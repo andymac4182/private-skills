@@ -49,6 +49,17 @@ jobs:
       - name: Build the web package
         run: pnpm build
 
+      - name: Build the Eve reviewer
+        working-directory: apps/reviewer
+        env:
+          EVE_TELEMETRY_DISABLED: '1'
+        run: node ../../node_modules/eve/bin/eve.js build --skip-sandbox-prewarm
+
+      - name: Verify portable Vercel and Cloudflare builds
+        run: |
+          PSKILLS_STORAGE_BUILD_PROFILE=vercel-blob node scripts/build-vercel.mjs
+          PSKILLS_RUNTIME_PROFILE=edge NITRO_PRESET=cloudflare_module node node_modules/vite/bin/vite.js build --config apps/web/vite.config.ts
+
   rust:
     name: rust (${{ matrix.target }})
     strategy:

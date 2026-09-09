@@ -3,5 +3,7 @@ declare module '#pskills-infrastructure' {
   export function createInfrastructure(env: RuntimeEnvironment): Promise<{
     repository: import('../../../packages/contracts/src/index').StateRepository;
     blobs: import('../../../packages/contracts/src/index').BlobStore;
+    hostedWorker?: (request: Request) => Promise<Response>;
+    createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;
 }

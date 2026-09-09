@@ -173,6 +173,23 @@ describe('token and session authentication', () => {
     expect((await defaulted.authenticate(new Request('https://registry.invalid/v1/me', {
       headers: { authorization: `Bearer ${token}` },
     })))?.scopes).toContain('skills:read');
+    const defaultedPrincipal = await defaulted.requirePrincipal(new Request('https://registry.invalid/v1/install-receipts', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    }), { scope: 'install:receipt' });
+    expect(defaultedPrincipal.scopes).not.toContain('analytics:write');
+
+    const publisherToken = crypto.randomUUID();
+    const publisher = new TokenAuthenticator({
+      tokens: [{ id: 'publisher', token: publisherToken, organizationId: 'org-a', subject: 'publisher', roles: ['publisher'] }],
+      sessionSecret: freshSecret(),
+      environment: 'test',
+    });
+    const publisherPrincipal = await publisher.requirePrincipal(new Request('https://registry.invalid/v1/install-receipts', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${publisherToken}` },
+    }), { scope: 'install:receipt' });
+    expect(publisherPrincipal.scopes).not.toContain('analytics:write');
 
     const restrictedToken = crypto.randomUUID();
     const restricted = new TokenAuthenticator({
@@ -190,5 +207,16 @@ describe('token and session authentication', () => {
       environment: 'test',
     });
     await expect(mixedWorker.ready()).rejects.toThrow('Worker credentials cannot include user roles');
+
+    const workerToken = crypto.randomUUID();
+    const worker = new TokenAuthenticator({
+      workerTokens: [{ id: 'worker', token: workerToken, organizationId: 'org-a', subject: 'worker', roles: ['worker'] }],
+      sessionSecret: freshSecret(),
+      environment: 'test',
+    });
+    await expect(worker.requirePrincipal(new Request('https://registry.invalid/v1/install-receipts', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workerToken}` },
+    }), { scope: 'install:receipt' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
   });
 });

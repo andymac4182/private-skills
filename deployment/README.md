@@ -1,11 +1,17 @@
 # Deployment templates and runbook
 
 These files describe deployment profiles; they do not contain provider
-credentials and no cloud deployment has been performed. The portable baseline
-is a Node Nitro server, PostgreSQL, a host worker/controller, and Files SDK
-storage. Vercel and Cloudflare Workers are optional Nitro targets with the same
-HTTP contracts. An edge deployment still needs a separate host worker for
-durable acquisition and scanning.
+credentials. The portable baseline is a Node Nitro server, PostgreSQL, a host
+worker/controller, and Files SDK storage. Vercel and Cloudflare Workers are
+optional Nitro targets with the same HTTP contracts. An edge deployment still
+needs a separate host worker for durable acquisition and scanning.
+
+The separate Eve reviewer has a verified Vercel deployment at
+`private-skills-reviewer.vercel.app`: its public health probe returned `200`
+and its unauthenticated session probe returned `401`. This proves the reviewer
+boundary only. The main registry project `private-skills-theta.vercel.app` is
+provisioned but has not been claimed as deployed; database terms/user setup is
+still required before an authenticated registry deployment can be reported.
 
 ## Self-hosted Node and PostgreSQL
 
@@ -101,12 +107,43 @@ public object URL.
 
 ## Vercel
 
-The [Vercel template](vercel.json) is for a repository-root Vercel project. It
-uses the TanStack Start framework preset and the Nitro build emitted by the
-web package. If the Vercel project is configured to read a checked-in config,
-copy this template to the repository root as `vercel.json`, or apply the same
-settings in the project configuration. Keep provider-specific storage and
-metadata adapters behind the existing environment-backed interfaces.
+The repository-root [`vercel.json`](../vercel.json) owns the main web project.
+It keeps the Vercel project root at the checkout root, installs with the pinned
+pnpm lockfile, and runs [`scripts/build-vercel.mjs`](../scripts/build-vercel.mjs).
+That script builds the TanStack Start web package with Nitro's `vercel` preset
+and copies `apps/web/.vercel/output` to the repository-root `.vercel/output`,
+which is the Build Output API directory Vercel collects. The matching
+[`deployment/vercel.json`](vercel.json) is a copyable template for a new
+repository-root project.
+
+The script requires Node 24 and does not invoke a second package-manager
+install. Vercel's install phase is the only install phase:
+
+```sh
+pnpm install --frozen-lockfile
+node scripts/build-vercel.mjs
+test -f .vercel/output/config.json
+```
+
+Keep the Vercel project on Node 24.x. The repository's `.node-version` and
+`packageManager` fields pin Node `24.20.0` and pnpm `11.19.0`; preserve those
+pins when overriding Build & Development settings.
+
+The web project is separate from the Eve reviewer project. Configure that
+project with Root Directory `apps/reviewer` and its own `pnpm build` command;
+`eve build` emits that project's `.vercel/output`. Do not point the reviewer
+project at the root web build script or combine its services with the registry
+project. The scanner worker/controller remains a separately operated host
+process and is not included in either Vercel build.
+
+Keep provider-specific storage and metadata adapters behind the existing
+environment-backed interfaces. For a Vercel deployment backed by the
+authenticated HTTP gateways, set both `PSKILLS_STORAGE_PROVIDER=http` and
+`PSKILLS_STORAGE_BUILD_PROFILE=http` in the Vercel build environment. For a
+direct Node Files SDK provider, set the build profile to that provider and
+install its pinned optional peer dependencies before building. Runtime state,
+storage, model, session, and reviewer tokens belong in Vercel environment
+configuration and never in `VITE_` variables or this repository.
 
 The [official TanStack Start Vercel guide](https://vercel.com/kb/guide/deploy-a-tanstack-start-app-to-vercel)
 and [Nitro's Vercel provider documentation](https://nitro.build/deploy/providers/vercel)
@@ -117,13 +154,75 @@ route, authenticated API flow, private artifact transfer, and worker callback.
 A local build or a CLI-only deployment is not evidence that Git deployment
 automation works.
 
-Set secrets in Vercel's environment configuration, never in `VITE_` variables
-or this repository. A Vercel function cannot use the local filesystem or run
-native scanners; use `PSKILLS_STORAGE_PROVIDER=http` and
-`PSKILLS_STATE_PROVIDER=http` with an authenticated gateway/transaction
-service, and keep the durable host worker/controller outside Vercel. Vercel is
-optional and no Vercel account, paid integration, or deployment is required by
-this repository.
+Set `PSKILLS_STATE_PROVIDER=http` with its endpoint and token for the same
+gateway-backed deployment. A Vercel function cannot use the local filesystem
+or run native scanners, so keep the durable host worker/controller outside
+Vercel. Vercel is optional and no Vercel account, paid integration, or
+deployment is required by this repository.
+
+### Hosted Sandbox worker (optional)
+
+The one-shot hosted worker factory in
+[`workers/runner/src/hosted.ts`](../workers/runner/src/hosted.ts) is a Node
+runtime route for Vercel Cron or an explicitly authenticated operator pump. It
+accepts `GET` only and requires `Authorization: Bearer $CRON_SECRET`; the
+Vercel cron user-agent is not authentication. Each invocation claims at most
+one job through the existing worker API, runs the configured scanners in
+Vercel Sandbox, and returns queue metadata only. Reports, artifact bytes,
+worker tokens, and scanner errors are not returned to the caller.
+
+The route configuration uses these Vercel environment variables:
+
+```dotenv
+PSKILLS_HOSTED_WORKER=true
+PSKILLS_API_URL=https://registry.example.test
+PSKILLS_WORKER_TOKEN=an-independent-worker-token
+CRON_SECRET=at-least-16-random-characters
+PSKILLS_IMAGE_CISCO=registry.example/cisco@sha256:<64-lowercase-hex>
+PSKILLS_IMAGE_NVIDIA=registry.example/nvidia@sha256:<64-lowercase-hex>
+PSKILLS_IMAGE_SKILLSGUARD=registry.example/skillsguard@sha256:<64-lowercase-hex>
+```
+
+Scanner image variables may instead contain a trusted source-built snapshot:
+
+```dotenv
+PSKILLS_IMAGE_SKILLSGUARD=snapshot:<snapshot-id>|revision:<source-commit>|artifact:sha256:<64-lowercase-hex>
+```
+
+The snapshot form records the source revision and SHA-256 digest of the
+prepared scanner tree; a bare snapshot ID is rejected. The Vercel Sandbox SDK
+is loaded lazily by the route, uses `networkPolicy: "deny-all"`, stages only
+the sealed bundle under bounded input/output limits, and stops the ephemeral
+sandbox after each scanner. The route must run on Vercel's Node runtime; the
+Cloudflare edge target cannot launch the Node Sandbox SDK or native scanners.
+
+The repository-root Vercel fallback cron invokes the route at `0 21 * * *`
+UTC. Successful publish, import, and skill-rescan requests also schedule a
+bounded drain of at most two jobs with Nitro's platform `waitUntil` hook when
+available. The route's scheduler is a liveness fallback rather than the queue
+itself.
+Cron invocations do not provide durable retries, so the existing worker lease
+expiry and fencing behavior remains authoritative. Configure the function
+duration and lease longer than the worst-case sequential scanner policy, and
+keep at least one configured required scanner. Do not set
+`PSKILLS_ALLOW_UNSCANNED=true` to fit a function limit.
+
+For the source-built SkillsGuard snapshot, run the source-pinned provisioning
+script with an explicit 30-day rotation policy. Its default invocation only
+prints the immutable mapping; `--provision` is the remote operation and must
+be recorded before the returned reference is placed in the secret store:
+
+```sh
+PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
+  pnpm exec tsx scripts/provision-scanner-sandbox.ts
+PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
+  pnpm exec tsx scripts/provision-scanner-sandbox.ts --provision
+```
+
+Rotate before `expiresAt`, keep the source revision and artifact digest in the
+mapping, and never treat an unexpired mutable snapshot id as provenance. The
+script defaults to no expiry when `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS` is not
+set, so production must set it to `30` when a 30-day rotation is required.
 
 ## Cloudflare Workers
 

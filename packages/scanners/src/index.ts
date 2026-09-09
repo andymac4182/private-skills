@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './util.js';
 export * from './executor.js';
+export * from './sandbox-executor.js';
 export * from './adapter-base.js';
 export * from './policy.js';
 export * from './adapters/cisco.js';

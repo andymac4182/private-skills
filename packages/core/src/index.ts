@@ -7,6 +7,16 @@ import {
   type Finding,
   type ImportRequest,
   type InstallAuthorization,
+  type InstallAnalytics,
+  type InstallAnalyticsTopSkill,
+  type InstallReceipt,
+  type InstallReceiptAgent,
+  type InstallReceiptMetadata,
+  type InstallReceiptPlatform,
+  type InstallReceiptResolutionMember,
+  type InstallReceiptResolutionMetadata,
+  type InstallReceiptTicket,
+  type InstallReceiptTicketMetadata,
   type Job,
   type PackMember,
   type PackVersion,
@@ -47,6 +57,12 @@ import { SERVICE_VERSION } from '../../contracts/src/version.js';
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_LEASE_SECONDS = 300;
 const TRANSFER_TTL_SECONDS = 60;
+const INSTALL_RECEIPT_TTL_SECONDS = 24 * 60 * 60;
+const INSTALL_RECEIPT_RETENTION_SECONDS = 90 * 24 * 60 * 60;
+const MAX_ANALYTICS_DAYS = 90;
+const MAX_INSTALL_RECEIPTS = 100_000;
+const MAX_INSTALL_RECEIPT_TICKETS = 100_000;
+const MAX_CLIENT_VERSION_LENGTH = 128;
 const SUPPORTED_SCANNERS: readonly ScannerId[] = [
   'cisco-skill-scanner',
   'nvidia-skillspector',
@@ -137,6 +153,8 @@ export function createEmptyRegistryState(policy: Policy = defaultPolicy()): Regi
     policy,
     upstreams: [],
     authorizations: [],
+    installReceiptTickets: [],
+    installReceipts: [],
     grants: [],
     audit: [],
   };
@@ -247,6 +265,7 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
             imports: true,
             proxyResolve: true,
             installAuthorizations: true,
+            installReceipts: true,
             transferMode: 'gateway',
             rangeSupported: false,
           },
@@ -309,6 +328,24 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
           config,
           requestId,
         );
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'install-receipts' && segments.length === 2) {
+        if (method !== 'POST') return methodNotAllowed(['POST']);
+        // A receipt is a browser-visible mutation as well as a report of a
+        // local transaction.  Apply the same Origin/Sec-Fetch protections as
+        // session mutations when the caller uses a cookie credential.
+        assertSessionRequestSafe(request, config, method);
+        requireReader(principal);
+        const body = await readJson(request, config.maxBodyBytes);
+        return await createInstallReceipt(body, principal, deps, config, requestId);
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'analytics' && segments.length === 2) {
+        if (method !== 'GET') return methodNotAllowed(['GET']);
+        requireAdmin(principal);
+        const state = await readState(deps.repository, config.organizationId);
+        return jsonResponse(buildInstallAnalytics(url, state, principal));
       }
 
       if (segments[0] === 'v1' && segments[1] === 'artifacts' && segments.length === 4) {
@@ -612,6 +649,12 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (segments[0] === 'v1' && segments[1] === 'operations') return ['jobs:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'install-authorizations') {
     return segments.length === 4 ? ['install:validate', 'artifacts:download', 'registry:read'] : ['install:authorize', 'artifacts:download', 'registry:read'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'install-receipts') {
+    return ['install:receipt', 'analytics:write'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'analytics') {
+    return ['analytics:read', 'registry:admin'];
   }
   if (segments[0] === 'v1' && segments[1] === 'artifacts') return ['artifacts:download', 'install:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'packs') return method === 'GET' ? ['packs:read', 'registry:read'] : ['packs:publish', 'packs:write'];
@@ -1035,10 +1078,10 @@ function resolveResource(
  * but it stops resolving or minting install capabilities when its required
  * evidence is no longer current.
  */
-function skillCurrentlyApproved(state: RegistryState, skill: SkillVersion): boolean {
+function skillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now = Date.now()): boolean {
   if (skill.state !== 'approved' || skill.policyRevision !== state.policy.revision) return false;
   const scans = state.scans.filter((scan) => skill.scanIds.includes(scan.id));
-  return evaluatePolicy(state.policy, scans, skill.artifact.digest).state === 'approved';
+  return evaluatePolicy(state.policy, scans, skill.artifact.digest, now).state === 'approved';
 }
 
 async function handleInstallAuthorizationRoute(
@@ -1080,8 +1123,17 @@ async function createInstallAuthorization(
     id: randomId('authz'),
     organizationId: config.organizationId,
     subject: principal.subject,
-    resolution,
+    resolution: cloneResolution(resolution),
     expiresAt: new Date(now + TRANSFER_TTL_SECONDS * 1000).toISOString(),
+  };
+  const ticket: InstallReceiptTicket = {
+    id: randomId('receipt_ticket'),
+    organizationId: config.organizationId,
+    subject: principal.subject,
+    authorizationId: authorization.id,
+    resolution: cloneResolution(resolution),
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + INSTALL_RECEIPT_TTL_SECONDS * 1000).toISOString(),
   };
   const result = await deps.repository.transaction(config.organizationId, (current) => {
     const mutable = ensureState(current, state.policy);
@@ -1095,15 +1147,26 @@ async function createInstallAuthorization(
     if (currentResolution.kind !== 'resolved' || !sameResolution(currentResolution.resolution, resolution)) {
       throw new RegistryApiError('POLICY_BLOCKED', 'Resolution changed before authorization', 409, { retryable: true });
     }
+    const nowForTickets = Date.now();
+    mutable.installReceiptTickets = mutable.installReceiptTickets!.filter((candidate) =>
+      !timestampExpired(candidate.expiresAt, nowForTickets),
+    );
+    if (mutable.installReceiptTickets.length >= MAX_INSTALL_RECEIPT_TICKETS) {
+      throw new RegistryApiError('ANALYTICS_LIMIT', 'Install receipt ticket limit reached', 503, { retryable: true });
+    }
     mutable.authorizations.push(authorization);
+    mutable.installReceiptTickets!.push(ticket);
     appendAudit(mutable, audit(principal, 'install.authorization.create', authorization.id, {
       resourceId: resolution.resourceId,
       digest: resolution.digest,
       requestId,
     }, config.organizationId));
-    return authorization;
+    return { authorization, ticket };
   });
-  return jsonResponse({ authorization: result }, 201);
+  return jsonResponse({
+    authorization: result.authorization,
+    receipt: publicReceiptTicket(result.ticket),
+  }, 201);
 }
 
 async function validateInstallAuthorization(
@@ -1136,9 +1199,268 @@ async function validateInstallAuthorization(
       resourceId: authorization.resolution.resourceId,
       requestId,
     }, config.organizationId));
-    return authorization;
+    const ticket = mutable.installReceiptTickets!.find(
+      (candidate) => candidate.authorizationId === authorization.id && candidate.subject === principal.subject,
+    );
+    return { authorization, ticket };
   });
-  return jsonResponse({ authorization: result });
+  return jsonResponse({
+    authorization: result.authorization,
+    ...(result.ticket ? { receipt: publicReceiptTicket(result.ticket) } : {}),
+  });
+}
+
+interface InstallReceiptInput {
+  authorizationId: string;
+  changed: boolean;
+  agent: InstallReceiptAgent;
+  platform: InstallReceiptPlatform;
+  clientVersion: string;
+}
+
+function parseInstallReceiptInput(body: JsonObject): InstallReceiptInput {
+  const authorizationId = stringValue(body.authorizationId)?.trim();
+  if (!authorizationId || authorizationId.length > 256) {
+    throw new RegistryApiError('INVALID_RECEIPT', 'authorizationId is required', 400);
+  }
+  if (typeof body.changed !== 'boolean') {
+    throw new RegistryApiError('INVALID_RECEIPT', 'changed must be a boolean', 400);
+  }
+  const agent = body.agent;
+  if (agent !== 'codex' && agent !== 'claude' && agent !== 'universal') {
+    throw new RegistryApiError('INVALID_RECEIPT', 'agent is invalid', 400);
+  }
+  const platform = body.platform;
+  if (platform !== 'windows' && platform !== 'macos' && platform !== 'linux' && platform !== 'other') {
+    throw new RegistryApiError('INVALID_RECEIPT', 'platform is invalid', 400);
+  }
+  const clientVersion = stringValue(body.clientVersion)?.trim();
+  if (!clientVersion || clientVersion.length > MAX_CLIENT_VERSION_LENGTH || /[\u0000-\u001f\u007f]/u.test(clientVersion)) {
+    throw new RegistryApiError('INVALID_RECEIPT', 'clientVersion is invalid', 400);
+  }
+  return {
+    authorizationId,
+    changed: body.changed,
+    agent,
+    platform,
+    clientVersion,
+  };
+}
+
+function publicReceiptTicket(ticket: InstallReceiptTicket): InstallReceiptTicketMetadata {
+  return {
+    id: ticket.id,
+    authorizationId: ticket.authorizationId,
+    expiresAt: ticket.expiresAt,
+  };
+}
+
+function publicReceiptResolution(resolution: Resolution): InstallReceiptResolutionMetadata {
+  const members: InstallReceiptResolutionMember[] = resolution.members.map((member) => ({
+    resourceId: member.id,
+    name: member.name,
+    version: member.version,
+    digest: member.artifact.digest,
+  }));
+  return {
+    kind: resolution.kind,
+    resourceId: resolution.resourceId,
+    name: resolution.name,
+    version: resolution.version,
+    digest: resolution.digest,
+    members,
+  };
+}
+
+function publicInstallReceipt(receipt: InstallReceipt): InstallReceiptMetadata {
+  return {
+    id: receipt.id,
+    ticketId: receipt.ticketId,
+    authorizationId: receipt.authorizationId,
+    createdAt: receipt.createdAt,
+    expiresAt: receipt.expiresAt,
+    changed: receipt.changed,
+    agent: receipt.agent,
+    platform: receipt.platform,
+    clientVersion: receipt.clientVersion,
+    resolution: publicReceiptResolution(receipt.resolution),
+  };
+}
+
+function sameInstallReceiptInput(receipt: InstallReceipt, input: InstallReceiptInput): boolean {
+  return receipt.changed === input.changed &&
+    receipt.agent === input.agent &&
+    receipt.platform === input.platform &&
+    receipt.clientVersion === input.clientVersion;
+}
+
+async function createInstallReceipt(
+  body: JsonObject,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  const input = parseInstallReceiptInput(body);
+  const state = await readState(deps.repository, config.organizationId);
+  const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
+    const mutable = ensureState(mutableState, state.policy);
+    const now = Date.now();
+    const retentionCutoff = now - INSTALL_RECEIPT_RETENTION_SECONDS * 1000;
+    mutable.installReceipts = mutable.installReceipts!.filter((candidate) => {
+      const createdAt = Date.parse(candidate.createdAt);
+      return Number.isFinite(createdAt) && createdAt >= retentionCutoff;
+    });
+    const existing = mutable.installReceipts!.find(
+      (candidate) => candidate.authorizationId === input.authorizationId,
+    );
+    if (existing) {
+      // The authorization id is the idempotency key.  Do not disclose a
+      // receipt belonging to another subject, even when an attacker guesses
+      // the id; a same-subject conflicting replay is an explicit 409.
+      if (existing.organizationId !== config.organizationId || existing.subject !== principal.subject) {
+        throw unavailable();
+      }
+      if (!sameInstallReceiptInput(existing, input)) {
+        throw new RegistryApiError('RECEIPT_CONFLICT', 'The authorization already has a different receipt', 409);
+      }
+      return { receipt: existing, status: 200 as const };
+    }
+
+    const ticket = mutable.installReceiptTickets!.find(
+      (candidate) => candidate.id &&
+        candidate.authorizationId === input.authorizationId &&
+        candidate.organizationId === config.organizationId &&
+        candidate.subject === principal.subject,
+    );
+    if (!ticket || timestampExpired(ticket.expiresAt)) throw unavailable();
+    if (ticket.resolution.organizationId !== config.organizationId) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Receipt ticket resolution organization is invalid', 500);
+    }
+    if (mutable.installReceipts.length >= MAX_INSTALL_RECEIPTS) {
+      throw new RegistryApiError('ANALYTICS_LIMIT', 'Install receipt retention limit reached', 503, { retryable: true });
+    }
+    const receipt: InstallReceipt = {
+      id: randomId('receipt'),
+      organizationId: config.organizationId,
+      subject: principal.subject,
+      authorizationId: input.authorizationId,
+      ticketId: ticket.id,
+      resolution: cloneResolution(ticket.resolution),
+      changed: input.changed,
+      agent: input.agent,
+      platform: input.platform,
+      clientVersion: input.clientVersion,
+      createdAt: new Date(now).toISOString(),
+      expiresAt: ticket.expiresAt,
+    };
+    mutable.installReceipts.push(receipt);
+    // Tickets have a short bounded lifetime.  A receipt keeps its own
+    // immutable resolution snapshot, so an accepted receipt does not require
+    // retaining the ticket for idempotent replay.
+    mutable.installReceiptTickets = mutable.installReceiptTickets!.filter((candidate) =>
+      !timestampExpired(candidate.expiresAt, now),
+    );
+    if (mutable.installReceiptTickets.length > MAX_INSTALL_RECEIPT_TICKETS) {
+      mutable.installReceiptTickets = mutable.installReceiptTickets.slice(-MAX_INSTALL_RECEIPT_TICKETS);
+    }
+    appendAudit(mutable, audit(principal, 'install.receipt.create', receipt.id, {
+      authorizationId: receipt.authorizationId,
+      resourceId: receipt.resolution.resourceId,
+      digest: receipt.resolution.digest,
+      changed: receipt.changed,
+      agent: receipt.agent,
+      platform: receipt.platform,
+      requestId,
+    }, config.organizationId));
+    return { receipt, status: 201 as const };
+  });
+  return jsonResponse({ receipt: publicInstallReceipt(result.receipt) }, result.status);
+}
+
+function parseAnalyticsDays(url: URL): number {
+  const raw = url.searchParams.get('days');
+  if (raw === null || raw === '') return 30;
+  if (!/^\d+$/u.test(raw)) {
+    throw new RegistryApiError('INVALID_ANALYTICS_RANGE', 'days must be an integer between 1 and 90', 400);
+  }
+  const days = Number(raw);
+  if (!Number.isSafeInteger(days) || days < 1 || days > MAX_ANALYTICS_DAYS) {
+    throw new RegistryApiError('INVALID_ANALYTICS_RANGE', 'days must be an integer between 1 and 90', 400);
+  }
+  return days;
+}
+
+function emptyAnalyticsTotals(): { installOperations: number; skillInstalls: number; packInstalls: number; upToDateChecks: number } {
+  return { installOperations: 0, skillInstalls: 0, packInstalls: 0, upToDateChecks: 0 };
+}
+
+function buildInstallAnalytics(url: URL, state: RegistryState, principal: Principal): InstallAnalytics {
+  const days = parseAnalyticsDays(url);
+  const now = Date.now();
+  const currentDay = new Date(now);
+  currentDay.setUTCHours(0, 0, 0, 0);
+  const start = currentDay.getTime() - (days - 1) * 24 * 60 * 60 * 1000;
+  const daily = new Map<string, InstallAnalytics['daily'][number]>();
+  for (let index = 0; index < days; index += 1) {
+    const date = new Date(start + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    daily.set(date, { date, ...emptyAnalyticsTotals() });
+  }
+  const topSkills = new Map<string, InstallAnalyticsTopSkill>();
+  const receipts = (state.installReceipts ?? []).filter((receipt) => {
+    const createdAt = Date.parse(receipt.createdAt);
+    return receipt.organizationId === principal.organizationId &&
+      Number.isFinite(createdAt) &&
+      createdAt >= start && createdAt <= now &&
+      canReadNamespace(principal, receipt.resolution.name);
+  });
+  const totals = emptyAnalyticsTotals();
+  for (const receipt of receipts) {
+    const createdAt = Date.parse(receipt.createdAt);
+    const date = new Date(createdAt).toISOString().slice(0, 10);
+    const bucket = daily.get(date);
+    if (!bucket) continue;
+    totals.installOperations += 1;
+    bucket.installOperations += 1;
+    if (!receipt.changed) {
+      totals.upToDateChecks += 1;
+      bucket.upToDateChecks += 1;
+      continue;
+    }
+    if (receipt.resolution.kind === 'skill') {
+      totals.skillInstalls += 1;
+      bucket.skillInstalls += 1;
+    } else {
+      totals.packInstalls += 1;
+      bucket.packInstalls += 1;
+    }
+    for (const member of receipt.resolution.members) {
+      if (!canReadNamespace(principal, member.name)) continue;
+      const key = `${member.id}\u0000${member.version}`;
+      const existing = topSkills.get(key);
+      if (existing) {
+        existing.installs += 1;
+      } else {
+        topSkills.set(key, {
+          resourceId: member.id,
+          name: member.name,
+          version: member.version,
+          installs: 1,
+        });
+      }
+    }
+  }
+  const top = [...topSkills.values()]
+    .sort((left, right) => right.installs - left.installs || left.name.localeCompare(right.name) || left.version.localeCompare(right.version))
+    .slice(0, 20);
+  return {
+    days,
+    from: new Date(start).toISOString(),
+    to: new Date(now).toISOString(),
+    totals,
+    daily: [...daily.values()],
+    topSkills: top,
+  };
 }
 
 async function resolveRequestedResolution(
@@ -2316,6 +2638,7 @@ function evaluatePolicy(
   policy: Policy,
   results: ScanResult[],
   digest: Digest,
+  now = Date.now(),
 ): { state: DistributionState; error?: string } {
   const scanners = Array.isArray(policy.scanners) ? policy.scanners : [];
   const relevant = results.filter((result) => result.artifactDigest === digest && result.policyRevision === policy.revision);
@@ -2325,7 +2648,7 @@ function evaluatePolicy(
     const result = latestScanForScanner(relevant, scanner.id);
     if (!result) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not return evidence` };
     if (result.status !== 'completed') return { state: 'scan-error', error: `Required scanner ${scanner.id} returned ${result.status}` };
-    if (evidenceExpired(result, policy.evidenceMaxAgeSeconds)) return { state: 'scan-error', error: `Required scanner ${scanner.id} evidence is stale` };
+    if (evidenceExpired(result, policy.evidenceMaxAgeSeconds, now)) return { state: 'scan-error', error: `Required scanner ${scanner.id} evidence is stale` };
     if (result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not analyze any files` };
     if (
       result.coverage.filesSkipped > 0 ||
@@ -2360,11 +2683,11 @@ function latestScanForScanner(results: ScanResult[], scannerId: ScannerId): Scan
   return undefined;
 }
 
-function evidenceExpired(result: ScanResult, maxAgeSeconds: number): boolean {
+function evidenceExpired(result: ScanResult, maxAgeSeconds: number, now = Date.now()): boolean {
   const createdAt = Date.parse(result.createdAt);
   if (!Number.isFinite(createdAt)) return true;
-  if (createdAt > Date.now()) return true;
-  return maxAgeSeconds >= 0 && Date.now() - createdAt > maxAgeSeconds * 1000;
+  if (createdAt > now) return true;
+  return maxAgeSeconds >= 0 && now - createdAt > maxAgeSeconds * 1000;
 }
 
 function timestampExpired(value: string | undefined, now = Date.now()): boolean {
@@ -2561,6 +2884,23 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     assertOrganization(authorization.organizationId, organizationId);
     if (authorization.resolution.organizationId !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Authorization resolution organization is invalid', 500);
   }
+  for (const ticket of state.installReceiptTickets ?? []) {
+    assertOrganization(ticket.organizationId, organizationId);
+    if (ticket.resolution.organizationId !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Receipt ticket resolution organization is invalid', 500);
+    if (!ticket.id || !ticket.authorizationId || !ticket.subject || !ticket.issuedAt || !ticket.expiresAt) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Receipt ticket state is invalid', 500);
+    }
+  }
+  for (const receipt of state.installReceipts ?? []) {
+    assertOrganization(receipt.organizationId, organizationId);
+    if (receipt.resolution.organizationId !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Install receipt resolution organization is invalid', 500);
+    if (!receipt.id || !receipt.authorizationId || !receipt.ticketId || !receipt.subject || !receipt.createdAt || !receipt.expiresAt) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Install receipt state is invalid', 500);
+    }
+    if (typeof receipt.changed !== 'boolean' || !['codex', 'claude', 'universal'].includes(receipt.agent) || !['windows', 'macos', 'linux', 'other'].includes(receipt.platform)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Install receipt metadata is invalid', 500);
+    }
+  }
   for (const grant of state.grants) assertOrganization(grant.organizationId, organizationId);
   for (const event of state.audit) assertOrganization(event.organizationId, organizationId);
 }
@@ -2591,6 +2931,8 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
   target.scans ||= [];
   target.upstreams ||= [];
   target.authorizations ||= [];
+  target.installReceiptTickets ||= [];
+  target.installReceipts ||= [];
   target.grants ||= [];
   target.audit ||= [];
   if (!target.policy) target.policy = fallbackPolicy;
@@ -2599,6 +2941,25 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
 
 function accessibleSkillIds(state: RegistryState, principal: Principal): Set<string> {
   return new Set(state.skills.filter((skill) => canReadNamespace(principal, skill.name)).map((skill) => skill.id));
+}
+
+/**
+ * Return the skills visible to a principal that are approved under the
+ * current policy and still have fresh, complete scanner evidence.
+ *
+ * This deliberately shares the resolution predicate instead of exposing a
+ * second, weaker search predicate.  It is read-only and does not normalize or
+ * mutate the supplied state.  Callers that need deterministic tests may pass
+ * the evaluation timestamp explicitly.
+ */
+export function getVisibleApprovedSkills(
+  state: RegistryState,
+  principal: Principal,
+  now = Date.now(),
+): SkillVersion[] {
+  return state.skills.filter((skill) =>
+    canReadNamespace(principal, skill.name) && skillCurrentlyApproved(state, skill, now),
+  );
 }
 
 function chooseVersion<T extends { version: string }>(candidates: T[], version?: string): T | undefined {
@@ -2677,6 +3038,10 @@ function isObject(value: unknown): value is JsonObject {
 
 function clonePolicy(policy: Policy): Policy {
   return JSON.parse(JSON.stringify(policy)) as Policy;
+}
+
+function cloneResolution(resolution: Resolution): Resolution {
+  return JSON.parse(JSON.stringify(resolution)) as Resolution;
 }
 
 function stableStringify(value: unknown): string {

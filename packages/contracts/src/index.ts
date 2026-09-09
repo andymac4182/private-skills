@@ -27,13 +27,112 @@ export interface PackMember { resourceId: string; name: string; version: string;
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }
 export interface Resolution { kind: 'skill' | 'pack'; resourceId: string; organizationId: string; name: string; version: string; digest: Digest; members: SkillVersion[]; }
 export interface InstallAuthorization { id: string; organizationId: string; subject: string; resolution: Resolution; expiresAt: string; }
+/**
+ * A receipt ticket is issued with an install authorization and deliberately
+ * outlives that short-lived authorization.  The resolution is a server-owned
+ * snapshot; clients must never be allowed to replace it when reporting an
+ * install result.
+ */
+export interface InstallReceiptTicket {
+  id: string;
+  organizationId: string;
+  subject: string;
+  authorizationId: string;
+  resolution: Resolution;
+  issuedAt: string;
+  expiresAt: string;
+}
+export type InstallReceiptAgent = 'codex' | 'claude' | 'universal';
+export type InstallReceiptPlatform = 'windows' | 'macos' | 'linux' | 'other';
+export interface InstallReceipt {
+  id: string;
+  organizationId: string;
+  subject: string;
+  authorizationId: string;
+  ticketId: string;
+  resolution: Resolution;
+  changed: boolean;
+  agent: InstallReceiptAgent;
+  platform: InstallReceiptPlatform;
+  clientVersion: string;
+  createdAt: string;
+  expiresAt: string;
+}
+export interface InstallReceiptTicketMetadata {
+  id: string;
+  authorizationId: string;
+  expiresAt: string;
+}
+export interface InstallReceiptResolutionMember {
+  resourceId: string;
+  name: string;
+  version: string;
+  digest: Digest;
+}
+export interface InstallReceiptResolutionMetadata {
+  kind: 'skill' | 'pack';
+  resourceId: string;
+  name: string;
+  version: string;
+  digest: Digest;
+  members: InstallReceiptResolutionMember[];
+}
+export interface InstallReceiptMetadata {
+  id: string;
+  ticketId: string;
+  authorizationId: string;
+  createdAt: string;
+  expiresAt: string;
+  changed: boolean;
+  agent: InstallReceiptAgent;
+  platform: InstallReceiptPlatform;
+  clientVersion: string;
+  resolution: InstallReceiptResolutionMetadata;
+}
+export interface AnalyticsTotals {
+  installOperations: number;
+  skillInstalls: number;
+  packInstalls: number;
+  upToDateChecks: number;
+}
+export interface AnalyticsDaily extends AnalyticsTotals { date: string; }
+export interface InstallAnalyticsTopSkill {
+  resourceId: string;
+  name: string;
+  version: string;
+  installs: number;
+}
+export interface InstallAnalytics {
+  days: number;
+  from: string;
+  to: string;
+  totals: AnalyticsTotals;
+  daily: AnalyticsDaily[];
+  topSkills: InstallAnalyticsTopSkill[];
+}
 export interface TransferGrant { id: string; organizationId: string; subject: string; resourceId: string; authorizationId: string; digest: Digest; expiresAt: string; }
 export interface TransferDescriptor { mode: 'gateway' | 'signed-url'; url: string; method: 'GET'; headers: Record<string, string>; expiresAt: string; size: number; digest: Digest; rangeSupported: boolean; }
 export interface Upstream { id: string; organizationId: string; name: string; kind: 'github' | 'registry'; enabled: boolean; repositories?: string[]; baseUrl?: string; credentialEnv?: string; namespace: string; }
 export interface ImportRequest { upstreamId: string; repository?: string; path: string; ref?: string; name: string; version: string; }
 export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
-export interface RegistryState { metadataRevision?: number; schemaVersion: 1; skills: SkillVersion[]; packs: PackVersion[]; jobs: Job[]; scans: ScanResult[]; policy: Policy; upstreams: Upstream[]; authorizations: InstallAuthorization[]; grants: TransferGrant[]; audit: AuditEvent[]; }
+export interface RegistryState {
+  metadataRevision?: number;
+  schemaVersion: 1;
+  skills: SkillVersion[];
+  packs: PackVersion[];
+  jobs: Job[];
+  scans: ScanResult[];
+  policy: Policy;
+  upstreams: Upstream[];
+  authorizations: InstallAuthorization[];
+  /** Optional so states written before analytics can still be loaded. */
+  installReceiptTickets?: InstallReceiptTicket[];
+  /** Optional so states written before analytics can still be loaded. */
+  installReceipts?: InstallReceipt[];
+  grants: TransferGrant[];
+  audit: AuditEvent[];
+}
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
 export interface RegistryConfiguration { publicOrigin: string; maxBodyBytes: number; organizationId: string; leaseSeconds: number; allowLoopbackUpstreams?: boolean; }

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "tanstack-start",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "node scripts/build-vercel.mjs",
+  "crons": [{ "path": "/internal/worker/run", "schedule": "0 21 * * *" }]
+}

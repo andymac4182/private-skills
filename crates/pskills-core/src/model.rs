@@ -144,6 +144,27 @@ pub struct InstallAuthorization {
     pub subject: String,
     pub resolution: Resolution,
     pub expires_at: String,
+    /// Additive receipt ticket metadata returned by newer registries.
+    #[serde(default)]
+    pub receipt: Option<InstallReceiptTicketMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallReceiptTicketMetadata {
+    pub id: String,
+    pub authorization_id: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallReceiptRequest {
+    pub authorization_id: String,
+    pub changed: bool,
+    pub agent: String,
+    pub platform: String,
+    pub client_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

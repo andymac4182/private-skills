@@ -1,0 +1,128 @@
+# Eve common-skill reviewer
+
+`apps/reviewer` is a separate Eve 0.52.3 application. It runs one bounded,
+authenticated daily review and records proposals for a human to inspect. The
+reviewer cannot publish or merge skills, edit source, install packages, or run
+candidate content.
+
+## Runtime surface
+
+The app has only two authored tools and no Eve connections, skills, sandbox, or
+default built-in tools (`defaultTools: false`):
+
+- `prepare_review` calls the fixed deployment endpoint
+  `${PSKILLS_REGISTRY_API_URL}/internal/reviewer/prepare`.
+- `submit_review` calls the fixed deployment endpoint
+  `${PSKILLS_REGISTRY_API_URL}/internal/reviewer/complete`.
+
+The model cannot choose the destination URL. The API helper rejects endpoint
+paths outside those two routes, rejects credentials/query data in the base URL,
+requires HTTPS outside loopback development, bounds request/response bodies,
+rejects redirects, and uses a 45-second request timeout. Candidate `SKILL.md`
+text is quoted comparison data and is never loaded as Eve instructions or a
+tool. `submit_review` accepts only `skillIds` returned by the current prepared
+snapshot; the registry API remains authoritative for artifact digests, leases,
+and candidate identity. Candidate selection, organization authorization, and
+semantic-search/indexing policy remain root API responsibilities; this app has
+no catalog index or arbitrary search connection.
+
+`prepare_review` keeps the `runId`, `leaseToken`, and candidate snapshot in Eve
+durable private state using `defineState(name, initial)`, `get()`, and
+`update(current => next)`. The lease token is never returned in a tool result
+or included in model-visible instructions. A completed or already-completed
+run does not write a second proposal. An empty candidate set returns without a
+completion write; the API's short-lived lease expiry handles that no-op run.
+
+The agent limit is 10 minutes per session, 100,000 input tokens, 10,000 output
+tokens, and USD 0.50 of model token cost. The tools also limit preparation to
+two calls and submission to one call. No `agent/instrumentation.ts` is authored,
+so Eve's default local traces contain metadata rather than candidate content;
+the deployment must keep content export disabled in its runtime observability
+configuration.
+
+## Authentication
+
+`agent/channels/eve.ts` replaces the default channel auth with a constant-time
+comparison of a static production bearer token. It returns a service principal
+only for a matching token and never enables Eve's `placeholderAuth`, local-dev
+auth, or anonymous production access. `GET /eve/v1/health` is Eve's public
+health probe; the info and session routes require the bearer token.
+
+The internal reviewer token is separate from the Eve route token. Keep both in
+the deployment secret store. Do not place either token in candidate text, a
+model prompt, a URL, or a client bundle.
+
+## Configuration
+
+All of the following are runtime environment variables unless noted otherwise.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `PSKILLS_EVE_API_TOKEN` | yes | Bearer token accepted by Eve session/info routes. |
+| `PSKILLS_REGISTRY_API_URL` | yes | Root API origin/base path. The reviewer appends only the two fixed internal paths. HTTPS is required in production. |
+| `PSKILLS_REVIEWER_TOKEN` | yes | Service bearer sent to the root reviewer routes. |
+| `PSKILLS_REVIEW_MODEL` | no | Gateway `provider/model` id; defaults to `openai/gpt-5.6-luna`. |
+| `PSKILLS_REVIEW_CRON` | no | Five-field UTC cron expression; defaults to `0 22 * * *` (08:00 Australia/Brisbane). Changing it requires a rebuild because Eve discovers schedules during the build. |
+| `AI_GATEWAY_API_KEY` | one Gateway credential | Standard AI SDK Gateway API key. |
+| `VERCEL_OIDC_TOKEN` | Vercel alternative | Used by `@ai-sdk/gateway` when no API key is supplied in a linked Vercel deployment. |
+| `PSKILLS_AI_GATEWAY_BASE_URL` | no | Explicit Gateway base URL for a controlled deployment or loopback test. HTTPS is required in production; credentials, query strings, and fragments are rejected. |
+| `PSKILLS_AI_GATEWAY_TEAM_ID` | no | Optional Vercel team id/slug passed to the Gateway for scoped credentials. |
+
+The model id is deployment configuration, not model input. The agent selects
+the string at `session.started`; at `step.started` it creates an AI SDK Gateway
+`LanguageModel` with the configured base URL and credential. Eve 0.52.3 permits
+live `LanguageModel` values at step scope, which is the supported way to apply a
+custom Gateway base URL without inventing an Eve environment variable. With no
+custom base URL, the AI SDK Gateway default is used. OIDC remains available by
+leaving `AI_GATEWAY_API_KEY` unset in a Vercel-linked runtime.
+
+## Scheduling and manual runs
+
+The authored schedule is `agent/schedules/daily-review.ts`:
+
+```text
+0 22 * * *  (UTC)  =  08:00 Australia/Brisbane
+```
+
+Each schedule fire starts a new Eve session with a fixed prompt. The prompt
+requires exactly one preparation and at most one bounded submission. The root
+tool sends the deterministic idempotency key `common-skill-review:YYYY-MM-DD`
+(UTC); the root API owns the daily claim and must keep retries for that day
+idempotent, so a retry cannot create a second lease or proposal.
+
+An authenticated backend can start the same fixed prompt through Eve's Client
+SDK. The caller, not the model, supplies the host and bearer token:
+
+```ts
+import { Client } from "eve/client";
+
+const client = new Client({
+  host: process.env.PSKILLS_EVE_ORIGIN!,
+  auth: { bearer: () => process.env.PSKILLS_EVE_API_TOKEN! },
+  redirect: "error",
+});
+
+await client.health();
+const { response } = await client.sessions.create({
+  message: "Run the daily common-skill review. Call prepare_review once, compare only its returned candidates, and submit bounded proposals once.",
+});
+const result = await response.result();
+console.log({ sessionId: response.sessionId, result });
+```
+
+`Client` is a server-side control surface. Do not expose the token or this
+manual trigger in the browser.
+
+## Build and run
+
+From `apps/reviewer`:
+
+```bash
+pnpm typecheck
+pnpm build
+pnpm start
+```
+
+`eve build` writes the compiled agent and schedule into the app's `.eve/` and
+`.output/` artifacts. Vercel or a self-hosted runtime must provide the runtime
+secrets above; a build-time placeholder is not an authentication strategy.

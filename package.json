@@ -1,6 +1,6 @@
 {
   "name": "private-skills",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "pnpm --filter @private-skills/web dev",
     "build": "pnpm --filter @private-skills/web build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p apps/reviewer/tsconfig.json",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test",
     "worker": "node --env-file-if-exists=.env --import tsx workers/runner/src/index.ts",
@@ -19,12 +19,17 @@
     "setup:dev": "tsx scripts/setup-dev.ts"
   },
   "dependencies": {
+    "@ai-sdk/gateway": "4.0.76",
     "@aws-sdk/client-s3": "3.1079.0",
     "@aws-sdk/lib-storage": "3.1079.0",
     "@aws-sdk/s3-presigned-post": "3.1079.0",
     "@aws-sdk/s3-request-presigner": "3.1079.0",
     "@tanstack/react-router": "1.170.33",
     "@tanstack/react-start": "1.168.50",
+    "@vercel/blob": "2.8.0",
+    "@vercel/sandbox": "3.2.2",
+    "ai": "7.0.94",
+    "eve": "0.52.3",
     "files-sdk": "2.4.0",
     "nitro": "3.0.260903-beta",
     "postgres": "3.4.9",
