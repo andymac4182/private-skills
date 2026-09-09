@@ -4,7 +4,7 @@ Private Skills is a registry, pull-through proxy, and cross-platform installer f
 
 ## Current status
 
-The baseline is implemented in source as of 9 September 2026. The final command, browser, deployment, and recovery evidence is recorded separately in [`docs/verification.md`](docs/verification.md) by the release verification pass.
+The baseline is implemented as of 9 September 2026. Native Windows, macOS, and Linux CI, real scanner runs, browser/CLI flows, storage, and recovery checks passed; see [`docs/verification.md`](docs/verification.md) for the evidence and deployment limits. Private CLI archives and checksums are available through [GitHub Releases](https://github.com/andymac4182/private-skills/releases).
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ The baseline is implemented in source as of 9 September 2026. The final command,
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
 | Jobs and scanning | Implemented leased worker protocol, fencing tokens, scanner adapters, policy evaluation, and Docker executor boundary | Scanner images, credentials, and external executor infrastructure are deployment inputs |
-| CLI | Implemented Rust package and binary named `pskills` | Native OS CI and release artifacts require the GitHub workflow to run in the repository |
+| CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
@@ -77,9 +77,9 @@ The request handler owns authorization, resolution, policy state, and audit reco
 
 ## Documentation
 
-- [`docs/implementation.md`](docs/implementation.md) describes the implemented components, route families, state/storage profiles, and remaining acceptance work.
+- [`docs/implementation.md`](docs/implementation.md) describes the implemented components, route families, state/storage profiles, and operating boundaries.
 - [`docs/operations.md`](docs/operations.md) is the checkable local/production runbook, including storage backups and recovery.
-- [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence when the verification pass is complete.
+- [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
 - [`docs/architecture.md`](docs/architecture.md) is the original architecture and portability design intent. Its planning language remains useful context; this README and the implementation status document describe what exists in the repository now.
 - [`docs/product.md`](docs/product.md) records the product roles, journeys, and explicit scope boundaries.
 - [`docs/api-and-data.md`](docs/api-and-data.md), [`docs/storage.md`](docs/storage.md), and [`docs/scanning-and-hooks.md`](docs/scanning-and-hooks.md) hold the detailed contracts and operating constraints.

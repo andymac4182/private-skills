@@ -1,5 +1,7 @@
 packages:
   - apps/*
+overrides:
+  miniflare>sharp: 0.35.4
 allowBuilds:
   esbuild: true
   workerd: true

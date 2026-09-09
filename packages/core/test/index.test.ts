@@ -127,7 +127,7 @@ describe('registry core handler', () => {
     const test = setup({ principal: null });
     const health = await test.handler(new Request(`${ORIGIN}/health`));
     expect(health.status).toBe(200);
-    expect(await json(health)).toEqual({ ok: true, service: 'private-skills', version: '0.1.2' });
+    expect(await json(health)).toEqual({ ok: true, service: 'private-skills', version: '0.1.3' });
 
     const me = await test.handler(new Request(`${ORIGIN}/v1/me`));
     expect(me.status).toBe(401);

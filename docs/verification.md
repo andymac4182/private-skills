@@ -10,6 +10,7 @@ Verified on 9 September 2026. This record separates working runtime checks from 
 - Rust: formatting, Clippy with warnings denied, and **26 tests** pass. Tests cover batch preflight, shared owners, changed files, digest pins, lock contention, interrupted activation, and journal/lock recovery.
 - [Native CI](https://github.com/andymac4182/private-skills/actions/runs/34341248542) passed on Linux x86_64, macOS arm64, and Windows x86_64, including tests, builds, and executable help/version smoke checks. The same run built the API and worker container images.
 - [Scanner CI](https://github.com/andymac4182/private-skills/actions/runs/34341248538) built and exercised all three pinned scanner images successfully.
+- Release dependency review identified [GHSA-rgj7-g3m4-5g8c](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c) in Wrangler/Miniflare's transitive image decoder. A scoped `miniflare>sharp` override pins patched `sharp@0.35.4`; the installed native decoder was verified at that version. The application does not call the decoder, but the current container dependency tree includes development tools, so the dependency was patched before release.
 
 ## Browser, server, and CLI
 
