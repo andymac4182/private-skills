@@ -436,6 +436,53 @@ tr.row-selected td { background: #f4f8f3; }
 .topic-card-actions .button { min-height: 32px; padding-inline: 10px; font-size: 10px; }
 .topic-card-actions > a:not(.button) { color: var(--sage-dark); font-size: 10px; font-weight: 750; text-decoration: none; }
 .topic-card-actions > a:not(.button):hover { text-decoration: underline; }
+.topic-detail-view { gap: 18px; }
+.topic-document { min-width: 0; }
+.topic-document-grid { display: grid; grid-template-columns: minmax(0, 1fr) 285px; gap: 26px; padding: 23px; }
+.topic-document-main { min-width: 0; }
+.topic-document-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 21px; border-bottom: 1px solid var(--line); }
+.topic-document-heading > div { min-width: 0; }
+.topic-document-heading h2 { margin: 9px 0 7px; color: var(--ink); font: 600 24px/1.08 Georgia, "Times New Roman", serif; letter-spacing: -.045em; overflow-wrap: anywhere; }
+.topic-document-heading p { max-width: 720px; margin: 0; font-size: 12px; line-height: 1.55; }
+.topic-section { margin-top: 25px; }
+.topic-section > h3 { margin: 0 0 11px; color: var(--ink-soft); font-size: 13px; }
+.topic-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.topic-section-heading h3 { margin: 0; color: var(--ink-soft); font-size: 13px; }
+.topic-capabilities { display: grid; gap: 9px; margin: 0; padding: 0 0 0 20px; color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
+.topic-capabilities li::marker { color: var(--sage); }
+.topic-skill-list { display: grid; border-top: 1px solid var(--line); }
+.topic-skill-row { display: grid; grid-template-columns: minmax(160px, .34fr) minmax(0, .66fr) auto; gap: 16px; align-items: center; min-width: 0; padding: 13px 0; border-bottom: 1px solid #efede8; color: inherit; text-decoration: none; }
+.topic-skill-row:hover strong { color: var(--sage-dark); text-decoration: underline; }
+.topic-skill-main { display: grid; min-width: 0; gap: 4px; }
+.topic-skill-main strong { overflow-wrap: anywhere; color: var(--ink); font-size: 11px; }
+.topic-skill-main span { color: var(--muted); font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.topic-skill-description { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.topic-skill-arrow { color: var(--sage); font-size: 14px; }
+.topic-faq-list { display: grid; border-top: 1px solid var(--line); }
+.topic-faq-list details { padding: 12px 0; border-bottom: 1px solid #efede8; }
+.topic-faq-list summary { cursor: pointer; color: var(--ink-soft); font-size: 11px; font-weight: 750; }
+.topic-faq-list p { margin: 8px 0 0; font-size: 11px; line-height: 1.5; }
+.topic-document-side { display: grid; align-content: start; gap: 22px; min-width: 0; }
+.topic-provenance { min-width: 0; padding: 15px; border: 1px solid #e7def7; border-radius: 11px; background: linear-gradient(145deg, #fbf9ff 0%, var(--lavender) 100%); }
+.topic-provenance-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.topic-provenance h3 { margin: 0; color: var(--ink); font-size: 12px; }
+.topic-provenance dl { display: grid; gap: 11px; margin: 15px 0 0; }
+.topic-provenance dl > div { display: grid; gap: 4px; min-width: 0; }
+.topic-provenance dt { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.topic-provenance dd { min-width: 0; margin: 0; color: var(--ink-soft); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.topic-provenance a { color: var(--sage-dark); }
+.topic-provenance code { font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.topic-related { min-width: 0; }
+.topic-related .topic-section-heading { margin-bottom: 10px; }
+.topic-related-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.topic-related-link { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d9d0ef; border-radius: 999px; padding: 7px 10px; background: var(--lavender); color: var(--purple); font-size: 10px; font-weight: 750; text-decoration: none; }
+.topic-related-link:hover { border-color: #bfaee8; background: #f0ebff; }
+.topic-state-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(220px, 285px); gap: 18px; align-items: start; padding: 23px; }
+.topic-state-icon { display: grid; width: 33px; height: 33px; place-items: center; border: 1px solid #e7d1a9; border-radius: 10px; background: #fff8e9; color: #8b5a11; font-weight: 850; }
+.topic-state-panel h2 { margin: 10px 0 6px; color: var(--ink); font-size: 15px; }
+.topic-state-panel p { margin: 0; font-size: 11px; line-height: 1.55; }
+.topic-state-panel .row-actions { margin-top: 15px; }
+.topic-state-panel .topic-provenance { margin-top: 0; }
 .directory-audit-form { display: flex; align-items: end; gap: 12px; padding: 19px 22px 22px; }
 .directory-audit-form .field { min-width: 0; flex: 1; }
 .external-audit-list { display: grid; gap: 11px; padding: 20px 22px 22px; }
@@ -471,6 +518,13 @@ tr.row-selected td { background: #f4f8f3; }
   .directory-detail-grid { grid-template-columns: 1fr; }
   .official-grid { grid-template-columns: 1fr; }
   .directory-audit-form { align-items: stretch; flex-direction: column; }
+  .topic-document-grid { grid-template-columns: 1fr; }
+  .topic-document-heading { display: grid; }
+  .topic-document-heading .button { width: 100%; }
+  .topic-state-panel { grid-template-columns: auto minmax(0, 1fr); }
+  .topic-state-panel .topic-provenance { grid-column: 1 / -1; }
+  .topic-skill-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .topic-skill-description { grid-column: 1 / -1; }
 }
 
 @media (max-width: 520px) {
@@ -490,4 +544,7 @@ tr.row-selected td { background: #f4f8f3; }
   .external-pack-preview { margin-inline: 17px; padding: 14px; }
   .external-pack-preview-header { display: grid; }
   .external-pack-member-heading { align-items: flex-start; flex-direction: column; }
+  .topic-document-grid { padding: 17px; }
+  .topic-state-panel { padding: 17px; }
+  .topic-state-panel .topic-provenance { min-width: 0; }
 }

@@ -1,12 +1,22 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
-**Status:** v0.3.0 implementation merged; server-side forwarding of the
-Vercel project OIDC token to skills.sh is verified for the current production
-directory evidence. ComputeSDK required-scan evidence is also verified on
-`dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi`. The final CSS deployment
-`dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready and its final narrow browser proof
-now passes; full C1 acceptance remains partial.
+**Status:** v0.3.0 implementation is at source head `0f9da75`. The current READY
+production deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with output
+fingerprint
+`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; the
+corresponding Cloudflare build has fingerprint
+`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` and 35
+server files with no executable SDK references. The current source review reports 286 tests passed and two
+environment-dependent skips, TypeScript, five SDK probes, Files SDK checks,
+and two independent review approvals. The earlier
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` deployment (fingerprint
+`b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) verifies
+metadata-only full pagination. Earlier deployment evidence verifies the
+server-side Vercel project OIDC path, ComputeSDK scan, and captured browser
+surfaces; the current API artifact verifies the directory and Topics paths,
+and current browser proof is still pending, so full C1 acceptance remains
+partial.
 **Scope:** the current skills.sh site, its documented API, and the public
 `vercel-labs/skills` repository. The review uses official sources only. It does
 not use Tessl pages or GitHub issues as evidence.
@@ -21,18 +31,28 @@ traversal.
 ## Current configuration
 
 The owner authorized connecting skills.sh with the Vercel project request-scoped
-OIDC token on 2026-09-10, superseding the earlier disconnected deferral. Current
+OIDC token on 2026-09-10, superseding the earlier disconnected deferral. The
+current READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y`; it carries the
+enabled directory and request-scoped OIDC/ComputeSDK configuration. Earlier
 production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` proves authenticated
-directory access and the ComputeSDK scan. The earlier captured deployment
-remains historical disabled-configuration evidence: it returns HTTP 503 with
+directory access and the ComputeSDK scan. The earlier directory deployment
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` supplies the metadata-only pagination
+evidence described below. The earlier captured deployment
+`dpl_3D4epeApMaBFmSFtuycVV9iAxrhi` remains historical disabled-configuration
+evidence: it returns HTTP 503 with
 `DIRECTORY_NOT_CONFIGURED` and `retryable: false`, while actual upstream
 outages retain `DIRECTORY_UNAVAILABLE`.
 
 The directory client, authenticated registry routes, Rust commands, cloud views,
-and governed import worker are implemented. `PSKILLS_DIRECTORY_ENABLED=false`
-describes the historical disconnected capture; the current production evidence
-has the enabled, authenticated directory path. Full pagination, selected-row
-import, Topics membership, and external Packs preview remain separate
+and governed import worker are implemented. Source `0f9da75` additionally
+contains the canonical Topics page parser, auth-before-hit metadata cache with
+bounded TTL/bytes, conflict/drift-aware enumeration, and credential-negative
+security tests. `PSKILLS_DIRECTORY_ENABLED=false` describes the historical
+disconnected capture; the current production deployment has the enabled,
+authenticated directory path. Full metadata pagination is verified for one
+earlier bounded run; the current read-only API probe verifies list/search,
+fail-closed auth, and fresh canonical Topics. Selected-row import, nested detail
+availability, current browser proof, and external Packs preview remain separate
 acceptance gates.
 
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
@@ -43,27 +63,65 @@ releases. Automatic external pack migration is a future feature.
 
 ## Current production evidence
 
-- The sanitized [v0.3 production record](../work/production-v03-evidence.json)
+- Current production deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY at
+  the stable alias, with output fingerprint
+  `613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`. The
+  platform checkpoint reports the enabled skills.sh directory and
+  request-scoped OIDC/ComputeSDK path, directory/search/CLI/analytics, and Files
+  SDK checks. The [current API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
+  adds eight GET requests with zero retries or mutations and no credential-pattern
+  leakage: health, authenticated `/me`, policy, list (`total=9738`), fuzzy
+  search, and fresh canonical React/Marketing Topics pass; unauthenticated
+  Topics is 401. The artifact is `verified:true`; browser proof for the current
+  deployment remains pending, and the previous stale-canonical result remains
+  preserved as regression evidence.
+- The current source review at `0f9da75` reports 286 tests passed and two
+  environment-dependent skips, with TypeScript, five SDK probes, the Files SDK,
+  and Cloudflare checks passing and two independent reviews approving. The
+  Topics parser, bounded cache, conflict/drift-aware enumeration, and
+  credential-negative security coverage are implementation/test evidence. The
+  current API result above verifies fresh canonical Topics; current browser
+  proof and the other acceptance gates remain pending.
+- The sanitized [earlier v0.3 production record](../work/production-v03-evidence.json)
   from `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` records authenticated list/search,
   Official, detail, and audit responses. It observed list page zero with
   `total=9736` and `hasMore=true`, two search results, 100 Official owners with
   5,497 skills, one detail file, and five audit entries. Topics is explicitly
   `not_exposed` and the pack preview is explicitly `skipped` because no
   operator-supplied unlisted URL was present.
-- The [scan record](../work/production-v03-scan-evidence.json) is
+- The [earlier pagination evidence](../work/production-c1-pagination-evidence-1788989595741-50223-dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC.json)
+  from `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
+  `b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`)
+  verifies 20 all-time pages at `per_page=500`, with 9,738 declared,
+  observed, and unique IDs, zero duplicate rows/IDs, and three nested IDs.
+  It is metadata-only: no detail, artifact, or mutating requests occurred.
+- The [earlier scan record](../work/production-v03-scan-evidence.json) is
   `verified=true` for driver `computesdk`: one file analyzed, zero findings,
   unchanged approved digest, and `allowUnscanned=false`. Scan
   `44cd2613-b29b-4b54-9c5a-4efc932afbe0` ran as job
-  `job_fd182a70-9c73-45d8-9d1b-a1732d98d107`.
-- Final CSS deployment `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready with output
-  hash `665727f37999113a2d018eb348ad32b47d1cbd817d9c8b4762b35c0ea760549a`.
-  The final 390px Packs, dashboard, and catalog captures pass without
-  horizontal overflow; the 1280px Packs capture also passes. The evidence is
-  linked from `docs/design/production-final-*.png`.
+  `job_fd182a70-9c73-45d8-9d1b-a1732d98d107` on the earlier deployment.
+- The nested compatibility evidence is split between the live upstream and
+  our client. [The upstream probe](../work/skills-sh-nested-probe-evidence.json)
+  saw 400 `invalid_path` for direct/full-ID encoding, 200 with wrong identity
+  for one-slug-segment encoding, and 404 for double encoding. The current
+  client supports bounded nested IDs and rejects identity mismatches; the
+  [current production nested probe](../work/production-c1-nested-evidence-1788989719476-50915-dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC.json)
+  received 503 for detail/audit on all three nested rows, with no mutation.
+  This is an upstream availability/route limitation, not evidence that the
+  client accepts a wrong skill.
+- Earlier CSS deployment `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready with
+  output hash `665727f37999113a2d018eb348ad32b47d1cbd817d9c8b4762b35c0ea760549a`.
+  Its 390px Packs, dashboard, and catalog captures pass without horizontal
+  overflow, as does the 1280px Packs capture; the evidence is linked from
+  `docs/design/production-final-*.png`.
 
-These results prove the current authenticated endpoints and sandbox scan path;
-they do not by themselves prove complete catalog pagination, representative
-GitHub/well-known imports, or metadata-only Packs preview.
+These results prove one earlier metadata-pagination run and preserve the
+provenance of the earlier authenticated endpoint, sandbox-scan, and browser
+evidence. The current deployment is READY and carries the new implementation;
+the current API artifact verifies the current read-only directory and Topics
+checks, and current browser proof is still pending. The results do not by themselves
+prove representative GitHub/well-known imports, upstream nested detail
+availability, or metadata-only Packs preview.
 
 An administrator can configure a `skills-sh` upstream with `repositories: ["*"]`
 to admit any public catalog source into an authorized namespace, or list exact
@@ -117,9 +175,10 @@ The current API documentation describes these versioned endpoints:
 | Rate/error behavior | Authenticated requests expose `X-RateLimit-*`; `429` includes `Retry-After`; documented errors include 400, 401, 404, 429, and 503. List/search cache for 30–60 seconds; detail/curated cache for five minutes. | Proxy and cache server-side, obey `Retry-After`, use bounded retries, surface stale metadata, and retain source response time/age. |
 
 The API examples contain dynamic install and total values. They are examples,
-not schema constants. A prior live authenticated spotcheck on 2026-09-10
-observed `pagination.total = 9,735` from `/api/v1/skills?per_page=2`; the
-current sanitized production record observed `total=9,736` on page zero. The
+not schema constants. Earlier live spotchecks on 2026-09-10 observed
+`pagination.total = 9,735` from `/api/v1/skills?per_page=2` and `total=9,736`
+on page zero of an earlier production deployment. The latest bounded production
+traversal observed `total=9,738` and 9,738 unique rows across 20 pages. The
 homepage displayed an approximately 1.4-million install headline. These are
 different measures (skill-row count versus aggregate installs), so the apparent
 disparity is not a catalog integrity finding. The adapter must read the
@@ -224,13 +283,14 @@ well-known support.
 
 | Area | Current implementation | Status for skills.sh support |
 | --- | --- | --- |
-| Private catalog | `packages/core` serves authorized `/v1/skills`; `apps/web` renders approved private releases and semantic search. | **Separate system.** No external source adapter or remote catalog view. |
-| Provenance | `packages/contracts` has `native`, `github`, and `registry` with upstream ID, repository, path, revision, and `sourceDigest`. | **Partial.** It has useful source fields, but no provider ID, external `source/slug`, source type, skills.sh URL, snapshot hash, tree path/ref mapping, or well-known identity. `sourceDigest` is validated as our canonical artifact digest and must not be overloaded with the external skills.sh hash. |
-| Acquisition | `packages/upstreams` supports enabled, administrator-created GitHub/registry upstreams. GitHub acquisition resolves a commit, recursive tree, selected directory, bounded files, and local canonical bundle digest. | **Partial.** The safe worker primitive is reusable, but it requires an allowlisted upstream and caller-supplied repository/path/name/version. It has no skills.sh API, well-known discovery, direct snapshot fallback, or external identity resolver. |
-| Imports/proxy | `packages/core` `/v1/imports` and `/v1/proxy/resolve` require an existing upstream, safe relative path, private namespace name, and SemVer. Completion requires complete provenance and local scanner evidence. | **Partial.** A selected cloud row can eventually enter this gate, but “every skills.sh row” cannot be represented until source identity and a separate external revision are added. Do not derive a SemVer from installs, first-seen date, or a Git branch. |
-| Packs | `PackVersion` is an immutable private org pack with approved private skill members and a manifest digest. `PacksView` creates/list private packs. | **Separate system.** Add a remote unlisted-pack link and metadata-only manifest preview; do not pretend the skills.sh pack page is an enumerable public pack catalog or automatically migrate its members. |
-| Audit | `AuditView` is the Private Skills administrative change log. Scanner reports are tenant-scoped. | **Separate system.** Add external skills.sh audit evidence keyed by external ID; keep the administrative audit log unchanged. |
-| UI navigation | `RegistryShell` exposes Discover, Skills, Skill packs, Analytics, Reviews, Publish, Activity, Settings, Sources, and Audit. | **Missing views.** Add a cloud catalog surface with All/Trending/Hot, Official, Topics, and external Audits, and split private versus external Packs. |
+| Private catalog | `packages/core` serves authorized `/v1/skills`; `apps/web` renders approved private releases and semantic search. The directory adapter and `/v1/directory` cloud routes are implemented separately. | **Partial integration.** Current production evidence proves the metadata directory path and complete bounded pagination; it does not prove private admission for every source row. |
+| Enumeration/cache/security | `packages/directory` provides conflict/drift-aware enumeration, auth-before-hit bounded metadata caching, and negative credential/security coverage. | **Implemented in source; API proof verified.** These paths are present at `0f9da75` and included in the current test review; the current API artifact proves credential-negative/list/search behavior and fresh-canonical Topics, while browser proof remains pending. |
+| Provenance | `packages/contracts` carries skills.sh provider, complete external ID, source/slug/type, source/page URLs, snapshot hash, source resolution fields, and the separate local `sourceDigest`. | **Implemented with live limits.** Current-head tests preserve bounded nested IDs and exact identity checks; the live upstream route returned invalid or wrong-identity responses for the nested probe, so no detail/import success is claimed. |
+| Acquisition | `packages/upstreams` implements skills.sh snapshot parsing plus GitHub and well-known source resolution with bounded files, archives, paths, and local canonical digesting. | **Implemented, import evidence pending.** The safe worker primitive and identity resolver are present, but representative production pullthrough awaits the separately requested restricted-source approval and scanner-admission readback. |
+| Imports/proxy | `packages/core` exposes governed `/v1/directory/import` and carries external ID/type/hash through the import job and provenance checks; existing `/v1/imports` and `/v1/proxy/resolve` remain authorization and scanner bounded. | **Partial.** A selected cloud row can enter the private import gate, but no representative GitHub/well-known import is accepted as complete yet. Do not derive a SemVer from installs, first-seen date, or a Git branch. |
+| Packs | `PackVersion` is an immutable private org pack with approved private skill members and a manifest digest. `PacksView` creates/lists private packs and has a remote unlisted-pack preview route. | **Partial verification.** The current code keeps external previews metadata-only and separate from private packs; production evidence still lacks an operator-supplied preview URL, and no public enumeration or automatic member migration is claimed. |
+| Audit | `AuditView` remains the Private Skills administrative change log; scanner reports are tenant-scoped, and `/v1/directory/audits` supplies external evidence. | **Partial.** External audit view is implemented and earlier production evidence returned five partner entries; negative-credential and tenant/secrecy proof remain open. |
+| UI navigation | `RegistryShell` exposes Cloud directory, Official makers, Topics, external Audits, and Packs alongside private registry views. | **Partial verification.** Earlier CSS deployment captures prove the recorded browser surfaces; the latest directory deployment is a metadata probe, and no current deployment claim is made for every view. |
 | Agent targets | `InstallReceiptAgent` and the Rust client currently cover `codex`, `claude`, and `universal`; the web install command is Codex-oriented. | **Partial ecosystem coverage.** The official CLI's current agent union is substantially larger. Catalog coverage can ship independently, but “all agent targets” needs an explicit later adapter matrix and discovery tests. |
 
 ## Proposed external catalog contract
@@ -321,10 +381,12 @@ Rules:
    documented, the UI must label results as a search result set, not a complete
    owner catalog. Owner-wide “all” uses leaderboard paging or a separately
    verified future API contract.
-3. Normalize every response to one external row type and deduplicate by `id`.
-   The `source`, `slug`, `sourceType`, install URL, direct page URL, and
-   `isDuplicate` flag remain visible. Dynamic install counts are display values,
-   not release identity.
+3. Normalize every response to one external row type and use the complete `id`
+   as the coverage key. The traversal records duplicate rows/IDs explicitly,
+   deduplicates its unique coverage count, and retains the source row and
+   `isDuplicate` metadata for review rather than silently dropping a listing.
+   The `source`, `slug`, `sourceType`, install URL, and direct page URL remain
+   visible. Dynamic install counts are display values, not release identity.
 4. Keep only bounded metadata cache entries, keyed by endpoint plus normalized
    query/page. Respect the documented cache windows (30–60 seconds for list and
    search; five minutes for detail and curated) and record cache age. Metadata
@@ -338,10 +400,11 @@ Rules:
    presented as current source bytes, and no browser call contains a bearer
    credential.
 
-“Full catalog coverage” is therefore measurable without mass mirroring: a
-bounded enumeration run can prove that every response row was observed,
-deduplicated, and assigned a status; only selected rows incur detail/source
-traffic and private object storage.
+“Full catalog coverage” is therefore measurable without mass mirroring: the
+latest bounded enumeration run observed all 9,738 declared rows across 20 pages,
+recorded 9,738 unique IDs and zero duplicates, and performed no detail/source
+or artifact writes. Only selected rows incur detail/source traffic and private
+object storage.
 
 ## Pullthrough and source resolution
 
@@ -378,11 +441,11 @@ official CLI's tree path:
    `changed`, `ambiguous`, or `unavailable` with a reason. Never silently import
    another skill with the same display name.
 
-The existing GitHub upstream worker already resolves commits and recursive
-trees, enforces path/size/redirect/SSRF limits, validates bundles, and emits a
-local source digest. The missing work is a skills.sh identity resolver and a
-public adapter that does not require an administrator to pre-register every
-one of the catalog's repositories.
+The existing GitHub upstream worker and the skills.sh identity resolver now
+resolve commits and recursive trees, enforce path/size/redirect/SSRF limits,
+validate bundles, and emit a local source digest. The remaining work is live
+representative pullthrough and admission evidence; an administrator must still
+authorize the source policy rather than allowing an arbitrary direct fetch.
 
 ### Well-known fallback
 
@@ -439,9 +502,12 @@ contract. They do not add a requirement to the current v0.2.0 shipment.
   `sourceType`, `files: null`, unknown fields, `429/Retry-After`, and `503`
   are tested.
 - **CAT-2 complete enumeration:** bounded list-page traversal can walk pages
-  from zero until `hasMore=false`, deduplicate by `id`, and record observed
-  count versus response `total`. It passes with a fixture spanning at least
-  three pages and a duplicate row; no row disappears without a recorded reason.
+  from zero until `hasMore=false`, use complete `id` values as its coverage key,
+  retain duplicate-row evidence, and record observed count versus response
+  `total`. It passes with a fixture spanning at least three pages and a
+  duplicate row; no row disappears without a recorded reason. The latest
+  production run recorded 9,738 declared/observed/unique rows across 20 pages,
+  with zero duplicate rows/IDs and no artifact writes.
   This is a coverage/adapter verification path, not a required user-triggered
   “refresh all metadata” operation. Search results expose their query/search
   type and are not mislabeled as complete enumeration.
@@ -453,8 +519,12 @@ contract. They do not add a requirement to the current v0.2.0 shipment.
   operator chooses a shorter bounded TTL.
 - **CAT-4 stable identity:** round-trip fixtures preserve complete `id`, source,
   slug, source type, install URL, page URL, and duplicate flag. Same slug under
-  different sources cannot collide. IDs are treated as opaque path components;
-  detail/audit route construction cannot allow slash traversal.
+  different sources cannot collide. IDs are treated as bounded path components;
+  detail/audit route construction cannot allow traversal or encoded-delimiter
+  confusion. Current-head fixtures accept the valid nested ID
+  `claude-office-skills/skills/facebook/meta-ads` and fail closed for unsafe
+  variants; the live upstream's 400/wrong-identity/404 behavior remains an
+  external compatibility limitation, not a trusted mapping.
 - **CAT-5 source status:** every enumerated row receives `snapshot-available`,
   `source-resolved`, `metadata-only`, `changed`, `unavailable`, or `rejected`,
   with a bounded human-readable reason. The UI never calls a row installable
@@ -553,16 +623,23 @@ because its manifest could be previewed.
 
 ## Dependencies and non-goals
 
-The near-term implementation dependency is now partially satisfied: current
-production evidence covers the authenticated Vercel OIDC directory path and a
-required ComputeSDK scan. Remaining C1 dependencies are complete pagination,
-source resolution/import readback, Topics page parsing, an operator-supplied
-Packs preview, browser/log credential-negative evidence, and tenant/secrecy
-checks. A non-Vercel Nitro deployment still needs an explicitly configured
-supported gateway/credential provider. Other dependencies are the external
-identity fields, a public source resolver, a bounded detail cache, and an
-import operation that can carry external provenance through the existing
-scanner job.
+The near-term implementation dependency is now partially satisfied: an earlier
+production evidence run covers complete metadata pagination, while earlier
+evidence covers the authenticated Vercel OIDC directory path and a required
+ComputeSDK scan. The current source contains the Topics parser, bounded cache,
+enumeration conflict handling, and credential-negative tests. The current API
+artifact verifies safe list/search, fail-closed auth, and fresh canonical Topics;
+browser proof for those paths is still pending. Remaining C1
+dependencies are representative GitHub/well-known source resolution and import
+readback (subject to the separately requested restricted-source approval),
+upstream nested-detail availability, current browser proof for Topics/cache/
+enumeration, an operator-supplied
+Packs preview, browser/log credential-negative evidence, error/rate handling,
+and tenant/secrecy checks. A non-Vercel Nitro deployment still needs an
+explicitly configured supported gateway/credential provider.
+The current-head client supports bounded nested identities and fails closed on
+wrong upstream identities; that does not substitute for successful live detail
+and scanner-admission evidence.
 
 This work must not silently turn the current release into a public marketplace
 or bulk mirror. It does not require importing all catalog rows, copying
@@ -593,10 +670,12 @@ Primary official pages and files used for this review:
 - [`src/download-source.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/download-source.ts)
 - [`src/find.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/find.ts)
 - [`src/telemetry.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/telemetry.ts)
+- [Private Skills isolated install-directory guide](install-directories.md)
 
 The report is a design and evidence record. Current production evidence covers
-the authenticated directory endpoints and ComputeSDK scan above; complete
-cloud catalog coverage, representative pullthrough, and CLI parity are not
+metadata-only full catalog pagination; earlier deployment evidence covers the
+authenticated directory endpoints and ComputeSDK scan above. Representative
+pullthrough, nested live detail, remaining cloud views, and CLI parity are not
 claimed until their remaining acceptance criteria pass.
 
 ## CLI and agent compatibility review

@@ -8,7 +8,10 @@ The baseline implementation and its recorded v0.2 checks were established on
 9 September 2026. The v0.3 production checkpoint and its remaining gates are
 tracked separately in [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md);
 that record distinguishes completed evidence from pending deployment/provider
-checks. Published CLI archives and checksums are linked through [GitHub Releases](https://github.com/andymac4182/private-skills/releases); in-flight or prerelease packaging is not represented as a published release.
+checks. The private v0.2.0 archives/checksums and clean-consumer verification
+are recorded as complete; any archive/checksum publication for the current
+source remains a separate release step, and in-flight or prerelease packaging
+is not represented as a published release.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -23,7 +26,7 @@ checks. Published CLI archives and checksums are linked through [GitHub Releases
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
-| skills.sh directory | Production list/search/Official/detail/audits are verified with governed directory plumbing; recorded 390px Packs/dashboard/catalog and 1280px Packs layouts pass | Current deployment evidence proves server-side Vercel project OIDC and a ComputeSDK scan; full pagination, selected imports, Topics parsing, Packs preview, and tenant/secrecy evidence remain pending |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented at source `0f9da75`; current READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` | The current read-only API probe verifies list/search, fail-closed auth, and fresh-canonical Topics; current browser proof, selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe is retained as stale-canonical regression evidence, and `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` proves metadata-only pagination across 9,738 rows and 20 pages |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
@@ -31,21 +34,47 @@ The repository includes Node production, Vercel, and Cloudflare/Nitro build prof
 The current registry checkpoint is deployed at
 [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
 with Neon PostgreSQL/pgvector, private Blob storage, and required SkillsGuard
-scanning. The v0.3.0 verification record covers the current deployment and
-its remaining production gates; the recorded authenticated publishing, search,
-CLI pack installation, analytics, and Eve review flows are carried forward from
-the verified private-registry evidence. The separate reviewer runs at
+scanning. The current READY deployment is
+`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with output fingerprint
+`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`.
+Its Cloudflare build fingerprint is
+`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` with
+35 server files and no executable SDK references. The checked-in all-time
+pagination record is from the earlier `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC`;
+OIDC/ComputeSDK and browser evidence also remains identified by its own
+deployment in the v0.3.0 verification record. The current source review reports
+286 tests passed and two environment-dependent skips, TypeScript and the edge
+bundle checks pass, and two independent review approvals are recorded. The
+previous deployment's [sanitized API probe](work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
+records safe list/search and credential-negative behavior but stale-canonical
+Topics. The [current API probe](work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
+is verified for health, authenticated `/me`, policy, list, fuzzy search, fresh
+canonical React and Marketing Topics, and unauthenticated Topics rejection;
+current browser proof for the new deployment is still pending. The
+recorded authenticated publishing,
+search, CLI pack installation, analytics, and Eve review flows are
+carried forward from the verified private-registry evidence. The separate reviewer runs at
 [`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
-with a registered daily `0 22 * * *` UTC schedule. Git-triggered deployment
-verification, full C1 catalog acceptance, and hosted restore remain pending.
+with a registered daily `0 22 * * *` UTC schedule (22:00 UTC, subject to the
+hosting execution window); the route and schedule were verified earlier, but a
+last observed 22:02 check was not a confirmed calendar invocation.
+Git-triggered deployment verification, full C1 catalog acceptance, and hosted
+restore remain pending.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
 The v0.3.0 checkout adds the external directory and ComputeSDK integration. The
-current production evidence verifies the server-side Vercel project OIDC
-directory path, a required ComputeSDK scan, and the final captured 390px
-Packs/dashboard/catalog plus 1280px Packs layouts. Full C1 acceptance remains
-open. The historical disconnected deployment and the prior ComputeSDK
-pre-analysis failure remain preserved in the verification record.
+current source head `0f9da75` has the Topics canonical-page parser, bounded
+metadata cache, conflict-aware enumeration, and credential-negative tests; its
+review reports 286 tests passed and two environment-dependent skips. The current
+READY deployment carries the enabled directory and ComputeSDK configuration;
+earlier deployment artifacts verify the authenticated directory endpoints, scan,
+pagination, and captured 390px/1280px browser surfaces. Full C1 acceptance
+remains open while current browser proof, selected import, nested detail, Packs
+preview, and tenant/secrecy checks are completed; the earlier deployment's
+stale-canonical Topics result remains preserved as regression evidence, while the
+current API result is verified. The historical
+disconnected deployment and the prior ComputeSDK pre-analysis failure remain
+preserved in the verification record.
 See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.
@@ -158,6 +187,7 @@ The request handler owns authorization, resolution, policy state, and audit reco
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
 - [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the historical v0.2.0 release evidence.
 - [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md) records the directory and sandbox implementation checkpoint and remaining acceptance gates.
+- [`docs/install-directories.md`](docs/install-directories.md) documents absolute-root and agent/scope selection for isolated CLI installs.
 - [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
 - [`docs/completion-criteria.md`](docs/completion-criteria.md) turns the roadmap into measurable, non-blocking future milestones.
 - [`docs/architecture.md`](docs/architecture.md) is the original architecture and portability design intent. Its planning language remains useful context; this README and the implementation status document describe what exists in the repository now.

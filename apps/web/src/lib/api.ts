@@ -4,7 +4,7 @@ import type {
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
   ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
-  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillView,
+  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest,
 } from './types'
 
@@ -100,6 +100,7 @@ export const api = {
     } })
   },
   directoryOfficial() { return request<CuratedSkillsResponse>('/v1/directory/official') },
+  directoryTopic(slug: string) { return request<SkillsTopicResponse>('/v1/directory/topic', { query: { slug } }) },
   directoryDetail(id: string) { return request<SkillDetailResponse>('/v1/directory/detail', { query: { id } }) },
   directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {

@@ -401,4 +401,99 @@ describe('SkillsDirectoryClient', () => {
     await expect(client.list()).rejects.toMatchObject({ code: 'request_timeout' });
     expect(cancelled).toBe(true);
   });
+
+  it('caches normalized metadata per client while authenticating every lookup', async () => {
+    let tokenNumber = 0;
+    const getToken = vi.fn(async () => `request-token-${++tokenNumber}`);
+    const fetch = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer request-token-1');
+      return response({
+        data: [{ ...skill }],
+        pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+      });
+    });
+    const client = new SkillsDirectoryClient({ fetch, getToken });
+
+    const first = await client.list();
+    first.data[0]!.name = 'mutated by caller';
+    const second = await client.list();
+
+    expect(second.data[0]?.name).toBe(skill.name);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(getToken).toHaveBeenCalledTimes(2);
+    expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 1, stores: 1, entries: 1, totalBytes: expect.any(Number) });
+  });
+
+  it('fails a warm lookup when its fresh credential provider fails', async () => {
+    let unavailable = false;
+    const getToken = vi.fn(async () => {
+      if (unavailable) throw new Error('credential-secret-must-not-escape');
+      return 'request-token';
+    });
+    const fetch = vi.fn(async () => response({
+      data: [{ ...skill }],
+      pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+    }));
+    const client = new SkillsDirectoryClient({ fetch, getToken });
+
+    await client.list();
+    unavailable = true;
+    const error = await client.list().catch((value: unknown) => value);
+
+    expect(error).toMatchObject({ code: 'unavailable' });
+    expect((error as Error).message).not.toContain('credential-secret-must-not-escape');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(client.cacheStats()).toMatchObject({ authFailures: 1, hits: 0, stores: 1 });
+  });
+
+  it('allows explicit cache disabling without changing request semantics', async () => {
+    const fetch = vi.fn(async () => response({
+      data: [{ ...skill }],
+      pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+    }));
+    const client = new SkillsDirectoryClient({ fetch, cache: false });
+
+    await client.list();
+    await client.list();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(client.cacheStats()).toBeNull();
+  });
+
+  it('bypasses only the cache for valid queries whose encoded identity is too large', async () => {
+    const longAscii = 'a'.repeat(12_000);
+    const unicodeQuery = '😀'.repeat(1_500);
+    const invalidQuery = 'b'.repeat(17_000);
+    let tokenNumber = 0;
+    const events: unknown[] = [];
+    const getToken = vi.fn(async () => `long-query-token-${++tokenNumber}`);
+    const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const query = new URL(String(input)).searchParams.get('q');
+      expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer long-query-token-${tokenNumber}`);
+      return response({
+        data: [{ ...skill }],
+        query,
+        searchType: 'fuzzy',
+        count: 1,
+        durationMs: 1,
+      });
+    });
+    const client = new SkillsDirectoryClient({
+      fetch,
+      getToken,
+      maxAttempts: 1,
+      cache: { observe: (event) => events.push(event) },
+    });
+
+    await expect(client.search({ q: longAscii })).resolves.toMatchObject({ query: longAscii });
+    await expect(client.search({ q: longAscii })).resolves.toMatchObject({ query: longAscii });
+    await expect(client.search({ q: unicodeQuery })).resolves.toMatchObject({ query: unicodeQuery });
+    await expect(client.search({ q: invalidQuery })).rejects.toMatchObject({ code: 'invalid_input' });
+
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(getToken).toHaveBeenCalledTimes(3);
+    expect(events).toEqual([]);
+    expect(JSON.stringify({ events, stats: client.cacheStats() })).not.toContain('long-query-token');
+    expect(JSON.stringify({ events, stats: client.cacheStats() })).not.toContain(longAscii);
+  });
 });
