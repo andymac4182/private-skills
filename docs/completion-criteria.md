@@ -2,8 +2,9 @@
 
 These criteria turn [`roadmap.md`](roadmap.md) into checkable milestones. A
 future feature is not complete because a route, CLI command, or design mockup
-exists; the listed behavior and evidence must pass. The v0.2.0 criteria are the
-only criteria that gate the current shipment.
+exists; the listed behavior and evidence must pass. G0 records the original
+shipment gates; C1 records the explicitly requested catalog follow-up. Both
+must be satisfied before the complete current goal can be marked achieved.
 
 ## G0 — v0.2.0 shipment
 

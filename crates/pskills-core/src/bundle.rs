@@ -925,18 +925,17 @@ fn strip_yaml_comment(raw: &str) -> &str {
                     quote = None;
                 }
             }
-            Some('\'') => {
-                if character == '\'' {
-                    if chars
-                        .peek()
-                        .is_some_and(|(_, next_character)| *next_character == '\'')
-                    {
-                        let _ = chars.next();
-                    } else {
-                        quote = None;
-                    }
+            Some('\'') if character == '\'' => {
+                if chars
+                    .peek()
+                    .is_some_and(|(_, next_character)| *next_character == '\'')
+                {
+                    let _ = chars.next();
+                } else {
+                    quote = None;
                 }
             }
+            Some('\'') => {}
             None => match character {
                 '"' | '\'' => quote = Some(character),
                 '#' if index == 0
