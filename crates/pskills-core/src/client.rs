@@ -496,36 +496,15 @@ impl ApiClient {
         loop {
             let value: Value =
                 self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
-            if let Ok(resolution) = serde_json::from_value::<Resolution>(value.clone()) {
-                return Ok(resolution);
-            }
-            if let Some(resolution) = value.get("resolution") {
-                return serde_json::from_value(resolution.clone())
-                    .map_err(|e| ApiError::Response(e.to_string()));
-            }
-            let operation = value.get("operation").unwrap_or(&value);
-            if let Some(resolution) = operation.get("resolution") {
-                return serde_json::from_value(resolution.clone())
-                    .map_err(|e| ApiError::Response(e.to_string()));
-            }
-            let state = operation
-                .get("state")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if matches!(state, "failed" | "error") {
-                return Err(ApiError::OperationFailed(
-                    operation
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("operation failed")
-                        .into(),
-                ));
-            }
-            if matches!(state, "completed" | "succeeded" | "done") {
-                // The registry operation only records that its scan/import
-                // finished.  The immutable resolution is obtained by
-                // repeating the fenced resolve request after completion.
-                return self.resolve_until(request, deadline);
+            match inspect_operation(&value, "operation failed")? {
+                OperationPollAction::Resolution(resolution) => return Ok(resolution),
+                OperationPollAction::Completed => {
+                    // The registry operation only records that its scan/import
+                    // finished.  The immutable resolution is obtained by
+                    // repeating the fenced resolve request after completion.
+                    return self.resolve_until(request, deadline);
+                }
+                OperationPollAction::Pending => {}
             }
             if std::time::Instant::now() >= deadline {
                 return Err(ApiError::OperationTimeout(operation_id.into()));
@@ -544,29 +523,12 @@ impl ApiClient {
         loop {
             let value: Value =
                 self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
-            if let Ok(resolution) = extract_resolution(value.clone()) {
-                return Ok(resolution);
-            }
-            let operation = value.get("operation").unwrap_or(&value);
-            if let Some(resolution) = operation.get("resolution") {
-                return serde_json::from_value(resolution.clone())
-                    .map_err(|e| ApiError::Response(e.to_string()));
-            }
-            let state = operation
-                .get("state")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if matches!(state, "failed" | "error") {
-                return Err(ApiError::OperationFailed(
-                    operation
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("proxy operation failed")
-                        .into(),
-                ));
-            }
-            if matches!(state, "completed" | "succeeded" | "done") {
-                return self.proxy_resolve_until(request, deadline);
+            match inspect_operation(&value, "proxy operation failed")? {
+                OperationPollAction::Resolution(resolution) => return Ok(resolution),
+                OperationPollAction::Completed => {
+                    return self.proxy_resolve_until(request, deadline);
+                }
+                OperationPollAction::Pending => {}
             }
             if std::time::Instant::now() >= deadline {
                 return Err(ApiError::OperationTimeout(operation_id.into()));
@@ -768,6 +730,70 @@ fn extract_operation_id(value: &Value) -> Result<String, ApiError> {
     ))
 }
 
+fn operation_error_message(operation: &Value, fallback: &str) -> Option<String> {
+    let error = operation.get("error").and_then(Value::as_str)?;
+    if error.is_empty() {
+        return None;
+    }
+    let sanitized: String = error
+        .chars()
+        .take(512)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let sanitized = sanitized.trim();
+    Some(if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized.to_string()
+    })
+}
+
+enum OperationPollAction {
+    Resolution(Resolution),
+    Completed,
+    Pending,
+}
+
+fn inspect_operation(
+    value: &Value,
+    failure_fallback: &str,
+) -> Result<OperationPollAction, ApiError> {
+    let operation = value.get("operation").unwrap_or(value);
+    if let Some(error) = operation_error_message(operation, failure_fallback) {
+        return Err(ApiError::OperationFailed(error));
+    }
+    if let Ok(resolution) = serde_json::from_value::<Resolution>(value.clone()) {
+        return Ok(OperationPollAction::Resolution(resolution));
+    }
+    if let Some(resolution) = value.get("resolution") {
+        return serde_json::from_value(resolution.clone())
+            .map(OperationPollAction::Resolution)
+            .map_err(|error| ApiError::Response(error.to_string()));
+    }
+    if let Some(resolution) = operation.get("resolution") {
+        return serde_json::from_value(resolution.clone())
+            .map(OperationPollAction::Resolution)
+            .map_err(|error| ApiError::Response(error.to_string()));
+    }
+    let state = operation
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(state, "failed" | "error") {
+        return Err(ApiError::OperationFailed(failure_fallback.into()));
+    }
+    if matches!(state, "completed" | "succeeded" | "done") {
+        return Ok(OperationPollAction::Completed);
+    }
+    Ok(OperationPollAction::Pending)
+}
+
 /// Construct a publish request and enforce the same canonical bytes the server
 /// will hash.  This helper keeps callers from accidentally publishing a pretty
 /// printed or otherwise non-canonical artifact.
@@ -815,6 +841,53 @@ mod tests {
     fn remote_http_requires_tls_but_loopback_is_allowed_for_development() {
         assert!(ApiClient::new("http://registry.example", None).is_err());
         assert!(ApiClient::new("http://127.0.0.1:5173", None).is_ok());
+    }
+
+    #[test]
+    fn completed_operation_error_is_terminal_for_both_polling_paths() {
+        let value = serde_json::json!({
+            "operation": {
+                "id": "op-1",
+                "state": "completed",
+                "error": "Required scanner cisco-skill-scanner returned scan-error"
+            }
+        });
+        for fallback in ["operation failed", "proxy operation failed"] {
+            let result = inspect_operation(&value, fallback);
+            assert!(matches!(
+                result,
+                Err(ApiError::OperationFailed(message))
+                    if message == "Required scanner cisco-skill-scanner returned scan-error"
+            ));
+        }
+    }
+
+    #[test]
+    fn completed_operation_without_error_remains_resolvable() {
+        let value = serde_json::json!({
+            "operation": { "id": "op-1", "state": "completed" }
+        });
+        assert!(matches!(
+            inspect_operation(&value, "operation failed"),
+            Ok(OperationPollAction::Completed)
+        ));
+
+        let value = serde_json::json!({
+            "resolution": {
+                "kind": "skill",
+                "resourceId": "skill-1",
+                "organizationId": "org-1",
+                "name": "@team/demo",
+                "version": "1.0.0",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "members": []
+            }
+        });
+        assert!(matches!(
+            inspect_operation(&value, "operation failed"),
+            Ok(OperationPollAction::Resolution(resolution))
+                if resolution.resource_id == "skill-1"
+        ));
     }
 
     #[test]
