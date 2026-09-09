@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { api, ApiError } from '../lib/api'
+import { api, ApiError, isApiErrorCode } from '../lib/api'
 import { formatDate } from '../lib/format'
 import type { SkillAuditResponse } from '../lib/types'
-import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
+import { Badge, Button, DisconnectedState, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
 
 function initialAuditId() {
   if (typeof window === 'undefined') return ''
@@ -16,12 +16,14 @@ export function DirectoryAuditsView() {
   const [audits, setAudits] = useState<SkillAuditResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [disconnected, setDisconnected] = useState(false)
   const loadGeneration = useRef(0)
 
   async function loadAudit(targetId: string) {
     const generation = ++loadGeneration.current
     setLoading(true)
     setError(null)
+    setDisconnected(false)
     try {
       const response = await api.directoryAudits(targetId)
       if (generation !== loadGeneration.current) return
@@ -31,7 +33,12 @@ export function DirectoryAuditsView() {
       if (cause instanceof ApiError && cause.status === 404) {
         const parts = targetId.split('/').filter(Boolean)
         setAudits({ id: targetId, source: parts.slice(0, -1).join('/') || targetId, slug: parts.at(-1) ?? targetId, audits: [] })
+      } else if (isApiErrorCode(cause, 'DIRECTORY_NOT_CONFIGURED')) {
+        setDisconnected(true)
+        setError(null)
+        setAudits(null)
       } else {
+        setDisconnected(false)
         setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load external audit evidence.')
         setAudits(null)
       }
@@ -52,10 +59,12 @@ export function DirectoryAuditsView() {
       setLoading(false)
       setSubmittedId('')
       setAudits(null)
+      setDisconnected(false)
       setError('Enter the complete skills.sh external ID, such as owner/repository/skill.')
       return
     }
     setError(null)
+    setDisconnected(false)
     setAudits(null)
     if (target === submittedId) {
       void loadAudit(target)
@@ -66,7 +75,7 @@ export function DirectoryAuditsView() {
     if (typeof window !== 'undefined') window.sessionStorage.setItem('pskills.directory.audit.id', target)
   }
 
-  return <div className="view-heading external-audits-view"><div className="page-intro"><div><span className="eyebrow eyebrow-cloud">Cloud directory</span><h1>External security audits</h1><p className="muted">Read partner evidence attached to a skills.sh listing. A remote pass is evidence only and never changes this registry’s scanner or approval state.</p></div><Link className="button button-primary" params={{ section: 'directory' }} to="/app/$section">Browse cloud skills</Link></div><Notice kind="info">This evidence is separate from the administrative audit log and from Private Skills scanner reports. A missing partner audit means unknown evidence, not a private scan failure.</Notice><Panel title="Check a cloud skill" description="Use the complete external source/slug identity from the cloud directory."><form className="directory-audit-form" onSubmit={submit}><Field label="External ID" hint="Copied from a cloud skill detail panel."><input onChange={(event) => setId(event.target.value)} placeholder="owner/repository/skill" value={id} /></Field><Button type="submit">Load external audits</Button></form></Panel>{error && <ErrorState message={error} onRetry={() => submittedId ? void loadAudit(submittedId) : undefined} />}{submittedId && <Panel title="Partner evidence" description={`${submittedId} · external source evidence`}>
-    {loading ? <LoadingState label="Loading partner evidence…" /> : error ? <Notice kind="warning">No partner evidence is shown while the source is unavailable.</Notice> : audits && audits.audits.length === 0 ? <EmptyState title="No external audit yet" description="skills.sh returned no partner audit for this listing. Continue to rely on the Private Skills scanner and policy before admission." /> : audits && <div className="external-audit-list">{audits.audits.map((audit) => <article className="external-audit-card" key={`${audit.provider}:${audit.slug}:${audit.auditedAt}`}><div className="external-audit-heading"><div><span className="eyebrow eyebrow-cloud">Partner evidence</span><h2>{audit.provider}</h2><p>{audit.slug}</p></div><Badge tone={audit.status === 'pass' ? 'good' : audit.status === 'warn' ? 'warn' : 'bad'} value={audit.status} /></div><p className="external-audit-summary">{audit.summary}</p><div className="external-audit-meta"><span>Audited {formatDate(audit.auditedAt)}</span>{audit.riskLevel && <span>Risk {audit.riskLevel}</span>}{audit.categories && audit.categories.length > 0 && <span>{audit.categories.join(' · ')}</span>}</div></article>)}</div>}
+  return <div className="view-heading external-audits-view"><div className="page-intro"><div><span className="eyebrow eyebrow-cloud">Cloud directory</span><h1>External security audits</h1><p className="muted">Read partner evidence attached to a skills.sh listing. A remote pass is evidence only and never changes this registry’s scanner or approval state.</p></div><Link className="button button-primary" params={{ section: 'directory' }} to="/app/$section">Browse cloud skills</Link></div><Notice kind="info">This evidence is separate from the administrative audit log and from Private Skills scanner reports. A missing partner audit means unknown evidence, not a private scan failure.</Notice><Panel title="Check a cloud skill" description="Use the complete external source/slug identity from the cloud directory."><form className="directory-audit-form" onSubmit={submit}><Field label="External ID" hint="Copied from a cloud skill detail panel."><input onChange={(event) => setId(event.target.value)} placeholder="owner/repository/skill" value={id} /></Field><Button type="submit">Load external audits</Button></form></Panel>{disconnected ? <DisconnectedState title="External audits are disconnected" message="Partner evidence is unavailable because the public skills.sh connection is not configured. Your private scanner and administrative audit log remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error && <ErrorState message={error} onRetry={() => submittedId ? void loadAudit(submittedId) : undefined} />}{submittedId && <Panel title="Partner evidence" description={`${submittedId} · external source evidence`}>
+    {loading ? <LoadingState label="Loading partner evidence…" /> : disconnected ? <Notice kind="info">Partner evidence is paused until the public source connection is configured.</Notice> : error ? <Notice kind="warning">No partner evidence is shown while the source is unavailable.</Notice> : audits && audits.audits.length === 0 ? <EmptyState title="No external audit yet" description="skills.sh returned no partner audit for this listing. Continue to rely on the Private Skills scanner and policy before admission." /> : audits && <div className="external-audit-list">{audits.audits.map((audit) => <article className="external-audit-card" key={`${audit.provider}:${audit.slug}:${audit.auditedAt}`}><div className="external-audit-heading"><div><span className="eyebrow eyebrow-cloud">Partner evidence</span><h2>{audit.provider}</h2><p>{audit.slug}</p></div><Badge tone={audit.status === 'pass' ? 'good' : audit.status === 'warn' ? 'warn' : 'bad'} value={audit.status} /></div><p className="external-audit-summary">{audit.summary}</p><div className="external-audit-meta"><span>Audited {formatDate(audit.auditedAt)}</span>{audit.riskLevel && <span>Risk {audit.riskLevel}</span>}{audit.categories && audit.categories.length > 0 && <span>{audit.categories.join(' · ')}</span>}</div></article>)}</div>}
   </Panel>}</div>
 }

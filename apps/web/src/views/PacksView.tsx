@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
-import { api, ApiError } from '../lib/api'
+import { api, ApiError, isApiErrorCode } from '../lib/api'
 import { formatDate, shortDigest } from '../lib/format'
 import type { PackVersion, SkillsPackManifest, SkillsPackMember } from '../lib/types'
-import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
+import { Badge, Button, DisconnectedState, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
 
 export function PacksView() {
   const [packs, setPacks] = useState<PackVersion[] | null>(null)
@@ -18,6 +18,7 @@ export function PacksView() {
   const [externalPack, setExternalPack] = useState<SkillsPackManifest | null>(null)
   const [externalPackBusy, setExternalPackBusy] = useState(false)
   const [externalPackMessage, setExternalPackMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  const [externalPackDisconnected, setExternalPackDisconnected] = useState(false)
 
   async function load() {
     setError(null)
@@ -65,13 +66,20 @@ export function PacksView() {
     }
     setExternalPackBusy(true)
     setExternalPack(null)
+    setExternalPackDisconnected(false)
     setExternalPackMessage(null)
     try {
       const response = await api.directoryPackPreview({ url: candidate })
       setExternalPack(response)
       setExternalPackMessage({ kind: 'success', text: `Preview loaded with ${response.members.length} upstream member${response.members.length === 1 ? '' : 's'}.` })
     } catch (cause) {
-      setExternalPackMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not preview this external pack.' })
+      if (isApiErrorCode(cause, 'DIRECTORY_NOT_CONFIGURED')) {
+        setExternalPackDisconnected(true)
+        setExternalPackMessage(null)
+      } else {
+        setExternalPackDisconnected(false)
+        setExternalPackMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not preview this external pack.' })
+      }
     } finally {
       setExternalPackBusy(false)
     }
@@ -96,9 +104,9 @@ export function PacksView() {
     </div>
     <Panel className="external-pack-panel" title="Preview an unlisted skills.sh pack" description="Private packs stay managed here. Preview an upstream pack by its link before deciding which releases to admit privately.">
       <form className="directory-pack-form" onSubmit={previewExternalPack}>
-        <Field label="skills.sh pack link" hint="Anyone with the link can view or install the upstream pack. Previewing it does not create a private pack or bypass the private scanner."><input onChange={(event) => { setExternalPackUrl(event.target.value); setExternalPack(null); setExternalPackMessage(null) }} placeholder="https://skills.sh/p/…" value={externalPackUrl} /></Field>
+        <Field label="skills.sh pack link" hint="Anyone with the link can view or install the upstream pack. Previewing it does not create a private pack or bypass the private scanner."><input onChange={(event) => { setExternalPackUrl(event.target.value); setExternalPack(null); setExternalPackDisconnected(false); setExternalPackMessage(null) }} placeholder="https://skills.sh/p/…" value={externalPackUrl} /></Field>
         <div className="form-actions"><Button busy={externalPackBusy} kind="secondary" type="submit">Preview pack</Button>{externalPack && <a className="button button-primary" href={externalPackUrl.trim()} rel="noreferrer" target="_blank">Open original pack ↗</a>}</div>
-        {externalPackMessage && <Notice kind={externalPackMessage.kind}>{externalPackMessage.text}</Notice>}
+        {externalPackDisconnected ? <DisconnectedState title="Pack preview is disconnected" message="The public skills.sh connection is not configured for this registry. You can still open the upstream link, or create a private pack from approved releases below." action={<a className="button button-secondary" href={externalPackUrl.trim()} rel="noreferrer" target="_blank">Open original pack ↗</a>} /> : externalPackMessage && <Notice kind={externalPackMessage.kind}>{externalPackMessage.text}</Notice>}
       </form>
       {externalPack && <ExternalPackPreview pack={externalPack} />}
     </Panel>

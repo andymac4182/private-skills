@@ -1330,7 +1330,7 @@ function directoryApiError(error: SkillsDirectoryError): RegistryApiError {
 }
 
 function directoryUnavailable(): RegistryApiError {
-  return new RegistryApiError('DIRECTORY_UNAVAILABLE', 'The skills.sh directory is not configured', 503, { retryable: true });
+  return new RegistryApiError('DIRECTORY_NOT_CONFIGURED', 'The skills.sh directory is disconnected', 503, { retryable: false });
 }
 
 function requireDirectoryPackUrl(value: unknown): string {

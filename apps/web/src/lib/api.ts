@@ -25,6 +25,10 @@ export class ApiError extends Error {
   }
 }
 
+export function isApiErrorCode(error: unknown, code: string): error is ApiError {
+  return error instanceof ApiError && error.code === code
+}
+
 type RequestOptions = Omit<RequestInit, 'body'> & { body?: unknown; query?: Record<string, string | undefined> }
 function isRecord(value: unknown): value is Record<string, any> { return typeof value === 'object' && value !== null }
 async function readBody(response: Response): Promise<unknown> {

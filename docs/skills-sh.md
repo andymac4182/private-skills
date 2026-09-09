@@ -1,7 +1,7 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
-**Status:** v0.3.0 implementation and acceptance record; live catalog authentication remains pending
+**Status:** v0.3.0 implementation merged; skills.sh is intentionally disconnected at the owner's request on 2026-09-10.
 **Scope:** the current skills.sh site, its documented API, and the public
 `vercel-labs/skills` repository. The review uses official sources only. It does
 not use Tessl pages or GitHub issues as evidence.
@@ -14,6 +14,12 @@ not mean copying every artifact into the private registry during metadata
 traversal.
 
 ## Current configuration
+
+The owner has deferred connecting skills.sh. Private-registry deployment and
+refinement continue independently. A disabled integration returns HTTP 503 with
+`DIRECTORY_NOT_CONFIGURED` and `retryable: false`; clients show an intentional
+disconnected state. Actual upstream outages retain `DIRECTORY_UNAVAILABLE`.
+Connecting later remains a separate decision; no OIDC forwarding is enabled.
 
 The directory client, authenticated registry routes, Rust commands, cloud views,
 and governed import worker are implemented. `PSKILLS_DIRECTORY_ENABLED` defaults

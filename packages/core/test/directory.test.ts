@@ -104,7 +104,7 @@ function directoryClient(): RegistryDirectoryClient {
 }
 
 describe('skills.sh directory routes', () => {
-  function setup(directoryPacks?: RegistryDirectoryPackClient, directory: RegistryDirectoryClient = directoryClient()) {
+  function setup(directoryPacks?: RegistryDirectoryPackClient, directory: RegistryDirectoryClient | null = directoryClient()) {
     const repository = new MemoryRepository();
     const blobs = new MemoryBlobs();
     let current: Principal | null = user();
@@ -116,12 +116,19 @@ describe('skills.sh directory routes', () => {
       repository,
       blobs,
       auth,
-      directory,
+      directory: directory ?? undefined,
       directoryPacks,
       config: { publicOrigin: ORIGIN, maxBodyBytes: 2 * 1024 * 1024, organizationId: 'org-directory', leaseSeconds: 30 },
     });
     return { repository, handler, setPrincipal: (principal: Principal | null) => { current = principal; } };
   }
+
+  it('distinguishes an intentionally disconnected directory from a retryable outage', async () => {
+    const test = setup(undefined, null);
+    const response = await test.handler(new Request(`${ORIGIN}/v1/directory/skills`, { headers: { authorization: 'Bearer user' } }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: 'DIRECTORY_NOT_CONFIGURED', retryable: false } });
+  });
 
   it('returns validated directory DTOs only to authenticated readers', async () => {
     const test = setup();

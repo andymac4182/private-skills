@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { api, ApiError } from '../lib/api'
+import { api, ApiError, isApiErrorCode } from '../lib/api'
 import { formatDate, shortDigest } from '../lib/format'
 import { useAuth } from '../lib/auth'
 import type {
@@ -10,7 +10,7 @@ import type {
   V1Skill,
   DirectorySkillListResponse,
 } from '../lib/types'
-import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
+import { Badge, Button, DisconnectedState, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
 
 const browseViews: Array<{ id: SkillView; label: string; description: string }> = [
   { id: 'all-time', label: 'All', description: 'The complete on-demand leaderboard page.' },
@@ -30,10 +30,12 @@ export function DirectoryView() {
   const [search, setSearch] = useState<SkillSearchResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [disconnected, setDisconnected] = useState(false)
   const [selected, setSelected] = useState<V1Skill | null>(null)
   const [detail, setDetail] = useState<SkillDetailResponse | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailDisconnected, setDetailDisconnected] = useState(false)
   const loadGeneration = useRef(0)
   const detailGeneration = useRef(0)
 
@@ -52,6 +54,7 @@ export function DirectoryView() {
     const generation = ++loadGeneration.current
     setLoading(true)
     setError(null)
+    setDisconnected(false)
     setList(null)
     setSearch(null)
     try {
@@ -68,7 +71,13 @@ export function DirectoryView() {
       }
     } catch (cause) {
       if (generation !== loadGeneration.current) return
-      setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load the cloud directory.')
+      if (isApiErrorCode(cause, 'DIRECTORY_NOT_CONFIGURED')) {
+        setDisconnected(true)
+        setError(null)
+      } else {
+        setDisconnected(false)
+        setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load the cloud directory.')
+      }
     } finally {
       if (generation === loadGeneration.current) setLoading(false)
     }
@@ -81,6 +90,7 @@ export function DirectoryView() {
     setSelected(skill)
     setDetail(null)
     setDetailError(null)
+    setDetailDisconnected(false)
     setDetailLoading(true)
     try {
       const response = await api.directoryDetail(skill.id)
@@ -88,7 +98,13 @@ export function DirectoryView() {
       setDetail(response)
     } catch (cause) {
       if (generation !== detailGeneration.current) return
-      setDetailError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load the cloud skill detail.')
+      if (isApiErrorCode(cause, 'DIRECTORY_NOT_CONFIGURED')) {
+        setDetailDisconnected(true)
+        setDetailError(null)
+      } else {
+        setDetailDisconnected(false)
+        setDetailError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load the cloud skill detail.')
+      }
     } finally {
       if (generation === detailGeneration.current) setDetailLoading(false)
     }
@@ -103,6 +119,7 @@ export function DirectoryView() {
     ++detailGeneration.current
     setSelected(null)
     setDetail(null)
+    setDetailDisconnected(false)
     if (changed) {
       setLoading(true)
       setList(null)
@@ -124,6 +141,7 @@ export function DirectoryView() {
       ++detailGeneration.current
       setSelected(null)
       setDetail(null)
+      setDetailDisconnected(false)
       setError('Cloud search needs at least two characters.')
       return
     }
@@ -165,12 +183,12 @@ export function DirectoryView() {
         <small>Search results are a bounded upstream result set, not a complete catalog enumeration.</small>
       </form>
     </Panel>
-    {error && <ErrorState message={error} onRetry={() => void load()} />}
+    {disconnected ? <DisconnectedState title="Cloud directory is disconnected" message="The public skills.sh connection is not configured for this registry. Your private catalog, packs, and policy remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error && <ErrorState message={error} onRetry={() => void load()} />}
     <Panel title={submittedQuery ? `Search results for “${submittedQuery}”` : `${browseViews.find((item) => item.id === view)?.label} skills`} description={resultDescription}>
-      {loading ? <LoadingState label="Loading cloud metadata…" /> : error ? <Notice kind="warning">No directory results are shown while the source is unavailable.</Notice> : skills.length === 0 ? <EmptyState title={submittedQuery ? 'No cloud matches' : 'No skills on this page'} description={submittedQuery ? 'Try a broader source or skill description.' : 'The directory returned no rows for this page.'} /> : <div className="directory-grid">{skills.map((skill) => <DirectorySkillCard key={skill.id} skill={skill} selected={selected?.id === skill.id} onInspect={() => void inspect(skill)} />)}</div>}
+      {loading ? <LoadingState label="Loading cloud metadata…" /> : disconnected ? <Notice kind="info">Directory results are paused until the public source connection is configured.</Notice> : error ? <Notice kind="warning">No directory results are shown while the source is unavailable.</Notice> : skills.length === 0 ? <EmptyState title={submittedQuery ? 'No cloud matches' : 'No skills on this page'} description={submittedQuery ? 'Try a broader source or skill description.' : 'The directory returned no rows for this page.'} /> : <div className="directory-grid">{skills.map((skill) => <DirectorySkillCard key={skill.id} skill={skill} selected={selected?.id === skill.id} onInspect={() => void inspect(skill)} />)}</div>}
       {!submittedQuery && list && <DirectoryPagination pagination={list.pagination} page={page} onPageChange={(nextPage) => { setPage(nextPage); setSelected(null); setDetail(null) }} />}
     </Panel>
-    {selected && <DirectoryDetailPanel detail={detail} detailError={detailError} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
+    {selected && <DirectoryDetailPanel detail={detail} detailDisconnected={detailDisconnected} detailError={detailError} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
   </div>
 }
 
@@ -193,7 +211,7 @@ function DirectoryPagination({ pagination, page, onPageChange }: { pagination: D
   return <div className="directory-pagination"><span>Page {pagination.page + 1} of {totalPages} · {formatNumber(pagination.total)} total rows</span><div className="row-actions"><Button disabled={page <= 0} kind="quiet" type="button" onClick={() => onPageChange(Math.max(0, page - 1))}>Previous</Button><Button disabled={!pagination.hasMore} kind="secondary" type="button" onClick={() => onPageChange(page + 1)}>Next</Button></div></div>
 }
 
-function DirectoryDetailPanel({ detail, detailError, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailError: string | null; loading: boolean; selected: V1Skill; onRetry: () => void }) {
+function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailDisconnected: boolean; detailError: string | null; loading: boolean; selected: V1Skill; onRetry: () => void }) {
   const navigate = useNavigate()
   const { principal } = useAuth()
   const [name, setName] = useState('')
@@ -226,7 +244,7 @@ function DirectoryDetailPanel({ detail, detailError, loading, selected, onRetry 
   }
 
   return <Panel className="directory-detail" title="Cloud skill detail" description="External source identity and snapshot evidence. A listing or external audit never approves a private release." action={<div className="row-actions"><Button kind="quiet" type="button" onClick={openAudits}>External audits</Button>{selected.url && <a className="button button-secondary" href={selected.url} rel="noreferrer" target="_blank">Open source page ↗</a>}</div>}>
-    {loading ? <LoadingState label="Loading source detail…" /> : detailError ? <ErrorState message={detailError} onRetry={onRetry} /> : detail && <div className="directory-detail-grid"><div>
+    {loading ? <LoadingState label="Loading source detail…" /> : detailDisconnected ? <DisconnectedState title="Cloud source is disconnected" message="This listing cannot be inspected until the public skills.sh connection is configured." action={selected.url ? <a className="button button-secondary" href={selected.url} rel="noreferrer" target="_blank">Open source page ↗</a> : undefined} /> : detailError ? <ErrorState message={detailError} onRetry={onRetry} /> : detail && <div className="directory-detail-grid"><div>
       <div className="detail-heading"><div><span className="eyebrow eyebrow-cloud">skills.sh listing</span><h2>{selected.name}</h2><p>{selected.source}/{selected.slug}</p></div><Badge value={detail.files === null ? 'metadata-only' : 'snapshot-available'} /></div>
       <div className="detail-meta"><div className="meta-row"><span>External ID</span><span>{detail.id}</span></div><div className="meta-row"><span>Source type</span><span>{selected.sourceType === 'github' ? 'GitHub' : 'Well-known provider'}</span></div><div className="meta-row"><span>skills.sh installs</span><span>{formatNumber(detail.installs)}</span></div><div className="meta-row"><span>External snapshot hash</span><span>{detail.hash ? shortDigest(detail.hash) : 'Unavailable'}</span></div></div>
       {detail.files === null ? <Notice kind="warning">The directory has no file snapshot for this row. Source resolution is required before a private import can be admitted.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Snapshot files</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · text is retained as source data</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
