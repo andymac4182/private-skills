@@ -136,6 +136,9 @@ The request handler owns authorization, resolution, policy state, and audit reco
 - [`docs/semantic-search.md`](docs/semantic-search.md) documents the authorization-aware index and PostgreSQL/state adapter boundary.
 - [`docs/eve-reviewer.md`](docs/eve-reviewer.md) documents the separate Eve app, fixed tools, schedule, and human-only decision boundary.
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
+- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the current v0.2.0 release checkpoint and pending production gates.
+- [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
+- [`docs/completion-criteria.md`](docs/completion-criteria.md) turns the roadmap into measurable, non-blocking future milestones.
 - [`docs/architecture.md`](docs/architecture.md) is the original architecture and portability design intent. Its planning language remains useful context; this README and the implementation status document describe what exists in the repository now.
 - [`docs/product.md`](docs/product.md) records the product roles, journeys, and explicit scope boundaries.
 - [`docs/api-and-data.md`](docs/api-and-data.md), [`docs/storage.md`](docs/storage.md), and [`docs/scanning-and-hooks.md`](docs/scanning-and-hooks.md) hold the detailed contracts and operating constraints.
