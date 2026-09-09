@@ -235,8 +235,8 @@ install_native_skillsguard() {
   # basename; keep this directory named skillsguard like package.json.
   local source="$TMP_ROOT/native/skillsguard"
   archive_source "$checkout" "$(metadata '.scanners.skillsguard.sourceRevision')" "$source"
-  (cd "$source" && npm ci --ignore-scripts) || die "SkillsGuard npm ci failed"
-  (cd "$source" && npm run build) || die "SkillsGuard build failed"
+  (cd "$source" && npm ci --ignore-scripts >&2) || die "SkillsGuard npm ci failed"
+  (cd "$source" && npm run build >&2) || die "SkillsGuard build failed"
   local wrapper="$TMP_ROOT/native/skillsguard-bin"
   printf '%s\n' '#!/bin/sh' 'set -eu' "exec node '$source/dist/cli.js' \"\$@\"" > "$wrapper"
   chmod 0555 "$wrapper"

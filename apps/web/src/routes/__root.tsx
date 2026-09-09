@@ -29,4 +29,3 @@ function RootDocument({ children }: { children?: ReactNode }) {
     </html>
   )
 }
-

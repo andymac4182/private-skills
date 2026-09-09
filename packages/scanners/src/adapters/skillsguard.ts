@@ -76,4 +76,3 @@ const definition: AdapterDefinition = {
 export function createSkillsGuardAdapter(options: AdapterOptions = {}): ScannerAdapter {
   return createCommandAdapter(definition, options);
 }
-

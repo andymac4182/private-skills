@@ -16,4 +16,3 @@ function HomePage() {
   }
   return <main className="public-shell"><div className="public-nav"><span className="brand-mark">PS</span><strong>Private Skills</strong><span className="public-nav-label">Team registry</span></div><LoginForm /></main>
 }
-

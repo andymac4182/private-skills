@@ -97,4 +97,3 @@ describe('worker import acquisition', () => {
     assert.deepEqual(completion.bundle, { format: 'pskills-bundle-v1', files: [{ path: 'SKILL.md', content: base64 }] });
   });
 });
-

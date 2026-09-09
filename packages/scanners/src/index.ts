@@ -16,4 +16,3 @@ export function createDefaultScannerAdapters(): Map<ScannerId, ScannerAdapter> {
   const adapters = [createCiscoAdapter(), createNvidiaAdapter(), createSkillsGuardAdapter()];
   return new Map(adapters.map((adapter) => [adapter.id, adapter]));
 }
-

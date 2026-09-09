@@ -20,4 +20,3 @@ export function shortDigest(value?: string) {
 export function titleCase(value: string) {
   return value.split(/[-_ ]+/).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
 }
-

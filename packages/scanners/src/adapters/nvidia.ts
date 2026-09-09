@@ -106,4 +106,3 @@ function ledgerCount(ledger: Record<string, unknown> | undefined, keys: string[]
   }
   return undefined;
 }
-

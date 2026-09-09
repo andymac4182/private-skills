@@ -7,4 +7,3 @@ function SectionRoute() {
   const { section } = Route.useParams()
   return <SectionView section={section} />
 }
-

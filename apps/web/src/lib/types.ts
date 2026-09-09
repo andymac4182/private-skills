@@ -46,4 +46,3 @@ export interface PackCreateResponse { pack: PackVersion }
 export interface UpstreamResponse { upstream: Upstream }
 export interface ImportResponse { operation: Job }
 export interface SessionResponse { principal?: Principal }
-

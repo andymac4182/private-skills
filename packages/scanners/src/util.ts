@@ -238,4 +238,3 @@ export async function assertDirectory(path: string): Promise<void> {
   const info = await lstat(path);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`scanner input is not a directory: ${path}`);
 }
-

@@ -132,17 +132,29 @@ describe('upstream acquisition', () => {
       const auth = req.headers.authorization;
       if (requestURL.pathname === '/v1/resolve') {
         assert.equal(auth, 'Bearer fixture-secret');
+        const chain = req.headers['x-private-skills-proxy-chain'];
+        const hop = req.headers['x-private-skills-proxy-hop'];
+        if (typeof chain === 'string') res.setHeader('x-private-skills-proxy-chain', chain);
+        if (typeof hop === 'string') res.setHeader('x-private-skills-proxy-hop', hop);
         json(res, { resolution: { kind: 'skill', resourceId: 'skill-1', organizationId: 'org', name: '@team/demo', version: '1.0.0', digest } });
         return;
       }
       if (requestURL.pathname === '/v1/install-authorizations') {
         assert.equal(auth, 'Bearer fixture-secret');
+        const chain = req.headers['x-private-skills-proxy-chain'];
+        const hop = req.headers['x-private-skills-proxy-hop'];
+        if (typeof chain === 'string') res.setHeader('x-private-skills-proxy-chain', chain);
+        if (typeof hop === 'string') res.setHeader('x-private-skills-proxy-hop', hop);
         json(res, { authorization: { id: 'auth-1', expiresAt: new Date(Date.now() + 60_000).toISOString() } });
         return;
       }
       if (requestURL.pathname === `/v1/artifacts/${encodeURIComponent(digest)}/download` || decodeURIComponent(requestURL.pathname) === `/v1/artifacts/${digest}/download`) {
         assert.equal(auth, 'Bearer fixture-secret');
-        json(res, { mode: 'gateway', url: `${origin}/payload`, method: 'GET', headers: {}, size: payload.length, digest });
+        const chain = req.headers['x-private-skills-proxy-chain'];
+        const hop = req.headers['x-private-skills-proxy-hop'];
+        if (typeof chain === 'string') res.setHeader('x-private-skills-proxy-chain', chain);
+        if (typeof hop === 'string') res.setHeader('x-private-skills-proxy-hop', hop);
+        json(res, { mode: 'gateway', url: `${origin}/payload`, method: 'GET', headers: { authorization: 'Bearer descriptor-secret', 'proxy-authorization': 'Basic descriptor-secret' }, size: payload.length, digest });
         return;
       }
       if (requestURL.pathname === '/payload') {
@@ -175,6 +187,8 @@ describe('upstream acquisition', () => {
       });
       assert.equal(result.provenance.kind, 'registry');
       assert.equal(result.provenance.sourceDigest, digest);
+      assert.equal(lastHeaders.authorization, undefined);
+      assert.equal(lastHeaders['proxy-authorization'], undefined);
     } finally {
       await new Promise<void>((resolve) => registry.close(() => resolve()));
       delete process.env.PSKILLS_FIXTURE_TOKEN;
@@ -268,5 +282,10 @@ describe('bundle validation', () => {
       }, { maxBinaryBytes: 1 }),
       (error: unknown) => error instanceof UpstreamAcquisitionError && error.code === 'binary_size_limit',
     );
+    const explicitFalse = validateSkillBundle({
+      format: 'pskills-bundle-v1',
+      files: [{ path: 'SKILL.md', content: b64('# skill'), executable: false }],
+    });
+    assert.deepEqual(explicitFalse.files, [{ path: 'SKILL.md', content: b64('# skill') }]);
   });
 });
