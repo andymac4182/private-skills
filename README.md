@@ -56,8 +56,14 @@ search, CLI pack installation, analytics, and Eve review flows are
 carried forward from the verified private-registry evidence. The separate reviewer runs at
 [`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
 with a registered daily `0 22 * * *` UTC schedule (22:00 UTC, subject to the
-hosting execution window); the route and schedule were verified earlier, but a
-last observed 22:02 check was not a confirmed calendar invocation.
+hosting execution window). The sanitized [production cron evidence](work/reviewer-cron-completion-evidence.json)
+for deployment `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e` observed the cron path at
+2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary `workflowEntry`
+and `turnWorkflow` runs completed, with the `sessionTimeoutWorkflow` run
+cancelled. The primary run was created 2.067 seconds after the cron observation
+and completed 14.353 seconds after it. This is deployment-scoped temporal
+correlation; no explicit opaque scheduler/session correlation or
+proposal/prompt/report/event payload was retained.
 Git-triggered deployment verification, full C1 catalog acceptance, and hosted
 restore remain pending.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
