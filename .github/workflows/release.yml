@@ -45,6 +45,11 @@ jobs:
           if (expected !== tag) {
             throw new Error(`tag ${tag} does not match package.json version ${expected}`);
           }
+          const cargo = fs.readFileSync('Cargo.toml', 'utf8');
+          const cargoVersion = cargo.match(/\[workspace\.package\][\s\S]*?\bversion\s*=\s*"([^"]+)"/)?.[1];
+          if (cargoVersion !== packageJson.version) {
+            throw new Error('Cargo workspace and web package release versions differ');
+          }
           NODE
 
   web:

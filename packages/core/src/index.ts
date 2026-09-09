@@ -35,6 +35,7 @@ import {
   parseSkillMetadata,
   validateBundle,
 } from '../../storage/src/index.js';
+import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
  * The registry handler is deliberately implemented using only Web APIs.  The
@@ -43,7 +44,6 @@ import {
  * edge Nitro targets alike.
  */
 
-const SERVICE_VERSION = '0.1.1';
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_LEASE_SECONDS = 300;
 const TRANSFER_TTL_SECONDS = 60;

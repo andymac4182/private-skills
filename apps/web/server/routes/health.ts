@@ -1,2 +1,4 @@
 import { defineHandler } from 'nitro';
-export default defineHandler(() => Response.json({ ok: true, service: 'private-skills', version: '0.1.0' }));
+import { SERVICE_VERSION } from '../../../../packages/contracts/src/version';
+
+export default defineHandler(() => Response.json({ ok: true, service: 'private-skills', version: SERVICE_VERSION }));
