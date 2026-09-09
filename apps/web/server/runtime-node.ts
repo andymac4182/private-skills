@@ -6,6 +6,10 @@ import { createNodeFilesSdkBlobStore, type FilesProvider } from '../../../packag
 import { HttpBlobStore } from '../../../packages/storage/src/http';
 import type { BlobStore, StateRepository } from '../../../packages/contracts/src/index';
 import { defaultRegistryState } from '../../../packages/database/src/state';
+import { PostgresSemanticIndex } from '../../../packages/search/src/postgres';
+import { StateSemanticIndex } from '../../../packages/search/src/state';
+import type { EmbeddingProfile, SemanticIndex } from '../../../packages/search/src/types';
+import { createHostedWorkerHandlerFromEnv } from '../../../workers/runner/src/hosted';
 
 export type RuntimeEnvironment = Record<string, string | undefined>;
 function required(env: RuntimeEnvironment, name: string): string {
@@ -14,11 +18,12 @@ function required(env: RuntimeEnvironment, name: string): string {
   return value;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = () => defaultRegistryState({ production, allowUnscanned: env.PSKILLS_ALLOW_UNSCANNED === 'true' });
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
   let repository: StateRepository;
+  let postgresPool: PgPoolLike | undefined;
   if (stateProvider === 'file') {
     if (production && env.PSKILLS_SINGLE_PROCESS !== 'true') throw new Error('File metadata requires PSKILLS_SINGLE_PROCESS=true or a development environment');
     repository = new FileStateRepository({ directory: env.PSKILLS_STATE_PATH ?? './work/data/state', stateFactory });
@@ -35,6 +40,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         return { query: (text: string, parameters?: readonly unknown[]) => query(connection as unknown as typeof sql, text, parameters), release: () => connection.release() };
       },
     } as PgPoolLike;
+    postgresPool = pool;
     repository = new PostgresStateRepository(pool, { autoMigrate: true, stateFactory });
   } else if (stateProvider === 'http') {
     repository = new HttpStateRepository({ baseUrl: required(env, 'PSKILLS_STATE_ENDPOINT'), headers: { authorization: `Bearer ${required(env, 'PSKILLS_STATE_TOKEN')}` } });
@@ -59,5 +65,16 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
-  return { repository, blobs };
+  const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
+    ? createHostedWorkerHandlerFromEnv({ ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN })
+    : undefined;
+  return { repository, blobs, hostedWorker, createSearchIndex: (profile) => {
+    const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
+    if (provider === 'pgvector') {
+      if (!postgresPool) throw new Error('pgvector search requires PostgreSQL metadata');
+      return new PostgresSemanticIndex(postgresPool, { profile, autoMigrate: true });
+    }
+    if (provider !== 'state') throw new Error('Unsupported PSKILLS_SEARCH_PROVIDER');
+    return new StateSemanticIndex(repository, { profile });
+  } };
 }

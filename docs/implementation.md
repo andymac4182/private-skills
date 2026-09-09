@@ -1,6 +1,6 @@
 # Implementation status
 
-This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md).
+This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
 
 ## Implemented baseline
 
@@ -16,13 +16,24 @@ This document describes the code that exists in the repository now. The earlier 
 | Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | External upstream access needs approved mappings and credentials |
 | Scanners | `packages/scanners/src` | Cisco, NVIDIA, and SkillsGuard adapter contracts, normalized reports, coverage, policy modes, and executors | Installed scanner images and live findings are environment-specific |
 | Worker | `workers/runner/src` | Claims scan/import jobs, verifies artifact digests, materializes a bounded bundle, executes scanners, and completes with fencing data | Run as a separate worker with a worker token |
+| Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
+| Eve reviewer | `apps/reviewer`, `packages/reviews` | Separate bounded Eve reviewer records proposals and human decisions through fixed internal routes | It cannot publish, merge, edit source, authorize installs, or execute candidate content |
+| Hosted worker | `workers/runner/src/hosted.ts`, `packages/scanners/src/sandbox-executor.ts` | Authenticated one-shot Node/Vercel Sandbox execution with immutable image or snapshot provenance | Requires Vercel Sandbox credentials and reviewed scanner references; edge builds do not run it |
 | CLI | `crates/pskills-core`, `crates/pskills-cli` | Rust package and binary `pskills` for login, health, catalog, publish, install, verify, remove, update, scans, and packs | Native OS CI/release runs after the repository workflow executes |
 
-The default state policy is fail-closed: all three scanner policies start as `disabled` and `allowUnscanned` is `false`. A deployment must deliberately configure evidence or explicitly select a different policy. The web application surfaces the actual API response and does not ship catalog or operation fixtures as pretend data.
+The Node production runtime factory starts Cisco (`cisco-skill-scanner`) as
+`required`, NVIDIA Skillspector as `advisory`, and SkillsGuard as `advisory`,
+with `allowUnscanned=false`. Development and test runtime profiles start all
+scanner modes as `disabled`; `pnpm setup:dev --allow-unscanned` is an explicit
+disposable-demo override. The portable core's in-memory fallback also starts
+with disabled scanners and `allowUnscanned=false` for tests and migration
+shims; that fallback is not the production factory. The web application
+surfaces the actual API response and does not ship catalog or operation
+fixtures as pretend data.
 
 ## Runtime composition
 
-The request boundary is `createRegistryHandler`, a host-neutral `Request` to `Response` function. `apps/web/server/runtime.ts` composes it with an environment-selected infrastructure factory and also exposes worker-only state and blob gateway routes. The Node profile in `runtime-node.ts` supports local file state, PostgreSQL state, HTTP state, Files SDK providers, and HTTP blob storage. The edge profile in `runtime-edge.ts` requires authenticated HTTP state and blob endpoints so the edge request process does not require native filesystem, PostgreSQL, or provider SDK access.
+The request boundary is `createRegistryHandler`, a host-neutral `Request` to `Response` function. `apps/web/server/runtime.ts` composes it with an environment-selected infrastructure factory and also exposes worker-only state, blob gateway, intelligence, and hosted-worker routes. Successful publish, import, and rescan mutations schedule a bounded two-job hosted-worker drain through Nitro's `waitUntil` hook when the platform provides it. The Node profile in `runtime-node.ts` supports local file state, PostgreSQL state, HTTP state, Files SDK providers, HTTP blob storage, pgvector search, StateRepository search fallback, and the optional hosted worker. The edge profile in `runtime-edge.ts` requires authenticated HTTP state and blob endpoints so the edge request process does not require native filesystem, PostgreSQL, provider SDK, or scanner execution.
 
 `apps/web/vite.config.ts` selects `runtime-node.ts` by default and `runtime-edge.ts` when `PSKILLS_RUNTIME_PROFILE=edge` or a Cloudflare Nitro preset is selected. Provider imports stay behind the Node storage boundary; the edge bundle uses the HTTP adapters. Nitro's `serverDir` is `./server`, and the runtime entry delegates to the same core handler used by tests and other hosts.
 
@@ -46,6 +57,11 @@ The implemented public surface is:
 | `GET /v1/policy`, `PUT /v1/policy` | Read and revision the scanner policy |
 | `GET /v1/upstreams`, `POST /v1/upstreams`, `POST /v1/imports` | Manage approved source mappings and queue imports |
 | `GET /v1/audit` | Read the organization audit trail |
+| `GET /v1/search`, `GET /v1/search/status`, `POST /v1/search/reindex` | Query, inspect, and rebuild the authorization-aware semantic index |
+| `POST /v1/install-authorizations`, `POST /v1/install-receipts`, `GET /v1/analytics` | Authorize transfers, record client-confirmed install telemetry, and read admin aggregates |
+| `GET /v1/reviews`, `POST /v1/reviews/run`, `POST /v1/reviews/:id/decision` | Read bounded Eve proposals, trigger a review, and record human decisions |
+| `POST /internal/reviewer/prepare`, `POST /internal/reviewer/complete` | Fixed, reviewer-token-protected Eve tool boundary |
+| `GET /internal/worker/run` | CRON_SECRET-protected one-shot hosted scanner invocation |
 | `GET /v1/transfers/:grant` | Serve a short-lived authorized artifact transfer |
 | `/internal/jobs/*` | Worker claim, artifact download, and fenced completion |
 
@@ -100,17 +116,53 @@ scan status, pack list/show/install/publish/remove
 
 Install planning uses explicit project/global scope, target-agent adapters (`codex`, `claude`, and `universal`), local installation state, digest verification, and pack ownership. The Rust client does not contain provider SDK credentials; it consumes registry responses and transfer descriptors.
 
-## Deployment profiles and acceptance work
+## Deployment profiles and current verification boundary
 
-The repository includes a production Node image and compose profile, a Vercel Nitro template, and a Cloudflare Workers template using the edge HTTP adapters. These are build/deployment inputs, not claims that every hosted flow has been live-tested. The GitHub workflow defines Node web checks, native Linux/macOS/Windows Rust jobs, and a container build; those hosted CI results require a push or workflow dispatch in the target repository.
+The repository includes a production Node image and compose profile, a Vercel
+Nitro template, and a Cloudflare Workers template using the edge HTTP adapters.
+These are build and deployment inputs, not claims that the main registry is
+hosted. The GitHub workflow defines Node web checks, native Linux/macOS/Windows
+Rust jobs, and a container build; a checkpoint result is evidence for the
+recorded revision only.
 
-The following remain explicit acceptance work:
+The v0.2.0 verification record reports passing root/Eve TypeScript checks, 110
+tests with two optional integration suites skipped locally, Rust formatting/
+compilation with 30 tests, and passing Nitro Vercel, Cloudflare, and Eve builds.
+PostgreSQL/pgvector passed a separate real-service conformance test. The
+isolated registry integration used file state, real Vercel AI Gateway
+embeddings, Vercel Sandbox scanning, the Eve service, and the compiled Rust
+CLI. It found both harmless fixtures through semantic search, persisted a
+human Eve decision without mutating artifacts, and measured one changed
+install plus one up-to-date check in analytics. Scanner acceptance recorded
+zero findings for the benign fixture and 15 for the inert malicious fixture,
+with complete one-file evidence; fixture instructions were not executed. See
+[`verification-v0.2.0.md`](verification-v0.2.0.md) for the command-level record
+and its limits.
 
-- run the complete authenticated publish, import, scan, pack, transfer, revocation, and recovery flow against production-built Node, Vercel, and Cloudflare profiles;
-- qualify each selected Files SDK provider and the HTTP gateway with private-access, byte-integrity, failure, and restore checks;
-- run the real pinned scanner images and confirm normalized findings, coverage, timeouts, and policy races;
-- exercise GitHub native OS CI and private CLI release artifacts;
+That isolated verification explicitly configured SkillsGuard as `required`
+with `allowUnscanned=false` for the hosted-worker fixture checks. It is a
+deliberate deployment policy and does not replace the Node production factory
+defaults documented above (Cisco required; NVIDIA and SkillsGuard advisory).
+
+The Eve reviewer is deployed separately and its public health/authentication
+boundary is verified. The main registry project and private Blob storage are
+provisioned, but no production registry publication, search, CLI install, or
+scheduled Eve review is claimed: Neon terms/user setup remains a prerequisite
+for the selected production database. GitHub Vercel app security-key
+confirmation is separately required for Git-triggered deployments.
+
+The following remain explicit release or environment acceptance work:
+
+- deploy the main registry and run its authenticated publish, import, scan,
+  pack, transfer, revocation, and recovery flow;
+- qualify the selected Files SDK provider and HTTP gateway with private-access,
+  byte-integrity, failure, and restore checks;
+- run the final source revision through CI and produce the private CLI release
+  archives;
 - rehearse metadata/object backup and restore in an isolated environment;
-- add OIDC/device authentication, if required, as a separate feature rather than treating bootstrap tokens as an identity provider.
+- add OIDC/device authentication, if required, as a separate feature rather
+  than treating bootstrap tokens as an identity provider.
 
-The old broad M0–M5 list in the architecture planning material is therefore preserved as design intent, while this file distinguishes implemented source from work that still needs environment evidence.
+The old broad M0–M5 list in the architecture planning material remains design
+intent. This file distinguishes implemented source and checkpoint evidence
+from work that still needs deployment or environment evidence.

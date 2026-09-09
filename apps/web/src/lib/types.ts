@@ -1,5 +1,6 @@
 import type {
   AuditEvent,
+  InstallAnalytics,
   Job,
   PackVersion,
   Policy,
@@ -9,9 +10,11 @@ import type {
   SkillVersion,
   Upstream,
 } from '../../../../packages/contracts/src/index'
+import type { ReviewRun, ReviewSkillSnapshot, ReviewSuggestion } from '../../../../packages/reviews/src/index'
 
 export type {
   AuditEvent,
+  InstallAnalytics,
   Job,
   PackVersion,
   Policy,
@@ -21,6 +24,10 @@ export type {
   SkillVersion,
   Upstream,
 }
+
+export type ReviewRunView = Omit<ReviewRun, 'leaseToken' | 'leaseExpiresAt'> & { snapshotValid: boolean }
+export type ReviewSuggestionView = ReviewSuggestion & { snapshotValid: boolean }
+export type { ReviewSkillSnapshot }
 
 export interface ApiErrorShape {
   code?: string
@@ -46,3 +53,20 @@ export interface PackCreateResponse { pack: PackVersion }
 export interface UpstreamResponse { upstream: Upstream }
 export interface ImportResponse { operation: Job }
 export interface SessionResponse { principal?: Principal }
+export interface ReviewsResponse { runs: ReviewRunView[]; suggestions: ReviewSuggestionView[] }
+export interface ReviewRunResponse { sessionId: string; status: 'started' }
+export interface ReviewDecisionResponse { suggestion: ReviewSuggestionView }
+export interface SemanticSearchResult {
+  resourceId: string
+  name: string
+  skillName: string
+  version: string
+  description: string
+  artifactDigest: `sha256:${string}`
+  contentDigest: `sha256:${string}`
+  score: number
+  text: string
+}
+export interface SearchResponse { results: SemanticSearchResult[] }
+export interface SearchStatusResponse { status: 'ok' | 'degraded'; provider: string; profileId?: string; error?: string }
+export interface SearchReindexResponse { indexed: number; profileId: string; truncated: boolean; nextCursor?: string }

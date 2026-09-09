@@ -36,6 +36,44 @@ curl --fail http://127.0.0.1:3000/health
 
 The API must have a user bootstrap token. Production additionally requires a configured session secret, a durable state provider, and private artifact storage. `PSKILLS_ALLOW_UNSCANNED=false` is the safe default; keep it false unless the organization has deliberately accepted the policy consequence.
 
+## Runtime profiles and environment
+
+Choose the state, storage, and search boundaries together. The runtime factory
+uses these production defaults:
+
+| Profile | Required selection | Result |
+| --- | --- | --- |
+| Node with PostgreSQL | `PSKILLS_STATE_PROVIDER=postgres`, `DATABASE_URL` | PostgreSQL JSONB state and pgvector semantic search by default; Files SDK storage uses the selected provider, S3 by default. |
+| Node single process | `PSKILLS_STATE_PROVIDER=file`, `PSKILLS_SINGLE_PROCESS=true` | File state and the exact StateRepository search fallback; suitable for local or explicitly single-process deployments. |
+| Vercel Node with gateways | `PSKILLS_STATE_PROVIDER=http`, `PSKILLS_STORAGE_PROVIDER=http`, `PSKILLS_STORAGE_BUILD_PROFILE=http` | Authenticated HTTP state/blob gateways keep local filesystem, PostgreSQL, and provider SDKs out of the Vercel function. |
+| Cloudflare edge | `PSKILLS_RUNTIME_PROFILE=edge`, HTTP state/blob endpoints | Uses `apps/web/server/runtime-edge.ts`; the bundle does not include Files SDK, PostgreSQL, or Node scanner execution. |
+
+`PSKILLS_STORAGE_BUILD_PROFILE` is a build-time adapter choice. Keep it aligned
+with `PSKILLS_STORAGE_PROVIDER` for a direct Node/Vercel Files SDK build, or
+set both to `http` for a gateway-backed function. Provider credentials,
+`PSKILLS_SESSION_SECRET`, `PSKILLS_BOOTSTRAP_TOKEN`, state/blob gateway tokens,
+and worker/reviewer tokens are runtime secrets; do not put them in `VITE_`
+variables or source control.
+
+The production state factory starts the scanner policy with Cisco
+(`cisco-skill-scanner`) `required`, NVIDIA Skillspector `advisory`, SkillsGuard
+`advisory`, and `allowUnscanned=false`. Development starts all three scanners
+`disabled`; `pnpm setup:dev --allow-unscanned` is the explicit disposable-demo
+override. The in-memory/core policy fallback is also fail-closed, so do not
+use it as evidence that a production factory has disabled its configured
+scanners. Read `/v1/policy` after startup and record the policy revision with
+the deployment manifest.
+
+Semantic search is disabled unless `PSKILLS_AI_ENABLED=true`. When it is
+enabled, configure `PSKILLS_EMBEDDING_MODEL` and
+`PSKILLS_EMBEDDING_DIMENSIONS` only when overriding the defaults, plus either
+`AI_GATEWAY_API_KEY` or the deployment's Vercel OIDC credential. The default
+profile is `openai/text-embedding-3-small` with 1,536 dimensions. PostgreSQL
+uses pgvector; deployments without PostgreSQL use the exact StateRepository
+fallback. There is no libSQL/Turso implementation in this release. The
+embedding request and reindex bounds are documented in
+[`docs/semantic-search.md`](semantic-search.md).
+
 ## Authenticate a check
 
 Use the web form for browser work. For a scripted check, keep the token in the process environment and let curl write only the session cookie to a temporary file:
@@ -87,6 +125,98 @@ Build and exercise the pinned engines with `./scripts/scanner-acceptance.sh all`
 
 Deployment code may inject local `ingest.validate` and `artifact.evaluate` hooks into `WorkerRunner`. Required hook rejection, timeout, or error denies approval. Automatic outbound webhook delivery is disabled; no remote URL receives skill content or job metadata automatically.
 
+## Hosted Vercel Sandbox worker
+
+The optional hosted worker is a Node-only, one-shot route at
+`GET /internal/worker/run`. Set `PSKILLS_HOSTED_WORKER=true` in the web
+runtime and provide the following values in the Vercel secret store:
+
+```dotenv
+PSKILLS_HOSTED_WORKER=true
+PSKILLS_API_URL=https://registry.example.test
+PSKILLS_WORKER_TOKEN=worker-service-token
+CRON_SECRET=at-least-16-random-characters
+PSKILLS_IMAGE_CISCO=registry.example/cisco@sha256:<64-lowercase-hex>
+PSKILLS_IMAGE_NVIDIA=registry.example/nvidia@sha256:<64-lowercase-hex>
+PSKILLS_IMAGE_SKILLSGUARD=registry.example/skillsguard@sha256:<64-lowercase-hex>
+```
+
+The route accepts only `GET` and requires an exact
+`Authorization: Bearer $CRON_SECRET` value. The scheduler user-agent is not
+authentication. Each call claims at most one durable job and returns only
+`ok`, `claimed`, `jobId`, `allow`, or a generic error. Scanner reports,
+artifact bytes, worker tokens, and scanner stderr never appear in the route
+response. Vercel Sandbox creates a fresh ephemeral sandbox with deny-all
+network access and bounded input/output; the edge runtime cannot run this
+Node/Sandbox boundary.
+
+The repository-root Vercel fallback cron invokes the route at `0 21 * * *`
+UTC. A successful `POST /v1/publish`, `/v1/imports`, or skill rescan also
+starts a bounded drain of at most two jobs through Nitro's `waitUntil` hook
+when the platform provides it. Queue leases and fencing remain authoritative;
+cron is liveness, not durable retry. Keep at least one reviewed required
+scanner configured and do not enable `PSKILLS_ALLOW_UNSCANNED` to fit a
+function limit.
+
+Use immutable scanner references. A SkillsGuard source-built snapshot must
+include its source revision and prepared artifact digest:
+
+```dotenv
+PSKILLS_IMAGE_SKILLSGUARD=snapshot:<snapshot-id>|revision:<source-commit>|artifact:sha256:<64-lowercase-hex>
+```
+
+The provisioning script is source-pinned and non-provisioning by default. A
+finite snapshot lifetime is optional. The currently promoted verified
+source-built snapshot uses the non-expiring mapping (`expiresAt: null`); replace
+it when the pinned source/build changes or through an explicit operator
+rotation. If a deployment chooses a finite 30-day lifetime, run the dry-run
+mapping before requesting a remote snapshot:
+
+```sh
+PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
+  pnpm exec tsx scripts/provision-scanner-sandbox.ts
+PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
+  pnpm exec tsx scripts/provision-scanner-sandbox.ts --provision
+```
+
+Persist the returned mapping and update `PSKILLS_IMAGE_SKILLSGUARD`. Rotate
+before `expiresAt` when the mapping has a finite expiry; with the current
+non-expiring mapping, `expiresAt` is `null` and source/build changes still
+require an explicit replacement. `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS` defaults
+to `0` (no expiry), and a bare or mutable snapshot id is never sufficient
+provenance. The snapshot source is the exact SkillsGuard revision recorded in
+`workers/images/scanner-metadata.json`; do not describe a snapshot as
+provisioned until the `--provision` command has returned and its immutable
+mapping has been reviewed.
+
+## Eve reviewer
+
+The reviewer is a separate Eve 0.52.3 application under `apps/reviewer`, not a
+registry route or a model with registry credentials. The root API can trigger
+it only when `PSKILLS_AI_ENABLED=true`, `PSKILLS_REVIEWER_URL`, and
+`PSKILLS_EVE_API_TOKEN` are present. The reviewer deployment separately
+requires `PSKILLS_REGISTRY_API_URL`, `PSKILLS_REVIEWER_TOKEN`, its Eve bearer
+`PSKILLS_EVE_API_TOKEN`, and an AI Gateway credential (`AI_GATEWAY_API_KEY` or
+Vercel `VERCEL_OIDC_TOKEN`). Keep these values in each project's runtime secret
+store; never expose them to the browser or put them in candidate text.
+
+The authored schedule is `0 22 * * *` UTC (08:00 Australia/Brisbane). The root
+Vercel fallback worker cron is separate at `0 21 * * *` UTC. Manual runs use
+the authenticated admin review action or the Eve server-side Client SDK; do
+not put the Eve token in a browser request. The deployed reviewer health probe
+at `https://private-skills-reviewer.vercel.app/eve/v1/health` returned `200`,
+while an unauthenticated session request returned `401`. This verifies the
+reviewer service boundary only; the main registry project has not been claimed
+as deployed, and no registry authenticated flow is implied by the reviewer
+probe. See [`docs/eve-reviewer.md`](eve-reviewer.md) for the complete tool,
+session, and build contract.
+
+Eve receives a bounded approved-skill snapshot through the two fixed internal
+routes. Its model can propose and submit a review suggestion, but it cannot
+merge or publish a release, edit source, authorize an install, or execute
+candidate content. Accepting a suggestion in the registry records a human
+decision only.
+
 ## Pull-through proxy
 
 Configure an allowlisted upstream in the Sources screen. `pskills proxy @team/name@1.0.0 --upstream <id> --path skills/name --ref <commit-or-ref>` asks the registry to acquire and scan the complete source, waits for the operation, and then installs the approved artifact. GitHub acquisition records the resolved commit. The API is `POST /v1/proxy/resolve` with `{ upstreamId, path, ref?, repository?, name, version }`.
@@ -106,8 +236,16 @@ Select the profile through the environment-backed runtime factory:
 | HTTP state | `PSKILLS_STATE_PROVIDER=http`, `PSKILLS_STATE_ENDPOINT`, `PSKILLS_STATE_TOKEN` | Use for edge or isolated metadata service. The server enforces the versioned HTTP CAS protocol. |
 | Files SDK storage | `PSKILLS_STORAGE_PROVIDER=filesystem`/`s3`/`r2`/`gcs`/`azure`/`vercel-blob` plus provider settings | Node loads the selected adapter. Credentials stay server-side and public object URLs are not accepted. |
 | HTTP blob gateway | `PSKILLS_STORAGE_PROVIDER=http`, `PSKILLS_STORAGE_ENDPOINT`, `PSKILLS_STORAGE_TOKEN` | Edge and provider-isolated profile. The gateway is authenticated, bounded, and digest-checking. |
+| Semantic search index | PostgreSQL with `PSKILLS_SEARCH_PROVIDER=pgvector`, or `PSKILLS_SEARCH_PROVIDER=state` | pgvector is the Node multi-process default when PostgreSQL is selected; StateRepository is the portable exact fallback. |
 
 File-state writes are atomic per organization and use restrictive permissions. PostgreSQL increments the revision in the same transaction as the JSONB update. The HTTP repository retries compare-and-set conflicts by replaying the synchronous updater; it does not hide a conflict with local memory.
+
+Install receipt tickets and receipts are stored with the selected state
+repository. The client submits a receipt after its local transaction commits;
+the CLI retries transient receipt delivery once and then reports a warning
+without changing install success. See [`docs/analytics.md`](analytics.md) for
+the endpoint contract, 24-hour ticket, 90-day retention, 100,000-record
+bound, and admin report.
 
 The Files SDK store writes to fresh random `sealed/` keys, reads the object back, and verifies its size and SHA-256 digest. The HTTP gateway is a transport boundary, not a second source of truth: back up the gateway's underlying state and object provider.
 

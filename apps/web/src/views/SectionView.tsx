@@ -1,4 +1,5 @@
 import { AuditView } from './AuditView'
+import { AnalyticsView } from './AnalyticsView'
 import { CatalogView } from './CatalogView'
 import { OperationsView } from './OperationsView'
 import { PacksView } from './PacksView'
@@ -6,12 +7,15 @@ import { PolicyView } from './PolicyView'
 import { PublishView } from './PublishView'
 import { UpstreamsView } from './UpstreamsView'
 import { OverviewView } from './OverviewView'
+import { ReviewsView } from './ReviewsView'
 
 export function SectionView({ section }: { section: string }) {
   switch (section) {
     case 'overview': return <OverviewView />
     case 'catalog': return <CatalogView />
     case 'packs': return <PacksView />
+    case 'analytics': return <AnalyticsView />
+    case 'reviews': return <ReviewsView />
     case 'publish': return <PublishView />
     case 'operations': return <OperationsView />
     case 'policy': return <PolicyView />

@@ -10,13 +10,30 @@ runtime boundary:
 | Vercel | `vercel` | `apps/web/server/runtime-node.ts` | Same Node adapter; Nitro traces it into the Vercel function |
 | Cloudflare Workers | `cloudflare_module` | `apps/web/server/runtime-edge.ts` | HTTP state and blob gateways; no Files SDK or Node storage adapter |
 
-Build one target with the checked-in helper from the repository root:
+Build one portable target with the checked-in helper from the repository root:
 
 ```sh
 pnpm exec tsx scripts/platform-build.ts node
 pnpm exec tsx scripts/platform-build.ts vercel
 pnpm exec tsx scripts/platform-build.ts cloudflare
 ```
+
+The main Vercel project has a repository-root Build Output API wrapper. It
+keeps the web package's Nitro root at `apps/web` while copying the completed
+Vercel output to the root directory Vercel collects:
+
+```sh
+PSKILLS_STORAGE_PROVIDER=http \
+PSKILLS_STORAGE_BUILD_PROFILE=http \
+node scripts/build-vercel.mjs
+test -f .vercel/output/config.json
+```
+
+The wrapper requires Node 24, uses the already-installed Vite binary, and
+does not run a second install. The `vercel.json` root config points Vercel at
+this wrapper. The Eve reviewer is a separate Vercel project rooted at
+`apps/reviewer`; its `eve build` owns its own `.vercel/output`. The scanner
+worker/controller remains outside both projects.
 
 After the edge build, run the native local Worker smoke against a reviewed
 local gateway. The harness does not contain credentials and uses an existing
@@ -58,6 +75,7 @@ The following checks are separate by design:
 | --- | --- | --- |
 | `scripts/platform-build.ts node` exits successfully | Nitro emitted a production Node server and traced the selected Files SDK package | A database, storage backend, authentication, or authenticated API flow is reachable |
 | `scripts/platform-build.ts vercel` exits successfully | Nitro emitted a Vercel Build Output API function with the selected Node dependencies under the function directory | A Vercel deployment, Git-triggered build, or production integration exists |
+| `node scripts/build-vercel.mjs` exits successfully and root `.vercel/output/config.json` exists | The repository-root Vercel project has a collected Build Output API directory copied from `apps/web` | A Vercel deployment, Git-triggered build, or production integration exists |
 | `scripts/platform-build.ts cloudflare` exits successfully and the edge artifact contains no `files-sdk`/Node storage imports | Nitro emitted a Workers module with the HTTP gateway runtime boundary | A Worker has been deployed or its gateway bindings work |
 | Native Wrangler/workerd run plus `scripts/edge-local-smoke.ts` | The built Worker serves health/authenticated API traffic and completes state reads/transactions plus a grant download through the Files SDK-backed HTTP gateway | A deployed Worker, external gateway, or Cloudflare account integration exists |
 | Isolated prebuilt Node and Vercel `/v1/me` smoke | The copied artifact initializes the selected S3 Files SDK adapter and authenticated runtime without an ancestor workspace `node_modules` directory | A real S3 object transfer, cloud deployment, or gateway service is reachable |

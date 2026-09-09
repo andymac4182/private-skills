@@ -17,3 +17,5 @@ coverage/
 *.key
 work/
 tmp/
+.vercel
+.env*

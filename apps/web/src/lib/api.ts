@@ -1,7 +1,8 @@
 import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
-  PackListResponse, PolicyResponse, PublishResponse, ScanActionResponse, ScanListResponse, SessionResponse,
+  InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
+  ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
 } from './types'
 
@@ -71,4 +72,11 @@ export const api = {
   createUpstream(input: Omit<Upstream, 'id' | 'organizationId' | 'enabled'> & { enabled?: boolean }) { return request<UpstreamResponse>('/v1/upstreams', { method: 'POST', body: input }).then(unwrap) },
   importUpstream(input: { upstreamId: string; repository?: string; path: string; ref?: string; name: string; version: string }) { return request<ImportResponse>('/v1/imports', { method: 'POST', body: input }).then(unwrap) },
   audit() { return request<AuditListResponse>('/v1/audit').then(unwrap) },
+  analytics(days = 30) { return request<InstallAnalytics>('/v1/analytics', { query: { days: String(days) } }).then(unwrap) },
+  reviews() { return request<ReviewsResponse>('/v1/reviews').then(unwrap) },
+  startReview() { return request<ReviewRunResponse>('/v1/reviews/run', { method: 'POST', body: {} }).then(unwrap) },
+  decideReview(suggestionId: string, decision: 'accepted' | 'dismissed') { return request<ReviewDecisionResponse>(`/v1/reviews/${encodeURIComponent(suggestionId)}/decision`, { method: 'POST', body: { decision } }).then(unwrap) },
+  search(query: string) { return request<SearchResponse>('/v1/search', { query: { q: query } }).then(unwrap) },
+  searchStatus() { return request<SearchStatusResponse>('/v1/search/status').then(unwrap) },
+  reindexSearch(cursor?: string) { return request<SearchReindexResponse>('/v1/search/reindex', { method: 'POST', body: cursor ? { cursor } : {} }).then(unwrap) },
 }

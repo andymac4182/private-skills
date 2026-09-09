@@ -4,6 +4,7 @@ export * from './acquisition.js';
 export * from './protocol.js';
 export * from './worker.js';
 export * from './webhook.js';
+export * from './hosted.js';
 
 import { WorkerRunner } from './worker.js';
 

@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -554,6 +556,7 @@ fn install_skill(
         .into_iter()
         .next()
         .ok_or_else(|| CliError::Message("installer returned no result".into()))?;
+    report_install_receipt(context, &client, &authorization.id, result.changed);
     emit(
         context.json,
         json!({ "ok": true, "dryRun": context.dry_run, "reference": reference, "version": resolution.version, "digest": artifact_digest, "destination": result.destination, "changed": result.changed }),
@@ -784,6 +787,12 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
             })
         })
         .collect();
+    report_install_receipt(
+        context,
+        &client,
+        &authorization.id,
+        activated.iter().any(|result| result.changed),
+    );
     emit(
         context.json,
         json!({ "ok": true, "dryRun": context.dry_run, "pack": reference, "version": resolution.version, "members": results }),
@@ -1032,6 +1041,62 @@ fn client(context: &Context) -> Result<ApiClient, CliError> {
     })?;
     let token = context.credentials.token(&registry.url)?;
     Ok(ApiClient::new(&registry.url, Some(token))?)
+}
+
+fn report_install_receipt(
+    context: &Context,
+    client: &ApiClient,
+    authorization_id: &str,
+    changed: bool,
+) {
+    if context.dry_run {
+        return;
+    }
+    let request = InstallReceiptRequest {
+        authorization_id: authorization_id.into(),
+        changed,
+        agent: context.agent.as_str().into(),
+        platform: receipt_platform().into(),
+        client_version: VERSION.into(),
+    };
+    if let Err(error) = submit_receipt_with_retry(|| client.submit_install_receipt(&request)) {
+        eprintln!("pskills: install analytics receipt unavailable: {error}");
+    }
+}
+
+fn submit_receipt_with_retry<F>(mut submit: F) -> Result<(), ApiError>
+where
+    F: FnMut() -> Result<Value, ApiError>,
+{
+    for attempt in 0..2 {
+        match submit() {
+            Ok(_) => return Ok(()),
+            Err(error) if attempt == 0 && receipt_error_retryable(&error) => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("receipt retry loop always returns")
+}
+
+fn receipt_error_retryable(error: &ApiError) -> bool {
+    match error {
+        ApiError::Transport(_) => true,
+        ApiError::Http { status, .. } => {
+            matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+        }
+        _ => false,
+    }
+}
+
+fn receipt_platform() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "windows",
+        "macos" => "macos",
+        "linux" => "linux",
+        _ => "other",
+    }
 }
 
 fn local_state(root: &Path, scope: InstallScope) -> LocalState {
@@ -1447,4 +1512,38 @@ fn emit(json_output: bool, value: Value) -> Result<(), CliError> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipt_retry_recovers_transient_failure() {
+        let mut attempts = 0;
+        let result = submit_receipt_with_retry(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(ApiError::Transport("temporary network error".into()))
+            } else {
+                Ok(Value::Null)
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn receipt_failure_is_bounded_and_non_retryable_errors_are_not_repeated() {
+        let mut attempts = 0;
+        let result = submit_receipt_with_retry(|| {
+            attempts += 1;
+            Err(ApiError::Http {
+                status: 400,
+                message: "invalid receipt".into(),
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
 }

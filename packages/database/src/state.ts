@@ -80,6 +80,8 @@ export function defaultRegistryState(
     policy: initialPolicy(options),
     upstreams: [],
     authorizations: [],
+    installReceiptTickets: [],
+    installReceipts: [],
     grants: [],
     audit: [],
   };
@@ -148,6 +150,14 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
   ] as const;
   if (arrayFields.some((field) => !Array.isArray(value[field]))) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid collection');
+  }
+  // Analytics was added after the first state schema.  Keep these collections
+  // optional so older persisted documents remain readable, while rejecting a
+  // malformed value when a newer writer has supplied one.
+  for (const field of ['installReceiptTickets', 'installReceipts'] as const) {
+    if (value[field] !== undefined && !Array.isArray(value[field])) {
+      throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid analytics collection');
+    }
   }
   if (!validPolicy(value.policy)) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid scanner policy');

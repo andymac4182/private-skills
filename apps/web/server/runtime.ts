@@ -3,6 +3,9 @@ import { createRegistryHandler } from '../../../packages/core/src/index';
 import { createHttpRepositoryHandler } from '../../../packages/database/src/http';
 import { createBlobGatewayHandler } from '../../../packages/storage/src/http';
 import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastructure';
+import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
+import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
+import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const config = {
@@ -15,6 +18,16 @@ async function createRuntime(env: RuntimeEnvironment) {
   const infrastructure = await createInfrastructure(env);
   const auth = await createAuthenticatorFromEnv(env);
   const registry = createRegistryHandler({ ...infrastructure, auth, config });
+  const embeddingProvider = createEmbeddingProvider(env);
+  const intelligence = createIntelligenceHandler({
+    repository: infrastructure.repository, blobs: infrastructure.blobs,
+    authenticate: (request: Request) => auth.authenticate(request),
+    organizationId: config.organizationId, publicOrigin: config.publicOrigin,
+    embeddingProvider,
+    index: embeddingProvider ? infrastructure.createSearchIndex(embeddingProvider.profile) : undefined,
+    reviewerToken: env.PSKILLS_REVIEWER_TOKEN,
+    triggerReview: createReviewTrigger(env),
+  });
   const gatewayPrincipal = env.PSKILLS_GATEWAY_TOKEN
     ? await createAuthenticatorFromEnv({ ...env, PSKILLS_BOOTSTRAP_TOKENS: undefined, PSKILLS_BOOTSTRAP_TOKEN: undefined, PSKILLS_WORKER_TOKENS: undefined, PSKILLS_WORKER_TOKEN: env.PSKILLS_GATEWAY_TOKEN })
     : null;
@@ -25,11 +38,39 @@ async function createRuntime(env: RuntimeEnvironment) {
   };
   const stateGateway = createHttpRepositoryHandler({ repository: infrastructure.repository, authorize, maxBodyBytes: 20 * 1024 * 1024 });
   const blobGateway = createBlobGatewayHandler({ store: infrastructure.blobs, authorize, baseOrigin: config.publicOrigin, allowLoopback: env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test' });
-  return (request: Request) => {
+  return async (request: Request) => {
     const path = new URL(request.url).pathname;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
-    return registry(request);
+    if (path === '/internal/worker/run') {
+      return infrastructure.hostedWorker ? infrastructure.hostedWorker(request)
+        : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
+    }
+    const intelligenceResponse = await intelligence(request);
+    if (intelligenceResponse) return intelligenceResponse;
+    const response = await registry(request);
+    if (infrastructure.hostedWorker && env.CRON_SECRET && response.ok && request.method === 'POST' &&
+        (path === '/v1/publish' || path === '/v1/imports' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
+      // Nitro forwards the platform waitUntil hook on the Web Request. On
+      // hosts without that hook, await the bounded drain before returning.
+      const drain = async () => {
+        const signal = AbortSignal.timeout(240_000);
+        for (let count = 0; count < 2; count++) {
+          const result = await infrastructure.hostedWorker!(new Request(`${config.publicOrigin}/internal/worker/run`, {
+            headers: { authorization: `Bearer ${env.CRON_SECRET}` },
+            signal,
+          }));
+          if (!result.ok) break;
+          const outcome = await result.json() as { claimed?: boolean };
+          if (!outcome.claimed) break;
+        }
+      };
+      const pending = drain().catch(() => console.error('Hosted worker drain failed; the durable queue retains pending jobs.'));
+      const platformRequest = request as Request & { waitUntil?: (task: Promise<unknown>) => void };
+      if (platformRequest.waitUntil) platformRequest.waitUntil(pending);
+      else await pending;
+    }
+    return response;
   };
 }
 

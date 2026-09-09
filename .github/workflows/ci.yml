@@ -19,6 +19,22 @@ jobs:
     name: web (Node 24)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg18@sha256:508c5290cda481d4f5f846446a26e9c1b804766828a394a5861de1b348a18b4c
+        env:
+          POSTGRES_PASSWORD: pskills_ci_ephemeral
+          POSTGRES_DB: pskills_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pskills_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:pskills_ci_ephemeral@127.0.0.1:5432/pskills_test
+      PSKILLS_TEST_PGVECTOR_URL: postgres://postgres:pskills_ci_ephemeral@127.0.0.1:5432/pskills_test
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -48,6 +64,17 @@ jobs:
 
       - name: Build the web package
         run: pnpm build
+
+      - name: Build the Eve reviewer
+        working-directory: apps/reviewer
+        env:
+          EVE_TELEMETRY_DISABLED: '1'
+        run: node ../../node_modules/eve/bin/eve.js build --skip-sandbox-prewarm
+
+      - name: Verify portable Vercel and Cloudflare builds
+        run: |
+          PSKILLS_STORAGE_BUILD_PROFILE=vercel-blob node scripts/build-vercel.mjs
+          PSKILLS_RUNTIME_PROFILE=edge NITRO_PRESET=cloudflare_module node node_modules/vite/bin/vite.js build --config apps/web/vite.config.ts
 
   rust:
     name: rust (${{ matrix.target }})

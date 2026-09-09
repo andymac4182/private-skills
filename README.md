@@ -15,9 +15,21 @@ The baseline is implemented as of 9 September 2026. Native Windows, macOS, and L
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
 | Jobs and scanning | Implemented leased worker protocol, fencing tokens, scanner adapters, policy evaluation, and Docker executor boundary | Scanner images, credentials, and external executor infrastructure are deployment inputs |
+| Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
+| Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
+| Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
+
+The separate Eve reviewer is currently deployed at
+[`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app):
+its public `/eve/v1/health` probe returned `200`, and an unauthenticated
+session request returned `401`. Its authored schedule is `0 22 * * *` UTC.
+This is reviewer evidence only. The main registry project is provisioned as
+`private-skills-theta.vercel.app` but has not been claimed as deployed or
+authenticated; its database terms/user setup remains an external deployment
+prerequisite.
 
 ## Quickstart
 
@@ -63,9 +75,50 @@ The web surface calls the same-origin API and exposes the implemented registry a
 - scanner policy under `/v1/policy`;
 - approved upstream mappings and queued imports under `/v1/upstreams` and `/v1/imports`;
 - audit records under `/v1/audit`;
+- authorization-aware semantic search under `/v1/search`, `/v1/search/status`, and `/v1/search/reindex`;
+- client-confirmed install telemetry under `/v1/install-authorizations`, `/v1/install-receipts`, and the admin-only `/v1/analytics` report;
+- human review proposals under `/v1/reviews`; the separate Eve app calls only the fixed `/internal/reviewer/prepare` and `/internal/reviewer/complete` routes;
 - worker-only claim, artifact, and completion routes under `/internal/jobs`.
 
-The fail-closed default keeps all three supported scanners disabled and refuses unscanned distribution. Administrators can set each scanner to `disabled`, `advisory`, or `required`; required evidence must be complete, current, digest-bound, and free of configured blocking findings before a release becomes approved.
+The production state factory starts Cisco as `required`, NVIDIA Skillspector as
+`advisory`, and SkillsGuard as `advisory`, with `allowUnscanned=false`.
+Development starts all scanners as `disabled`; `pnpm setup:dev --allow-unscanned`
+is an explicit disposable-demo override. Administrators can set each scanner
+to `disabled`, `advisory`, or `required`; required evidence must be complete,
+current, digest-bound, and free of configured blocking findings before a
+release becomes approved.
+
+## Search, analytics, and review
+
+Semantic search is opt-in. Set `PSKILLS_AI_ENABLED=true` and configure the
+embedding Gateway credentials and optional model/dimension settings. A Node
+deployment uses pgvector when it has PostgreSQL metadata and otherwise uses the
+exact StateRepository fallback; the current implementation has no libSQL/Turso
+adapter. Search indexes only approved, authorized skill text and rechecks the
+artifact and content digests before returning a result. See
+[`docs/semantic-search.md`](docs/semantic-search.md) for the profile, limits,
+reindex, and edge gateway boundaries.
+
+Install analytics is based on receipts submitted by the CLI after its local
+transaction commits. The admin report counts changed skill/pack resolutions
+and up-to-date checks, with bounded one-retry delivery. It does not count
+downloads or infer installs from transfer grants. See
+[`docs/analytics.md`](docs/analytics.md) for the receipt contract and
+retention limits.
+
+The Eve reviewer compares a bounded approved-skill snapshot and records
+suggestions for a human. Accepting a suggestion records a decision only: there
+is no model auto-merge, publish, source edit, install authorization, or
+candidate execution. See [`docs/eve-reviewer.md`](docs/eve-reviewer.md).
+
+For Vercel Node deployments, the optional hosted worker route
+`GET /internal/worker/run` requires `Authorization: Bearer $CRON_SECRET` and
+returns queue metadata only. The root Vercel fallback cron is `0 21 * * *`
+UTC; successful publish/import/rescan requests also schedule a bounded drain of
+up to two jobs through Nitro's `waitUntil` hook. Configure immutable scanner
+image references, including a source-revision/artifact-digest snapshot for
+SkillsGuard when used. This route is not available in the Cloudflare edge
+runtime; see [`docs/operations.md`](docs/operations.md).
 
 ## Data and trust boundaries
 
@@ -79,7 +132,13 @@ The request handler owns authorization, resolution, policy state, and audit reco
 
 - [`docs/implementation.md`](docs/implementation.md) describes the implemented components, route families, state/storage profiles, and operating boundaries.
 - [`docs/operations.md`](docs/operations.md) is the checkable local/production runbook, including storage backups and recovery.
+- [`docs/analytics.md`](docs/analytics.md) documents client-confirmed install receipts, admin aggregates, retention, and retry behavior.
+- [`docs/semantic-search.md`](docs/semantic-search.md) documents the authorization-aware index and PostgreSQL/state adapter boundary.
+- [`docs/eve-reviewer.md`](docs/eve-reviewer.md) documents the separate Eve app, fixed tools, schedule, and human-only decision boundary.
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
+- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the current v0.2.0 release checkpoint and pending production gates.
+- [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
+- [`docs/completion-criteria.md`](docs/completion-criteria.md) turns the roadmap into measurable, non-blocking future milestones.
 - [`docs/architecture.md`](docs/architecture.md) is the original architecture and portability design intent. Its planning language remains useful context; this README and the implementation status document describe what exists in the repository now.
 - [`docs/product.md`](docs/product.md) records the product roles, journeys, and explicit scope boundaries.
 - [`docs/api-and-data.md`](docs/api-and-data.md), [`docs/storage.md`](docs/storage.md), and [`docs/scanning-and-hooks.md`](docs/scanning-and-hooks.md) hold the detailed contracts and operating constraints.

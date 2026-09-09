@@ -210,19 +210,23 @@ impl ApiClient {
     pub fn authorize(&self, resolution: &Resolution) -> Result<InstallAuthorization, ApiError> {
         let url = self.endpoint(&["v1", "install-authorizations"])?;
         let value: Value = self.post_json(&url, resolution, true)?;
-        if let Ok(auth) = serde_json::from_value::<InstallAuthorization>(value.clone()) {
-            return Ok(auth);
-        }
-        extract(value, "authorization")
+        parse_install_authorization(value)
     }
 
     pub fn validate_authorization(&self, id: &str) -> Result<InstallAuthorization, ApiError> {
         let url = self.endpoint(&["v1", "install-authorizations", id, "validate"])?;
         let value: Value = self.post_json_no_body(&url, true)?;
-        if let Ok(auth) = serde_json::from_value::<InstallAuthorization>(value.clone()) {
-            return Ok(auth);
-        }
-        extract(value, "authorization")
+        parse_install_authorization(value)
+    }
+
+    /// Record a completed install or up-to-date check.  The caller invokes
+    /// this only after the local transaction commits; the server uses the
+    /// authorization id as its idempotency key.
+    pub fn submit_install_receipt(
+        &self,
+        request: &InstallReceiptRequest,
+    ) -> Result<Value, ApiError> {
+        self.post_json(&self.endpoint(&["v1", "install-receipts"])?, request, true)
     }
 
     pub fn download_descriptor(
@@ -619,6 +623,27 @@ fn extract_resolution(value: Value) -> Result<Resolution, ApiError> {
     extract(value, "resolution")
 }
 
+fn parse_install_authorization(value: Value) -> Result<InstallAuthorization, ApiError> {
+    let mut authorization =
+        if let Ok(authorization) = serde_json::from_value::<InstallAuthorization>(value.clone()) {
+            authorization
+        } else {
+            extract(value.clone(), "authorization")?
+        };
+    // The server keeps the receipt ticket additive to the historical
+    // `{authorization: ...}` wrapper. Preserve it for callers while still
+    // accepting older registries that omit it.
+    if authorization.receipt.is_none() {
+        if let Some(receipt) = value.get("receipt") {
+            authorization.receipt = Some(
+                serde_json::from_value(receipt.clone())
+                    .map_err(|error| ApiError::Response(error.to_string()))?,
+            );
+        }
+    }
+    Ok(authorization)
+}
+
 fn extract_operation_id(value: &Value) -> Result<String, ApiError> {
     if let Some(id) = value
         .get("operationId")
@@ -688,5 +713,53 @@ mod tests {
     fn remote_http_requires_tls_but_loopback_is_allowed_for_development() {
         assert!(ApiClient::new("http://registry.example", None).is_err());
         assert!(ApiClient::new("http://127.0.0.1:5173", None).is_ok());
+    }
+
+    #[test]
+    fn receipt_request_uses_contract_field_names() {
+        let request = InstallReceiptRequest {
+            authorization_id: "auth-1".into(),
+            changed: false,
+            agent: "codex".into(),
+            platform: "macos".into(),
+            client_version: "0.1.3".into(),
+        };
+        let value = serde_json::to_value(request).expect("receipt JSON");
+        assert_eq!(value["authorizationId"], "auth-1");
+        assert_eq!(value["changed"], false);
+        assert_eq!(value["clientVersion"], "0.1.3");
+        assert!(value.get("authorization_id").is_none());
+    }
+
+    #[test]
+    fn additive_receipt_ticket_is_preserved_from_authorization_wrapper() {
+        let value = serde_json::json!({
+            "authorization": {
+                "id": "auth-1",
+                "subject": "user-1",
+                "resolution": {
+                    "kind": "skill",
+                    "resourceId": "skill-1",
+                    "name": "@team/demo",
+                    "version": "1.0.0",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "members": []
+                },
+                "expiresAt": "2099-01-01T00:00:00Z"
+            },
+            "receipt": {
+                "id": "ticket-1",
+                "authorizationId": "auth-1",
+                "expiresAt": "2099-01-02T00:00:00Z"
+            }
+        });
+        let authorization = parse_install_authorization(value).expect("authorization");
+        assert_eq!(
+            authorization
+                .receipt
+                .as_ref()
+                .map(|receipt| receipt.id.as_str()),
+            Some("ticket-1")
+        );
     }
 }
