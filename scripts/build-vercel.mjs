@@ -1,4 +1,5 @@
-import { cpSync, existsSync, lstatSync, readlinkSync, readdirSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -101,5 +102,45 @@ function verifyRelocatedSymlinks(sourceDirectory, destinationDirectory) {
   console.log(`Verified ${symlinks.length} relocated Vercel output symlinks`)
 }
 
+function verifySandboxDependency(functionDirectory) {
+  const packageJsonPath = resolve(functionDirectory, 'node_modules/@vercel/sandbox/package.json')
+  if (!existsSync(packageJsonPath)) {
+    throw new Error(`Vercel function output does not include @vercel/sandbox: ${packageJsonPath}`)
+  }
+
+  const isolationRoot = mkdtempSync(resolve(tmpdir(), 'private-skills-vercel-sandbox-'))
+  const isolatedFunctionDirectory = resolve(isolationRoot, '__server.func')
+  try {
+    cpSync(functionDirectory, isolatedFunctionDirectory, {
+      recursive: true,
+      force: true,
+      verbatimSymlinks: true,
+    })
+    const isolatedPackageJsonPath = resolve(isolatedFunctionDirectory, 'node_modules/@vercel/sandbox/package.json')
+    const packageJson = JSON.parse(readFileSync(isolatedPackageJsonPath, 'utf8'))
+    const probe = [
+      "const load = new Function('specifier', 'return import(specifier)')",
+      "const module = await load('@vercel/sandbox')",
+      "if (!module.Sandbox || typeof module.Sandbox.create !== 'function') throw new Error('Sandbox export is unavailable')",
+    ].join(';')
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', probe], {
+      cwd: isolatedFunctionDirectory,
+      env: { PATH: process.env.PATH ?? '' },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.error) throw result.error
+    if (result.status !== 0) {
+      throw new Error(
+        `Vercel function output could not load @vercel/sandbox ${packageJson.version ?? 'unknown'} from its isolated node_modules`,
+      )
+    }
+    console.log(`Verified isolated @vercel/sandbox ${packageJson.version ?? 'unknown'} function dependency`)
+  } finally {
+    rmSync(isolationRoot, { recursive: true, force: true })
+  }
+}
+
 verifyRelocatedSymlinks(webOutput, rootOutput)
+verifySandboxDependency(resolve(rootOutput, 'functions/__server.func'))
 console.log(`Copied Vercel Build Output API output to ${rootOutput}`)

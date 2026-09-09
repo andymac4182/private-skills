@@ -31,9 +31,9 @@ export default defineConfig(({ mode }) => {
   const edge = profile === 'edge'
   const infrastructure = fileURLToPath(new URL(edge ? './server/runtime-edge.ts' : './server/runtime-node.ts', import.meta.url))
   const provider = providerForBuild(profile)
-  const traceDeps = provider
-    ? ['files-sdk', `files-sdk/${provider}`]
-    : ['!files-sdk']
+  const traceDeps = edge
+    ? ['!files-sdk']
+    : ['@vercel/sandbox', ...(provider ? ['files-sdk', `files-sdk/${provider}`] : [])]
   return {
     root,
     resolve: { alias: { '#pskills-infrastructure': infrastructure } },
