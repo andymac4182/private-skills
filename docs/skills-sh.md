@@ -1,15 +1,22 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
-**Status:** v0.3.0 implementation is at source head `a4ea17c`; the latest
-production directory deployment `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (output
+**Status:** v0.3.0 implementation is at source head `0f9da75`. The current READY
+production deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with output
 fingerprint
+`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; the
+corresponding Cloudflare build has fingerprint
+`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` and 35
+server files with no executable SDK references. The current source review reports 286 tests passed and two
+environment-dependent skips, TypeScript, five SDK probes, Files SDK checks,
+and two independent review approvals. The earlier
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` deployment (fingerprint
 `b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) verifies
 metadata-only full pagination. Earlier deployment evidence verifies the
-server-side Vercel project OIDC path and ComputeSDK scan, and earlier CSS
-deployment evidence verifies the captured browser surfaces. The latest source
-head reports 229 tests passed and two environment-dependent skips; full C1
-acceptance remains partial.
+server-side Vercel project OIDC path, ComputeSDK scan, and captured browser
+surfaces; the current API artifact verifies the directory and Topics paths,
+and current browser proof is still pending, so full C1 acceptance remains
+partial.
 **Scope:** the current skills.sh site, its documented API, and the public
 `vercel-labs/skills` repository. The review uses official sources only. It does
 not use Tessl pages or GitHub issues as evidence.
@@ -24,22 +31,29 @@ traversal.
 ## Current configuration
 
 The owner authorized connecting skills.sh with the Vercel project request-scoped
-OIDC token on 2026-09-10, superseding the earlier disconnected deferral. Earlier
+OIDC token on 2026-09-10, superseding the earlier disconnected deferral. The
+current READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y`; it carries the
+enabled directory and request-scoped OIDC/ComputeSDK configuration. Earlier
 production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` proves authenticated
-directory access and the ComputeSDK scan. The latest directory deployment is
-`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC`; its metadata-only pagination evidence is
-described below. The earlier captured deployment
+directory access and the ComputeSDK scan. The earlier directory deployment
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` supplies the metadata-only pagination
+evidence described below. The earlier captured deployment
 `dpl_3D4epeApMaBFmSFtuycVV9iAxrhi` remains historical disabled-configuration
 evidence: it returns HTTP 503 with
 `DIRECTORY_NOT_CONFIGURED` and `retryable: false`, while actual upstream
 outages retain `DIRECTORY_UNAVAILABLE`.
 
 The directory client, authenticated registry routes, Rust commands, cloud views,
-and governed import worker are implemented. `PSKILLS_DIRECTORY_ENABLED=false`
-describes the historical disconnected capture; the current production evidence
-has the enabled, authenticated directory path. Full metadata pagination is now
-verified for one bounded run; selected-row import, nested detail availability,
-Topics membership, and external Packs preview remain separate acceptance gates.
+and governed import worker are implemented. Source `0f9da75` additionally
+contains the canonical Topics page parser, auth-before-hit metadata cache with
+bounded TTL/bytes, conflict/drift-aware enumeration, and credential-negative
+security tests. `PSKILLS_DIRECTORY_ENABLED=false` describes the historical
+disconnected capture; the current production deployment has the enabled,
+authenticated directory path. Full metadata pagination is verified for one
+earlier bounded run; the current read-only API probe verifies list/search,
+fail-closed auth, and fresh canonical Topics. Selected-row import, nested detail
+availability, current browser proof, and external Packs preview remain separate
+acceptance gates.
 
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
@@ -49,6 +63,25 @@ releases. Automatic external pack migration is a future feature.
 
 ## Current production evidence
 
+- Current production deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY at
+  the stable alias, with output fingerprint
+  `613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`. The
+  platform checkpoint reports the enabled skills.sh directory and
+  request-scoped OIDC/ComputeSDK path, directory/search/CLI/analytics, and Files
+  SDK checks. The [current API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
+  adds eight GET requests with zero retries or mutations and no credential-pattern
+  leakage: health, authenticated `/me`, policy, list (`total=9738`), fuzzy
+  search, and fresh canonical React/Marketing Topics pass; unauthenticated
+  Topics is 401. The artifact is `verified:true`; browser proof for the current
+  deployment remains pending, and the previous stale-canonical result remains
+  preserved as regression evidence.
+- The current source review at `0f9da75` reports 286 tests passed and two
+  environment-dependent skips, with TypeScript, five SDK probes, the Files SDK,
+  and Cloudflare checks passing and two independent reviews approving. The
+  Topics parser, bounded cache, conflict/drift-aware enumeration, and
+  credential-negative security coverage are implementation/test evidence. The
+  current API result above verifies fresh canonical Topics; current browser
+  proof and the other acceptance gates remain pending.
 - The sanitized [earlier v0.3 production record](../work/production-v03-evidence.json)
   from `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` records authenticated list/search,
   Official, detail, and audit responses. It observed list page zero with
@@ -56,7 +89,7 @@ releases. Automatic external pack migration is a future feature.
   5,497 skills, one detail file, and five audit entries. Topics is explicitly
   `not_exposed` and the pack preview is explicitly `skipped` because no
   operator-supplied unlisted URL was present.
-- The [current pagination evidence](../work/production-c1-pagination-evidence-1788989595741-50223-dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC.json)
+- The [earlier pagination evidence](../work/production-c1-pagination-evidence-1788989595741-50223-dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC.json)
   from `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
   `b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`)
   verifies 20 all-time pages at `per_page=500`, with 9,738 declared,
@@ -82,10 +115,13 @@ releases. Automatic external pack migration is a future feature.
   overflow, as does the 1280px Packs capture; the evidence is linked from
   `docs/design/production-final-*.png`.
 
-These results prove current metadata pagination and preserve the provenance of
-the earlier authenticated endpoint, sandbox-scan, and browser evidence. They do
-not by themselves prove representative GitHub/well-known imports, upstream
-nested detail availability, or metadata-only Packs preview.
+These results prove one earlier metadata-pagination run and preserve the
+provenance of the earlier authenticated endpoint, sandbox-scan, and browser
+evidence. The current deployment is READY and carries the new implementation;
+the current API artifact verifies the current read-only directory and Topics
+checks, and current browser proof is still pending. The results do not by themselves
+prove representative GitHub/well-known imports, upstream nested detail
+availability, or metadata-only Packs preview.
 
 An administrator can configure a `skills-sh` upstream with `repositories: ["*"]`
 to admit any public catalog source into an authorized namespace, or list exact
@@ -248,6 +284,7 @@ well-known support.
 | Area | Current implementation | Status for skills.sh support |
 | --- | --- | --- |
 | Private catalog | `packages/core` serves authorized `/v1/skills`; `apps/web` renders approved private releases and semantic search. The directory adapter and `/v1/directory` cloud routes are implemented separately. | **Partial integration.** Current production evidence proves the metadata directory path and complete bounded pagination; it does not prove private admission for every source row. |
+| Enumeration/cache/security | `packages/directory` provides conflict/drift-aware enumeration, auth-before-hit bounded metadata caching, and negative credential/security coverage. | **Implemented in source; API proof verified.** These paths are present at `0f9da75` and included in the current test review; the current API artifact proves credential-negative/list/search behavior and fresh-canonical Topics, while browser proof remains pending. |
 | Provenance | `packages/contracts` carries skills.sh provider, complete external ID, source/slug/type, source/page URLs, snapshot hash, source resolution fields, and the separate local `sourceDigest`. | **Implemented with live limits.** Current-head tests preserve bounded nested IDs and exact identity checks; the live upstream route returned invalid or wrong-identity responses for the nested probe, so no detail/import success is claimed. |
 | Acquisition | `packages/upstreams` implements skills.sh snapshot parsing plus GitHub and well-known source resolution with bounded files, archives, paths, and local canonical digesting. | **Implemented, import evidence pending.** The safe worker primitive and identity resolver are present, but representative production pullthrough awaits the separately requested restricted-source approval and scanner-admission readback. |
 | Imports/proxy | `packages/core` exposes governed `/v1/directory/import` and carries external ID/type/hash through the import job and provenance checks; existing `/v1/imports` and `/v1/proxy/resolve` remain authorization and scanner bounded. | **Partial.** A selected cloud row can enter the private import gate, but no representative GitHub/well-known import is accepted as complete yet. Do not derive a SemVer from installs, first-seen date, or a Git branch. |
@@ -586,15 +623,20 @@ because its manifest could be previewed.
 
 ## Dependencies and non-goals
 
-The near-term implementation dependency is now partially satisfied: the latest
-production evidence covers complete metadata pagination, while earlier evidence
-covers the authenticated Vercel OIDC directory path and a required ComputeSDK
-scan. Remaining C1 dependencies are representative GitHub/well-known source
-resolution and import readback (subject to the separately requested restricted-
-source approval), upstream nested-detail availability, Topics page parsing, an
-operator-supplied Packs preview, browser/log credential-negative evidence,
-error/rate handling, and tenant/secrecy checks. A non-Vercel Nitro deployment
-still needs an explicitly configured supported gateway/credential provider.
+The near-term implementation dependency is now partially satisfied: an earlier
+production evidence run covers complete metadata pagination, while earlier
+evidence covers the authenticated Vercel OIDC directory path and a required
+ComputeSDK scan. The current source contains the Topics parser, bounded cache,
+enumeration conflict handling, and credential-negative tests. The current API
+artifact verifies safe list/search, fail-closed auth, and fresh canonical Topics;
+browser proof for those paths is still pending. Remaining C1
+dependencies are representative GitHub/well-known source resolution and import
+readback (subject to the separately requested restricted-source approval),
+upstream nested-detail availability, current browser proof for Topics/cache/
+enumeration, an operator-supplied
+Packs preview, browser/log credential-negative evidence, error/rate handling,
+and tenant/secrecy checks. A non-Vercel Nitro deployment still needs an
+explicitly configured supported gateway/credential provider.
 The current-head client supports bounded nested identities and fails closed on
 wrong upstream identities; that does not substitute for successful live detail
 and scanner-admission evidence.
@@ -628,6 +670,7 @@ Primary official pages and files used for this review:
 - [`src/download-source.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/download-source.ts)
 - [`src/find.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/find.ts)
 - [`src/telemetry.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/telemetry.ts)
+- [Private Skills isolated install-directory guide](install-directories.md)
 
 The report is a design and evidence record. Current production evidence covers
 metadata-only full catalog pagination; earlier deployment evidence covers the

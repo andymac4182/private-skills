@@ -2,16 +2,19 @@
 
 The owner authorized server-side forwarding of the Vercel project OIDC token to
 skills.sh on 2026-09-10, superseding the earlier disconnected deferral. Current
-production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` has sanitized evidence
-for authenticated directory access and the ComputeSDK scan. The final CSS
-deployment `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready; its final
-Packs/dashboard/catalog mobile proof and Packs desktop proof pass. Vercel
-Sandbox authentication is a separately scoped request-scoped OIDC path (or
-complete explicit provider credentials).
+production deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY at the stable
+alias with output fingerprint
+`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; its
+Cloudflare build fingerprint is
+`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` with 35
+server files and no executable SDK references. Earlier deployment artifacts
+retain the detailed OIDC/ComputeSDK
+and browser evidence. Vercel Sandbox authentication is a separately scoped
+request-scoped OIDC path (or complete explicit provider credentials).
 
 ## Verified current pass
 
-- Current production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` proves the
+- Earlier production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` proves the
   server-side skills.sh directory path with the authorized Vercel project OIDC
   token. `work/production-v03-evidence.json` records authenticated list/search/
   Official/detail/audits success: page zero returned two rows with
@@ -21,6 +24,15 @@ complete explicit provider credentials).
   analytics readback. It explicitly marks Topics `not_exposed` and packPreview
   `skipped`, so full pagination, imports, Topics JSON membership, and pack
   preview are not claimed complete.
+- The previous API evidence for `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` is retained in
+  `work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json`
+  as stale-canonical regression evidence. The current API evidence for
+  `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is in
+  `work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json`:
+  eight GETs, no retries or mutations, no credential-pattern leakage, and
+  verified health, authenticated `/me`, policy, list (`total=9738`), fuzzy
+  search, fresh canonical React and Marketing Topics, and unauthenticated
+  Topics rejection. Current browser proof remains pending.
 - The same production path passed the required ComputeSDK scan recorded in
   `work/production-v03-scan-evidence.json`: `verified=true`, driver
   `computesdk`, scan `44cd2613-b29b-4b54-9c5a-4efc932afbe0`, job
@@ -48,21 +60,24 @@ complete explicit provider credentials).
   and the 1280px Packs capture also pass after the CSS fix.
 - Existing private workflows and public links remain usable. Automatic external
   pack migration remains deferred.
-- The latest runtime review reports 207 tests passed with two
-  environment-dependent tests skipped, plus four CLI, 25 core, and 11
-  installation-safety Rust tests passed. All five SDK trace checks and
-  Cloudflare checks pass. Platform-agent evidence reports all CI checks green
-  for PR10 head `78c6db0`, including the refinement Rust checks. No prerelease
-  CLI packaging is represented as a published release.
+- The current runtime review at source head `0f9da75` reports 286 tests passed
+  with two environment-dependent tests skipped, plus four CLI, 25 core, and 11
+  installation-safety Rust tests passed. TypeScript, five SDK probes, Files SDK,
+  and Cloudflare checks pass, and two independent reviews approve. PR10 was
+  explicitly authorized and merged to `origin/main` at `6e916d9`; PR11 remains
+  a held draft while final acceptance is resolved. No
+  v0.3 release tag or prerelease CLI packaging is represented as published.
 
 ## Unresolved work
 
-- C1 is partially verified in production: the current deployment proves
-  authenticated skills.sh list/search/Official/detail/audits and the ComputeSDK
-  scan, while full pagination/count reconciliation, selected GitHub/well-known
-  pullthrough, local import readback, Topics page parsing, metadata-only Packs
-  preview with an operator URL, browser/log credential-negative checks, and
-  tenant/secrecy evidence remain outstanding. The prior
+- C1 is partially verified in production: the current deployment pointer and
+  API probe prove authenticated health/me/policy/list/search behavior, fresh
+  canonical React/Marketing Topics, and credential-pattern-negative handling;
+  the earlier deployment artifacts prove authenticated skills.sh
+  Official/detail/audits and the ComputeSDK scan. The earlier 20-page metadata
+  enumeration is complete; selected GitHub/well-known pullthrough, local
+  import readback, metadata-only Packs preview with an operator URL, browser
+  proof, and tenant/secrecy evidence remain outstanding. The prior
   `503 DIRECTORY_NOT_CONFIGURED` result is historical evidence only.
 - A fresh required production scan on the original deployment failed before
   scanner analysis because ComputeSDK authentication was read from environment
@@ -74,8 +89,10 @@ complete explicit provider credentials).
   an error is observed end to end.
 - Deployment `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` passes the final captured mobile
   layout checks. Storage-redaction and other infrastructure effects remain
-  subject to their own evidence. Hosted backup restoration is still required
-  and remains excluded from this checkpoint.
+  subject to their own evidence. The committed read-only PostgreSQL snapshot
+  adapter's revision-83/counts probe did not copy blobs or complete a backup,
+  restore, or hosted-recovery rehearsal. Hosted backup restoration is still
+  required and remains excluded from this checkpoint.
 - Git-triggered deployment still requires the account owner's GitHub Vercel
   app security-key step. CLI deployment evidence does not satisfy that gate.
 
