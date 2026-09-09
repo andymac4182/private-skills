@@ -2,7 +2,7 @@
 
 ## Three separate responsibilities
 
-An **engine adapter** runs a pinned scanner against a sealed skill directory and normalizes its evidence. A **policy evaluator** decides whether evidence permits distribution. An **event hook** integrates administrator-owned checks and downstream systems. A scanner exit code or webhook HTTP 200 is not itself an approval.
+An **engine adapter** runs a pinned scanner against a sealed skill directory and normalizes its evidence. A **policy evaluator** decides whether evidence permits distribution. An **event hook** integrates administrator-owned checks and downstream systems. A scanner exit code or webhook HTTP 200 is not itself an approval. Files SDK observation hooks are fire-and-forget and cannot gate an upload or release; required scanner hooks are explicit, awaited stages in the registry's persisted job pipeline. [Files SDK hook semantics](https://files-sdk.dev/docs/api/onaction)
 
 Built-in adapters: `cisco-skill-scanner`, `nvidia-skillspector`, and `skillsguard`. Each has `disabled`, `advisory`, or `required` mode. Recommended first-run configuration is Cisco required after adapter acceptance, NVIDIA and SkillsGuard advisory; administrators can require all three. All software executes on the server, so CLI users need none of its runtimes.
 
@@ -10,7 +10,7 @@ See [scanner research](scanners.md) for licensing, commands, actual egress behav
 
 ## Safe execution contract
 
-The coordinator selects the engine image by digest, reviewed source revision, configuration hash, and policy revision. It creates a fresh ephemeral scanner environment with an empty home, immutable input, bounded output, and no upstream or production credentials. Input is a canonical extracted bundle whose file manifest matches the distribution archive. A fresh environment is required between organizations and jobs.
+The coordinator selects the engine image by digest, reviewed source revision, configuration hash, and policy revision. A portable executor creates a fresh ephemeral scanner environment with an empty home, immutable input, bounded output, and no upstream or production credentials. It runs outside the Nitro request runtime; a self-hosted isolated worker and managed sandboxes implement the same contract. Input is a canonical extracted bundle whose file manifest matches the server-only sealed distribution archive stored through Files SDK. A fresh environment is required between organizations and jobs.
 
 Source fetching is a separate phase. Scanners receive local input, not an upstream URL; they cannot download a different branch or quietly expand their scope. Deny network by default. Optional OSV metadata lookups, LLM analysis, or custom remote scanners require an administrator-configured destination and documented data categories. Content-bearing egress is visibly different from dependency-coordinate egress.
 
@@ -56,12 +56,12 @@ Exceptions contain digest, finding fingerprint or explicitly named coverage limi
 | `scan.execute` | Sealed artifact ready | Yes; built-in or custom scanner adapter |
 | `artifact.evaluate` | All required evidence collected, before approval | Yes; custom policy checks |
 | `pack.evaluate` | Pack member set fixed | Yes; all member permissions/decisions plus aggregate metadata and cross-skill rules |
-| `download.authorize` | Before every new download grant | Yes; local fast evaluator checks current ACL, revocation, policy, and grant limits |
+| `download.authorize` | Before every new transfer grant and gateway stream | Yes; fast evaluator checks current ACL, revocation, policy, and grant limits |
 | `artifact.approved`, `artifact.quarantined`, `artifact.revoked`, `scan.completed`, `pack.published` | After committed state transition | Notifications only; failure does not undo an already committed decision |
 
 `download.authorize` consumes persisted policy state; remote checks run asynchronously before approval so download requests do not depend on an unbounded third-party callback. Packs receive their own immutable manifest digest and decision, and reference each member's decision; ordinary single-skill engines do not automatically analyze interactions between members. A combined-content scan can be an additional hook, never a substitute for each member's scan.
 
-Custom adapters are administrator-registered runner integrations with pinned executables and allowlisted settings. Custom webhooks carry `eventId`, `organizationId`, `jobId`, `attempt`, `artifactDigest`, `policyRevision`, `deadline`, and a bounded payload. HMAC signatures cover the exact body and timestamp; rotate secrets, reject old signatures, deduplicate event IDs, and verify response/callback job bindings. Use per-attempt nonces and authenticated result ingestion. Webhook destinations obey the same SSRF/redirect protections as upstreams.
+Custom adapters are administrator-registered runner integrations with pinned executables and allowlisted settings. Custom webhooks carry `eventId`, `organizationId`, `jobId`, `attempt`, `artifactDigest`, `policyRevision`, `deadline`, and a bounded payload. HMAC signatures cover the exact body and timestamp; rotate secrets, reject old signatures, deduplicate event IDs, and verify response/callback job bindings. Use per-attempt nonces and authenticated result ingestion. Webhook destinations obey the same SSRF/redirect protections as upstreams. All hooks use the portable job contract; enabling a managed workflow adapter does not change hook or approval semantics.
 
 Default hooks receive metadata only. An explicit content-enabled scanner may get read access to a single quarantined artifact for a bounded period. This is a privileged scanner grant, distinct from ordinary client distribution. It can never read all quarantine or issue approved downloads.
 

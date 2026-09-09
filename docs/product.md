@@ -4,12 +4,14 @@
 
 Give a private team one trusted entry point for its own and upstream agent skills. An administrator decides which namespaces, sources, scanners, and policies are available; developers install a skill or an entire curated pack with a consistent CLI.
 
-Initial assumption: one organization per deployment, with organization IDs throughout the data model so later hosted tenancy does not require removing access boundaries. GitHub is the first sign-in and upstream provider. The product repository is private under the owner's personal GitHub account. Product naming, initial provider, and UI framework are reversible implementation choices.
+Initial assumption: one organization per deployment, with organization IDs throughout the data model so later hosted tenancy does not require removing access boundaries. GitHub is the first sign-in and upstream provider. The product repository is private under the owner's personal GitHub account. The chosen stack is TanStack Start/Router with Nitro for the web/API and Rust for the CLI. Hosting across Nitro server targets and Files SDK-backed storage are explicit product requirements.
 
 ## Required v1 capabilities
 
 | Capability | User-visible behavior |
 | --- | --- |
+| Portable hosting | Deploy the web/API on any server-capable Nitro target; use external worker/gateway services where the target lacks native processes, durable disk, or sufficient transfer limits |
+| Storage choice | Configure any existing or custom Files SDK backend that passes the private artifact contract; no domain/API rewrite or mandatory Vercel account |
 | Private hosting | Signed-in readers browse permitted skills and download approved versions; private metadata and search results are access controlled too |
 | Publishing | Publishers upload complete bundles, inspect validation/scan results, and publish an immutable version when policy allows |
 | Proxy | A configured public/private upstream is fetched by the server on first request; clients receive only the registry's cached artifact |

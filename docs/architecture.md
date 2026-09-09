@@ -1,90 +1,94 @@
 # Architecture and operations
 
-This is the proposed v1 architecture, researched on 9 September 2026. The application, scanner integrations, hosted resources, and deployment pipeline are not implemented or provisioned. Initial operating limits are assumptions to validate during implementation.
+This is the proposed v1 architecture, researched on 9 September 2026. The application, integrations, and deployments are not implemented. Hosting portability and Files SDK storage are requirements; compatibility must be demonstrated for each runtime and backend combination.
 
-## Components
+## Components and portability boundary
 
 | Component | Responsibility |
 | --- | --- |
-| Next.js and TypeScript, Node runtime on Vercel | Private web UI, versioned JSON API, browser authentication, CLI authorization, catalog, policy evaluation, download grants |
-| Neon PostgreSQL | Organization boundaries, ACLs, immutable releases, packs, job state, policy revisions, scan evidence indexes, audit history |
-| Private Vercel Blob | Quarantined inputs, immutable distribution archives, reports; separate quarantine and approved stores |
-| Vercel Workflow | Durable orchestration through short, retryable steps and waits |
-| Disposable Vercel Sandbox | Source acquisition and separate scanner execution environments |
-| Go `pskills` CLI | Native Windows/macOS/Linux login, publish, resolution, download verification, installation, packs, updates, removal |
+| TanStack Start/Router, React, TypeScript | Private UI, browser navigation, typed data loading |
+| Nitro | Versioned API, authentication, authorization, catalog, policy decisions, deployment adapters |
+| PostgreSQL through a metadata repository | ACLs, immutable releases/packs, leases, outbox, policies, evidence indexes, audit history |
+| Files SDK through a storage adapter | Private uploads, sealed archives, scan reports, authorized transfers |
+| Portable dispatcher and worker | Durable acquisition/scan jobs, retries, cancellation, recovery |
+| Disposable scanner executor | Isolated native Linux environments for pinned scanners |
+| Rust `pskills` CLI | Native Windows/macOS/Linux publish, resolution, verification, installation, packs, update/removal |
 
-Start with one organization per deployment while including organization IDs in database keys, authorization, object paths, and jobs. The web server is the control plane; it does not run skill scripts or scanner binaries. Shared versioned JSON schemas connect TypeScript and Go. Storage and executor interfaces allow another object store or a separate Linux worker later without changing the CLI protocol.
+Start with one organization per deployment, but include organization identity in database keys, authorization, storage paths, and jobs. Shared versioned JSON schemas connect TypeScript and Rust. Domain contracts do not import hosting-provider SDKs.
+
+The web/API targets every **server-capable Nitro preset**. Use Web `Request`/`Response`, streams, `fetch`, and Web Crypto in shared request paths. Put native database drivers, filesystem operations, subprocesses, and provider bindings behind runtime adapters. A static-only build can serve the UI with a separately deployed API; it cannot run an authenticated registry itself. Nitro generates provider-specific outputs from a common codebase; its standalone Node output runs in containers or conventional servers. [Nitro deployment](https://nitro.build/deploy), [Node output](https://nitro.build/deploy/runtimes/node).
 
 ```mermaid
 flowchart LR
-  C[Web or CLI] --> A[Vercel API]
-  A --> D[(PostgreSQL)]
-  D --> O[Outbox dispatcher]
-  O --> W[Workflow]
-  W --> F[Acquisition sandbox]
-  U[Approved upstream] --> F
-  F --> Q[(Private quarantine)]
-  W --> S[Separate scanner sandboxes]
-  Q --> S
-  S --> R[(Private reports)]
+  C[Web or Rust CLI] --> A[Nitro API]
+  A --> M[Metadata repository]
+  M --> D[(PostgreSQL)]
+  D --> W[Durable dispatcher and worker]
+  U[Approved upstream] --> W
+  W --> F[Files SDK]
+  F --> B[(Private sealed artifacts and reports)]
+  W --> S[Disposable scanner executor]
+  B --> S
+  S --> W
   W --> P[Trusted policy coordinator]
   P --> D
-  P --> B[(Approved immutable artifacts)]
-  A --> G[Scoped download grant]
+  A --> G[Authorized transfer adapter]
+  G --> F
   G --> C
-  B --> C
 ```
 
-## Platform constraints and transfers
+## Persistence and transfers
 
-Current Vercel Functions limits list a 4.5 MB request/response payload, 300-second Hobby maximum, and 800-second generally available Pro/Enterprise maximum. An 1800-second extension is beta and requires specific runtime configuration. Standard bundles allow 250 MB, or 500 MB for Python; 5 GB bundles are beta. Memory is 2 GB on Hobby and up to 4 GB on Pro/Enterprise. Keep the API small and avoid depending on beta extensions. Streamed responses still consume invocation lifetime. [Functions limits, updated 24 August 2026](https://vercel.com/docs/functions/limitations).
+PostgreSQL is self-hosted or managed. Node deployments use a bounded native connection pool. Edge deployments use a compatible transport or an authenticated HTTP transaction service implementing named repository operations, not arbitrary client SQL. Preserve transaction, conditional-update, and uniqueness guarantees across transports. Optional Cloudflare Hyperdrive connects Workers to ordinary PostgreSQL; Neon is not required. [Hyperdrive PostgreSQL support](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/).
 
-Archive transfers use private Blob directly. After authenticating and authorizing the user, the API grants PUT access to one random quarantine pathname with size restrictions. Completion triggers server-side inspection and hashing; client claims are not authoritative. Readers receive a server-generated GET URL for one approved digest, valid for 60 seconds. Explicitly scope path, operation, and expiration; never expose store credentials or signing material. Private signed transfers support these restrictions, and PUT grants support content-type and maximum-size constraints. [Signed URLs](https://vercel.com/docs/vercel-blob/vercel-signed-urls). Private Blob and OIDC authentication are generally available. [GA announcement](https://vercel.com/changelog/vercel-private-blob-is-now-generally-available).
+Files SDK is the object-storage boundary. Choose a backend at deployment time; see [storage contracts](storage.md). Validate capabilities and private access rather than assuming every backend offers signed URLs, atomic copies, or conditional writes. Where supported, issue a grant limited to one object, operation, and expiration. Otherwise use an authenticated streaming gateway with an expiring, narrowly scoped transfer grant distinct from the CLI's registry session credential. A permanent public URL cannot substitute for private delivery. [Files SDK capabilities](https://files-sdk.dev/docs/capabilities).
 
-An acquisition job fully downloads and stores a candidate before scanning. The API returns `202 Accepted` and an operation ID while work remains pending. It never redirects clients to upstream bytes. See [proxy behavior](proxy.md) for canonicalization, source identity, mutable references, and cache rules.
+Uploads receive a random quarantine destination. Trusted inspection determines size, digest, and content; client claims are advisory. Download grants authorize an approved immutable object and expire within 60 seconds. Large transfers may bypass the control API through private storage grants or a dedicated gateway. Enforce product limits in every path, including signed-upload finalization.
 
-## Acquisition, sealing, and scanning
+For Nitro v3, use Files SDK core behind a thin Web Request/Response handler. The documented `files-sdk/nitro` binding targets Nitro v2/h3 v1; do not assume v3 compatibility. [Files SDK Nitro binding](https://files-sdk.dev/docs/ui/server/nitro).
 
-Acquisition and scanning have separate trust boundaries. The acquisition sandbox receives narrowly scoped access to an approved GitHub repository or Private Skills registry. Its egress permits only the configured source and storage endpoints. It downloads archives without executing repository code, enforces extraction limits, validates the selected directory, and produces a deterministic distribution archive. Preserve original and distribution digests when normalization changes bytes.
+## Acquisition, sealing, and scanner isolation
 
-The trusted coordinator seals the stored distribution object by digest. Each scanner receives that exact bundle in a fresh sandbox from a pinned, trusted environment. Expose input read-only where supported, with a separate writable reports directory; independently verify its digest. A scanner cannot edit the distributed object, issue download grants, or approve a release. No production database credentials, source tokens, full object-store credentials, or unrelated organization data enter its VM.
+A cache miss creates a job and returns `202 Accepted` with an operation ID. Fully download the candidate before scanning or distribution; never redirect clients to upstream bytes. Nitro `routeRules.proxy` forwards traffic and can become a CDN rewrite on Vercel; it does not implement this package-proxy contract. [Nitro proxy rules](https://nitro.build/deploy/providers/vercel). See [source identity and cache rules](proxy.md).
 
-Static scanning starts with egress denied. Explicit cloud/LLM modes allow only policy-approved endpoints and disclose that content will leave the registry. Where supported, broker credentials through network headers instead of environment variables. Vercel supports egress restrictions and credential injection outside the VM boundary. [Sandbox credential brokering](https://vercel.com/changelog/safely-inject-credentials-in-http-headers-with-vercel-sandbox). Never execute uploaded scripts, dependency installation, or lifecycle hooks.
+The trusted acquisition worker receives narrowly scoped source/storage credentials. It resolves immutable upstream identity, validates archive paths and extraction limits, and builds the final deterministic archive without executing repository code. Any normalization happens **before sealing**; retain original and distribution digests when they differ.
 
-Use ephemeral instances explicitly: persistence must not retain one customer's bundle for later scans. Only trusted scanner dependencies belong in reusable images. The executor contract covers start, status, cancellation, logs, report retrieval, and cleanup; a later external worker must implement equivalent isolation and job authentication. Detailed findings, coverage, engine errors, and policy gates follow [scanner hooks](scanning-and-hooks.md).
+Persist the final archive under a fresh random object key, verify complete bytes and digest, then seal it against further writes before scanning. The digest indexes content; the random immutable object identity prevents a shared mutable pathname becoming the approval target. Every scanner receives the same sealed archive and independently checks its digest. There is no post-scan archive rewriting. Approval changes database visibility and evidence state, not bytes. If a physical copy is required, verify and seal the destination before scanning and approve that exact object.
 
-## Durable jobs and publication
+Run scanners in fresh disposable native Linux environments, separate from the trusted worker. Provide read-only input where supported and a bounded writable report directory. Scanners receive no database credentials, source tokens, broad storage credentials, or unrelated tenant data. Worker-mediated transfer and report collection keep those credentials outside scanner processes. Scanners cannot publish, edit sealed storage, or grant access.
 
-Create the job and outbox event in one database transaction. A dispatcher starts its Workflow and marks dispatch only after recording the run identifier. Repeated dispatch is expected: job uniqueness, stage idempotency keys, and conditional updates prevent duplicate publication. A scheduled recovery pass retries undispatched outbox entries and identifies abandoned jobs.
+The executor contract covers start/status/cancel, bounded logs, report retrieval, deadlines, and cleanup. The baseline uses an OCI container worker with isolated per-scan execution; hardened deployments may use VM isolation. Reusable images contain pinned trusted tools, never retained customer artifacts. Deny egress by default; cloud/LLM profiles permit only disclosed policy-approved destinations. Never execute skill scripts, install their dependencies, or run lifecycle hooks.
 
-Workers claim expiring stage leases with fencing tokens, send bounded heartbeats, and lose authority when the lease expires. Stale workers cannot finalize results. Persist operation, sandbox, command, attempt, artifact, and policy identifiers before advancing. Limit retries with backoff and distinguish transient provider errors from permanent validation failures. Cancellation revokes the lease and prevents approval even if a late result arrives.
+External execution enables edge hosting: Workers exposes `node:child_process` as a nonfunctional stub, so compatibility shims cannot run native scanners. [Workers runtime support](https://developers.cloudflare.com/workers/runtime-apis/nodejs/). See [scanner hooks and coverage](scanning-and-hooks.md).
 
-Workflow offers persistent steps, retries, sleeps, and external-event hooks. [Workflow concepts](https://vercel.com/docs/workflows/concepts). Its complete run has no duration limit, but each step inherits Function limits. Start detached sandbox commands, persist identifiers, then poll through short steps separated by durable waits; do not hold a Function open for the whole scan. [Detached execution example](https://vercel.com/kb/guide/run-claude-managed-agent-tools-with-vercel-sandbox).
+## Durable jobs and approval
 
-The trusted policy coordinator validates report schema, job identity, artifact digest, scanner configuration, expected coverage, and callback authentication. It rechecks current policy, namespace permissions, and revocation inside the approval transaction. Required timeouts, incomplete scans, or errors cannot become a pass. Publishing creates an immutable version pointing to an approved object; no scanner has this authority.
+Create each job and outbox row in one PostgreSQL transaction. A dispatcher claims pending entries; workers claim expiring stage leases with fencing tokens and bounded heartbeats. Persist attempts, executor handles, artifact identity, and policy revisions before advancing. Stale or cancelled workers cannot finalize results. Recovery retries undispatched events and abandoned stages; bounded backoff distinguishes transient infrastructure failures from permanent validation failures.
+
+Use idempotency keys and conditional transitions for acquisition, scanner attempts, report ingestion, and publication. Jobs never depend on an open HTTP request, in-memory queue, local API disk, or provider callback surviving. The worker can run beside the Node API or independently while Nitro runs on serverless/edge infrastructure.
+
+The trusted policy coordinator validates report schema, authenticated job identity, sealed-object digest, scanner revision/configuration, and expected coverage. Inside the approval transaction, recheck policy, namespace permissions, cancellation, and revocation. Required timeouts, incomplete results, and engine errors deny distribution. Immutable releases reference the exact scanned object and evidence.
+
+Files SDK lifecycle hooks are observability hooks: they are not awaited and cannot fail their observed operation. Enforce scanning through explicit durable stages and approval checks. [Hook semantics](https://files-sdk.dev/docs/api/onaction).
 
 ## Access and revocation
 
-Browser login identifies a user; organization membership and namespace permissions separately authorize actions. Follow [product roles](product.md): owner, administrator, publisher, reader, and narrowly scoped scanner service identity. A publisher does not obtain exception-approval authority implicitly. CLI credentials are registry-issued, revocable, and distinct from upstream credentials. GitHub App installations provide organization-managed mirror access, as defined in the proxy policy.
+Browser login establishes identity; organization membership and namespace permissions authorize actions. Preserve [product roles](product.md), including separately controlled exception approval. CLI tokens are registry-issued, scoped, and revocable; upstream credentials remain server-side.
 
-Authorize metadata, search, reports, job status, and each download-grant request. Bind approvals/grants to immutable release/source identity and pack version/manifest where applicable, as well as digest and current effective policy. Identical bytes under another namespace do not inherit access. Before activation, the CLI revalidates the whole plan through the install authorization endpoint, including aggregate pack decisions and retained members. Avoid revealing private artifact existence through unauthorized responses. Revocation immediately denies new grants and resolutions, including pack members. Already-issued signed grants may work for up to their 60-second lifetime; a final authorization also has a bounded race with local activation. Installed offline copies cannot be recalled. The CLI reports revocation on its next online check.
+Authorize metadata, search, reports, jobs, and every transfer grant. Bind approvals/grants to immutable release/source identity, digest, current effective policy, and pack version/manifest context where applicable. Equal bytes in another namespace never inherit access. Before activation, the CLI revalidates its whole plan, including aggregate pack decisions and retained members.
 
-## Operating limits, evidence, and recovery
+Revocation immediately blocks new resolutions and grants. Existing grants may work for their remaining lifetime, at most 60 seconds; final install authorization also has a bounded race with local activation. Offline installed copies cannot be recalled. Report revocation on the next online check without exposing private artifact existence to unauthorized callers.
 
-Initial product caps are 25 MiB compressed bundles, 100 MiB expanded, 2,000 files, 10 MiB per file, 100:1 expansion, and a separate 100 MiB repository acquisition ceiling. Start with two concurrent jobs per organization and ten-minute per-scanner deadlines; validate scanner-specific requirements in the spike. These are application assumptions, not provider promises. Sandbox currently allows 45-minute Hobby sessions and 24-hour Pro/Enterprise sessions; quota exhaustion must produce pending/error states rather than bypassing scans. [Sandbox quotas](https://vercel.com/docs/sandbox/pricing).
+## Operations and deployment profiles
 
-Track queue age, fetch/scan duration, retries, lease expiry, scanner coverage/errors, rejection rates, cache hits, download grants, and storage growth. Correlate through operation IDs. Keep tokens, signed URLs, skill contents, prompts, and raw report excerpts out of routine logs. Store bounded reports privately with explicit access control and an append-only audit history for policy, exception, publication, and revocation decisions.
+Initial caps are 25 MiB compressed, 100 MiB expanded, 2,000 files, 10 MiB per file, 100:1 expansion, and a separate 100 MiB repository acquisition ceiling. Start with two concurrent jobs per organization and ten-minute scanner deadlines. Validate these assumptions against scanners and hosts. Payload, duration, memory, transfer, and queue quotas vary; exhaustion produces pending/error states and never bypasses scanning.
 
-Persist required evidence in PostgreSQL and Blob. Workflow history is retained after completion for only 1/7/30 days on Hobby/Pro/Enterprise and is unsuitable as the permanent audit record. [Workflow retention and limits](https://vercel.com/docs/workflows/pricing). Proposed retention: 30 days for failed temporary uploads, 90 days for unreferenced rejected candidates, and the lifetime of a published version plus one year for its reports and audit evidence. Administrators can extend retention or apply legal/security holds.
+Track queue age, stage duration, lease expiry, coverage, failures, grants, and storage growth using operation IDs. Exclude credentials, signed URLs, contents, prompts, and raw excerpts from routine logs. PostgreSQL and Files SDK storage retain authoritative evidence independently of vendor workflow-history retention.
 
-Enable database backups and object inventory/export backups to a separate recovery boundary. Keep published artifacts, pack references, active jobs, and retention holds outside routine garbage collection. Define recovery objectives during the deployment spike, then test restoration into an isolated environment, verify artifact hashes and references, and prove that restored policy never approves missing evidence. Provider backup availability alone is not a restore test.
+Proposed retention: 30 days for failed uploads, 90 days for unreferenced rejected candidates, and published-version lifetime plus one year for reports/audit evidence. Honor holds. Exclude published references, active jobs, and held objects from collection. Back up metadata and objects across a separate recovery boundary; restore into isolation and verify hashes, references, and policy evidence before serving.
 
-## Delivery and rollout
+Initial conformance requires actual deployments on **Node/container, Vercel, and Cloudflare Workers**. Run identical authenticated publish/install, proxy miss/hit, pack-lock, revocation, required-scan failure, retry, and recovery checks. Other server-capable Nitro targets remain portability goals and gain verified status through this suite. Nitro development runs on Node, so local success cannot certify edge output. Resolve Cloudflare credentials/bindings within the request lifecycle. [Deployment behavior](https://nitro.build/deploy), [Cloudflare preset](https://nitro.build/deploy/providers/cloudflare).
 
-Use separate development, preview, and production databases, stores, OAuth callbacks, service identities, and source allowlists. Previews receive synthetic fixtures and no production source credentials. Apply reviewed migrations as a controlled deployment stage; use backward-compatible schema changes so rollback remains possible. Pin runtime dependencies, scanner revisions/rules/images, and CI actions.
+Vercel is an optional profile. Nitro deployment, optional Workflow orchestration, and Sandbox execution satisfy the same interfaces. The documented TanStack Workflow path uses `workflow/vite`; validate pinned versions. [TanStack on Vercel](https://vercel.com/kb/guide/deploy-a-tanstack-start-app-to-vercel), [Workflow integration](https://vercel.com/changelog/workflow-sdk-now-supports-tanstack-start). Prove Git integration with a real deployment reporting `source: git`.
 
-Roll out through protocol/storage and isolation spikes, authenticated private publish/install, proxy caching, immutable packs, scanner calibration, required policies, then operational hardening. CI must exercise native CLI behavior on Windows, macOS, and Linux; archive attacks, access boundaries, retry recovery, policy changes, revoked artifacts, and scanner failures need integration coverage.
-
-Release acceptance includes a real Git-triggered Vercel deployment whose deployment metadata confirms `source: git`, authenticated end-to-end publish and install, a miss fully cached and scanned before delivery, a hit during upstream outage, reproducible pack locks, and denial under required scanner failure. Cross-compilation, local builds, or manually triggered deployments alone do not complete these gates. See [implementation milestones](implementation.md).
-
-Budget for Vercel plan/Functions and transfer, PostgreSQL/storage/backups, private Blob operations and retention, Workflow/queue persistence, Sandbox compute/images, CI artifacts, and optional model/API calls. Measure representative jobs before estimating monthly spend; enforce concurrency, runtime, storage, and external-call budgets. Free scanner software does not imply free operation. Planning creates no hosted services or paid subscriptions.
+Separate development, preview, and production identities, data, callbacks, and allowlists. Pin dependencies, scanner rules/images, compatibility dates, and CI actions. Use reviewed backward-compatible migrations and native Rust CLI tests on Windows, macOS, and Linux. Budget for compute, storage, backups, transfer, CI, and optional model calls; planning provisions no paid services. See [implementation gates](implementation.md).

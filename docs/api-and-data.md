@@ -1,6 +1,6 @@
 # API and data model
 
-This is a proposed v1 contract inventory. Implementation milestone M1 produces and validates the complete OpenAPI specification and generated TypeScript/Go types. The included JSON Schemas are reviewable drafts, not a complete server API.
+This is a proposed v1 contract inventory. Implementation milestone M1 produces and validates the complete OpenAPI specification and generated TypeScript/Rust types. Nitro serves the HTTP contract across deployment targets; Files SDK and infrastructure providers remain behind service interfaces. The included JSON Schemas are reviewable drafts, not a complete server API.
 
 ## Conventions
 
@@ -14,19 +14,19 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 
 | Endpoint | Purpose / response |
 | --- | --- |
-| `GET /v1/capabilities` | Authenticated protocol, limits, schema versions, supported targets/scanners |
+| `GET /v1/capabilities` | Authenticated protocol, effective host/storage transfer limits, transfer modes/range support, schema versions, supported targets/scanners |
 | `POST /auth/device` and `POST /auth/token` | Standards-based browser/device login; expiring codes and prescribed polling |
 | `POST /auth/revoke` | Revoke the caller's CLI session/token |
 | `GET /v1/skills?q=...` | Search accessible skills, cursor pagination |
 | `GET /v1/skills/{id}/versions` | Authorized version/provenance metadata |
 | `POST /v1/resolve` | Resolve `{kind, ref, version?, sourceRevision?}` to pinned resource/member records; `200` resolved or `202` ingestion operation |
 | `POST /v1/imports` | Import approved upstream/source/subdirectory/revision; `202` operation |
-| `POST /v1/uploads` | Reserve a single non-overwritable quarantine object and intended release; `201` scoped upload grant |
+| `POST /v1/uploads` | Reserve a fresh private quarantine attempt object and intended release; `201` scoped signed-upload or authenticated-gateway descriptor |
 | `POST /v1/uploads/{id}/complete` | Revalidate actual stored bytes; `202` ingestion operation; server computes digests |
 | `GET /v1/operations/{id}` | Authorized status, stage, retry timing, redacted failure detail |
 | `POST /v1/install-authorizations` | Authorize a complete resolved install plan, including resource/pack identities and exact digests; recheck every member and pack decision; return actor-bound authorization ID valid for 60 seconds |
 | `POST /v1/install-authorizations/{id}/validate` | Recheck the full plan immediately before activation; renew only if ACLs, sources, releases, packs, and current policies still permit it |
-| `POST /v1/artifacts/{digest}/download` | Require release/source-revision ID and install authorization ID, including pack context when applicable; reauthorize; `200` scoped signed URL, digest, size, expiry; `202` if rescan required, otherwise deny |
+| `POST /v1/artifacts/{digest}/download` | Require release/source-revision ID and install authorization ID, including pack context when applicable; reauthorize; `200` transfer descriptor (signed URL or authenticated gateway), digest, size, expiry; `202` if rescan required, otherwise deny |
 | `GET /v1/packs` / `GET /v1/packs/{id}/versions` | Pack catalog and immutable member sets |
 | `POST /v1/packs` / `PATCH /v1/packs/{id}/draft` | Create/edit unpublished pack intent |
 | `POST /v1/packs/{id}/publish` | Resolve all members, scan/evaluate aggregate manifest, commit exact graph; `202` operation |
@@ -44,7 +44,7 @@ Installation authorization binds the caller, organization, full desired member s
 
 For a project spanning registries, the CLI partitions the desired plan by registry origin and organization. Each service sees and authorizes only its own resources; the CLI completes final validation with every participating registry before activation and aborts on any failure. Never share another registry's credentials or private member metadata. A published v1 pack belongs to one registry/organization; its proxied members are locally mirrored resources in that same registry.
 
-Artifact URLs contain temporary capabilities; the CLI downloads without forwarding registry authorization headers to the storage host. The API supplies only approved storage origins. Metadata replies, reports, and authorization routes set private/no-store caching as appropriate; shared CDN caching never bypasses authorization.
+Transfer descriptors specify `mode: signed-url | gateway`, approved URL, method, explicit per-transfer headers, expiry, digest, byte size, and range support. The CLI forwards only those scoped transfer headers to that exact approved origin; registry session credentials never flow to storage or a cross-origin gateway. A gateway grant is separate from registry credentials and binds actor/resource/pack context, operation, object, limits, and expiry. The gateway rechecks current authorization before opening the stream. See [storage and transfers](storage.md) for provider capability fallback, upload sealing, and host limits. Metadata replies, reports, and authorization routes set private/no-store caching as appropriate; shared CDN caching never bypasses authorization.
 
 ## Tables and invariants
 
@@ -55,7 +55,7 @@ Artifact URLs contain temporary capabilities; the CLI downloads without forwardi
 | `upstreams`, `namespace_routes` | Provider, repository allowlist, canonical config, secret reference, revision, mirror-access policy |
 | `skills`, `skill_versions` | Namespaced identity; unique `(organization, skill, version)`; immutable artifact binding |
 | `source_revisions` | Upstream/repository/subdirectory/immutable revision, original and canonical digest, provenance and license data |
-| `artifacts`, `artifact_files` | Organization-scoped digest, storage key, byte limits, file manifest, creation/retention state |
+| `artifacts`, `artifact_files` | Organization-scoped digest, logical store ID and sealed object key/version, byte limits, file manifest, creation/retention state; no provider URL as permanent identity |
 | `packs`, `pack_drafts`, `pack_versions`, `pack_members` | Immutable published manifest/member graph; exact skills/releases/digests; no nested packs in v1 |
 | `policy_revisions`, `policy_exceptions` | Immutable normalized config/hash; scoped reasoned exceptions with expiry |
 | `scan_runs`, `scan_findings`, `approvals` | Reusable artifact/engine/config/rules evidence; approvals additionally bind release/source/pack context, effective policy revisions, and expiry |
@@ -69,7 +69,7 @@ Artifact bytes and published version/member bindings are immutable. Approval is 
 
 ## Transactions and races
 
-Job creation and outbox insertion occur in one database transaction. Unique constraints collapse concurrent requests; workers use renewable leases and monotonic fencing tokens to reject stale attempts. Workflow delivery is at least once. Write artifact bytes once, validate integrity, then transition metadata; reconcile orphaned objects and missing events periodically.
+Job creation and outbox insertion occur in one database transaction. Unique constraints collapse concurrent requests; workers use renewable leases and monotonic fencing tokens to reject stale attempts. Job/event delivery is at least once; a managed workflow provider is optional. Create a fresh server-only sealed object, validate/hash/scan its exact bytes, then publish its database pointer. Do not require cross-provider atomic rename, conditional upload, or cheap server-side copy. Reconcile orphaned objects and missing events periodically.
 
 Publish/approve transactions check the active policy revision, resource context, and exact artifact digest at commit. A policy race returns pending reevaluation, not an approval from old evidence. Pack publication checks member version identities and permissions again at commit. Download authorization checks release/source/pack revocation and current context-bound approval immediately before minting its short-lived grant. Final installation authorization rechecks the pack-level decision and every desired member, including retained shared members.
 

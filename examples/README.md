@@ -7,5 +7,6 @@ No endpoint, package, hash, token, or scanner result here is live.
 - [pskills.lock.json](pskills.lock.json): resolved pack/member records without secrets or machine-specific paths.
 - [scanner-policy.json](scanner-policy.json): independent modes and explicit egress choices for the three planned adapters.
 - [scan-result.json](scan-result.json): normalized scanner evidence, not a distribution decision.
+- [deployment-profiles.json](deployment-profiles.json): illustrative Node, Vercel, and Workers profiles selecting Files SDK backends and portable infrastructure. These fields are proposed application configuration, not copy-paste provider SDK options.
 
 Digest values are demonstrative SHA-256-shaped strings, not computed artifacts. Production lock creation happens through the CLI and includes validated canonical file manifests. The policy and lock examples are explanatory drafts; their complete schemas follow in M1.

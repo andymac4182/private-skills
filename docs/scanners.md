@@ -8,7 +8,7 @@ These three are purpose-built skill scanners whose local profiles require no sca
 
 Each engine supports `disabled`, `advisory`, and `required`. After the adapter acceptance milestone, enable Cisco as required and NVIDIA/SkillsGuard as advisory. Administrators can promote either after calibrating results against their internal skills. Changing modes creates a policy revision and follows the re-evaluation rules in [the scanning contract](scanning-and-hooks.md).
 
-Default profiles run locally inside disposable scanner environments with network access denied. External semantic analysis and dependency-metadata queries are separately named opt-ins. None of these integrations runs on the developer's machine during normal installation; the Go CLI downloads the registry-approved artifact.
+Default profiles run locally inside disposable scanner environments with network access denied. External semantic analysis and dependency-metadata queries are separately named opt-ins. None of these integrations runs on the developer's machine during normal installation; the Rust CLI downloads the registry-approved artifact.
 
 The commands below are preliminary adapter invocations documented by the projects. Implementation must select immutable scanner/rule/image versions and verify flags, JSON, exit behavior, and runtime requirements against those exact versions before enabling them. They are not installation instructions or evidence of a completed integration.
 

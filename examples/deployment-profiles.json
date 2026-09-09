@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "description": "Illustrative application configuration, not an executable Nitro or Files SDK configuration file",
+  "profiles": {
+    "self-hosted": {
+      "nitroPreset": "node_server",
+      "metadata": { "driver": "postgres", "connectionSecret": "REGISTRY_DATABASE_URL" },
+      "storage": { "sdk": "files-sdk", "adapter": "s3", "private": true, "configurationSecret": "REGISTRY_STORAGE_CONFIG" },
+      "jobs": { "driver": "postgres-leased-worker" },
+      "executor": { "driver": "isolated-oci" },
+      "transfers": { "mode": "capability-selected", "gateway": "same-host" }
+    },
+    "vercel": {
+      "nitroPreset": "vercel",
+      "metadata": { "driver": "postgres", "connectionSecret": "REGISTRY_DATABASE_URL" },
+      "storage": { "sdk": "files-sdk", "adapter": "vercel-blob", "private": true, "configurationSecret": "REGISTRY_STORAGE_CONFIG" },
+      "jobs": { "driver": "portable-worker-service" },
+      "executor": { "driver": "remote-isolated-executor" },
+      "transfers": { "mode": "capability-selected", "gateway": "external-service" }
+    },
+    "cloudflare": {
+      "nitroPreset": "cloudflare_module",
+      "metadata": { "driver": "authenticated-http-transactions", "endpointSecret": "REGISTRY_METADATA_SERVICE" },
+      "storage": { "sdk": "files-sdk", "adapter": "r2", "private": true, "binding": "REGISTRY_ARTIFACTS" },
+      "jobs": { "driver": "portable-worker-service" },
+      "executor": { "driver": "remote-isolated-executor" },
+      "transfers": { "mode": "capability-selected", "gateway": "same-host-if-limits-permit" }
+    }
+  }
+}

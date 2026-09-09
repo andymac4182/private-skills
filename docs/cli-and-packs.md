@@ -4,9 +4,9 @@ This document specifies the proposed `pskills` v1 interface. Commands are illust
 
 ## Distribution and language
 
-Use Go for standalone Windows, macOS and Linux executables, with AMD64 and ARM64 release artifacts. Normal registry installs require no Node, Python, Git, Docker, WSL or administrator access. Publish checksums and verifiable release provenance; native OS signing depends on configured signing identities. Test released artifacts on real operating systems, documenting any architecture that only has build/emulation coverage. Go supports these target combinations. [Go platforms](https://go.dev/doc/install/source)
+Use Rust for standalone Windows, macOS and Linux executables, with AMD64 and ARM64 release artifacts. Normal registry installs require no Rust compiler, Cargo, Node, Python, Git, Docker, WSL or administrator access. Publish checksums and verifiable release provenance; native OS signing depends on configured signing identities. Test released artifacts on real operating systems, documenting any architecture that only has build/emulation coverage. Rust documents support by target triple and tier; set minimum OS versions and native dependency requirements for the tested binaries. [Rust platforms](https://doc.rust-lang.org/rustc/platform-support.html)
 
-TypeScript would share more implementation with the Vercel API, but ordinary npm distribution requires Node. Node can bundle standalone executables; its documented mechanism remains under active development and adds packaging constraints. Rust also supports the target platforms, but introduces another language without a clear advantage for this predominantly HTTP/filesystem client. The Go choice is an engineering recommendation, not a benchmark result. Share versioned JSON Schema/OpenAPI contracts and conformance fixtures with TypeScript. [Node executables](https://nodejs.org/api/single-executable-applications.html), [Rust platforms](https://doc.rust-lang.org/rustc/platform-support.html)
+Use a Cargo workspace with a thin `pskills-cli` binary crate and a reusable `pskills-core` crate for protocol, installation, ownership, and recovery. Commit Cargo.lock, pin the toolchain, and define a minimum supported Rust version during M0. Share language-neutral JSON Schema/OpenAPI contracts and conformance fixtures with the TanStack/Nitro TypeScript server; generate or validate Rust serialization against those contracts. Run formatting, Clippy, unit/contract tests, and native installation tests in CI. Cargo workspaces share a lockfile and support workspace-wide commands. [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
 
 ## Skill identity and compatibility
 
@@ -76,6 +76,8 @@ Removing a pack removes its ownership only; shared members remain until their fi
 ## Installation and recovery
 
 Download approved bytes into a content-addressed cache, verify the archive digest, extract into staging, validate the file manifest and tree digest, then activate. Use the versioned canonical digest contract; preserve file bytes and line endings. Copy by default so Windows needs no symlink privileges.
+
+Consume the registry's provider-neutral transfer descriptor: either an approved private signed URL or an authenticated gateway URL with narrowly scoped transfer headers. Do not assume S3/Vercel URLs, always-available range requests, or direct storage signing. Forward only descriptor-authorized headers to its exact origin, never the registry session token. Files SDK runs on the server/gateway; the Rust CLI contains no storage-provider SDK or credentials.
 
 Apply the [proxy extraction defenses](proxy.md#fetch-and-extraction-defenses) again locally, including path traversal, links, Windows reserved names, case/Unicode collisions, expansion limits and trailing dots/spaces. Never execute install scripts or package managers.
 

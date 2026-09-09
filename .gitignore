@@ -2,9 +2,14 @@
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
 .vercel/
+.wrangler/
 node_modules/
-.next/
+.output/
+.nitro/
+target/
 dist/
 coverage/
 *.log
