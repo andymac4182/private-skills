@@ -18,6 +18,7 @@ Date: 2026-09-10. Status: implementation in progress; not a production acceptanc
 - Desktop 1280px and mobile 390px browser checks found no overflow or browser errors. These checks used disabled integrations and verify loading/error states and navigation, not populated live catalog data.
 - The full TypeScript suite passes: 178 tests passed and two environment-dependent tests skipped. Both application TypeScript checks pass.
 - Rust checks pass: four CLI tests, 23 core tests, and 11 installation safety tests, including the shared standard-skill metadata fixture.
+- [CI run 34389979645](https://github.com/andymac4182/private-skills/actions/runs/34389979645) passed for `be59ece45ea574a7398974076f34d1c23dce83c6`: web checks/builds, native macOS ARM64/Linux x64/Windows x64 Rust checks and binary smoke tests, and the Node container build. This evidence is specific to that revision; later changes require their own checks.
 - Final Vercel and Cloudflare builds pass with the YAML metadata parser. Vercel output verification resolves all four sandbox SDKs from an isolated directory and validates 29 relocated output links.
 
 ## Remaining acceptance gates
