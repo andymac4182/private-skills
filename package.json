@@ -1,0 +1,48 @@
+{
+  "name": "private-skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @private-skills/web dev",
+    "build": "pnpm --filter @private-skills/web build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test",
+    "worker": "node --env-file-if-exists=.env --import tsx workers/runner/src/index.ts",
+    "cli": "cargo run -p pskills --",
+    "smoke": "tsx scripts/smoke.ts",
+    "setup:dev": "tsx scripts/setup-dev.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1079.0",
+    "@aws-sdk/lib-storage": "3.1079.0",
+    "@aws-sdk/s3-presigned-post": "3.1079.0",
+    "@aws-sdk/s3-request-presigner": "3.1079.0",
+    "@tanstack/react-router": "1.170.33",
+    "@tanstack/react-start": "1.168.50",
+    "files-sdk": "2.4.0",
+    "nitro": "3.0.260903-beta",
+    "postgres": "3.4.9",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "semver": "7.8.5",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "@types/semver": "7.8.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "5.0.0",
+    "wrangler": "4.130.0"
+  }
+}

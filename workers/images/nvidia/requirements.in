@@ -1,0 +1,2 @@
+# Direct scanner dependency. Generate requirements.txt with uv pip compile.
+skillspector==2.11.1

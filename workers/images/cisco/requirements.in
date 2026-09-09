@@ -1,0 +1,2 @@
+# Direct scanner dependency. Generate requirements.txt with uv pip compile.
+cisco-ai-skill-scanner==2.1.0

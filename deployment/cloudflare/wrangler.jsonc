@@ -1,0 +1,20 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "private-skills",
+  "main": "../../apps/web/.output/server/index.mjs",
+  "compatibility_date": "2026-09-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "../../apps/web/.output/public"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "PSKILLS_STORAGE_PROVIDER": "http",
+    "PSKILLS_STATE_PROVIDER": "http",
+    "PSKILLS_ALLOW_UNSCANNED": "false"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "target": "fixture-skill",
+  "filesScanned": 1,
+  "safe": true,
+  "suppressedCount": 1,
+  "findings": [
+    {
+      "ruleId": "EX-001",
+      "category": "exfiltration",
+      "severity": "CRITICAL",
+      "message": "Encoded data is sent to a remote endpoint",
+      "file": "SKILL.md",
+      "line": 19,
+      "evidence": "token=secret-value"
+    }
+  ]
+}

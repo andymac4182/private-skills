@@ -1,0 +1,187 @@
+name: Release private CLI binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# A tag push is the only release trigger.  This workflow never publishes to
+# npm, crates.io, GHCR, or another public registry.  It attaches native CLI
+# archives to the release in this repository, whose visibility is controlled by
+# the repository owner.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: verify version tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Require a matching package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tag = process.env.RELEASE_TAG;
+          if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) {
+            throw new Error(`release ref is not a semantic version tag: ${tag}`);
+          }
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const expected = `v${packageJson.version}`;
+          if (expected !== tag) {
+            throw new Error(`tag ${tag} does not match package.json version ${expected}`);
+          }
+          NODE
+
+  web:
+    name: build web package
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.19.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Verify the runtime pins
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = 24
+          test "$(pnpm --version)" = 11.19.0
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check TypeScript and run tests
+        run: pnpm check
+
+      - name: Build the web package
+        run: pnpm build
+
+  native:
+    name: native binary (${{ matrix.target }})
+    needs: verify-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master (resolved 2026-09-09)
+        with:
+          toolchain: 1.95.0
+
+      - name: Verify the native Rust target
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
+
+      - name: Build the release binary
+        run: cargo build --target "${{ matrix.target }}" --package pskills --release --locked
+
+      - name: Smoke the native binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./target/${{ matrix.target }}/release/pskills --version
+          ./target/${{ matrix.target }}/release/pskills --help
+
+      - name: Smoke the native binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\${{ matrix.target }}\release\pskills.exe --version
+          .\target\${{ matrix.target }}\release\pskills.exe --help
+
+      - name: Package the Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p release
+          tar -C "target/${{ matrix.target }}/release" -czf "release/pskills-${{ matrix.target }}.tar.gz" pskills
+
+      - name: Package the Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/pskills.exe" -DestinationPath "release/pskills-${{ matrix.target }}.zip"
+
+      - name: Upload the private release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pskills-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-private-release:
+    name: attach binaries to private GitHub release
+    needs:
+      - verify-tag
+      - web
+      - native
+    if: ${{ needs.verify-tag.result == 'success' && needs.web.result == 'success' && needs.native.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download native artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: pskills-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum -- * > SHA256SUMS
+
+      - name: Create or update the private GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes --title "Private Skills $RELEASE_TAG"
+          fi

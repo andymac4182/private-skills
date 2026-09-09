@@ -1,0 +1,22 @@
+{
+  "skill": { "name": "fixture-skill", "source": "local" },
+  "risk_assessment": { "score": 20, "severity": "LOW" },
+  "components": [
+    { "path": "SKILL.md", "type": "markdown", "size_bytes": 120 }
+  ],
+  "issues": [
+    {
+      "rule_id": "SC2_COMMAND_EXECUTION",
+      "category": "command_execution",
+      "severity": "MEDIUM",
+      "message": "Shell command is referenced",
+      "location": { "path": "SKILL.md", "line": 12 },
+      "matched_text": "run command"
+    }
+  ],
+  "metadata": {
+    "skillspector_version": "2.11.1",
+    "inspection_ledger": { "files_analyzed": 1, "files_skipped": [], "files_failed": [] },
+    "llm_used": false
+  }
+}

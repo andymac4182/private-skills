@@ -1,0 +1,116 @@
+name: private-skills
+
+# This is the self-hosted Node/PostgreSQL baseline. It keeps artifacts private
+# on a named volume by default. Start the optional S3-compatible profile with
+# `docker compose --profile s3 up` after setting the S3 variables described in
+# deployment/README.md. The scanner worker is deliberately run by a host
+# controller (see that runbook): this image has no Docker CLI or daemon socket.
+
+x-runtime-environment: &runtime-environment
+  NODE_ENV: production
+  PSKILLS_ENVIRONMENT: ${PSKILLS_ENVIRONMENT:-production}
+  HOST: 0.0.0.0
+  PORT: 3000
+  NITRO_HOST: 0.0.0.0
+  NITRO_PORT: 3000
+  PSKILLS_PUBLIC_ORIGIN: ${PSKILLS_PUBLIC_ORIGIN:-http://localhost:3000}
+  PSKILLS_ORGANIZATION_ID: ${PSKILLS_ORGANIZATION_ID:-local}
+  PSKILLS_STORAGE_PROVIDER: ${PSKILLS_STORAGE_PROVIDER:-filesystem}
+  PSKILLS_STORAGE_ROOT: /var/lib/private-skills/artifacts
+  PSKILLS_STORAGE_ENDPOINT: ${PSKILLS_STORAGE_ENDPOINT:-}
+  PSKILLS_STORAGE_TOKEN: ${PSKILLS_STORAGE_TOKEN:-}
+  PSKILLS_STORAGE_BUCKET: ${PSKILLS_STORAGE_BUCKET:-private-skills}
+  PSKILLS_STORAGE_REGION: ${PSKILLS_STORAGE_REGION:-us-east-1}
+  PSKILLS_STORAGE_PATH_STYLE: ${PSKILLS_STORAGE_PATH_STYLE:-true}
+  PSKILLS_STORAGE_ACCESS_KEY_ID: ${PSKILLS_STORAGE_ACCESS_KEY_ID:-private-skills-local}
+  PSKILLS_STORAGE_SECRET_ACCESS_KEY: ${PSKILLS_STORAGE_SECRET_ACCESS_KEY:-local-development-only-change-me}
+  PSKILLS_STATE_PROVIDER: ${PSKILLS_STATE_PROVIDER:-postgres}
+  PSKILLS_STATE_PATH: /var/lib/private-skills/state/state.json
+  PSKILLS_STATE_ENDPOINT: ${PSKILLS_STATE_ENDPOINT:-}
+  PSKILLS_STATE_TOKEN: ${PSKILLS_STATE_TOKEN:-}
+  PSKILLS_BOOTSTRAP_TOKEN: ${PSKILLS_BOOTSTRAP_TOKEN:?Set PSKILLS_BOOTSTRAP_TOKEN in .env}
+  PSKILLS_SESSION_SECRET: ${PSKILLS_SESSION_SECRET:?Set PSKILLS_SESSION_SECRET in .env}
+  PSKILLS_WORKER_TOKEN: ${PSKILLS_WORKER_TOKEN:?Set PSKILLS_WORKER_TOKEN in .env}
+  PSKILLS_ALLOW_UNSCANNED: ${PSKILLS_ALLOW_UNSCANNED:-false}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (for example, postgresql://private_skills:<password>@db:5432/private_skills)}
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  db:
+    image: postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-private_skills}
+      POSTGRES_USER: ${POSTGRES_USER:-private_skills}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - private-skills
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *runtime-environment
+    ports:
+      - '127.0.0.1:${PSKILLS_HTTP_PORT:-3000}:3000'
+    volumes:
+      - artifacts:/var/lib/private-skills/artifacts
+      - state-data:/var/lib/private-skills/state
+    healthcheck:
+      test: [CMD, node, --input-type=module, -e, "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    <<: *hardening
+    networks:
+      - private-skills
+
+  # Optional S3-compatible development backend.  MinIO is deliberately not a
+  # default dependency and its console/API bind only to loopback.  Override all
+  # local credentials before using this profile outside a disposable machine.
+  minio:
+    profiles: [s3]
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data --console-address ':9001'
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${PSKILLS_STORAGE_ACCESS_KEY_ID:-private-skills-local}
+      MINIO_ROOT_PASSWORD: ${PSKILLS_STORAGE_SECRET_ACCESS_KEY:-local-development-only-change-me}
+    volumes:
+      - minio-data:/data
+    ports:
+      - '127.0.0.1:${PSKILLS_S3_API_PORT:-9000}:9000'
+      - '127.0.0.1:${PSKILLS_S3_CONSOLE_PORT:-9001}:9001'
+    networks:
+      - private-skills
+
+volumes:
+  artifacts:
+  minio-data:
+  postgres-data:
+  state-data:
+
+networks:
+  private-skills:
