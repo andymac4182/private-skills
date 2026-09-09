@@ -199,7 +199,8 @@ describe('DirectoryResponseCache', () => {
     expect(first).not.toBe(differentBase);
 
     const events: unknown[] = [];
-    const cache = new DirectoryResponseCache({ observe: (event) => events.push(event) });
+    let now = 0;
+    const cache = new DirectoryResponseCache({ now: () => now, observe: (event) => events.push(event) });
     await cache.get(request(first, async () => ({ value: { count: 1 }, status: 200 }), async () => 'header-secret'));
     const serialized = JSON.stringify({ events, stats: cache.inspect() });
     expect(serialized).toContain(first);
