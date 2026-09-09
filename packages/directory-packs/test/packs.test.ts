@@ -37,16 +37,16 @@ describe('SkillsPackClient C1 pack acceptance fixtures', () => {
 
     const manifest = await new SkillsPackClient({ fetch }).inspect('https://skills.sh/p/fixture-unlisted');
 
-    expect(manifest.packUrl).toBe('https://skills.sh/p/fixture-unlisted');
+    expect(manifest.packUrl).toBe('https://www.skills.sh/p/fixture-unlisted');
     expect(manifest.schema).toBe('0.2.0');
     expect(manifest.members).toEqual([expect.objectContaining({
       name: 'preview-skill',
       type: 'skill-md',
-      artifactUrl: 'https://skills.sh/p/fixture-unlisted/.well-known/agent-skills/artifact/preview-skill.md',
+      artifactUrl: 'https://www.skills.sh/p/fixture-unlisted/.well-known/agent-skills/artifact/preview-skill.md',
       externalDigest: `sha256:${'a'.repeat(64)}`,
       files: null,
     })]);
-    expect(calls).toEqual(['https://skills.sh/p/fixture-unlisted/.well-known/agent-skills/index.json']);
+    expect(calls).toEqual(['https://www.skills.sh/p/fixture-unlisted/.well-known/agent-skills/index.json']);
   });
 
   it('reports a deleted unlisted pack as not found without widening to the host root', async () => {
@@ -59,8 +59,8 @@ describe('SkillsPackClient C1 pack acceptance fixtures', () => {
     await expect(new SkillsPackClient({ fetch }).inspect('https://skills.sh/p/fixture-deleted'))
       .rejects.toMatchObject({ code: 'not_found', status: 404 });
     expect(calls).toEqual([
-      'https://skills.sh/p/fixture-deleted/.well-known/agent-skills/index.json',
-      'https://skills.sh/p/fixture-deleted/.well-known/skills/index.json',
+      'https://www.skills.sh/p/fixture-deleted/.well-known/agent-skills/index.json',
+      'https://www.skills.sh/p/fixture-deleted/.well-known/skills/index.json',
     ]);
     expect(calls.some((url) => url === 'https://skills.sh/.well-known/agent-skills/index.json')).toBe(false);
     expect(calls.some((url) => url === 'https://skills.sh/.well-known/skills/index.json')).toBe(false);
@@ -108,8 +108,8 @@ describe('SkillsPackClient C1 pack acceptance fixtures', () => {
     expect(manifest.schema).toBe('0.1.0');
     expect(manifest.members[0]).toEqual(expect.objectContaining({ name: 'legacy-skill', type: 'files', files: ['SKILL.md'] }));
     expect(calls).toEqual([
-      'https://skills.sh/p/fixture-legacy-fallback/.well-known/agent-skills/index.json',
-      'https://skills.sh/p/fixture-legacy-fallback/.well-known/skills/index.json',
+      'https://www.skills.sh/p/fixture-legacy-fallback/.well-known/agent-skills/index.json',
+      'https://www.skills.sh/p/fixture-legacy-fallback/.well-known/skills/index.json',
     ]);
   });
 });
