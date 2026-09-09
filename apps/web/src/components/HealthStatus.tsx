@@ -1,0 +1,5 @@
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../lib/api'
+type HealthState = 'checking' | 'online' | 'offline'
+export function HealthStatus() { const [state, setState] = useState<HealthState>('checking'); const [version, setVersion] = useState<string | null>(null); const check = useCallback(async () => { setState('checking'); try { const health = await api.health(); setVersion(health.version); setState(health.ok ? 'online' : 'offline') } catch { setVersion(null); setState('offline') } }, []); useEffect(() => { void check(); const timer = window.setInterval(() => void check(), 30_000); return () => window.clearInterval(timer) }, [check]); const label = state === 'online' ? `API online${version ? ` · v${version}` : ''}` : state === 'checking' ? 'Checking API…' : 'API unavailable'; return <button className="health-status" type="button" onClick={() => void check()} title="Check registry health"><span className={`health-dot health-${state}`} aria-hidden="true" /><span>{label}</span></button> }
+

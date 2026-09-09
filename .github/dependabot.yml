@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Dependabot understands SHA-pinned action references and proposes the
+  # corresponding immutable revision together with the human-readable tag.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

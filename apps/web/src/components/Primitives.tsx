@@ -1,0 +1,16 @@
+import type { PropsWithChildren, ReactNode } from 'react'
+import { titleCase } from '../lib/format'
+
+export function Button({ children, kind = 'primary', busy = false, className = '', ...props }: PropsWithChildren<React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: 'primary' | 'secondary' | 'quiet' | 'danger'; busy?: boolean }>) {
+  return <button {...props} className={`button button-${kind} ${className}`.trim()} disabled={busy || props.disabled}>{busy ? 'Working…' : children}</button>
+}
+export function Badge({ value, tone }: { value: string; tone?: 'good' | 'warn' | 'bad' | 'muted' }) { return <span className={`badge badge-${tone ?? badgeTone(value)}`}>{titleCase(value)}</span> }
+function badgeTone(value: string): 'good' | 'warn' | 'bad' | 'muted' { if (['approved', 'completed', 'enabled', 'healthy', 'required'].includes(value)) return 'good'; if (['pending', 'queued', 'running', 'advisory', 'degraded'].includes(value)) return 'warn'; if (['revoked', 'quarantined', 'scan-error', 'failed', 'error', 'timeout'].includes(value)) return 'bad'; return 'muted' }
+export function Panel({ title, description, action, children, className = '' }: PropsWithChildren<{ title?: string; description?: string; action?: ReactNode; className?: string }>) { return <section className={`panel ${className}`.trim()}>{(title || description || action) && <header className="panel-header"><div>{title && <h2>{title}</h2>}{description && <p className="muted">{description}</p>}</div>{action && <div className="panel-action">{action}</div>}</header>}{children}</section> }
+export function Notice({ kind = 'info', children }: PropsWithChildren<{ kind?: 'info' | 'error' | 'success' | 'warning' }>) { return <div className={`notice notice-${kind}`} role={kind === 'error' ? 'alert' : 'status'}>{children}</div> }
+export function LoadingState({ label = 'Loading registry data…' }: { label?: string }) { return <div className="state-block"><span className="spinner" aria-hidden="true" />{label}</div> }
+export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="state-block state-error" role="alert"><strong>Could not load this view.</strong><span>{message}</span>{onRetry && <Button kind="secondary" onClick={onRetry}>Try again</Button>}</div> }
+export function EmptyState({ title, description, action }: { title: string; description: string; action?: ReactNode }) { return <div className="empty-state"><div className="empty-mark" aria-hidden="true">∅</div><h3>{title}</h3><p className="muted">{description}</p>{action && <div className="empty-action">{action}</div>}</div> }
+export function Field({ label, hint, children }: PropsWithChildren<{ label: string; hint?: string }>) { return <label className="field"><span className="field-label">{label}</span>{children}{hint && <span className="field-hint">{hint}</span>}</label> }
+export function ConfirmAction({ label, confirmLabel, onConfirm, kind = 'danger', busy = false }: { label: string; confirmLabel: string; onConfirm: () => void; kind?: 'danger' | 'secondary'; busy?: boolean }) { return <Button kind={kind} busy={busy} onClick={() => { if (window.confirm(confirmLabel)) onConfirm() }}>{label}</Button> }
+

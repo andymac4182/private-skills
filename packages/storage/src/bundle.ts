@@ -1,0 +1,691 @@
+import type { BundleFile, SkillBundle } from "../../contracts/src/index.js";
+
+/** Maximum number of files accepted in one distribution bundle. */
+export const MAX_BUNDLE_FILES = 2_000;
+
+/** Maximum decoded byte size of one file in a distribution bundle. */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Maximum expanded decoded byte size of a distribution bundle. */
+export const MAX_BUNDLE_BYTES = 100 * 1024 * 1024;
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
+
+const BUNDLE_KEYS = new Set(["format", "files"]);
+const FILE_KEYS = new Set(["path", "content", "executable"]);
+const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+const WINDOWS_RESERVED_CHARACTER = /[<>"|?*]/u;
+const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const MAX_FILE_BASE64_CHARS = Math.ceil(MAX_FILE_BYTES / 3) * 4;
+const RESERVED_AGENT_SEGMENTS = new Set([
+  ".agents",
+  ".claude-plugin",
+  ".codex",
+  ".cursor",
+  ".mcp",
+  ".mcp.json",
+  ".windsurf",
+]);
+
+function isPluginEnablingPath(path: string): boolean {
+  const segments = path.toLowerCase().split("/");
+  // These directories/files are host activation/configuration boundaries;
+  // admitting them would let a skill bundle install hooks, MCP servers, or
+  // host-specific instructions as a side effect.
+  return segments.some((segment) => RESERVED_AGENT_SEGMENTS.has(segment));
+}
+
+/** A structured validation failure suitable for returning as an HTTP 400. */
+export class BundleValidationError extends Error {
+  readonly code: string;
+  readonly path?: string;
+
+  constructor(message: string, code = "invalid_bundle", path?: string) {
+    super(message);
+    this.name = "BundleValidationError";
+    this.code = code;
+    this.path = path;
+  }
+}
+
+export interface SkillMetadata {
+  skillName: string;
+  description: string;
+  /** Parsed, non-executable scalar frontmatter from the root SKILL.md. */
+  frontmatter: Record<string, string | number | boolean>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function ownKeys(value: Record<string, unknown>): string[] {
+  return Object.keys(value);
+}
+
+function assertOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  label: string
+): void {
+  for (const key of ownKeys(value)) {
+    if (!allowed.has(key)) {
+      throw new BundleValidationError(
+        `${label} contains unsupported property ${JSON.stringify(key)}`,
+        "unsupported_property",
+        label
+      );
+    }
+  }
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  if (typeof globalThis.btoa !== "function") {
+    throw new BundleValidationError(
+      "base64 encoding is unavailable in this runtime",
+      "configuration"
+    );
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return globalThis.btoa(binary);
+}
+
+function decodeBase64(value: unknown, path: string): Uint8Array {
+  if (typeof value !== "string" || !BASE64_PATTERN.test(value)) {
+    throw new BundleValidationError(
+      "bundle file content must be canonical base64",
+      "invalid_base64",
+      path
+    );
+  }
+  if (typeof globalThis.atob !== "function") {
+    throw new BundleValidationError(
+      "base64 decoding is unavailable in this runtime",
+      "configuration"
+    );
+  }
+  let binary: string;
+  try {
+    binary = globalThis.atob(value);
+  } catch {
+    throw new BundleValidationError(
+      "bundle file content must be canonical base64",
+      "invalid_base64",
+      path
+    );
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  // atob is permissive in some hosts; require one canonical wire spelling.
+  if (encodeBase64(bytes) !== value) {
+    throw new BundleValidationError(
+      "bundle file content must be canonical base64",
+      "invalid_base64",
+      path
+    );
+  }
+  return bytes;
+}
+
+function decodeSkillText(content: string): string {
+  const bytes = decodeBase64(content, "SKILL.md");
+  try {
+    return textDecoder.decode(bytes);
+  } catch {
+    throw new BundleValidationError(
+      "SKILL.md content must be valid UTF-8",
+      "invalid_skill_encoding",
+      "SKILL.md"
+    );
+  }
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function pathCollisionKey(path: string): string {
+  // NFC + lower case catches both decomposed Unicode aliases and the case
+  // collisions that make a bundle install differently on Windows/macOS.
+  return path.normalize("NFC").toLowerCase();
+}
+
+function validatePath(path: unknown, index: number): string {
+  if (typeof path !== "string" || path.length === 0) {
+    throw new BundleValidationError(
+      `files[${index}].path must be a non-empty string`,
+      "invalid_path",
+      `files[${index}].path`
+    );
+  }
+  if (hasLoneSurrogate(path) || path !== path.normalize("NFC")) {
+    throw new BundleValidationError(
+      `files[${index}].path must contain valid NFC Unicode`,
+      "invalid_path",
+      path
+    );
+  }
+  if (
+    path.length > 4_096 ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.includes("\\") ||
+    path.includes(":") ||
+    path.includes("//") ||
+    WINDOWS_RESERVED_CHARACTER.test(path) ||
+    CONTROL_CHARACTER.test(path)
+  ) {
+    throw new BundleValidationError(
+      `files[${index}].path is not a safe relative path`,
+      "unsafe_path",
+      path
+    );
+  }
+
+  const segments = path.split("/");
+  for (const segment of segments) {
+    if (
+      segment.length === 0 ||
+      segment === "." ||
+      segment === ".." ||
+      segment.endsWith(".") ||
+      segment.endsWith(" ") ||
+      WINDOWS_RESERVED_SEGMENT.test(segment)
+    ) {
+      throw new BundleValidationError(
+        `files[${index}].path contains an unsafe segment`,
+        "unsafe_path",
+        path
+      );
+    }
+    if (textEncoder.encode(segment).byteLength > 255) {
+      throw new BundleValidationError(
+        `files[${index}].path contains an oversized segment`,
+        "path_too_long",
+        path
+      );
+    }
+  }
+  return path;
+}
+
+interface ValidatedFile {
+  file: BundleFile;
+  decodedBytes: number;
+}
+
+function validateFile(value: unknown, index: number): ValidatedFile {
+  if (!isRecord(value)) {
+    throw new BundleValidationError(
+      `files[${index}] must be an object`,
+      "invalid_file",
+      `files[${index}]`
+    );
+  }
+  assertOnlyKeys(value, FILE_KEYS, `files[${index}]`);
+
+  const path = validatePath(value.path, index);
+  if (isPluginEnablingPath(path)) {
+    throw new BundleValidationError(
+      `files[${index}].path is a plugin-enabling payload and is not allowed`,
+      "plugin_payload",
+      path
+    );
+  }
+  if (typeof value.content !== "string") {
+    throw new BundleValidationError(
+      `files[${index}].content must be a string`,
+      "invalid_content",
+      path
+    );
+  }
+  if (hasLoneSurrogate(value.content)) {
+    throw new BundleValidationError(
+      `files[${index}].content must be canonical base64`,
+      "invalid_base64",
+      path
+    );
+  }
+  if (
+    value.executable !== undefined &&
+    typeof value.executable !== "boolean"
+  ) {
+    throw new BundleValidationError(
+      `files[${index}].executable must be a boolean`,
+      "invalid_executable",
+      path
+    );
+  }
+  if (value.content.length > MAX_FILE_BASE64_CHARS) {
+    throw new BundleValidationError(
+      `files[${index}].content exceeds the ${MAX_FILE_BYTES}-byte file limit`,
+      "file_too_large",
+      path
+    );
+  }
+  const decodedBytes = decodeBase64(value.content, path).byteLength;
+  if (decodedBytes > MAX_FILE_BYTES) {
+    throw new BundleValidationError(
+      `files[${index}].content exceeds the ${MAX_FILE_BYTES}-byte file limit`,
+      "file_too_large",
+      path
+    );
+  }
+
+  return {
+    file: {
+      path,
+      content: value.content,
+      ...(value.executable === true ? { executable: true } : {}),
+    },
+    decodedBytes,
+  };
+}
+
+/**
+ * Validate and normalize a bundle without executing any file content.
+ *
+ * This checks transport shape, canonical base64 file content, path safety,
+ * duplicate/case/Unicode aliases, and expanded decoded-byte size limits.
+ * SKILL.md metadata is intentionally parsed by {@link parseSkillMetadata};
+ * callers that publish a skill should call both.
+ */
+export function validateBundle(bundle: unknown): SkillBundle {
+  if (!isRecord(bundle)) {
+    throw new BundleValidationError("bundle must be an object");
+  }
+  assertOnlyKeys(bundle, BUNDLE_KEYS, "bundle");
+  if (bundle.format !== "pskills-bundle-v1") {
+    throw new BundleValidationError(
+      "bundle.format must be pskills-bundle-v1",
+      "invalid_format",
+      "format"
+    );
+  }
+  if (!Array.isArray(bundle.files)) {
+    throw new BundleValidationError(
+      "bundle.files must be an array",
+      "invalid_files",
+      "files"
+    );
+  }
+  if (bundle.files.length === 0) {
+    throw new BundleValidationError(
+      "bundle.files must contain at least one file",
+      "empty_bundle",
+      "files"
+    );
+  }
+  if (bundle.files.length > MAX_BUNDLE_FILES) {
+    throw new BundleValidationError(
+      `bundle.files exceeds the ${MAX_BUNDLE_FILES}-file limit`,
+      "too_many_files",
+      "files"
+    );
+  }
+
+  const files: BundleFile[] = [];
+  const seen = new Map<string, string>();
+  let totalBytes = 0;
+  for (const [index, value] of bundle.files.entries()) {
+    const validated = validateFile(value, index);
+    const file = validated.file;
+    const key = pathCollisionKey(file.path);
+    const prior = seen.get(key);
+    if (prior !== undefined) {
+      throw new BundleValidationError(
+        `bundle contains colliding paths ${JSON.stringify(prior)} and ${JSON.stringify(file.path)}`,
+        "path_collision",
+        file.path
+      );
+    }
+    seen.set(key, file.path);
+    totalBytes += validated.decodedBytes;
+    if (totalBytes > MAX_BUNDLE_BYTES) {
+      throw new BundleValidationError(
+        `bundle exceeds the ${MAX_BUNDLE_BYTES}-byte expanded size limit`,
+        "bundle_too_large",
+        file.path
+      );
+    }
+    files.push(file);
+  }
+
+  return { format: "pskills-bundle-v1", files };
+}
+
+function comparePaths(left: BundleFile, right: BundleFile): number {
+  if (left.path < right.path) return -1;
+  if (left.path > right.path) return 1;
+  return 0;
+}
+
+/** Encode a validated bundle as deterministic, compact UTF-8 JSON. */
+export function encodeBundle(bundle: SkillBundle): Uint8Array {
+  const normalized = validateBundle(bundle);
+  const files = [...normalized.files]
+    .sort(comparePaths)
+    .map((file) => ({
+      path: file.path,
+      content: file.content,
+      ...(file.executable === true ? { executable: true } : {}),
+    }));
+  return textEncoder.encode(
+    JSON.stringify({ format: "pskills-bundle-v1", files })
+  );
+}
+
+/** Decode UTF-8 JSON and apply the same validation as an in-memory bundle. */
+export function decodeBundle(bytes: Uint8Array): SkillBundle {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new BundleValidationError("bundle bytes must be a Uint8Array");
+  }
+  // A BOM is accepted by some JSON decoders but is not part of canonical
+  // UTF-8 JSON and would produce two byte representations for one bundle.
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    throw new BundleValidationError("bundle JSON must not contain a UTF-8 BOM");
+  }
+  let decoded: string;
+  try {
+    decoded = textDecoder.decode(bytes);
+  } catch {
+    throw new BundleValidationError("bundle bytes are not valid UTF-8");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded) as unknown;
+  } catch {
+    throw new BundleValidationError("bundle bytes are not valid JSON");
+  }
+  const normalized = validateBundle(parsed);
+  const canonical = encodeBundle(normalized);
+  if (!bytesEqual(canonical, bytes)) {
+    throw new BundleValidationError(
+      "bundle bytes are not canonical",
+      "non_canonical"
+    );
+  }
+  return normalized;
+}
+
+function frontmatterKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+const DANGEROUS_FRONTMATTER_KEYS = new Set([
+  "plugin",
+  "plugins",
+  "pluginjson",
+  "extension",
+  "extensions",
+  "mcp",
+  "mcpserver",
+  "mcpservers",
+  "hook",
+  "hooks",
+  "command",
+  "commands",
+  "script",
+  "scripts",
+  "runtime",
+  "runtimes",
+  "entrypoint",
+  "install",
+  "installer",
+  "tool",
+  "tools",
+]);
+const DANGEROUS_FRONTMATTER_PARTS = [
+  "plugin",
+  "extension",
+  "mcp",
+  "hook",
+  "command",
+  "script",
+  "runtime",
+  "entrypoint",
+  "install",
+  "execute",
+];
+
+function isDangerousFrontmatterKey(rawKey: string): boolean {
+  const normalized = frontmatterKey(rawKey);
+  const compact = normalized.replaceAll(/[-_]/gu, "");
+  // `allowed-tools` is a standard Agent Skills field. Keep it available as a
+  // scalar while rejecting all other tool activation fields.
+  if (compact === "allowedtools") return false;
+  if (DANGEROUS_FRONTMATTER_KEYS.has(compact)) return true;
+
+  // Match activation terms as their own key segments, or as the stem of a
+  // compound key (`plugin-enabled`, `mcpServer`, `scriptPath`, ...). Do not
+  // use an arbitrary substring match: ordinary metadata such as
+  // `description` contains the letters "script".
+  const segments = normalized
+    .replaceAll(/([a-z])([A-Z])/gu, "$1-$2")
+    .split(/[-_]+/u)
+    .map((segment) => segment.toLowerCase());
+  return DANGEROUS_FRONTMATTER_PARTS.some(
+    (part) =>
+      segments.includes(part) ||
+      compact.startsWith(part) ||
+      compact.endsWith(part)
+  );
+}
+
+function parseScalar(value: string, key: string): string | number | boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new BundleValidationError(
+      `SKILL.md frontmatter field ${key} cannot be empty`,
+      "invalid_frontmatter",
+      "SKILL.md"
+    );
+  }
+  if (trimmed.startsWith("[") || trimmed.startsWith("{") || trimmed.startsWith("!")) {
+    throw new BundleValidationError(
+      `SKILL.md frontmatter field ${key} must be a scalar`,
+      "unsafe_frontmatter",
+      "SKILL.md"
+    );
+  }
+  if (trimmed.startsWith('"')) {
+    if (!trimmed.endsWith('"') || trimmed.length < 2) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} has an unterminated quote`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed) as unknown;
+    } catch {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} has an invalid quoted value`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    if (typeof parsed !== "string") {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} has an invalid quoted value`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    if (CONTROL_CHARACTER.test(parsed) || hasLoneSurrogate(parsed)) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} contains control characters`,
+        "unsafe_frontmatter",
+        "SKILL.md"
+      );
+    }
+    return parsed;
+  }
+  if (trimmed.startsWith("'")) {
+    if (!trimmed.endsWith("'") || trimmed.length < 2) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} has an unterminated quote`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    const parsed = trimmed.slice(1, -1).replaceAll("''", "'");
+    if (CONTROL_CHARACTER.test(parsed) || hasLoneSurrogate(parsed)) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} contains control characters`,
+        "unsafe_frontmatter",
+        "SKILL.md"
+      );
+    }
+    return parsed;
+  }
+  if (trimmed === "true" || trimmed === "false") return trimmed === "true";
+  if (/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u.test(trimmed)) {
+    const number = Number(trimmed);
+    if (Number.isSafeInteger(number) || Number.isFinite(number)) return number;
+  }
+  if (CONTROL_CHARACTER.test(trimmed) || hasLoneSurrogate(trimmed)) {
+    throw new BundleValidationError(
+      `SKILL.md frontmatter field ${key} contains control characters`,
+      "unsafe_frontmatter",
+      "SKILL.md"
+    );
+  }
+  return trimmed;
+}
+
+function parseFrontmatter(text: string): Record<string, string | number | boolean> {
+  const lines = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+  if (lines[0] !== "---") {
+    throw new BundleValidationError(
+      "SKILL.md must begin with YAML frontmatter",
+      "missing_frontmatter",
+      "SKILL.md"
+    );
+  }
+  const end = lines.findIndex((line, index) => index > 0 && line === "---");
+  if (end < 0) {
+    throw new BundleValidationError(
+      "SKILL.md frontmatter is not closed",
+      "invalid_frontmatter",
+      "SKILL.md"
+    );
+  }
+
+  const result: Record<string, string | number | boolean> = {};
+  const seen = new Set<string>();
+  for (const [lineIndex, line] of lines.slice(1, end).entries()) {
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    if (/^[ \t]/u.test(line)) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter cannot contain indented or nested data (line ${lineIndex + 2})`,
+        "unsafe_frontmatter",
+        "SKILL.md"
+      );
+    }
+    const match = /^(?<key>[A-Za-z][A-Za-z0-9_-]{0,63}):[ \t]*(?<value>.*)$/u.exec(line);
+    if (!match?.groups) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter has an invalid field (line ${lineIndex + 2})`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    const key = match.groups.key;
+    const normalizedKey = frontmatterKey(key).replaceAll(/[-_]/gu, "");
+    if (isDangerousFrontmatterKey(key)) {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter field ${key} is not allowed to enable plugins or execution`,
+        "unsafe_frontmatter",
+        "SKILL.md"
+      );
+    }
+    if (seen.has(normalizedKey) || key === "__proto__" || key === "constructor") {
+      throw new BundleValidationError(
+        `SKILL.md frontmatter contains a duplicate or reserved field ${key}`,
+        "invalid_frontmatter",
+        "SKILL.md"
+      );
+    }
+    seen.add(normalizedKey);
+    result[key] = parseScalar(match.groups.value, key);
+  }
+  return result;
+}
+
+/** Parse decoded root SKILL.md metadata without evaluating any payload. */
+export function parseSkillMetadata(bundle: unknown): SkillMetadata {
+  const normalized = validateBundle(bundle);
+  const skillFile = normalized.files.find((file) => file.path === "SKILL.md");
+  if (!skillFile) {
+    throw new BundleValidationError(
+      "bundle must contain a root SKILL.md",
+      "missing_skill_metadata",
+      "SKILL.md"
+    );
+  }
+  const frontmatter = parseFrontmatter(decodeSkillText(skillFile.content));
+  const nameValue = frontmatter.name;
+  const descriptionValue = frontmatter.description;
+  if (typeof nameValue !== "string" || !NAME_PATTERN.test(nameValue)) {
+    throw new BundleValidationError(
+      "SKILL.md frontmatter name must use lowercase letters, numbers, and single hyphens",
+      "invalid_skill_name",
+      "SKILL.md"
+    );
+  }
+  if ([...nameValue].length > 64) {
+    throw new BundleValidationError(
+      "SKILL.md frontmatter name must be at most 64 characters",
+      "invalid_skill_name",
+      "SKILL.md"
+    );
+  }
+  if (
+    typeof descriptionValue !== "string" ||
+    descriptionValue.trim().length === 0 ||
+    [...descriptionValue].length > 1_024
+  ) {
+    throw new BundleValidationError(
+      "SKILL.md frontmatter description must be 1-1024 characters",
+      "invalid_skill_description",
+      "SKILL.md"
+    );
+  }
+  return {
+    description: descriptionValue,
+    frontmatter,
+    skillName: nameValue,
+  };
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@private-skills/storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bundle": "./src/bundle.ts",
+    "./http": "./src/http.ts",
+    "./node": "./src/node.ts"
+  },
+  "peerDependencies": {
+    "files-sdk": "2.4.0"
+  },
+  "peerDependenciesMeta": {
+    "files-sdk": {
+      "optional": true
+    }
+  }
+}
