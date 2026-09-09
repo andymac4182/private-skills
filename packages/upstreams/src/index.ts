@@ -226,12 +226,7 @@ export async function acquireSkill(
     optionsArg,
   );
 
-  if (normalized.upstream.enabled === false) {
-    throw new UpstreamAcquisitionError(
-      'upstream_disabled',
-      `Upstream ${safeId(normalized.upstream.id)} is disabled`,
-    );
-  }
+  assertUpstreamEnabled(normalized.upstream);
 
   switch (normalized.upstream.kind) {
     case 'github':
@@ -257,6 +252,7 @@ export async function acquireGithubSkill(
       'acquireGithubSkill requires a GitHub upstream',
     );
   }
+  assertUpstreamEnabled(normalized.upstream);
   return acquireGithub(normalized);
 }
 
@@ -271,7 +267,17 @@ export async function acquireRegistrySkill(
       'acquireRegistrySkill requires a registry upstream',
     );
   }
+  assertUpstreamEnabled(normalized.upstream);
   return acquireRegistry(normalized);
+}
+
+function assertUpstreamEnabled(upstream: Upstream): void {
+  if (upstream.enabled === false) {
+    throw new UpstreamAcquisitionError(
+      'upstream_disabled',
+      `Upstream ${safeId(upstream.id)} is disabled`,
+    );
+  }
 }
 
 /**
@@ -526,6 +532,12 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
       `GitHub tree for ${repository}@${revision} was truncated`,
     );
   }
+  if (treeResponse.truncated !== false) {
+    throw new UpstreamAcquisitionError('invalid_source', 'GitHub tree response has an invalid truncated flag');
+  }
+  if (treeResponse.sha !== undefined && treeResponse.sha !== revision) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'GitHub tree response is not pinned to the resolved commit');
+  }
   if (!Array.isArray(treeResponse.tree)) {
     throw new UpstreamAcquisitionError('invalid_source', 'GitHub tree response has no tree array');
   }
@@ -543,6 +555,22 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
       'file_count_limit',
       `Selected directory contains more than ${limits.maxFiles} files`,
     );
+  }
+  // GitHub includes blob sizes in recursive tree entries.  Reject a source
+  // whose declared expanded size is already over the bundle limit before
+  // starting any blob requests; the post-fetch check below still protects
+  // against a source that lies about those declarations.
+  let declaredExpandedBytes = 0;
+  for (const entry of entries) {
+    if (typeof entry.size === 'number') {
+      declaredExpandedBytes += entry.size;
+      if (declaredExpandedBytes > limits.maxExpandedBytes) {
+        throw new UpstreamAcquisitionError(
+          'expanded_size_limit',
+          `Selected directory exceeds the expanded size limit of ${limits.maxExpandedBytes} bytes`,
+        );
+      }
+    }
   }
 
   const blobs = await mapWithConcurrency(entries, limits.concurrency, async (entry) => {
@@ -695,6 +723,9 @@ async function acquireRegistry(input: NormalizedInput): Promise<AcquisitionResul
       throw new UpstreamAcquisitionError('transfer_expired', 'Registry transfer descriptor is expired');
     }
   }
+  if (descriptor.size !== undefined && descriptor.size > limits.maxResponseBytes) {
+    throw new UpstreamAcquisitionError('response_size_limit', 'Registry transfer exceeds response limit');
+  }
 
   const transferURL = resolveDescriptorURL(descriptor.url, base, options.allowLoopbackForTests ?? false);
   const transferHeaders = sanitizeTransferHeaders(descriptor.headers);
@@ -769,13 +800,21 @@ function mergeLimits(input?: Partial<AcquisitionLimits>): NormalizedLimits {
 }
 
 function normalizeRepository(repositoryInput: string | undefined, allowlist: string[] | undefined): string {
-  if (typeof repositoryInput !== 'string' || repositoryInput.trim() === '') {
-    throw new UpstreamAcquisitionError('repository_required', 'GitHub imports require a repository');
-  }
-  const repository = normalizeRepositoryIdentity(repositoryInput);
   if (!allowlist || allowlist.length === 0) {
     throw new UpstreamAcquisitionError('repository_denied', 'GitHub upstream has no repository allowlist');
   }
+  // A single-repository mapping may omit the redundant repository field.  A
+  // multi-repository mapping must name the selected repository explicitly so
+  // the worker never guesses across an administrator allowlist.
+  const requested = typeof repositoryInput === 'string' && repositoryInput.trim() !== ''
+    ? repositoryInput
+    : allowlist.length === 1
+      ? allowlist[0]
+      : undefined;
+  if (!requested) {
+    throw new UpstreamAcquisitionError('repository_required', 'GitHub imports require a repository');
+  }
+  const repository = normalizeRepositoryIdentity(requested);
   const allowed = allowlist.map(normalizeRepositoryIdentity);
   if (!allowed.some((entry) => entry.toLocaleLowerCase('en-US') === repository.toLocaleLowerCase('en-US'))) {
     throw new UpstreamAcquisitionError('repository_denied', `Repository ${repository} is not allowlisted`);
@@ -836,7 +875,7 @@ function validateSkillPath(pathInput: string, limits: AcquisitionLimits, rejectR
   if (typeof pathInput !== 'string' || pathInput.length === 0) {
     throw new UpstreamAcquisitionError('invalid_path', 'Bundle paths cannot be empty');
   }
-  if (pathInput.includes('\0') || pathInput.includes('\\') || /[\u0000-\u001f\u007f]/.test(pathInput) || pathInput.startsWith('/') || /^[A-Za-z]:/.test(pathInput) || pathInput.startsWith('//')) {
+  if (hasLoneSurrogate(pathInput) || pathInput.includes('\0') || pathInput.includes('\\') || /[\u0000-\u001f\u007f]/.test(pathInput) || pathInput.startsWith('/') || /^[A-Za-z]:/.test(pathInput) || pathInput.startsWith('//')) {
     throw new UpstreamAcquisitionError('invalid_path', `Unsafe bundle path ${JSON.stringify(pathInput)}`);
   }
   const path = pathInput.normalize('NFC');
@@ -863,6 +902,20 @@ function validateSkillPath(pathInput: string, limits: AcquisitionLimits, rejectR
   return path;
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function selectTreeEntries(tree: unknown[], selectedPath: string, limits: AcquisitionLimits): GitTreeEntry[] {
   const prefix = selectedPath ? `${selectedPath}/` : '';
   const result: GitTreeEntry[] = [];
@@ -880,7 +933,7 @@ function selectTreeEntries(tree: unknown[], selectedPath: string, limits: Acquis
     if (type !== 'blob' || mode === '120000' || mode === '160000') {
       throw new UpstreamAcquisitionError('unsupported_source_entry', `GitHub entry ${JSON.stringify(path)} is not a regular file`);
     }
-    if (mode !== '' && mode !== '100644' && mode !== '100755') {
+    if (mode !== '100644' && mode !== '100755') {
       throw new UpstreamAcquisitionError('unsupported_source_entry', `GitHub entry ${JSON.stringify(path)} has an unsupported file mode`);
     }
     const safePath = validateSkillPath(relative, limits);
@@ -916,11 +969,17 @@ function decodeGithubBlob(blob: GitHubBlobResponse, entry: GitTreeEntry, limits:
   if (bytes.length > limits.maxFileBytes) {
     throw new UpstreamAcquisitionError('file_size_limit', `GitHub file ${String(entry.path)} exceeds the per-file limit`);
   }
+  if (blob.size !== undefined && (typeof blob.size !== 'number' || !Number.isSafeInteger(blob.size) || blob.size < 0)) {
+    throw new UpstreamAcquisitionError('invalid_source', `GitHub blob ${String(entry.path)} has an invalid size`);
+  }
   if (typeof entry.size === 'number' && entry.size !== bytes.length) {
     throw new UpstreamAcquisitionError('size_mismatch', `GitHub file ${String(entry.path)} size changed during acquisition`);
   }
   if (typeof blob.size === 'number' && blob.size !== bytes.length) {
     throw new UpstreamAcquisitionError('size_mismatch', `GitHub blob ${String(entry.path)} size is inconsistent`);
+  }
+  if (typeof blob.sha === 'string' && blob.sha.toLocaleLowerCase('en-US') !== String(entry.sha).toLocaleLowerCase('en-US')) {
+    throw new UpstreamAcquisitionError('digest_mismatch', `GitHub blob ${String(entry.path)} response digest mismatch`);
   }
   const declaredSha = typeof entry.sha === 'string' ? entry.sha : '';
   if (/^[0-9a-f]{40}$/i.test(declaredSha)) {

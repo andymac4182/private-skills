@@ -5,7 +5,8 @@ LABEL org.opencontainers.image.title="Private Skills Cisco Skill Scanner" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="2.1.0" \
       io.private-skills.scanner.id="cisco-skill-scanner" \
-      io.private-skills.scanner.source-revision="e00b32f98d7721e687b0c748207e67da5157b50f"
+      io.private-skills.scanner.source-ref="2.1.0" \
+      io.private-skills.scanner.source-revision="a24df340ca6056a6446a239f4a7b114b11c6073a"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

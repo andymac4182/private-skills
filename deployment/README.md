@@ -2,12 +2,12 @@
 
 These files describe deployment profiles; they do not contain provider
 credentials and no cloud deployment has been performed. The portable baseline
-is a Node Nitro server, PostgreSQL, a separate worker, and Files SDK storage.
-Vercel and Cloudflare Workers are optional Nitro targets with the same HTTP
-contracts. A Workers deployment still needs a separate worker/executor for
+is a Node Nitro server, PostgreSQL, a host worker/controller, and Files SDK
+storage. Vercel and Cloudflare Workers are optional Nitro targets with the same
+HTTP contracts. An edge deployment still needs a separate host worker for
 durable acquisition and scanning.
 
-## Self-hosted Node, PostgreSQL, and worker
+## Self-hosted Node and PostgreSQL
 
 The root `compose.yaml` requires these values in a local `.env` file or in the
 shell environment. Keep the file outside source control:
@@ -25,28 +25,51 @@ reserved by a URI. `PSKILLS_ALLOW_UNSCANNED` defaults to `false`; keep it false
 for a production registry. The API binds to loopback by default, so put a
 reviewed TLS reverse proxy in front of it before exposing it to a network.
 
-Start the API, database, and worker after the application build is available:
+Start the API and database after the application build is available:
 
 ```sh
 docker compose up --build
 curl --fail http://127.0.0.1:3000/health
 ```
 
-The API and worker share the `artifacts` volume, while PostgreSQL uses its own
-named volume. The API also has a `state-data` volume for an explicitly selected
+The API uses the `artifacts` volume, while PostgreSQL uses its own named
+volume. The API also has a `state-data` volume for an explicitly selected
 single-process file-state profile; the default PostgreSQL profile does not use
 it. To select that local fallback, set `PSKILLS_STATE_PROVIDER=file` and
-`PSKILLS_SINGLE_PROCESS=true`. The API container is read-only, drops all Linux capabilities, and has a
-no-new-privileges policy. The worker has no published port and no Docker
-socket, `privileged` mode, host PID namespace, or host filesystem mount.
+`PSKILLS_SINGLE_PROCESS=true`. The API container is read-only, drops all Linux
+capabilities, and has a no-new-privileges policy.
 
-Scanner execution is a separate trust boundary. Configure
-`PSKILLS_SCANNER_EXECUTOR_URL` to a reviewed executor when one is available;
-the worker should send only the sealed artifact and bounded job metadata to
-that endpoint. The executor should return bounded, schema-validated evidence
-and must not receive database credentials, source credentials, or broad storage
-credentials. Running a scanner inside the API container or granting the API a
-Docker socket is not an equivalent isolation boundary.
+The Compose file intentionally does not start a worker container. The checked-in
+worker image has no Docker CLI or daemon socket, while `WorkerRunner` defaults
+to the isolated `DockerExecutor`; starting that container would claim jobs and
+then fail to launch scanner containers. Set `PSKILLS_WORKER_TOKEN` in the shell
+or ignored `.env` file, then run exactly one host controller against the API and
+the reviewed scanner images:
+
+```sh
+PSKILLS_API_URL=http://127.0.0.1:3000 \
+PSKILLS_WORKER_ID=host-controller-1 \
+PSKILLS_IMAGE_CISCO=private-skills/cisco-skill-scanner:2.1.0 \
+PSKILLS_IMAGE_NVIDIA=private-skills/nvidia-skillspector:2.11.1 \
+PSKILLS_IMAGE_SKILLSGUARD=private-skills/skillsguard:1.1.1 \
+PSKILLS_DOCKER_CONTEXT="${PSKILLS_DOCKER_CONTEXT:-default}" \
+pnpm worker
+```
+
+Run this command from a checkout with `pnpm install --frozen-lockfile` and a
+Docker CLI authenticated to the dedicated worker daemon. On Docker Desktop,
+set `PSKILLS_DOCKER_CONTEXT=desktop-linux`; on a local Linux daemon, leave it
+as `default`. Verify each image with `docker image inspect` before starting the
+controller. Do not run the Compose API more than once with the same state
+volume and do not run a second worker with the same queue unless that worker
+has its own reviewed token and stable ID. Leases and fencing prevent stale
+completion, but a worker without the scanner images will still consume and
+fail jobs.
+
+Scanner execution remains on the host-controller boundary. `DockerExecutor`
+passes only the sealed artifact workspace and bounded scanner arguments to
+each isolated container. The API never receives a Docker socket, privileged
+mode, host PID namespace, or scanner credentials.
 
 ### Optional S3-compatible storage
 
@@ -98,9 +121,9 @@ Set secrets in Vercel's environment configuration, never in `VITE_` variables
 or this repository. A Vercel function cannot use the local filesystem or run
 native scanners; use `PSKILLS_STORAGE_PROVIDER=http` and
 `PSKILLS_STATE_PROVIDER=http` with an authenticated gateway/transaction
-service, and keep the durable worker and scanner executor outside Vercel.
-Vercel is optional and no Vercel account, paid integration, or deployment is
-required by this repository.
+service, and keep the durable host worker/controller outside Vercel. Vercel is
+optional and no Vercel account, paid integration, or deployment is required by
+this repository.
 
 ## Cloudflare Workers
 
@@ -133,8 +156,9 @@ The repository does not add Wrangler as an application dependency. Pin and
 provision the CLI in the deployment environment before using the command; the
 command above is a runbook example and has not been run by this change.
 Cloudflare Workers cannot provide the Node filesystem, PostgreSQL native
-connection, or child-process scanner executor directly. Use the authenticated
-HTTP state/storage transport and an external worker, then run the same publish,
+connection, or child-process scanner execution directly. Use the authenticated
+HTTP state/storage transport and the host worker/controller described above,
+then run the same publish,
 proxy, scan-denial, revocation, and install checks used for the Node profile.
 
 ## Versioned CLI releases
@@ -142,7 +166,10 @@ proxy, scan-denial, revocation, and install checks used for the Node profile.
 `.github/workflows/release.yml` runs only for a semantic version tag matching
 the package version. It builds native binaries on Linux, macOS, and Windows,
 attaches checksums and archives to a GitHub Release, and does not publish to
-npm, crates.io, GHCR, or another public registry. Keep version tags protected
-and review the repository visibility and `contents: write` permission before
-enabling releases. CI and release action references are immutable commit SHAs;
-Dependabot watches the GitHub Actions ecosystem for reviewed pin updates.
+npm, crates.io, GHCR, or another public registry. The current assets are
+`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` (the standard arm64 macOS
+runner), and `x86_64-pc-windows-msvc`; an Intel macOS artifact is not claimed
+until an available private-repository runner is selected. Keep version tags
+protected and review the repository visibility and `contents: write` permission
+before enabling releases. CI and release action references are immutable commit
+SHAs; Dependabot watches the GitHub Actions ecosystem for reviewed pin updates.

@@ -8,6 +8,7 @@ import {
   createCiscoAdapter,
   createNvidiaAdapter,
   createSkillsGuardAdapter,
+  mapDockerScannerArgs,
   TrustedLocalExecutor,
   type CommandExecutor,
   type CommandRequest,
@@ -66,6 +67,28 @@ function request(inputDir: string, id: string) {
 }
 
 describe('pinned scanner adapters', () => {
+  it('maps adapter host paths to the scanner container mounts without prefix collisions', () => {
+    const inputDir = '/private/tmp/worker/input';
+    const outputDir = '/private/tmp/worker/output';
+    expect(mapDockerScannerArgs([
+      inputDir,
+      '--output',
+      `${outputDir}/cisco.json`,
+      `--input=${inputDir}/nested/SKILL.md`,
+      `${inputDir}-copy`,
+      '/private/tmp/worker',
+      'relative/SKILL.md',
+    ], inputDir, outputDir)).toEqual([
+      '/input',
+      '--output',
+      '/output/cisco.json',
+      '--input=/input/nested/SKILL.md',
+      `${inputDir}-copy`,
+      '/private/tmp/worker',
+      'relative/SKILL.md',
+    ]);
+  });
+
   it('runs Cisco in static JSON mode and preserves findings from the real report shape', async () => {
     const report = await fixture('cisco-findings.json');
     await withInput(async (inputDir) => {
@@ -99,10 +122,23 @@ describe('pinned scanner adapters', () => {
     const report = await fixture('skillsguard-false-clean.json');
     await withInput(async (inputDir) => {
       const scan = await createSkillsGuardAdapter().scan(request(inputDir, 'skillsguard'), reportExecutor(report));
+      expect(scan.result.status).toBe('degraded');
       expect(scan.result.findings).toHaveLength(1);
       expect(scan.result.findings[0]?.severity).toBe('critical');
       expect(scan.result.coverage.limitations.join(' ')).toContain('marked safe');
       expect(scan.result.coverage.limitations.join(' ')).toContain('suppressed');
+    });
+  });
+
+  it('keeps a complete static SkillsGuard pass completed despite scope notes', async () => {
+    await withInput(async (inputDir) => {
+      const scan = await createSkillsGuardAdapter().scan(
+        request(inputDir, 'skillsguard-clean'),
+        reportExecutor({ filesScanned: 2, findings: [] }),
+      );
+      expect(scan.result.status).toBe('completed');
+      expect(scan.result.coverage.filesAnalyzed).toBe(2);
+      expect(scan.result.coverage.limitations.join(' ')).toContain('does not observe runtime behavior');
     });
   });
 

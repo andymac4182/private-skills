@@ -162,4 +162,33 @@ describe('token and session authentication', () => {
     expect(parsed[0]).toMatchObject({ kind: 'user', roles: ['publisher'], namespaces: ['team-a'] });
     expect(parsed[1]).toMatchObject({ kind: 'worker', roles: ['worker'] });
   });
+
+  it('derives scopes from roles only when scopes are omitted and rejects mixed workers', async () => {
+    const token = crypto.randomUUID();
+    const defaulted = new TokenAuthenticator({
+      tokens: [{ id: 'reader', token, organizationId: 'org-a', subject: 'reader', roles: ['reader'] }],
+      sessionSecret: freshSecret(),
+      environment: 'test',
+    });
+    expect((await defaulted.authenticate(new Request('https://registry.invalid/v1/me', {
+      headers: { authorization: `Bearer ${token}` },
+    })))?.scopes).toContain('skills:read');
+
+    const restrictedToken = crypto.randomUUID();
+    const restricted = new TokenAuthenticator({
+      tokens: [{ id: 'restricted', token: restrictedToken, organizationId: 'org-a', subject: 'restricted', roles: ['reader'], scopes: [] }],
+      sessionSecret: freshSecret(),
+      environment: 'test',
+    });
+    expect((await restricted.authenticate(new Request('https://registry.invalid/v1/me', {
+      headers: { authorization: `Bearer ${restrictedToken}` },
+    })))?.scopes).toEqual([]);
+
+    const mixedWorker = new TokenAuthenticator({
+      workerTokens: [{ id: 'mixed', token: crypto.randomUUID(), organizationId: 'org-a', subject: 'mixed', roles: ['worker', 'reader'] }],
+      sessionSecret: freshSecret(),
+      environment: 'test',
+    });
+    await expect(mixedWorker.ready()).rejects.toThrow('Worker credentials cannot include user roles');
+  });
 });

@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test",
-    "worker": "tsx workers/runner/src/index.ts",
+    "worker": "node --env-file-if-exists=.env --import tsx workers/runner/src/index.ts",
     "cli": "cargo run -p pskills --",
     "smoke": "tsx scripts/smoke.ts",
     "setup:dev": "tsx scripts/setup-dev.ts"

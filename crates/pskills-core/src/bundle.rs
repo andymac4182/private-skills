@@ -2,7 +2,7 @@ use crate::model::{BundleFile, SkillBundle};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use sha2::{Digest as ShaDigest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
@@ -310,6 +310,18 @@ pub fn validate_path(path: &str) -> Result<(), BundleError> {
             reason: "backslash is not allowed; use `/`".into(),
         });
     }
+    if path.nfc().collect::<String>() != path {
+        return Err(BundleError::InvalidPath {
+            path: path.into(),
+            reason: "path must use NFC Unicode".into(),
+        });
+    }
+    if path.encode_utf16().count() > 4096 {
+        return Err(BundleError::InvalidPath {
+            path: path.into(),
+            reason: "path is too long".into(),
+        });
+    }
     if path.starts_with('/') || path.starts_with("//") {
         return Err(BundleError::InvalidPath {
             path: path.into(),
@@ -362,6 +374,12 @@ pub fn validate_path(path: &str) -> Result<(), BundleError> {
                     return Err(BundleError::InvalidPath {
                         path: path.into(),
                         reason: "reserved Windows path character".into(),
+                    });
+                }
+                if name.len() > 255 {
+                    return Err(BundleError::InvalidPath {
+                        path: path.into(),
+                        reason: "path component is too long".into(),
                     });
                 }
                 if is_reserved_windows_name(name) {
@@ -440,14 +458,19 @@ fn is_reserved_windows_name(component: &str) -> bool {
 }
 
 fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
-    let normalized = markdown.strip_prefix("\u{feff}").unwrap_or(markdown);
+    if markdown.starts_with('\u{feff}') {
+        return Err(BundleError::SkillFrontmatter(
+            "UTF-8 BOM is not allowed".into(),
+        ));
+    }
+    let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
     if !normalized.starts_with("---") {
         return Err(BundleError::SkillFrontmatter(
             "missing YAML frontmatter".into(),
         ));
     }
     let mut lines = normalized.lines();
-    if lines.next().unwrap_or_default().trim() != "---" {
+    if lines.next().unwrap_or_default() != "---" {
         return Err(BundleError::SkillFrontmatter(
             "frontmatter must start with `---`".into(),
         ));
@@ -455,32 +478,55 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
     let mut name = None;
     let mut description = None;
     let mut closed = false;
+    let mut seen = HashSet::new();
     for line in lines {
-        let line = line.trim_end();
-        if line.trim() == "---" {
+        if line == "---" {
             closed = true;
             break;
         }
-        if let Some((key, value)) = line.split_once(':') {
-            let value = value.trim().trim_matches(['"', '\'']);
-            match key
-                .trim()
-                .to_ascii_lowercase()
-                .replace(['-', '_'], "")
-                .as_str()
-            {
-                "plugin" | "plugins" | "pluginjson" | "extension" | "extensions" | "mcp"
-                | "mcpserver" | "mcpservers" | "hook" | "hooks" | "command" | "commands"
-                | "script" | "scripts" | "runtime" | "runtimes" | "entrypoint" | "install"
-                | "installer" | "tool" | "tools" => {
-                    return Err(BundleError::SkillFrontmatter(
-                        "frontmatter cannot enable plugins or execution".into(),
-                    ));
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.chars().next().is_some_and(char::is_whitespace) {
+            return Err(BundleError::SkillFrontmatter(
+                "frontmatter cannot contain indented or nested data".into(),
+            ));
+        }
+        let (key, value) = line.split_once(':').ok_or_else(|| {
+            BundleError::SkillFrontmatter("frontmatter has an invalid field".into())
+        })?;
+        if key.is_empty()
+            || key.len() > 64
+            || !key.chars().enumerate().all(|(index, character)| {
+                if index == 0 {
+                    character.is_ascii_alphabetic()
+                } else {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
                 }
-                "name" => name = Some(value.to_string()),
-                "description" => description = Some(value.to_string()),
-                _ => {}
-            }
+            })
+        {
+            return Err(BundleError::SkillFrontmatter(
+                "frontmatter has an invalid field name".into(),
+            ));
+        }
+        if is_dangerous_frontmatter_key(key) {
+            return Err(BundleError::SkillFrontmatter(
+                "frontmatter cannot enable plugins or execution".into(),
+            ));
+        }
+        let normalized_key = key.trim().to_ascii_lowercase().replace(['-', '_'], "");
+        if !seen.insert(normalized_key.clone())
+            || matches!(normalized_key.as_str(), "__proto__" | "constructor")
+        {
+            return Err(BundleError::SkillFrontmatter(
+                "frontmatter contains a duplicate or reserved field".into(),
+            ));
+        }
+        let parsed = parse_frontmatter_scalar(value, key)?;
+        match (key, parsed) {
+            ("name", FrontmatterScalar::String(value)) => name = Some(value),
+            ("description", FrontmatterScalar::String(value)) => description = Some(value),
+            _ => {}
         }
     }
     if !closed {
@@ -491,7 +537,7 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
     let name = name
         .filter(|value| !value.is_empty())
         .ok_or_else(|| BundleError::SkillFrontmatter("missing name".into()))?;
-    if name.len() > 64
+    if name.chars().count() > 64
         || !name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
@@ -506,12 +552,124 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
     let description = description
         .filter(|value| !value.is_empty())
         .ok_or_else(|| BundleError::SkillFrontmatter("missing description".into()))?;
-    if description.len() > 1024 {
+    if description.chars().count() > 1024 {
         return Err(BundleError::SkillFrontmatter(
             "description exceeds 1024 bytes".into(),
         ));
     }
     Ok(())
+}
+
+#[derive(Debug)]
+enum FrontmatterScalar {
+    String(String),
+    Number,
+    Boolean,
+}
+
+fn parse_frontmatter_scalar(raw: &str, key: &str) -> Result<FrontmatterScalar, BundleError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} cannot be empty"
+        )));
+    }
+    if value.starts_with(['[', '{', '!']) {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} must be a scalar"
+        )));
+    }
+    let value = if value.starts_with('"') {
+        if !value.ends_with('"') || value.len() < 2 {
+            return Err(BundleError::SkillFrontmatter(format!(
+                "frontmatter field {key} has an unterminated quote"
+            )));
+        }
+        serde_json::from_str::<String>(value).map_err(|_| {
+            BundleError::SkillFrontmatter(format!(
+                "frontmatter field {key} has an invalid quoted value"
+            ))
+        })?
+    } else if value.starts_with('\'') {
+        if !value.ends_with('\'') || value.len() < 2 {
+            return Err(BundleError::SkillFrontmatter(format!(
+                "frontmatter field {key} has an unterminated quote"
+            )));
+        }
+        value[1..value.len() - 1].replace("''", "'")
+    } else {
+        value.to_string()
+    };
+    if value.chars().any(char::is_control) {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} contains control characters"
+        )));
+    }
+    if value == "true" || value == "false" {
+        return Ok(FrontmatterScalar::Boolean);
+    }
+    if value.parse::<f64>().is_ok() {
+        return Ok(FrontmatterScalar::Number);
+    }
+    Ok(FrontmatterScalar::String(value))
+}
+
+fn is_dangerous_frontmatter_key(raw_key: &str) -> bool {
+    let raw_key = raw_key.trim();
+    let normalized = raw_key.to_ascii_lowercase();
+    let compact = normalized.replace(['-', '_'], "");
+    if compact == "allowedtools" {
+        return false;
+    }
+    const DANGEROUS: &[&str] = &[
+        "plugin",
+        "plugins",
+        "pluginjson",
+        "extension",
+        "extensions",
+        "mcp",
+        "mcpserver",
+        "mcpservers",
+        "hook",
+        "hooks",
+        "command",
+        "commands",
+        "script",
+        "scripts",
+        "runtime",
+        "runtimes",
+        "entrypoint",
+        "install",
+        "installer",
+        "tool",
+        "tools",
+    ];
+    if DANGEROUS.iter().any(|candidate| compact == *candidate) {
+        return true;
+    }
+    const PARTS: &[&str] = &[
+        "plugin",
+        "extension",
+        "mcp",
+        "hook",
+        "command",
+        "script",
+        "runtime",
+        "entrypoint",
+        "install",
+        "execute",
+    ];
+    let mut segmented = String::new();
+    for (index, character) in raw_key.chars().enumerate() {
+        if index > 0 && character.is_ascii_uppercase() {
+            segmented.push('-');
+        }
+        segmented.push(character.to_ascii_lowercase());
+    }
+    let segments: Vec<&str> = segmented.split(['-', '_']).collect();
+    PARTS
+        .iter()
+        .any(|part| segments.contains(part) || compact.starts_with(part) || compact.ends_with(part))
 }
 
 #[cfg(test)]

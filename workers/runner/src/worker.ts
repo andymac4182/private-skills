@@ -3,6 +3,7 @@ import { artifactDigest, digestBytes, fencingToken, WorkerApiClient, type Worker
 import { normalizePolicies, toContractScanResult, type Policy, type ScanResult } from './protocol.js';
 import { acquireImportJob, type WorkerAcquisitionOptions } from './acquisition.js';
 import type { HookConfiguration, SkillBundle } from '../../../packages/contracts/src/index.js';
+import { encodeBundle } from '../../../packages/storage/src/index.js';
 import {
   createDefaultScannerAdapters,
   DockerExecutor,
@@ -19,6 +20,7 @@ export interface WorkerRunnerOptions extends WorkerApiClientOptions {
   scannerImages?: Partial<Record<'cisco-skill-scanner' | 'nvidia-skillspector' | 'skillsguard', string>>;
   pollIntervalMs?: number;
   maxBundleJsonBytes?: number;
+  /** @deprecated Retained for caller compatibility; v1 transport always decodes canonical base64. */
   allowUtf8BundleContent?: boolean;
   /** Source acquisition settings; credentials remain named process env refs. */
   acquisition?: WorkerAcquisitionOptions;
@@ -107,7 +109,7 @@ export class WorkerRunner {
         });
         importedBundle = imported.bundle;
         importedProvenance = imported.provenance;
-        const bytes = encodePlainBundle(imported.bundle);
+        const bytes = encodeBundle(imported.bundle);
         scanArtifactDigest = digestBytes(bytes);
         bundleForScan = toWorkerBundle(imported.bundle);
       } else {
@@ -249,9 +251,9 @@ export class WorkerRunner {
 }
 
 /**
- * Keep the import worker's scanner input compatible with the base64-only materializer while preserving the registry bundle for
- * completion. The registry core computes its digest over this exact JSON
- * property order and sorted path order.
+ * Keep the import worker's scanner input compatible with the base64-only
+ * materializer while preserving the registry bundle for completion. The
+ * storage package owns the canonical encoder used for the completion digest.
  */
 function toWorkerBundle(bundle: SkillBundle): SkillBundleInput {
   return {
@@ -264,17 +266,6 @@ function toWorkerBundle(bundle: SkillBundle): SkillBundleInput {
         ...(file.executable === true ? { executable: true } : {}),
       })),
   };
-}
-
-function encodePlainBundle(bundle: SkillBundle): Uint8Array {
-  const files = [...bundle.files]
-    .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
-    .map((file) => ({
-      path: file.path,
-      content: file.content,
-      ...(file.executable === true ? { executable: true } : {}),
-    }));
-  return new TextEncoder().encode(JSON.stringify({ format: 'pskills-bundle-v1', files }));
 }
 
 function normalizeJobPolicy(job: WorkerClaimedJob): Policy {

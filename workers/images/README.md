@@ -13,15 +13,17 @@ full immutable Git object IDs:
 
 | image | scanner | source pin | command | base image |
 | --- | --- | --- | --- | --- |
-| `private-skills/cisco-skill-scanner:2.1.0` | Cisco Skill Scanner | release `2.1.0`, commit `e00b32f98d7721e687b0c748207e67da5157b50f` | `skill-scanner` | `python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254` |
-| `private-skills/nvidia-skillspector:2.11.1` | NVIDIA SkillSpector | release `v2.11.1`, commit `704bc9544260c2f41222dc0f92982521709496ab` | `skillspector` | same Python base |
-| `private-skills/skillsguard:1.1.1` | Teycir SkillsGuard | commit `7badb5157f8f9e4dd9ee2acb6e0129636e3147e3` | `skillsguard` | `node:22.23.2-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a5e5` |
+| `private-skills/cisco-skill-scanner:2.1.0` | Cisco Skill Scanner | release tag `2.1.0`, commit `a24df340ca6056a6446a239f4a7b114b11c6073a` | `skill-scanner` | `python:3.12-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254` |
+| `private-skills/nvidia-skillspector:2.11.1` | NVIDIA SkillSpector | release tag `v2.11.1`, commit `704bc9544260c2f41222dc0f92982521709496ab` | `skillspector` | same Python base |
+| `private-skills/skillsguard:1.1.1` | Teycir SkillsGuard | source build from `main` at commit `7badb5157f8f9e4dd9ee2acb6e0129636e3147e3` | `skillsguard` | `node:22.23.2-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5` |
 
 The Python requirements are hash-locked in each image directory. Cisco's lock
 comes from the exact PyPI release. SkillSpector is not published on PyPI, so
 its runtime lock is exported from the pinned repository's `uv.lock`; the
 Dockerfile installs the checked-out source with `--no-deps` after installing
-that lock.
+that lock. SkillsGuard is built from the exact `main` source commit above; its
+package version is `1.1.1`, but the image does not claim to be built from the
+upstream `v1.1.1` tag (that tag resolves to a different commit).
 
 ## Reproducible build and acceptance run
 

@@ -236,7 +236,7 @@ describe('registry HTTP protocol', () => {
     expect(descriptor.headers.authorization).toBeUndefined();
 
     const transferPath = new URL(descriptor.url).pathname;
-    const transferred = await request(handler, origin, transferPath);
+    const transferred = await request(handler, origin, transferPath, { headers: userHeaders });
     expect(transferred.status).toBe(200);
     const bytes = new Uint8Array(await transferred.arrayBuffer());
     expect(await digestBytes(bytes)).toBe(skill.artifact.digest);
@@ -273,7 +273,7 @@ describe('registry HTTP protocol', () => {
       error: { code: 'POLICY_BLOCKED' },
     });
 
-    const transferAfterRevoke = await request(handler, origin, transferPath);
+    const transferAfterRevoke = await request(handler, origin, transferPath, { headers: userHeaders });
     expect(transferAfterRevoke.status).toBe(409);
     await expect(jsonResponse<JsonError>(transferAfterRevoke)).resolves.toMatchObject({
       error: { code: 'POLICY_BLOCKED' },

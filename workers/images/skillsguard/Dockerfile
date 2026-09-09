@@ -5,6 +5,8 @@ LABEL org.opencontainers.image.title="Private Skills SkillsGuard" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="1.1.1" \
       io.private-skills.scanner.id="skillsguard" \
+      io.private-skills.scanner.source-kind="source-build" \
+      io.private-skills.scanner.source-ref="main" \
       io.private-skills.scanner.source-revision="7badb5157f8f9e4dd9ee2acb6e0129636e3147e3"
 
 ENV HOME=/tmp/empty-home \
@@ -18,11 +20,13 @@ RUN groupadd --system --gid 65532 scanner \
  && chown -R 65532:65532 /input /output /tmp/empty-home /opt/skillsguard
 
 # Trusted build input: workers/images/skillsguard/source is a source tree
-# obtained and verified at commit 7badb5157f8f9e4dd9ee2acb6e0129636e3147e3.
-# SkillsGuard is not published on npm.
+# obtained from main and verified at commit
+# 7badb5157f8f9e4dd9ee2acb6e0129636e3147e3. This is a source build; the
+# v1.1.1 tag points at a different upstream commit. SkillsGuard is not
+# published on npm.
 COPY source/ /opt/skillsguard/
 WORKDIR /opt/skillsguard
-RUN npm ci --ignore-scripts \
+RUN npm ci --include=dev --ignore-scripts \
  && npm run build \
  && npm prune --omit=dev --ignore-scripts \
  && rm -rf /root/.npm /opt/skillsguard/src /opt/skillsguard/test* /opt/skillsguard/.git

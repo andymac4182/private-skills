@@ -50,14 +50,20 @@ jobs:
         run: pnpm build
 
   rust:
-    name: rust (${{ matrix.os }})
+    name: rust (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # macos-latest is the standard arm64 GitHub-hosted image. An Intel
+          # macOS asset is intentionally not claimed without an available
+          # private-repository runner label.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -70,17 +76,38 @@ jobs:
           toolchain: 1.95.0
           components: rustfmt, clippy
 
+      - name: Verify the native Rust target
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --target "${{ matrix.target }}" --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run Rust tests
-        run: cargo test --workspace --all-targets --locked
+        run: cargo test --target "${{ matrix.target }}" --workspace --all-targets --locked
 
       - name: Build native binaries
-        run: cargo build --workspace --locked
+        run: cargo build --target "${{ matrix.target }}" --workspace --locked
+
+      - name: Smoke the native binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./target/${{ matrix.target }}/debug/pskills --version
+          ./target/${{ matrix.target }}/debug/pskills --help
+
+      - name: Smoke the native binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\${{ matrix.target }}\debug\pskills.exe --version
+          .\target\${{ matrix.target }}\debug\pskills.exe --help
 
   container:
     name: build the Node container

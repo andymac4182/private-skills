@@ -36,6 +36,8 @@ export interface ParsedReport {
   findings: ScanFinding[];
   coverage: ParsedCoverage;
   limitations: string[];
+  /** True when the report is incomplete or violates the adapter's execution contract. */
+  degraded?: boolean;
   /** false means the report did not contain enough structured evidence. */
   valid: boolean;
   error?: string;
@@ -48,6 +50,8 @@ export interface AdapterDefinition {
   buildArgs(inputDir: string, outputPath: string, request: ScanRequest): string[];
   parseReport(report: unknown, inputFileCount: number): ParsedReport;
   fixedLimitations?: string[];
+  /** A subset of fixedLimitations that represent incomplete required evidence. */
+  degradedLimitations?: string[];
   outputFileName: string;
 }
 
@@ -89,10 +93,8 @@ export function createCommandAdapter(
       const configHash = configurationHash(effectiveConfiguration);
       const adapterMetadata: AdapterMetadata = { ...metadata, configurationHash: configHash };
       const inputFileCount = await countInputFiles(request.inputDir);
-      const baseLimitations = [
-        ...(definition.fixedLimitations ?? []),
-        ...(await findPublisherScannerControls(request.inputDir)),
-      ];
+      const publisherControlLimitations = await findPublisherScannerControls(request.inputDir);
+      const baseLimitations = [...(definition.fixedLimitations ?? []), ...publisherControlLimitations];
       try {
         await assertDirectory(request.inputDir);
       } catch (error) {
@@ -166,7 +168,17 @@ export function createCommandAdapter(
         const result = resultBase(request, definition.id, adapterMetadata, 'error', execution.durationMs, coverage, parsed.findings, parsed.error ?? 'scanner report did not contain required evidence');
         return { result, raw };
       }
-      const degraded = coverage.filesAnalyzed === 0 || coverage.filesSkipped > 0 || coverage.filesUnsupported > 0 || coverage.limitations.length > 0;
+      // Limitations can describe the declared scope of a static analyzer (for
+      // example, that it does not observe runtime behavior) without making a
+      // complete static pass unusable as required evidence. Degrade only for
+      // missing/partial coverage, explicit parser/engine contract failures, or
+      // control markers that can invalidate a clean report.
+      const degraded = parsed.degraded === true
+        || publisherControlLimitations.length > 0
+        || (definition.degradedLimitations ?? []).some((item) => limitations.includes(item))
+        || coverage.filesAnalyzed === 0
+        || coverage.filesSkipped > 0
+        || coverage.filesUnsupported > 0;
       // A non-zero code means findings for all three pinned engines. Only an
       // invalid report or process failure is an execution error.
       const result = resultBase(request, definition.id, adapterMetadata, degraded ? 'degraded' : 'completed', execution.durationMs, coverage, parsed.findings);

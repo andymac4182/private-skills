@@ -61,9 +61,13 @@ impl ApiClient {
                     .into(),
             ));
         }
-        if url.username() != "" || url.password().is_some() || url.fragment().is_some() {
+        if url.username() != ""
+            || url.password().is_some()
+            || url.fragment().is_some()
+            || url.query().is_some()
+        {
             return Err(ApiError::InvalidUrl(
-                "registry URL cannot contain credentials or a fragment".into(),
+                "registry URL must be an origin without credentials, query, or fragment".into(),
             ));
         }
         while url.path().len() > 1 && url.path().ends_with('/') {
@@ -154,6 +158,35 @@ impl ApiClient {
         self.resolve_until(request, std::time::Instant::now() + Duration::from_secs(60))
     }
 
+    /// Resolve a registry-managed pull-through request.  The registry may
+    /// return a queued import operation; polling and the final cache lookup
+    /// stay on the registry origin and never contact the upstream locally.
+    pub fn proxy_resolve(&self, request: &ImportRequest) -> Result<Resolution, ApiError> {
+        self.proxy_resolve_until(request, std::time::Instant::now() + Duration::from_secs(60))
+    }
+
+    fn proxy_resolve_until(
+        &self,
+        request: &ImportRequest,
+        deadline: std::time::Instant,
+    ) -> Result<Resolution, ApiError> {
+        let url = self.endpoint(&["v1", "proxy", "resolve"])?;
+        let response = self.send(
+            self.http
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .json(request),
+            true,
+        )?;
+        if response.status == 202 {
+            let operation_value = parse_json(response.body)?;
+            let operation_id = extract_operation_id(&operation_value)?;
+            return self.wait_for_proxy_resolution(&operation_id, request, deadline);
+        }
+        ensure_success(&response)?;
+        extract_resolution(parse_json(response.body)?)
+    }
+
     fn resolve_until(
         &self,
         request: &ResolveRequest,
@@ -228,7 +261,7 @@ impl ApiClient {
         {
             return Err(ApiError::InvalidUrl("transfer URL is invalid".into()));
         }
-        let mut request = self.http.get(target);
+        let mut request = self.http.get(target.clone());
         let mut headers = HeaderMap::new();
         for (name, value) in &descriptor.headers {
             let name = HeaderName::from_bytes(name.as_bytes())
@@ -240,13 +273,38 @@ impl ApiClient {
                     "transfer descriptor cannot override authorization or user-agent".into(),
                 ));
             }
+            if matches!(
+                name,
+                ref header
+                    if header == reqwest::header::HOST
+                        || header == reqwest::header::COOKIE
+                        || header == reqwest::header::PROXY_AUTHORIZATION
+                        || header == reqwest::header::PROXY_AUTHENTICATE
+                        || header == reqwest::header::TRANSFER_ENCODING
+            ) {
+                return Err(ApiError::Response(
+                    "transfer descriptor cannot override connection or proxy credentials".into(),
+                ));
+            }
             headers.insert(name, value);
         }
         request = request.headers(headers);
-        let response = self.send(request, false)?;
+        let same_origin = same_origin(&self.base, &target);
+        let authorized_gateway = descriptor.mode == "gateway" && same_origin;
+        if descriptor.mode == "gateway" && !same_origin {
+            return Err(ApiError::InvalidUrl(
+                "gateway transfer URL must use the registry origin".into(),
+            ));
+        }
+        if descriptor.mode != "gateway" && descriptor.mode != "signed-url" {
+            return Err(ApiError::Response(
+                "transfer descriptor mode must be gateway or signed-url".into(),
+            ));
+        }
+        let response = self.send(request, authorized_gateway)?;
         ensure_success(&response)?;
         let actual = response.body.len() as u64;
-        if actual > descriptor.size {
+        if actual != descriptor.size {
             return Err(ApiError::SizeMismatch {
                 actual,
                 declared: descriptor.size,
@@ -379,6 +437,47 @@ impl ApiClient {
         }
     }
 
+    fn wait_for_proxy_resolution(
+        &self,
+        operation_id: &str,
+        request: &ImportRequest,
+        deadline: std::time::Instant,
+    ) -> Result<Resolution, ApiError> {
+        loop {
+            let value: Value =
+                self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
+            if let Ok(resolution) = extract_resolution(value.clone()) {
+                return Ok(resolution);
+            }
+            let operation = value.get("operation").unwrap_or(&value);
+            if let Some(resolution) = operation.get("resolution") {
+                return serde_json::from_value(resolution.clone())
+                    .map_err(|e| ApiError::Response(e.to_string()));
+            }
+            let state = operation
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if matches!(state, "failed" | "error") {
+                return Err(ApiError::OperationFailed(
+                    operation
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("proxy operation failed")
+                        .into(),
+                ));
+            }
+            if matches!(state, "completed" | "succeeded" | "done") {
+                return self.proxy_resolve_until(request, deadline);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ApiError::OperationTimeout(operation_id.into()));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(250)));
+        }
+    }
+
     fn endpoint(&self, segments: &[&str]) -> Result<Url, ApiError> {
         let mut url = self.base.clone();
         let needs_slash = !url.path().ends_with('/') && !url.path().is_empty();
@@ -495,6 +594,12 @@ fn is_loopback_url(url: &Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
+fn same_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
 fn parse_json(bytes: Vec<u8>) -> Result<Value, ApiError> {
     serde_json::from_slice(&bytes).map_err(|e| ApiError::Response(e.to_string()))
 }
@@ -505,6 +610,13 @@ fn extract<T: DeserializeOwned>(value: Value, field: &str) -> Result<T, ApiError
         .cloned()
         .ok_or_else(|| ApiError::Response(format!("response did not contain `{field}`")))?;
     serde_json::from_value(value).map_err(|e| ApiError::Response(e.to_string()))
+}
+
+fn extract_resolution(value: Value) -> Result<Resolution, ApiError> {
+    if let Ok(resolution) = serde_json::from_value::<Resolution>(value.clone()) {
+        return Ok(resolution);
+    }
+    extract(value, "resolution")
 }
 
 fn extract_operation_id(value: &Value) -> Result<String, ApiError> {

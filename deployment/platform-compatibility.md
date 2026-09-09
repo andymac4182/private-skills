@@ -18,6 +18,19 @@ pnpm exec tsx scripts/platform-build.ts vercel
 pnpm exec tsx scripts/platform-build.ts cloudflare
 ```
 
+After the edge build, run the native local Worker smoke against a reviewed
+local gateway. The harness does not contain credentials and uses an existing
+approved release for the grant/download check:
+
+```sh
+PSKILLS_EDGE_TOKEN="$PSKILLS_BOOTSTRAP_TOKEN" pnpm exec tsx scripts/edge-local-smoke.ts
+```
+
+The checked-in root development dependencies pin Wrangler `4.130.0` and allow
+the `workerd` postinstall. Use `wrangler dev --local` with private state/blob
+gateway bindings for this check; keep those bindings and tokens outside source
+control.
+
 The Node and Vercel helper profiles set a production environment and select
 S3 by default. Set `PSKILLS_STORAGE_PROVIDER` in the shell to build another
 supported Node Files SDK adapter deliberately. `filesystem` maps to the Files
@@ -46,6 +59,7 @@ The following checks are separate by design:
 | `scripts/platform-build.ts node` exits successfully | Nitro emitted a production Node server and traced the selected Files SDK package | A database, storage backend, authentication, or authenticated API flow is reachable |
 | `scripts/platform-build.ts vercel` exits successfully | Nitro emitted a Vercel Build Output API function with the selected Node dependencies under the function directory | A Vercel deployment, Git-triggered build, or production integration exists |
 | `scripts/platform-build.ts cloudflare` exits successfully and the edge artifact contains no `files-sdk`/Node storage imports | Nitro emitted a Workers module with the HTTP gateway runtime boundary | A Worker has been deployed or its gateway bindings work |
+| Native Wrangler/workerd run plus `scripts/edge-local-smoke.ts` | The built Worker serves health/authenticated API traffic and completes state reads/transactions plus a grant download through the Files SDK-backed HTTP gateway | A deployed Worker, external gateway, or Cloudflare account integration exists |
 | Isolated prebuilt Node and Vercel `/v1/me` smoke | The copied artifact initializes the selected S3 Files SDK adapter and authenticated runtime without an ancestor workspace `node_modules` directory | A real S3 object transfer, cloud deployment, or gateway service is reachable |
 | Parent task's production HTTP smoke flow | The running production artifact can serve the configured health/authenticated registry flow | Untested storage backends or cloud control-plane deployment behavior |
 
@@ -66,6 +80,9 @@ provider setup.
 The current local runtime smoke copies each Node and Vercel function output to
 a temporary directory and runs it without the repository's ancestor
 `node_modules`. With fake S3 credentials and loopback HTTP gateway endpoints,
-`/v1/me` returned `200`; this proves dependency tracing and runtime
-initialization, while the actual storage transfer and cloud deployment checks
-remain deployment-level work.
+`/v1/me` returned `200`. A native local Wrangler/workerd run also returned
+`200` for health, identity, capabilities, resolution, authorization, and
+transfer, and verified a disposable publish `202` followed by an exact blob
+digest read through the HTTP gateway. These checks prove local runtime and
+gateway behavior; external cloud deployment and real provider control-plane
+checks remain deployment-level work.

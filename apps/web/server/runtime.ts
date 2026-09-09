@@ -24,7 +24,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     return !!principal && principal.roles.includes('worker') && (!org || principal.organizationId === org);
   };
   const stateGateway = createHttpRepositoryHandler({ repository: infrastructure.repository, authorize, maxBodyBytes: 20 * 1024 * 1024 });
-  const blobGateway = createBlobGatewayHandler({ store: infrastructure.blobs, authorize });
+  const blobGateway = createBlobGatewayHandler({ store: infrastructure.blobs, authorize, baseOrigin: config.publicOrigin, allowLoopback: env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test' });
   return (request: Request) => {
     const path = new URL(request.url).pathname;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);

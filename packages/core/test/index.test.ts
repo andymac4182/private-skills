@@ -112,7 +112,7 @@ function setup(options: { allowUnscanned?: boolean; principal?: Principal | null
     repository,
     blobs,
     handler,
-    setPrincipal(value: Principal) {
+    setPrincipal(value: Principal | null) {
       principal = value;
     },
   };
@@ -138,6 +138,42 @@ describe('registry core handler', () => {
       body: JSON.stringify({ name: '@team/demo', version: '1.0.0', bundle: bundle('demo') }),
     }));
     expect(denied.status).toBe(403);
+
+    test.setPrincipal({
+      ...principalFor('mixed-worker', ['worker', 'reader']),
+      identity: 'worker',
+      scopes: ['registry:*'],
+    } as Principal);
+    const workerUserRoute = await test.handler(new Request(`${ORIGIN}/v1/me`));
+    expect(workerUserRoute.status).toBe(403);
+  });
+
+  it('enforces explicit scopes while retaining role-only adapter compatibility', async () => {
+    const test = setup();
+    test.setPrincipal({
+      ...principalFor('scoped-publisher', ['publisher'], ['@team']),
+      identity: 'user',
+      scopes: ['skills:publish'],
+    } as Principal);
+    const publish = await test.handler(new Request(`${ORIGIN}/v1/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '@team/scoped', version: '1.0.0', bundle: bundle('scoped') }),
+    }));
+    expect(publish.status).toBe(202);
+    const list = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect(list.status).toBe(403);
+
+    test.setPrincipal({
+      ...principalFor('empty-scopes', ['publisher'], ['@team']),
+      scopes: [],
+    } as Principal);
+    const emptyScopeList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect(emptyScopeList.status).toBe(403);
+
+    test.setPrincipal(principalFor('role-only', ['publisher'], ['@team']));
+    const roleOnlyList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect(roleOnlyList.status).toBe(200);
   });
 
   it('rejects cross-site login and logout mutations while allowing a CLI token exchange', async () => {
@@ -330,6 +366,11 @@ describe('registry core handler', () => {
       body: JSON.stringify({ resourceId: skill.id, authorizationId: authorization.id }),
     }));
     expect(descriptor.status).toBe(200);
+    const transferUrl = (await json(descriptor)).url as string;
+    test.setPrincipal(null);
+    const unauthenticatedTransfer = await test.handler(new Request(transferUrl));
+    expect(unauthenticatedTransfer.status).toBe(401);
+    test.setPrincipal(principalFor('publisher', ['publisher'], ['@team']));
 
     test.setPrincipal(principalFor('admin', ['admin']));
     const revoked = await test.handler(new Request(`${ORIGIN}/v1/skills/${skill.id}/revoke`, { method: 'POST' }));

@@ -79,6 +79,52 @@ describe("private blob HTTP gateway", () => {
     ).not.toThrow();
   });
 
+  it("uses portable manual redirects and rejects every 3xx response", async () => {
+    const redirects: RequestRedirect[] = [];
+    const client = new HttpBlobStore({
+      baseUrl: "https://gateway.example",
+      fetch: async (_input, init) => {
+        redirects.push(init?.redirect ?? "follow");
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/internal/blobs" },
+        });
+      },
+    });
+
+    await expect(client.put(new Uint8Array([1, 2, 3]))).rejects.toMatchObject({
+      status: 502,
+    });
+    expect(redirects).toEqual(["manual"]);
+  });
+
+  it("preserves the global receiver for receiver-sensitive fetch hosts", async () => {
+    const bytes = new Uint8Array([7, 8, 9]);
+    const strictFetch: typeof fetch = function (
+      this: unknown,
+      _input: RequestInfo | URL,
+      _init?: RequestInit
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        throw new Error("fetch receiver was not globalThis");
+      }
+      return Promise.resolve(
+        new Response(bytes, {
+          status: 200,
+          headers: {
+            "content-length": String(bytes.byteLength),
+          },
+        })
+      );
+    };
+    const client = new HttpBlobStore({
+      baseUrl: "https://gateway.example",
+      fetch: strictFetch,
+    });
+
+    await expect(client.get("sealed/receiver-test")).resolves.toEqual(bytes);
+  });
+
   it("bounds streamed gateway request bodies before storage", async () => {
     const handler = createBlobGatewayHandler({
       baseOrigin: "https://gateway.example",

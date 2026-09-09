@@ -50,6 +50,7 @@ docker_run() {
 }
 
 validate_context_name() {
+  [[ -z "$DOCKER_CONTEXT_NAME" ]] && return
   [[ "$DOCKER_CONTEXT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "DOCKER_CONTEXT contains unsupported characters"
 }
 
@@ -187,7 +188,15 @@ make_docker_command() {
   fi
   validate_context_name
   local wrapper="$TMP_ROOT/docker-context"
-  printf '%s\n' '#!/bin/sh' 'set -eu' "exec docker --context '$DOCKER_CONTEXT_NAME' \"\$@\"" > "$wrapper"
+  # DockerExecutor intentionally runs with a scrubbed HOME. Resolve the
+  # explicitly selected context before spawning it, then pass only the daemon
+  # endpoint to the tiny wrapper so Docker does not need the user's context
+  # configuration inside the scanner process environment.
+  local endpoint
+  endpoint="$(docker context inspect "$DOCKER_CONTEXT_NAME" --format '{{.Endpoints.docker.Host}}')" || die "cannot inspect Docker context $DOCKER_CONTEXT_NAME"
+  [[ -n "$endpoint" && "$endpoint" != *$'\r'* && "$endpoint" != *$'\n'* ]] || die "Docker context endpoint is empty or contains a newline"
+  printf '%s\n' '#!/bin/sh' 'set -eu' > "$wrapper"
+  printf 'exec docker --host %q "$@"\n' "$endpoint" >> "$wrapper"
   chmod 0555 "$wrapper"
   printf '%s\n' "$wrapper"
 }
@@ -211,20 +220,20 @@ run_container_acceptance() {
 
 install_native_cisco() {
   local venv="$TMP_ROOT/venvs/cisco"
-  uv venv --python 3.12 "$venv"
-  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --require-hashes --requirement "$ROOT_DIR/workers/images/cisco/requirements.txt"
+  uv venv --python 3.12 "$venv" || die "Cisco virtual environment creation failed"
+  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --require-hashes --requirement "$ROOT_DIR/workers/images/cisco/requirements.txt" || die "Cisco dependency installation failed"
   printf '%s\n' "$venv/bin/skill-scanner"
 }
 
 install_native_nvidia() {
   local venv="$TMP_ROOT/venvs/nvidia"
-  uv venv --python 3.12 "$venv"
-  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --require-hashes --requirement "$ROOT_DIR/workers/images/nvidia/requirements.txt"
+  uv venv --python 3.12 "$venv" || die "NVIDIA virtual environment creation failed"
+  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --require-hashes --requirement "$ROOT_DIR/workers/images/nvidia/requirements.txt" || die "NVIDIA dependency installation failed"
   local checkout
   checkout="$(source_checkout_for nvidia)"
   local source="$TMP_ROOT/native/nvidia-source"
   archive_source "$checkout" "$(metadata '.scanners["nvidia-skillspector"].sourceRevision')" "$source"
-  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --no-deps --no-build-isolation "$source"
+  UV_CACHE_DIR="$TMP_ROOT/uv-cache" uv pip install --python "$venv/bin/python" --no-deps --no-build-isolation "$source" || die "NVIDIA source installation failed"
   printf '%s\n' "$venv/bin/skillspector"
 }
 
@@ -238,7 +247,9 @@ install_native_skillsguard() {
   (cd "$source" && npm ci --ignore-scripts >&2) || die "SkillsGuard npm ci failed"
   (cd "$source" && npm run build >&2) || die "SkillsGuard build failed"
   local wrapper="$TMP_ROOT/native/skillsguard-bin"
-  printf '%s\n' '#!/bin/sh' 'set -eu' "exec node '$source/dist/cli.js' \"\$@\"" > "$wrapper"
+  local node_bin
+  node_bin="$(command -v node)"
+  printf '%s\n' '#!/bin/sh' 'set -eu' "exec '$node_bin' '$source/dist/cli.js' \"\$@\"" > "$wrapper"
   chmod 0555 "$wrapper"
   printf '%s\n' "$wrapper"
 }

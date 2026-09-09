@@ -77,6 +77,36 @@ export class AuthConfigurationError extends AuthError {
 const COOKIE_DEFAULT = 'pskills_session';
 const SESSION_VERSION = 1 as const;
 const VALID_ROLES: readonly Role[] = ['owner', 'admin', 'publisher', 'reader', 'worker'];
+const DEFAULT_ROLE_SCOPES: Readonly<Record<Role, readonly string[]>> = {
+  owner: ['*'],
+  admin: ['*'],
+  publisher: [
+    'registry:read',
+    'skills:read',
+    'skills:publish',
+    'resolve:read',
+    'operations:read',
+    'install:authorize',
+    'artifacts:download',
+    'packs:read',
+    'packs:publish',
+    'scans:read',
+    'upstreams:read',
+    'imports:create',
+  ],
+  reader: [
+    'registry:read',
+    'skills:read',
+    'resolve:read',
+    'operations:read',
+    'install:authorize',
+    'artifacts:download',
+    'packs:read',
+    'scans:read',
+    'upstreams:read',
+  ],
+  worker: ['jobs:claim', 'jobs:artifact', 'jobs:complete'],
+};
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 interface PreparedToken {
@@ -221,7 +251,12 @@ function roles(value: unknown, kind: 'user' | 'worker'): Role[] {
     throw new AuthConfigurationError('Authentication roles contain an unsupported role');
   }
   const result = [...new Set(parsed as Role[])];
-  if (kind === 'worker' && !result.includes('worker')) result.push('worker');
+  if (kind === 'worker') {
+    if (result.some((role) => role !== 'worker')) {
+      throw new AuthConfigurationError('Worker credentials cannot include user roles');
+    }
+    if (!result.includes('worker')) result.push('worker');
+  }
   if (kind === 'user' && result.includes('worker')) {
     throw new AuthConfigurationError('Worker roles require a separate worker identity');
   }
@@ -363,17 +398,32 @@ export function canAccessNamespace(
   return namespaces.includes(namespace);
 }
 
+/**
+ * Route scopes implied by a role when a token omits an explicit scope list.
+ * An explicit empty list remains empty and is therefore restrictive.
+ */
+export function defaultScopesForRoles(input: readonly Role[]): string[] {
+  const result = new Set<string>();
+  for (const role of input) {
+    for (const scope of DEFAULT_ROLE_SCOPES[role] ?? []) result.add(scope);
+  }
+  return [...result];
+}
+
 async function prepareToken(config: BootstrapTokenConfig, nowMs = Date.now()): Promise<PreparedToken> {
   const id = nonEmptyString(config.id, 'token id');
   const organizationId = nonEmptyString(config.organizationId, 'organization id');
   const subject = nonEmptyString(config.subject, 'subject');
   const kind = tokenKind(config);
+  const principalRoles = roles(config.roles, kind);
   const principal: AuthenticatedPrincipal = {
     organizationId,
     subject,
-    roles: roles(config.roles, kind),
+    roles: principalRoles,
     namespaces: stringArray(config.namespaces, 'namespaces'),
-    scopes: stringArray(config.scopes, 'scopes'),
+    scopes: config.scopes === undefined
+      ? defaultScopesForRoles(principalRoles)
+      : stringArray(config.scopes, 'scopes'),
     identity: kind,
     tokenId: id,
   };
@@ -688,6 +738,12 @@ function parseTokenList(raw: string, source: string, forceKind?: 'user' | 'worke
     const token = record.token ?? record.secret ?? record.value;
     const tokenHash = record.tokenHash ?? record.hash;
     const rolesValue = record.roles ?? principal.roles ?? (kind === 'worker' ? ['worker'] : ['reader']);
+    const scopesValue = record.scopes !== undefined
+      ? record.scopes
+      : record.scope !== undefined
+        ? record.scope
+        : principal.scopes;
+    const scopesProvided = record.scopes !== undefined || record.scope !== undefined || principal.scopes !== undefined;
     return {
       id: nonEmptyString(record.id ?? `${source}-${index + 1}`, 'token id'),
       ...(typeof token === 'string' ? { token } : {}),
@@ -696,7 +752,7 @@ function parseTokenList(raw: string, source: string, forceKind?: 'user' | 'worke
       subject: nonEmptyString(record.subject ?? record.sub ?? principal.subject ?? principal.sub ?? record.id, 'subject'),
       roles: rolesValue as Role[],
       namespaces: stringArray(record.namespaces ?? principal.namespaces, 'namespaces'),
-      scopes: stringArray(record.scopes ?? record.scope ?? principal.scopes, 'scopes'),
+      ...(scopesProvided ? { scopes: stringArray(scopesValue, 'scopes') } : {}),
       expiresAt: record.expiresAt as string | number | undefined,
       expiresInSeconds: record.expiresInSeconds as number | undefined,
       kind: kind ?? ((Array.isArray(rolesValue) && (rolesValue as unknown[]).includes('worker')) ? 'worker' : 'user'),
@@ -718,6 +774,7 @@ export function parseBootstrapTokenEnv(
   const bootstrapToken = envValue(env, 'PSKILLS_BOOTSTRAP_TOKEN');
   const bootstrapTokenHash = envValue(env, 'PSKILLS_BOOTSTRAP_TOKEN_HASH');
   if (bootstrapToken || bootstrapTokenHash) {
+    const bootstrapScopes = envValue(env, 'PSKILLS_BOOTSTRAP_SCOPES');
     result.push({
       id: envValue(env, 'PSKILLS_BOOTSTRAP_TOKEN_ID') ?? 'bootstrap',
       ...(bootstrapToken ? { token: bootstrapToken } : { tokenHash: bootstrapTokenHash! }),
@@ -727,13 +784,14 @@ export function parseBootstrapTokenEnv(
         ? stringArray(envValue(env, 'PSKILLS_BOOTSTRAP_ROLES'), 'bootstrap roles')
         : ['owner']) as Role[],
       namespaces: stringArray(envValue(env, 'PSKILLS_BOOTSTRAP_NAMESPACES'), 'bootstrap namespaces'),
-      scopes: stringArray(envValue(env, 'PSKILLS_BOOTSTRAP_SCOPES'), 'bootstrap scopes'),
+      ...(bootstrapScopes !== undefined ? { scopes: stringArray(bootstrapScopes, 'bootstrap scopes') } : {}),
       kind: 'user',
     });
   }
   const workerToken = envValue(env, 'PSKILLS_WORKER_TOKEN');
   const workerTokenHash = envValue(env, 'PSKILLS_WORKER_TOKEN_HASH');
   if (workerToken || workerTokenHash) {
+    const workerScopes = envValue(env, 'PSKILLS_WORKER_SCOPES');
     result.push({
       id: envValue(env, 'PSKILLS_WORKER_TOKEN_ID') ?? 'worker',
       ...(workerToken ? { token: workerToken } : { tokenHash: workerTokenHash! }),
@@ -741,7 +799,7 @@ export function parseBootstrapTokenEnv(
       subject: envValue(env, 'PSKILLS_WORKER_SUBJECT') ?? 'worker',
       roles: ['worker'],
       namespaces: stringArray(envValue(env, 'PSKILLS_WORKER_NAMESPACES'), 'worker namespaces'),
-      scopes: stringArray(envValue(env, 'PSKILLS_WORKER_SCOPES'), 'worker scopes'),
+      ...(workerScopes !== undefined ? { scopes: stringArray(workerScopes, 'worker scopes') } : {}),
       kind: 'worker',
       worker: true,
     });

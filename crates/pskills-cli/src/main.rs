@@ -9,7 +9,7 @@ use pskills_core::model::*;
 use pskills_core::paths::{resolve_directory, Agent, InstallScope, PathError};
 use pskills_core::{SERVICE, VERSION};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -75,6 +75,8 @@ enum Command {
         reference: String,
     },
     Publish(PublishArgs),
+    /// Request an approved upstream import through the registry, then install it.
+    Proxy(ProxyArgs),
     Install(InstallArgs),
     List,
     Verify,
@@ -112,6 +114,25 @@ struct PublishArgs {
     version: String,
     #[arg(long, default_value = "")]
     description: String,
+}
+
+#[derive(Debug, Args)]
+struct ProxyArgs {
+    /// Destination skill reference with an exact version, for example
+    /// `@team/review@1.2.3`.
+    reference: String,
+    /// Registry-configured upstream identifier.
+    #[arg(long)]
+    upstream: String,
+    /// Skill path within the configured upstream source.
+    #[arg(long)]
+    path: String,
+    /// Optional immutable source revision, branch, or tag accepted by the upstream mapping.
+    #[arg(long = "ref")]
+    source_ref: Option<String>,
+    /// Optional source repository in `owner/repository` form.
+    #[arg(long)]
+    repository: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -194,14 +215,13 @@ fn run(cli: Cli) -> Result<(), CliError> {
         && matches!(
             &cli.command,
             Command::Publish(_)
+                | Command::Proxy(_)
                 | Command::Pack {
                     command: PackCommand::Publish { .. }
                 }
         );
-    let registry_not_required = registry_not_required
-        || (matches!(&cli.command, Command::Health) && cli.registry.is_none());
     let context = Context {
-        registry: if registry_not_required || local_dry_run {
+        registry: if local_dry_run || (registry_not_required && cli.registry.is_none()) {
             None
         } else {
             Some(credentials.registry(cli.registry.as_deref())?)
@@ -227,6 +247,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Show { reference } => show(&context, &reference),
         Command::Versions { reference } => versions(&context, &reference),
         Command::Publish(args) => publish(&context, &args),
+        Command::Proxy(args) => proxy(&context, &args),
         Command::Install(args) => install_skill(&context, &args.reference, "direct"),
         Command::List => list_local(&context),
         Command::Verify => verify_local(&context),
@@ -324,13 +345,34 @@ fn show(context: &Context, reference: &str) -> Result<(), CliError> {
 }
 
 fn versions(context: &Context, reference: &str) -> Result<(), CliError> {
+    let (reference, requested_version) = split_reference(reference)?;
     let client = client(context)?;
-    let skills = client.search(reference)?;
-    let values: Vec<Value> = skills.into_iter().filter(|skill| skill.name == reference || skill.name.starts_with(&format!("{reference}@"))).map(|skill| json!({ "version": skill.version, "state": skill.state, "digest": skill.artifact.digest })).collect();
+    let skills = client.search(&reference)?;
+    let values: Vec<Value> = skills
+        .into_iter()
+        .filter(|skill| {
+            (skill.name == reference || skill.name.starts_with(&format!("{reference}@")))
+                && requested_version
+                    .as_deref()
+                    .map(|version| skill.version == version)
+                    .unwrap_or(true)
+        })
+        .map(|skill| {
+            json!({ "version": skill.version, "state": skill.state, "digest": skill.artifact.digest })
+        })
+        .collect();
     emit(context.json, Value::Array(values))
 }
 
 fn publish(context: &Context, args: &PublishArgs) -> Result<(), CliError> {
+    let (name, embedded_version) = split_reference(&args.name)?;
+    if embedded_version.is_some() {
+        return Err(CliError::Message(
+            "publish --name must not include a version; use --version".into(),
+        ));
+    }
+    semver::Version::parse(&args.version)
+        .map_err(|_| CliError::Message(format!("invalid SemVer `{}`", args.version)))?;
     let path = normalize_skill_source(&args.path)?;
     let bundle = bundle_from_directory(&path, BundleLimits::default())
         .map_err(|e| CliError::Message(e.to_string()))?;
@@ -338,17 +380,65 @@ fn publish(context: &Context, args: &PublishArgs) -> Result<(), CliError> {
     if context.dry_run {
         return emit(
             context.json,
-            json!({ "dryRun": true, "name": args.name, "version": args.version, "digest": digest, "files": bundle.files.len() }),
+            json!({ "dryRun": true, "name": name, "version": args.version, "digest": digest, "files": bundle.files.len() }),
         );
     }
     let client = client(context)?;
     let request = publish_request(
-        args.name.clone(),
+        name,
         args.version.clone(),
         args.description.clone(),
         &bundle,
     )?;
     emit(context.json, client.publish(&request)?)
+}
+
+fn proxy(context: &Context, args: &ProxyArgs) -> Result<(), CliError> {
+    let (reference, version) = split_reference(&args.reference)?;
+    let version = version.ok_or_else(|| {
+        CliError::Message("proxy requires an exact reference such as @team/name@1.0.0".into())
+    })?;
+    if args.upstream.trim().is_empty() {
+        return Err(CliError::Message("--upstream must not be empty".into()));
+    }
+    if args.path.trim().is_empty() {
+        return Err(CliError::Message("--path must not be empty".into()));
+    }
+    if context.dry_run {
+        return emit(
+            context.json,
+            json!({
+                "dryRun": true,
+                "upstreamId": args.upstream,
+                "path": args.path,
+                "ref": args.source_ref,
+                "repository": args.repository,
+                "name": reference,
+                "version": version,
+            }),
+        );
+    }
+    if context.registry.is_none() {
+        return Err(CliError::Message("proxy requires a registry".into()));
+    }
+    let resolution = client(context)?.proxy_resolve(&ImportRequest {
+        upstream_id: args.upstream.clone(),
+        repository: args.repository.clone(),
+        path: args.path.clone(),
+        reference: args.source_ref.clone(),
+        name: reference.clone(),
+        version: version.clone(),
+    })?;
+    if resolution.kind != "skill" || resolution.name != reference || resolution.version != version {
+        return Err(CliError::Message(
+            "proxy resolution did not match the requested skill reference".into(),
+        ));
+    }
+    // The normal authenticated install path performs authorization, transfer
+    // digest checks, bundle validation, final revalidation, and lock/journal
+    // activation.  The proxy request above only asks the registry to acquire
+    // and approve the upstream bytes.
+    install_skill(context, &format!("{reference}@{version}"), "direct")
 }
 
 fn install_skill(
@@ -361,11 +451,20 @@ fn install_skill(
         .registry
         .as_ref()
         .ok_or_else(|| CliError::Message("install requires a registry".into()))?;
-    let version = if context.frozen {
-        frozen_version(context, &reference, requested_version.as_deref())?
+    let frozen_entry = if context.frozen {
+        Some(frozen_skill_entry(
+            context,
+            registry,
+            &reference,
+            requested_version.as_deref(),
+        )?)
     } else {
-        requested_version.clone()
+        None
     };
+    let version = frozen_entry
+        .as_ref()
+        .map(|entry| entry.version.clone())
+        .or(requested_version.clone());
     let client = client(context)?;
     let resolution = client.resolve(&ResolveRequest {
         kind: "skill".into(),
@@ -391,6 +490,16 @@ fn install_skill(
         .as_ref()
         .map(|value| value.artifact.digest.clone())
         .unwrap_or_else(|| resolution.digest.clone());
+    if let Some(expected) = frozen_entry.as_ref() {
+        if resolution.version != expected.version
+            || resolution.digest != expected.artifact_digest
+            || skill_name != expected.skill_name
+        {
+            return Err(CliError::Message(format!(
+                "frozen lock entry for {reference} does not match the registry resolution"
+            )));
+        }
+    }
     let authorization = client.authorize(&resolution)?;
     let descriptor =
         client.download_descriptor(&artifact_digest, &resource_id, &authorization.id)?;
@@ -401,38 +510,50 @@ fn install_skill(
     }
     let bytes = client.download_transfer(&descriptor)?;
     let bundle = decode_bundle_bytes(&bytes).map_err(|e| CliError::Message(e.to_string()))?;
+    if let Some(expected) = frozen_entry.as_ref() {
+        let actual_tree = tree_digest(&bundle).map_err(|e| CliError::Message(e.to_string()))?;
+        if actual_tree != expected.tree_digest {
+            return Err(CliError::Message(format!(
+                "frozen lock tree digest mismatch for {reference}: expected {}, received {actual_tree}",
+                expected.tree_digest
+            )));
+        }
+    }
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     reject_agent_reserved_files(context.agent, &bundle)?;
     let second = client.validate_authorization(&authorization.id)?;
-    if second.resolution.digest != authorization.resolution.digest {
+    if !same_resolution(&second.resolution, &authorization.resolution) {
         return Err(CliError::Message(
             "install authorization changed during transfer".into(),
         ));
     }
     let state = local_state(&root, context.scope);
-    let owner = format!("{owner_prefix}:{reference}");
-    let result = state.install(&InstallPlan {
+    let owner = owner_for_reference(owner_prefix, registry, &reference);
+    let plan = InstallPlan {
         root: root.clone(),
         skill_name: skill_name.clone(),
         bundle: bundle.clone(),
         artifact_digest: artifact_digest.clone(),
         owner: owner.clone(),
         dry_run: context.dry_run,
-    })?;
-    if !context.dry_run {
-        let mut lock = state.read_lock()?;
-        update_lock_for_skill(
-            &mut lock,
-            registry,
-            context,
-            &reference,
-            &skill_name,
-            &resolution,
-            &bundle,
-            &owner,
-        )?;
-        state.write_lock(&lock)?;
-    }
+    };
+    let old_lock = state.read_lock()?;
+    let mut new_lock = old_lock.clone();
+    update_lock_for_skill(
+        &mut new_lock,
+        registry,
+        context,
+        &reference,
+        &skill_name,
+        &resolution,
+        &bundle,
+        &owner,
+    )?;
+    let result = state
+        .install_many_with_lock(&[plan], Some(&old_lock), Some(&new_lock))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CliError::Message("installer returned no result".into()))?;
     emit(
         context.json,
         json!({ "ok": true, "dryRun": context.dry_run, "reference": reference, "version": resolution.version, "digest": artifact_digest, "destination": result.destination, "changed": result.changed }),
@@ -489,11 +610,20 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
         .registry
         .as_ref()
         .ok_or_else(|| CliError::Message("pack install requires a registry".into()))?;
-    let version = if context.frozen {
-        frozen_version(context, &reference, requested_version.as_deref())?
+    let frozen_pack = if context.frozen {
+        Some(frozen_pack_entry(
+            context,
+            registry,
+            &reference,
+            requested_version.as_deref(),
+        )?)
     } else {
-        requested_version
+        None
     };
+    let version = frozen_pack
+        .as_ref()
+        .map(|pack| pack.version.clone())
+        .or(requested_version);
     let client = client(context)?;
     let resolution = client.resolve(&ResolveRequest {
         kind: "pack".into(),
@@ -505,9 +635,45 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
             "pack resolution did not contain pinned members".into(),
         ));
     }
+    let frozen_members = if let Some(expected_pack) = frozen_pack.as_ref() {
+        if resolution.version != expected_pack.version
+            || resolution.digest != expected_pack.manifest_digest
+            || resolution.members.len() != expected_pack.members.len()
+        {
+            return Err(CliError::Message(format!(
+                "frozen lock pack entry for {reference} does not match the registry resolution"
+            )));
+        }
+        Some(
+            expected_pack
+                .members
+                .iter()
+                .map(|key| {
+                    let skill = frozen_skill_by_key(context, registry, key)?;
+                    Ok(skill)
+                })
+                .collect::<Result<Vec<_>, CliError>>()?,
+        )
+    } else {
+        None
+    };
     let authorization = client.authorize(&resolution)?;
     let mut downloaded = Vec::with_capacity(resolution.members.len());
-    for skill in &resolution.members {
+    for (index, skill) in resolution.members.iter().enumerate() {
+        if let Some(expected) = frozen_members
+            .as_ref()
+            .and_then(|members| members.get(index))
+        {
+            if expected.version != skill.version
+                || expected.artifact_digest != skill.artifact.digest
+                || expected.reference != skill.name
+            {
+                return Err(CliError::Message(format!(
+                    "frozen lock member {} does not match the registry resolution",
+                    skill.name
+                )));
+            }
+        }
         let skill_name = if skill.skill_name.is_empty() {
             last_name(&skill.name)
         } else {
@@ -523,11 +689,24 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
         }
         let bytes = client.download_transfer(&descriptor)?;
         let bundle = decode_bundle_bytes(&bytes).map_err(|e| CliError::Message(e.to_string()))?;
+        if let Some(expected) = frozen_members
+            .as_ref()
+            .and_then(|members| members.get(index))
+        {
+            let actual_tree = tree_digest(&bundle).map_err(|e| CliError::Message(e.to_string()))?;
+            if actual_tree != expected.tree_digest {
+                return Err(CliError::Message(format!(
+                    "frozen lock tree digest mismatch for {}: expected {}, received {actual_tree}",
+                    skill.name, expected.tree_digest
+                )));
+            }
+        }
         reject_agent_reserved_files(context.agent, &bundle)?;
         downloaded.push((skill.clone(), skill_name, bundle));
     }
+    validate_pack_destinations(&downloaded)?;
     let second = client.validate_authorization(&authorization.id)?;
-    if second.resolution.digest != authorization.resolution.digest {
+    if !same_resolution(&second.resolution, &authorization.resolution) {
         return Err(CliError::Message(
             "pack authorization changed during transfer".into(),
         ));
@@ -539,55 +718,72 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
         resolution.version,
         registry_url = registry.url
     );
-    let mut results = Vec::new();
+    let old_lock = state.read_lock()?;
+    let mut new_lock = old_lock.clone();
+    let members: Vec<String> = downloaded
+        .iter()
+        .map(|(skill, _, _)| format!("{}:{}@{}", registry.url, skill.name, skill.version))
+        .collect();
+    new_lock.packs.retain(|pack| {
+        !(pack.registry == registry.url
+            && pack.reference == reference
+            && pack.version == resolution.version)
+    });
+    new_lock.packs.push(LockPack {
+        registry: registry.url.clone(),
+        reference: reference.clone(),
+        version: resolution.version.clone(),
+        manifest_digest: resolution.digest.clone(),
+        members,
+    });
     for (skill, skill_name, bundle) in &downloaded {
-        let result = state.install(&InstallPlan {
+        update_lock_for_skill(
+            &mut new_lock,
+            registry,
+            context,
+            &skill.name,
+            skill_name,
+            &Resolution {
+                kind: "skill".into(),
+                resource_id: skill.id.clone(),
+                organization_id: skill.organization_id.clone(),
+                name: skill.name.clone(),
+                version: skill.version.clone(),
+                digest: skill.artifact.digest.clone(),
+                members: vec![skill.clone()],
+            },
+            bundle,
+            &owner,
+        )?;
+    }
+    // A pack is one logical activation.  Preflight all members and hand the
+    // complete plan to the installer so a conflict in any member prevents
+    // every member from being activated.
+    let plans: Vec<InstallPlan> = downloaded
+        .iter()
+        .map(|(skill, skill_name, bundle)| InstallPlan {
             root: root.clone(),
             skill_name: skill_name.clone(),
             bundle: bundle.clone(),
             artifact_digest: skill.artifact.digest.clone(),
             owner: owner.clone(),
             dry_run: context.dry_run,
-        })?;
-        results.push(json!({ "name": skill.name, "version": skill.version, "digest": skill.artifact.digest, "destination": result.destination }));
-    }
-    if !context.dry_run {
-        let mut lock = state.read_lock()?;
-        let members: Vec<String> = downloaded
-            .iter()
-            .map(|(skill, _, _)| format!("{}:{}@{}", registry.url, skill.name, skill.version))
-            .collect();
-        lock.packs
-            .retain(|pack| !(pack.reference == reference && pack.version == resolution.version));
-        lock.packs.push(LockPack {
-            registry: registry.url.clone(),
-            reference: reference.clone(),
-            version: resolution.version.clone(),
-            manifest_digest: resolution.digest.clone(),
-            members,
-        });
-        for (skill, skill_name, bundle) in &downloaded {
-            update_lock_for_skill(
-                &mut lock,
-                registry,
-                context,
-                &skill.name,
-                skill_name,
-                &Resolution {
-                    kind: "skill".into(),
-                    resource_id: skill.id.clone(),
-                    organization_id: skill.organization_id.clone(),
-                    name: skill.name.clone(),
-                    version: skill.version.clone(),
-                    digest: skill.artifact.digest.clone(),
-                    members: vec![skill.clone()],
-                },
-                bundle,
-                &owner,
-            )?;
-        }
-        state.write_lock(&lock)?;
-    }
+        })
+        .collect();
+    let activated = state.install_many_with_lock(&plans, Some(&old_lock), Some(&new_lock))?;
+    let results: Vec<Value> = downloaded
+        .iter()
+        .zip(activated.iter())
+        .map(|((skill, _, _), result)| {
+            json!({
+                "name": skill.name,
+                "version": skill.version,
+                "digest": skill.artifact.digest,
+                "destination": result.destination,
+                "changed": result.changed,
+            })
+        })
+        .collect();
     emit(
         context.json,
         json!({ "ok": true, "dryRun": context.dry_run, "pack": reference, "version": resolution.version, "members": results }),
@@ -603,7 +799,12 @@ fn remove_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> {
         .packs
         .iter()
         .filter(|pack| {
-            pack.reference == reference
+            context
+                .registry
+                .as_ref()
+                .map(|registry| pack.registry == registry.url)
+                .unwrap_or(true)
+                && pack.reference == reference
                 && requested_version
                     .as_deref()
                     .map(|v| v == pack.version)
@@ -619,6 +820,7 @@ fn remove_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> {
     let mut removed = Vec::new();
     for pack in &packs {
         let owner = format!("pack:{}:{}@{}", pack.registry, pack.reference, pack.version);
+        let mut member_names = Vec::new();
         for member in &pack.members {
             if let Some(skill) = lock
                 .skills
@@ -628,27 +830,39 @@ fn remove_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> {
                 })
                 .cloned()
             {
-                let result = state.remove(&skill.skill_name, Some(&owner), context.dry_run)?;
-                removed.push(result.skill_name);
+                member_names.push(skill.skill_name);
+            } else {
+                return Err(CliError::Message(format!(
+                    "pack lock member `{member}` is missing from the skill lock"
+                )));
             }
         }
-    }
-    if !context.dry_run {
-        lock.packs.retain(|pack| {
-            !packs.iter().any(|selected| {
-                selected.registry == pack.registry
-                    && selected.reference == pack.reference
-                    && selected.version == pack.version
-            })
+        member_names.sort();
+        member_names.dedup();
+        let old_lock = lock.clone();
+        let mut new_lock = old_lock.clone();
+        new_lock.packs.retain(|candidate| {
+            !(candidate.registry == pack.registry
+                && candidate.reference == pack.reference
+                && candidate.version == pack.version)
         });
-        for skill in &mut lock.skills {
-            for pack in &packs {
-                let owner = format!("pack:{}:{}@{}", pack.registry, pack.reference, pack.version);
-                skill.owners.retain(|candidate| candidate != &owner);
-            }
+        for skill in &mut new_lock.skills {
+            skill.owners.retain(|candidate| candidate != &owner);
         }
-        lock.skills.retain(|skill| !skill.owners.is_empty());
-        state.write_lock(&lock)?;
+        new_lock.skills.retain(|skill| !skill.owners.is_empty());
+        // Remove all members belonging to this pack in one installer
+        // transaction.  Shared members retain their other owners.
+        let removed_entries = state.remove_owner_with_lock(
+            &owner,
+            &member_names,
+            context.dry_run,
+            Some(&old_lock),
+            Some(&new_lock),
+        )?;
+        removed.extend(removed_entries.into_iter().map(|entry| entry.skill_name));
+        if !context.dry_run {
+            lock = new_lock;
+        }
     }
     emit(
         context.json,
@@ -688,22 +902,59 @@ fn remove_local(
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     let state = local_state(&root, context.scope);
     let skill_name = last_name(&reference);
-    let result = state.remove(
-        &skill_name,
-        Some(&format!("{owner_prefix}:{reference}")),
-        context.dry_run,
-    )?;
-    if !context.dry_run {
-        let mut lock = state.read_lock()?;
-        lock.skills.retain(|skill| {
-            skill.skill_name != skill_name
-                || skill
-                    .owners
-                    .iter()
-                    .any(|owner| owner != &format!("{owner_prefix}:{reference}"))
-        });
-        state.write_lock(&lock)?;
+    let mut lock = state.read_lock()?;
+    let owner = if owner_prefix == "direct" {
+        if let Some(registry) = context.registry.as_ref() {
+            owner_for_reference(owner_prefix, registry, &reference)
+        } else {
+            let mut candidates = lock
+                .skills
+                .iter()
+                .filter(|skill| skill.skill_name == skill_name)
+                .flat_map(|skill| skill.owners.iter())
+                .filter(|candidate| {
+                    candidate.starts_with("direct:")
+                        && candidate.ends_with(&format!(":{reference}"))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            candidates.sort();
+            candidates.dedup();
+            match candidates.as_slice() {
+                [candidate] => candidate.clone(),
+                [] => {
+                    return Err(CliError::Message(format!(
+                        "skill {reference} has no direct owner in the local lock"
+                    )))
+                }
+                _ => {
+                    return Err(CliError::Message(format!(
+                        "skill {reference} is installed from multiple registries; pass --registry to remove one"
+                    )))
+                }
+            }
+        }
+    } else {
+        format!("{owner_prefix}:{reference}")
+    };
+    let old_lock = lock.clone();
+    for skill in &mut lock.skills {
+        if skill.skill_name == skill_name {
+            skill.owners.retain(|candidate| candidate != &owner);
+        }
     }
+    lock.skills.retain(|skill| !skill.owners.is_empty());
+    let result = state
+        .remove_owner_with_lock(
+            &owner,
+            std::slice::from_ref(&skill_name),
+            context.dry_run,
+            Some(&old_lock),
+            Some(&lock),
+        )?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CliError::Message("installer returned no removal result".into()))?;
     emit(
         context.json,
         json!({ "ok": true, "dryRun": context.dry_run, "removed": result.skill_name }),
@@ -790,6 +1041,14 @@ fn local_state(root: &Path, scope: InstallScope) -> LocalState {
     }
 }
 
+fn owner_for_reference(owner_prefix: &str, registry: &RegistryConfig, reference: &str) -> String {
+    if owner_prefix == "direct" {
+        format!("direct:{}:{reference}", registry.url)
+    } else {
+        format!("{owner_prefix}:{reference}")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_lock_for_skill(
     lock: &mut LockFile,
@@ -809,11 +1068,21 @@ fn update_lock_for_skill(
             organization: resolution.organization_id.clone(),
         },
     );
-    lock.targets = vec![LockTarget {
+    let target = LockTarget {
         agent: context.agent.as_str().into(),
         adapter_version: "1".into(),
         scope: context.scope.as_str().into(),
-    }];
+    };
+    if !lock.targets.iter().any(|existing| existing == &target) {
+        lock.targets.push(target);
+        lock.targets.sort_by(|left, right| {
+            (&left.agent, &left.scope, &left.adapter_version).cmp(&(
+                &right.agent,
+                &right.scope,
+                &right.adapter_version,
+            ))
+        });
+    }
     for existing in &mut lock.skills {
         if existing.registry == registry.url
             && existing.reference == reference
@@ -827,6 +1096,12 @@ fn update_lock_for_skill(
     lock.skills.retain(|skill| !skill.owners.is_empty());
     let key = format!("{}:{}@{}", registry.url, reference, resolution.version);
     if let Some(existing) = lock.skills.iter_mut().find(|skill| skill.key == key) {
+        if existing.skill_name != skill_name {
+            return Err(CliError::Message(format!(
+                "lock identity {key} maps to conflicting install destinations `{}` and `{skill_name}`",
+                existing.skill_name
+            )));
+        }
         existing
             .owners
             .retain(|existing_owner| existing_owner != owner);
@@ -853,17 +1128,23 @@ fn update_lock_for_skill(
     Ok(())
 }
 
-fn frozen_version(
+fn frozen_skill_entry(
     context: &Context,
+    registry: &RegistryConfig,
     reference: &str,
     requested: Option<&str>,
-) -> Result<Option<String>, CliError> {
+) -> Result<LockSkill, CliError> {
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     let lock = local_state(&root, context.scope).read_lock()?;
+    validate_frozen_target(&lock, context)?;
+    validate_frozen_registry(&lock, registry)?;
     let entry = lock
         .skills
         .iter()
-        .find(|skill| skill.reference == reference)
+        .find(|skill| {
+            lock_registry_matches(&lock, &skill.registry, registry) && skill.reference == reference
+        })
+        .cloned()
         .ok_or_else(|| {
             CliError::Message(format!("frozen lockfile has no entry for {reference}"))
         })?;
@@ -875,7 +1156,126 @@ fn frozen_version(
             )));
         }
     }
-    Ok(Some(entry.version.clone()))
+    Ok(entry)
+}
+
+fn frozen_pack_entry(
+    context: &Context,
+    registry: &RegistryConfig,
+    reference: &str,
+    requested: Option<&str>,
+) -> Result<LockPack, CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    validate_frozen_target(&lock, context)?;
+    validate_frozen_registry(&lock, registry)?;
+    let entry = lock
+        .packs
+        .iter()
+        .find(|pack| {
+            lock_registry_matches(&lock, &pack.registry, registry) && pack.reference == reference
+        })
+        .cloned()
+        .ok_or_else(|| {
+            CliError::Message(format!("frozen lockfile has no pack entry for {reference}"))
+        })?;
+    if let Some(requested) = requested {
+        if requested != entry.version {
+            return Err(CliError::Message(format!(
+                "frozen lockfile pins pack {reference}@{}, requested {requested}",
+                entry.version
+            )));
+        }
+    }
+    Ok(entry)
+}
+
+fn frozen_skill_by_key(
+    context: &Context,
+    registry: &RegistryConfig,
+    key: &str,
+) -> Result<LockSkill, CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    validate_frozen_target(&lock, context)?;
+    validate_frozen_registry(&lock, registry)?;
+    lock.skills
+        .iter()
+        .find(|skill| lock_registry_matches(&lock, &skill.registry, registry) && skill.key == key)
+        .cloned()
+        .ok_or_else(|| CliError::Message(format!("frozen lockfile has no member {key}")))
+}
+
+fn validate_frozen_target(lock: &LockFile, context: &Context) -> Result<(), CliError> {
+    if !lock.targets.iter().any(|target| {
+        target.agent == context.agent.as_str()
+            && target.adapter_version == "1"
+            && target.scope == context.scope.as_str()
+    }) {
+        return Err(CliError::Message(format!(
+            "frozen lockfile does not target agent {} in {} scope",
+            context.agent.as_str(),
+            context.scope.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_frozen_registry(lock: &LockFile, registry: &RegistryConfig) -> Result<(), CliError> {
+    if !lock
+        .registries
+        .values()
+        .any(|entry| entry.url == registry.url)
+    {
+        return Err(CliError::Message(format!(
+            "frozen lockfile does not contain registry {}",
+            registry.url
+        )));
+    }
+    Ok(())
+}
+
+fn lock_registry_matches(lock: &LockFile, value: &str, registry: &RegistryConfig) -> bool {
+    value == registry.url
+        || lock
+            .registries
+            .get(value)
+            .map(|entry| entry.url == registry.url)
+            .unwrap_or(false)
+}
+
+fn same_resolution(left: &Resolution, right: &Resolution) -> bool {
+    left.kind == right.kind
+        && left.resource_id == right.resource_id
+        && left.organization_id == right.organization_id
+        && left.name == right.name
+        && left.version == right.version
+        && left.digest == right.digest
+        && left.members.len() == right.members.len()
+        && left.members.iter().zip(&right.members).all(|(a, b)| {
+            a.id == b.id
+                && a.organization_id == b.organization_id
+                && a.name == b.name
+                && a.skill_name == b.skill_name
+                && a.version == b.version
+                && a.artifact.digest == b.artifact.digest
+        })
+}
+
+fn validate_pack_destinations(
+    members: &[(SkillVersion, String, SkillBundle)],
+) -> Result<(), CliError> {
+    let mut destinations = HashMap::<String, String>::new();
+    for (skill, skill_name, _) in members {
+        let key = skill_name.to_ascii_lowercase();
+        if let Some(previous) = destinations.insert(key, skill.name.clone()) {
+            return Err(CliError::Message(format!(
+                "pack members `{previous}` and `{}` resolve to the same install destination `{skill_name}`",
+                skill.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn reject_agent_reserved_files(agent: Agent, bundle: &SkillBundle) -> Result<(), CliError> {
@@ -926,12 +1326,49 @@ fn split_reference(raw: &str) -> Result<(String, Option<String>), CliError> {
     } else {
         (raw, None)
     };
-    if !reference.starts_with('@') || reference.matches('/').count() != 1 || reference.len() < 4 {
+    if !is_valid_reference(reference) {
         return Err(CliError::Message(format!(
             "invalid reference `{raw}`; expected @namespace/skill[@version]"
         )));
     }
+    if let Some(version) = version.as_deref() {
+        if semver::Version::parse(version).is_err() {
+            return Err(CliError::Message(format!(
+                "invalid SemVer `{version}` in reference `{raw}`"
+            )));
+        }
+    }
     Ok((reference.to_string(), version))
+}
+
+fn is_valid_reference(reference: &str) -> bool {
+    let mut parts = reference.split('/');
+    let Some(namespace) = parts.next() else {
+        return false;
+    };
+    let Some(skill) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some()
+        || !namespace.starts_with('@')
+        || namespace.len() < 2
+        || skill.is_empty()
+        || namespace[1..].len() > 64
+        || skill.len() > 128
+    {
+        return false;
+    }
+    let valid = |value: &str| {
+        value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+    };
+    valid(&namespace[1..])
+        && valid(skill)
+        && !namespace[1..].starts_with(['.', '_', '-'])
+        && !skill.starts_with(['.', '_', '-'])
 }
 
 fn last_name(reference: &str) -> String {
@@ -948,10 +1385,18 @@ fn normalize_registry(url: &str) -> Result<String, CliError> {
     if !matches!(parsed.scheme(), "http" | "https")
         || parsed.username() != ""
         || parsed.password().is_some()
+        || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
         return Err(CliError::Message(
-            "registry URL must be an http(s) origin without credentials or a fragment".into(),
+            "registry URL must be an http(s) origin without credentials, query, or fragment".into(),
+        ));
+    }
+    if parsed.scheme() == "http"
+        && !matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+    {
+        return Err(CliError::Message(
+            "HTTP registries are allowed only on loopback; use HTTPS for remote registries".into(),
         ));
     }
     Ok(url.into())
@@ -967,6 +1412,14 @@ fn validate_pack_draft(draft: &PackDraft) -> Result<(), CliError> {
             "pack must contain between 1 and 100 skills".into(),
         ));
     }
+    let (_, embedded_version) = split_reference(&draft.name)?;
+    if embedded_version.is_some() {
+        return Err(CliError::Message(
+            "pack name must not include a version".into(),
+        ));
+    }
+    semver::Version::parse(&draft.version)
+        .map_err(|_| CliError::Message(format!("invalid pack SemVer `{}`", draft.version)))?;
     for member in &draft.skills {
         split_reference(&member.reference)?;
         if member.version.trim().is_empty() {

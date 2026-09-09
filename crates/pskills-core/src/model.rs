@@ -223,6 +223,7 @@ pub struct LockTarget {
 #[serde(rename_all = "camelCase")]
 pub struct LockPack {
     pub registry: String,
+    #[serde(rename = "ref")]
     pub reference: String,
     pub version: String,
     pub manifest_digest: Digest,
@@ -233,6 +234,7 @@ pub struct LockPack {
 pub struct LockSkill {
     pub key: String,
     pub registry: String,
+    #[serde(rename = "ref")]
     pub reference: String,
     pub version: String,
     pub skill_name: String,
@@ -328,6 +330,21 @@ pub struct ResolveRequest {
     pub reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+/// A registry controlled pull-through request.  The CLI sends this only to
+/// the registry proxy endpoint; it never fetches an upstream directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRequest {
+    pub upstream_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    pub path: String,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    pub name: String,
+    pub version: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

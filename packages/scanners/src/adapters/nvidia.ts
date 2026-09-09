@@ -4,7 +4,8 @@ import type { ScannerAdapter, ScanFinding } from '../types.js';
 
 export const NVIDIA_PIN = Object.freeze({
   release: '2.11.1',
-  sourceRevision: '704bc95',
+  sourceRef: 'v2.11.1',
+  sourceRevision: '704bc9544260c2f41222dc0f92982521709496ab',
   source: 'https://github.com/NVIDIA/SkillSpector',
   package: 'skillspector==2.11.1',
   python: '3.12-3.14',
@@ -24,6 +25,9 @@ const definition: AdapterDefinition = {
   fixedLimitations: [
     'SkillSpector SC4 sends dependency coordinates to OSV.dev even with --no-llm; network-denied workers use the bundled fallback list',
     'SkillSpector is static analysis and does not observe runtime behavior or encrypted/binary content',
+  ],
+  degradedLimitations: [
+    'SkillSpector SC4 sends dependency coordinates to OSV.dev even with --no-llm; network-denied workers use the bundled fallback list',
   ],
   buildArgs(inputDir, outputPath) {
     // Do not pass a URL or archive supplied by the skill. The runner gives the
@@ -59,16 +63,21 @@ const definition: AdapterDefinition = {
     const filesUnsupported = firstNumber(report, metadata, ledger, ['files_unsupported', 'filesUnsupported', 'unsupported_files', 'failed_files'])
       ?? ledgerCount(ledger, ['unsupported', 'failed']);
     const limitations: string[] = [];
+    let degraded = false;
     if (filesAnalyzed === undefined) limitations.push('SkillSpector report did not expose analyzed-file coverage');
+    if (filesAnalyzed === undefined) degraded = true;
     if (metadata?.llm_requested === true || metadata?.llm_used === true) {
       limitations.push('SkillSpector report indicates LLM analysis was requested; this adapter requires static-only mode');
+      degraded = true;
     }
     if (Array.isArray(report.suppressed_findings) && report.suppressed_findings.length > 0) {
       limitations.push('SkillSpector report contains baseline-suppressed findings; suppression completeness is not independently verifiable');
+      degraded = true;
     }
     const reportedVersion = reportString(metadata, ['skillspector_version', 'version']);
     if (reportedVersion && reportedVersion !== NVIDIA_PIN.release) {
       limitations.push(`report engine version ${reportedVersion} differs from pinned ${NVIDIA_PIN.release}`);
+      degraded = true;
     }
     const destinations = [] as string[];
     // The static adapter never grants external access. This records the actual
@@ -79,6 +88,7 @@ const definition: AdapterDefinition = {
       findings: findings.slice(0, 10000),
       coverage: { filesEnumerated, filesAnalyzed, filesSkipped, filesUnsupported, externalDestinations: destinations },
       limitations: uniqueLimitations(limitations),
+      degraded,
       ...(inputFileCount === 0 ? { error: 'SkillSpector scanner input contains no files' } : {}),
     };
   },

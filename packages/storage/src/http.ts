@@ -260,6 +260,18 @@ async function responseError(response: Response, operation: string): Promise<nev
   );
 }
 
+function rejectRedirect(response: Response, operation: string): void {
+  // Workerd does not implement `redirect: "error"`. Manual mode is portable,
+  // but a manual response must still be rejected before any body is consumed
+  // so a gateway cannot redirect a private request to another origin.
+  if (response.status >= 300 && response.status < 400) {
+    throw new HttpBlobError(
+      `blob gateway ${operation} returned an unexpected redirect`,
+      502
+    );
+  }
+}
+
 /** BlobStore client for the private gateway, with no provider credentials. */
 export class HttpBlobStore implements BlobStore {
   readonly #origin: string;
@@ -280,10 +292,14 @@ export class HttpBlobStore implements BlobStore {
       if (options.token) headers.set("authorization", `Bearer ${options.token}`);
       return headers;
     };
-    this.#fetch = options.fetch ?? globalThis.fetch;
-    if (typeof this.#fetch !== "function") {
+    const fetchImplementation = options.fetch ?? globalThis.fetch;
+    if (typeof fetchImplementation !== "function") {
       throw new HttpBlobError("a fetch implementation is required", 500, "configuration");
     }
+    // Some edge runtimes expose fetch as a receiver-sensitive host method.
+    // Store a bound function so calling it through a private class field does
+    // not lose the required global receiver.
+    this.#fetch = fetchImplementation.bind(globalThis);
     this.#maxBytes = positiveLimit(options.maxBytes, DEFAULT_GATEWAY_MAX_BODY_BYTES);
     this.#timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_GATEWAY_TIMEOUT_MS);
   }
@@ -308,12 +324,13 @@ export class HttpBlobStore implements BlobStore {
         method: "POST",
         headers,
         body: payload,
-        redirect: "error",
+        redirect: "manual",
         signal,
       });
     } catch {
       throw new HttpBlobError("blob gateway request failed", 502);
     }
+    rejectRedirect(response, "upload");
     if (!response.ok) await responseError(response, "upload");
     let descriptor: StoredBlob;
     try {
@@ -355,12 +372,13 @@ export class HttpBlobStore implements BlobStore {
       response = await this.#fetch(`${this.#origin}${pathForKey(key)}`, {
         method: "GET",
         headers,
-        redirect: "error",
+        redirect: "manual",
         signal,
       });
     } catch {
       throw new HttpBlobError("blob gateway request failed", 502);
     }
+    rejectRedirect(response, "download");
     if (!response.ok) await responseError(response, "download");
     let bytes: Uint8Array;
     try {
@@ -389,12 +407,13 @@ export class HttpBlobStore implements BlobStore {
       response = await this.#fetch(`${this.#origin}${pathForKey(key)}`, {
         method: "DELETE",
         headers,
-        redirect: "error",
+        redirect: "manual",
         signal: combineTimeout(this.#timeoutMs),
       });
     } catch {
       throw new HttpBlobError("blob gateway request failed", 502);
     }
+    rejectRedirect(response, "delete");
     if (!response.ok) await responseError(response, "delete");
     this.#records.delete(key);
   }

@@ -160,7 +160,7 @@ async function runProtocolSmoke(
   );
   const descriptor = await assertJsonStatus<TransferDescriptor>(descriptorResponse, 200, 'download grant');
   const transferPath = new URL(descriptor.url).pathname;
-  const transferResponse = await client.request(transferPath);
+  const transferResponse = await client.request(transferPath, { headers: userHeaders });
   assertStatus(transferResponse, 200, 'artifact transfer');
   const bytes = new Uint8Array(await transferResponse.arrayBuffer());
   if (await digestBytes(bytes) !== skill.artifact.digest) throw new Error('artifact transfer: digest mismatch');
@@ -173,7 +173,7 @@ async function runProtocolSmoke(
   const revoked = (await assertJsonStatus<{ skill: SkillVersion }>(revokeResponse, 200, 'revoke')).skill;
   if (revoked.state !== 'revoked') throw new Error('revoke: resource did not enter revoked state');
 
-  const afterRevoke = await client.request(transferPath);
+  const afterRevoke = await client.request(transferPath, { headers: userHeaders });
   assertStatus(afterRevoke, 409, 'revoked transfer');
   const afterRevokeBody = await jsonResponse<ErrorBody>(afterRevoke);
   if (afterRevokeBody.error?.code !== 'POLICY_BLOCKED') {

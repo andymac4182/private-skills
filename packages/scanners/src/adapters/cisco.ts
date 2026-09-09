@@ -6,7 +6,8 @@ import { isObject, uniqueLimitations } from '../util.js';
 
 export const CISCO_PIN = Object.freeze({
   release: '2.1.0',
-  sourceRevision: 'a24df34',
+  sourceRef: '2.1.0',
+  sourceRevision: 'a24df340ca6056a6446a239f4a7b114b11c6073a',
   source: 'https://github.com/cisco-ai-defense/skill-scanner',
   package: 'cisco-ai-skill-scanner==2.1.0',
   python: '3.11-3.14',
@@ -43,9 +44,12 @@ const definition: AdapterDefinition = {
     const filesSkipped = firstNumber(report, summary, coverageRoot, ['files_skipped', 'filesSkipped', 'skipped_files']);
     const filesUnsupported = firstNumber(report, summary, coverageRoot, ['files_unsupported', 'filesUnsupported', 'unsupported_files', 'unanalysable_files']);
     const limitations: string[] = [];
+    let degraded = false;
     if (filesAnalyzed === undefined) limitations.push('Cisco JSON report does not expose analyzed-file coverage for this release');
+    if (filesAnalyzed === undefined) degraded = true;
     if (Array.isArray(report.suppressed_findings) && report.suppressed_findings.length > 0) {
       limitations.push('Cisco report contains suppressed findings; suppression completeness is not independently verifiable');
+      degraded = true;
     }
     const destinations = Array.isArray(report.external_destinations)
       ? report.external_destinations.filter((item): item is string => typeof item === 'string')
@@ -55,6 +59,7 @@ const definition: AdapterDefinition = {
       findings,
       coverage: { filesEnumerated, filesAnalyzed, filesSkipped, filesUnsupported, externalDestinations: destinations },
       limitations: uniqueLimitations(limitations),
+      degraded,
       ...(inputFileCount === 0 ? { error: 'Cisco scanner input contains no files' } : {}),
     };
   },

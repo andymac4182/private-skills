@@ -26,9 +26,11 @@ Use Node 24 and pnpm 11.19.0, matching [`.node-version`](.node-version) and `pac
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
-cp .env.example .env
+pnpm setup:dev --allow-unscanned
 pnpm dev
 ```
+
+`pnpm setup:dev --allow-unscanned` creates random local credentials and explicitly permits unreviewed releases for a disposable demo. Keep that mode local only. For a fail-closed setup, run `pnpm setup:dev` without the flag and configure the scanner worker before publishing releases; production must use a reviewed token, session secret, durable state provider, private storage, and scanner policy.
 
 The development server normally listens on `http://localhost:5173`. Check the public route in another shell:
 
@@ -42,11 +44,11 @@ The root scripts are the supported local entry points:
 pnpm build                         # TanStack/Nitro production output
 pnpm check                         # TypeScript and Vitest
 pnpm worker                        # external job and scanner worker
-pnpm cli -- --help                 # Rust CLI through Cargo
+pnpm cli --help                    # Rust CLI through Cargo
 cargo run -p pskills -- --help     # same CLI, package name is pskills
 ```
 
-`pnpm worker` requires `PSKILLS_API_URL`, `PSKILLS_WORKER_TOKEN`, and optionally `PSKILLS_WORKER_ID`, scanner image references, and polling settings. The worker is intended to run beside the API or as a separate service. See [`docs/operations.md`](docs/operations.md) for the environment, storage, worker, and recovery procedures.
+`pnpm worker` loads the optional local `.env` and requires `PSKILLS_API_URL`, `PSKILLS_WORKER_TOKEN`, and optionally `PSKILLS_WORKER_ID`, scanner image references, and polling settings. The worker is intended to run beside the API or as a separate service. See [`docs/operations.md`](docs/operations.md) for the environment, storage, worker, and recovery procedures.
 
 ## Authentication and API
 
@@ -63,7 +65,7 @@ The web surface calls the same-origin API and exposes the implemented registry a
 - audit records under `/v1/audit`;
 - worker-only claim, artifact, and completion routes under `/internal/jobs`.
 
-The default policy keeps all three supported scanners disabled and refuses unscanned distribution. Administrators can set each scanner to `disabled`, `advisory`, or `required`; required evidence must be complete, current, digest-bound, and free of configured blocking findings before a release becomes approved.
+The fail-closed default keeps all three supported scanners disabled and refuses unscanned distribution. Administrators can set each scanner to `disabled`, `advisory`, or `required`; required evidence must be complete, current, digest-bound, and free of configured blocking findings before a release becomes approved.
 
 ## Data and trust boundaries
 

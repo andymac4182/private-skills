@@ -4,7 +4,9 @@ import type { ScannerAdapter, ScanFinding } from '../types.js';
 
 export const SKILLSGUARD_PIN = Object.freeze({
   release: '1.1.1',
-  sourceRevision: '7badb51',
+  sourceRef: 'main',
+  sourceKind: 'source-build',
+  sourceRevision: '7badb5157f8f9e4dd9ee2acb6e0129636e3147e3',
   source: 'https://github.com/Teycir/SkillsGuard',
   package: 'source build (not published to npm)',
   node: '>=18.3',
@@ -49,13 +51,19 @@ const definition: AdapterDefinition = {
     const filesSkipped = reportNumber(report, ['filesSkipped', 'files_skipped', 'skippedFiles']) ?? 0;
     const filesUnsupported = reportNumber(report, ['filesUnsupported', 'files_unsupported', 'unsupportedFiles']) ?? 0;
     const limitations: string[] = [];
-    if (filesScanned === undefined) limitations.push('SkillsGuard report did not expose filesScanned coverage');
+    let degraded = false;
+    if (filesScanned === undefined) {
+      limitations.push('SkillsGuard report did not expose filesScanned coverage');
+      degraded = true;
+    }
     if (report.safe === true && findings.length > 0) {
       // A stale/false-clean report must never erase normalized findings.
       limitations.push('SkillsGuard report marked safe while returning findings; adapter preserves the findings');
+      degraded = true;
     }
     if (report.suppressedCount || report.suppressed_findings) {
       limitations.push('SkillsGuard report indicates suppressed findings; suppression completeness is not independently verifiable');
+      degraded = true;
     }
     return {
       valid: Array.isArray(report.findings) || Array.isArray(report.issues),
@@ -68,6 +76,7 @@ const definition: AdapterDefinition = {
         externalDestinations: [],
       },
       limitations: uniqueLimitations(limitations),
+      degraded,
       ...(inputFileCount === 0 ? { error: 'SkillsGuard scanner input contains no files' } : {}),
     };
   },

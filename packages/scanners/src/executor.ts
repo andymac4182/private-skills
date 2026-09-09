@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { CommandExecutor, CommandRequest, CommandResult } from './types.js';
 
@@ -87,7 +87,12 @@ export class DockerExecutor implements CommandExecutor {
       '--workdir', '/input',
       request.image,
       safeExecutable(request.command),
-      ...request.args,
+      // Adapter arguments are built against the worker's host paths. Only
+      // the two explicitly mounted trees are visible in the container; map
+      // those path arguments to their mount targets before invoking the
+      // scanner. Mapping is boundary-aware so a sibling such as
+      // `/tmp/input-copy` cannot be mistaken for a child of `/tmp/input`.
+      ...mapDockerScannerArgs(request.args, request.inputDir, request.outputDir),
     ];
     return runProcess({
       ...request,
@@ -100,6 +105,55 @@ export class DockerExecutor implements CommandExecutor {
       env: dockerControlEnv(),
     });
   }
+}
+
+/**
+ * Translate host paths emitted by an adapter into the paths exposed by the
+ * scanner container. Scanner argv is intentionally treated as opaque except
+ * for an argument that is itself a mounted path (or an option assignment such
+ * as `--output=/host/output/report.json`).
+ */
+export function mapDockerScannerArgs(args: readonly string[], inputDir: string, outputDir: string): string[] {
+  const mounts = [
+    { hostRoot: resolve(outputDir), containerRoot: '/output' },
+    { hostRoot: resolve(inputDir), containerRoot: '/input' },
+  ].sort((left, right) => right.hostRoot.length - left.hostRoot.length);
+
+  return args.map((argument) => {
+    const direct = mapMountedPath(argument, mounts);
+    if (direct !== undefined) return direct;
+
+    // A few CLIs accept `--option=/absolute/path` rather than a separate
+    // value. Rewrite only the value suffix and preserve the option spelling.
+    const equals = argument.indexOf('=');
+    if (equals > 0) {
+      const value = argument.slice(equals + 1);
+      const mapped = mapMountedPath(value, mounts);
+      if (mapped !== undefined) return `${argument.slice(0, equals + 1)}${mapped}`;
+    }
+    return argument;
+  });
+}
+
+interface ScannerMount {
+  hostRoot: string;
+  containerRoot: string;
+}
+
+function mapMountedPath(value: string, mounts: readonly ScannerMount[]): string | undefined {
+  // Relative values are scanner data/options, not host paths. Requiring an
+  // absolute value also prevents a caller from accidentally remapping a
+  // relative filename that happens to resolve below the worker directory.
+  if (!isAbsolute(value)) return undefined;
+  const candidate = resolve(value);
+  for (const mount of mounts) {
+    const child = relative(mount.hostRoot, candidate);
+    if (child === '') return mount.containerRoot;
+    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) continue;
+    // `relative` uses the host separator. Docker paths always use `/`.
+    return `${mount.containerRoot}/${child.split(sep).join('/')}`;
+  }
+  return undefined;
 }
 
 function containerUser(): { uid: number; gid: number } {
@@ -120,7 +174,22 @@ function dockerControlEnv(): Record<string, string | undefined> {
   const host = process.env.PSKILLS_DOCKER_HOST;
   if (context && /^[A-Za-z0-9._-]{1,128}$/.test(context)) env.DOCKER_CONTEXT = context;
   if (host && host.length <= 512 && !/[\u0000-\u001f\u007f]/.test(host)) env.DOCKER_HOST = host;
+
+  // The Docker CLI resolves named contexts and credentials from its host-side
+  // configuration. Keep that configuration in the trusted CLI process only;
+  // the scanner container receives the fixed HOME=/home/worker argument above
+  // and never inherits this HOME, DOCKER_CONFIG, or any registry credential.
+  // PSKILLS_DOCKER_HOME/CONFIG are explicit operator inputs so a worker can
+  // point at a dedicated context directory instead of its login home.
+  const home = process.env.PSKILLS_DOCKER_HOME ?? (context ? process.env.HOME ?? process.env.USERPROFILE : undefined);
+  const config = process.env.PSKILLS_DOCKER_CONFIG;
+  if (home && safeHostPath(home)) env.HOME = home;
+  if (config && safeHostPath(config)) env.DOCKER_CONFIG = config;
   return env;
+}
+
+function safeHostPath(value: string): boolean {
+  return isAbsolute(value) && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 async function runProcess(request: CommandRequest): Promise<CommandResult> {

@@ -82,18 +82,18 @@ jobs:
         run: pnpm build
 
   native:
-    name: native binary (${{ matrix.asset }})
+    name: native binary (${{ matrix.target }})
     needs: verify-tag
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            asset: linux-native
+            target: x86_64-unknown-linux-gnu
           - os: macos-latest
-            asset: macos-native
+            target: aarch64-apple-darwin
           - os: windows-latest
-            asset: windows-native
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -105,27 +105,48 @@ jobs:
         with:
           toolchain: 1.95.0
 
+      - name: Verify the native Rust target
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
+
       - name: Build the release binary
-        run: cargo build --package pskills --release --locked
+        run: cargo build --target "${{ matrix.target }}" --package pskills --release --locked
+
+      - name: Smoke the native binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./target/${{ matrix.target }}/release/pskills --version
+          ./target/${{ matrix.target }}/release/pskills --help
+
+      - name: Smoke the native binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\${{ matrix.target }}\release\pskills.exe --version
+          .\target\${{ matrix.target }}\release\pskills.exe --help
 
       - name: Package the Unix binary
         if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p release
-          tar -C target/release -czf "release/pskills-${{ matrix.asset }}.tar.gz" pskills
+          tar -C "target/${{ matrix.target }}/release" -czf "release/pskills-${{ matrix.target }}.tar.gz" pskills
 
       - name: Package the Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
-          Compress-Archive -Path target/release/pskills.exe -DestinationPath "release/pskills-${{ matrix.asset }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/pskills.exe" -DestinationPath "release/pskills-${{ matrix.target }}.zip"
 
       - name: Upload the private release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pskills-${{ matrix.asset }}
+          name: pskills-${{ matrix.target }}
           path: release/*
           if-no-files-found: error
           retention-days: 7
@@ -155,6 +176,7 @@ jobs:
       - name: Create or update the private GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail

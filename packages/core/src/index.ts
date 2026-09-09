@@ -96,6 +96,10 @@ const HOOK_EVENTS = new Set<NonNullable<Policy['hooks']>[number]['event']>([
 
 type JsonObject = Record<string, unknown>;
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type AuthenticatedPrincipalShape = Principal & {
+  identity?: unknown;
+  scopes?: unknown;
+};
 
 export class RegistryApiError extends Error {
   readonly code: string;
@@ -207,14 +211,23 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
       }
 
       // A transfer grant is an opaque, short-lived capability.  It is not
-      // authenticated with a registry bearer/session token.
+      // a substitute for the current registry principal: same-origin gateway
+      // reads must carry the user's current bearer or session credential.
       if (segments[0] === 'v1' && segments[1] === 'transfers' && segments.length === 3) {
         if (method !== 'GET') return methodNotAllowed(['GET']);
-        return await serveTransferGrant(segments[2], deps, config, requestId);
+        assertTransferRequestSafe(request, config);
+        const transferPrincipal = await authenticate(deps.auth, request);
+        assertPrincipal(transferPrincipal, config.organizationId);
+        assertUserPrincipal(transferPrincipal);
+        requireRouteScopes(transferPrincipal, ['artifacts:download', 'install:read', 'registry:read']);
+        return await serveTransferGrant(segments[2], transferPrincipal, deps, config, requestId);
       }
 
       const principal = await authenticate(deps.auth, request);
       assertPrincipal(principal, config.organizationId);
+      const internalJobs = segments[0] === 'internal' && segments[1] === 'jobs';
+      if (!internalJobs) assertUserPrincipal(principal);
+      requireRouteScopes(principal, scopesForRoute(method, path, segments));
 
       if (path === '/v1/me') {
         if (method !== 'GET') return methodNotAllowed(['GET']);
@@ -232,6 +245,7 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
             bundles: ['pskills-bundle-v1'],
             packs: true,
             imports: true,
+            proxyResolve: true,
             installAuthorizations: true,
             transferMode: 'gateway',
             rangeSupported: false,
@@ -380,6 +394,16 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
         return await createImportJob(body, principal, deps, config, requestId);
       }
 
+      // Pull-through resolution is deliberately a publisher operation in v1.
+      // A reader may install an already approved release through the ordinary
+      // resolution/authorization flow, but cannot cause a new source fetch.
+      if (segments[0] === 'v1' && segments[1] === 'proxy' && segments[2] === 'resolve' && segments.length === 3) {
+        if (method !== 'POST') return methodNotAllowed(['POST']);
+        requirePublisher(principal);
+        const body = await readJson(request, config.maxBodyBytes);
+        return await resolveProxyRequest(body, principal, deps, config, requestId);
+      }
+
       if (segments[0] === 'v1' && segments[1] === 'audit') {
         if (method !== 'GET') return methodNotAllowed(['GET']);
         requireAdmin(principal);
@@ -457,6 +481,28 @@ function assertSessionRequestSafe(
   }
 }
 
+function assertTransferRequestSafe(
+  request: Request,
+  config: Required<RegistryConfiguration>,
+): void {
+  if (request.headers.get('sec-fetch-site')?.toLowerCase() === 'cross-site') {
+    throw new RegistryApiError('CSRF_DENIED', 'Cross-site transfer reads are not allowed', 403);
+  }
+  const originHeader = request.headers.get('origin');
+  if (!originHeader) return;
+  let origin: string;
+  let expected: string;
+  try {
+    origin = new URL(originHeader).origin;
+    expected = new URL(config.publicOrigin).origin;
+  } catch {
+    throw new RegistryApiError('CSRF_DENIED', 'Transfer request origin is invalid', 403);
+  }
+  if (origin !== expected) {
+    throw new RegistryApiError('CSRF_DENIED', 'Transfer request origin is not allowed', 403);
+  }
+}
+
 async function authenticate(auth: Authenticator, request: Request): Promise<Principal> {
   try {
     const principal = await auth.authenticate(request);
@@ -484,11 +530,23 @@ function assertPrincipal(principal: Principal, organizationId: string): void {
   if (principal.organizationId !== organizationId) {
     throw new RegistryApiError('FORBIDDEN', 'Organization access denied', 403);
   }
+  const identity = (principal as AuthenticatedPrincipalShape).identity;
+  if (
+    identity !== undefined &&
+    identity !== 'user' &&
+    identity !== 'worker'
+  ) {
+    throw new RegistryApiError('FORBIDDEN', 'Principal identity is invalid', 403);
+  }
   if (
     principal.namespaces !== undefined &&
     (!Array.isArray(principal.namespaces) || principal.namespaces.some((namespace) => typeof namespace !== 'string' || namespace.trim() === ''))
   ) {
     throw new RegistryApiError('FORBIDDEN', 'Principal namespace grants are invalid', 403);
+  }
+  const scopes = (principal as AuthenticatedPrincipalShape).scopes;
+  if (scopes !== undefined && (!Array.isArray(scopes) || scopes.some((scope) => typeof scope !== 'string' || scope.trim() === ''))) {
+    throw new RegistryApiError('FORBIDDEN', 'Principal scopes are invalid', 403);
   }
   if (
     !Array.isArray(principal.roles) ||
@@ -497,6 +555,79 @@ function assertPrincipal(principal: Principal, organizationId: string): void {
   ) {
     throw new RegistryApiError('FORBIDDEN', 'No registry role is assigned', 403);
   }
+  if (identity === 'user' && principal.roles.includes('worker')) {
+    throw new RegistryApiError('FORBIDDEN', 'Worker roles require a worker identity', 403);
+  }
+  if (identity === 'worker' && !principal.roles.includes('worker')) {
+    throw new RegistryApiError('FORBIDDEN', 'Worker identity requires the worker role', 403);
+  }
+}
+
+function assertUserPrincipal(principal: Principal): void {
+  const identity = (principal as AuthenticatedPrincipalShape).identity;
+  if (identity === 'worker' || principal.roles.includes('worker')) {
+    throw new RegistryApiError('FORBIDDEN', 'Worker identity cannot access this route', 403);
+  }
+}
+
+function principalScopes(principal: Principal): string[] | undefined {
+  const value = (principal as AuthenticatedPrincipalShape).scopes;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((scope) => typeof scope !== 'string' || scope.trim() === '')) {
+    throw new RegistryApiError('FORBIDDEN', 'Principal scopes are invalid', 403);
+  }
+  return value as string[];
+}
+
+function hasAnyScope(principal: Principal, required: readonly string[]): boolean {
+  const scopes = principalScopes(principal);
+  // Injected test/adaptor principals predating scoped auth have no `scopes`
+  // field. The role and namespace checks remain their authorization boundary;
+  // an explicit scopes array is what opts a principal into scope enforcement.
+  if (!scopes) return true;
+  if (scopes.length === 0) return false;
+  if (scopes.includes('registry:*')) return true;
+  return scopes.some((granted) => {
+    if (granted === '*') return true;
+    return required.some((candidate) => granted === candidate || (granted.endsWith(':*') && candidate.startsWith(granted.slice(0, -1))));
+  });
+}
+
+function requireRouteScopes(principal: Principal, required: readonly string[]): void {
+  if (required.length > 0 && !hasAnyScope(principal, required)) {
+    throw new RegistryApiError('FORBIDDEN', 'The principal lacks the required scope', 403);
+  }
+}
+
+function scopesForRoute(method: HttpMethod, path: string, segments: string[]): readonly string[] {
+  if (path === '/v1/me') return [];
+  if (path === '/v1/capabilities') return ['registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'skills') {
+    if (segments.length === 2 || (segments.length === 3 && method === 'GET')) return ['skills:read', 'registry:read'];
+    if (segments.length === 4 && segments[3] === 'rescan') return ['skills:rescan', 'skills:write', 'skills:publish'];
+    if (segments.length === 4 && segments[3] === 'revoke') return ['skills:revoke', 'skills:write', 'skills:admin'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'publish') return ['skills:publish', 'skills:write'];
+  if (segments[0] === 'v1' && segments[1] === 'resolve') return ['skills:read', 'packs:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'operations') return ['jobs:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'install-authorizations') {
+    return segments.length === 4 ? ['install:validate', 'artifacts:download', 'registry:read'] : ['install:authorize', 'artifacts:download', 'registry:read'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'artifacts') return ['artifacts:download', 'install:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'packs') return method === 'GET' ? ['packs:read', 'registry:read'] : ['packs:publish', 'packs:write'];
+  if (segments[0] === 'v1' && segments[1] === 'policy') return method === 'GET' ? ['policy:read', 'registry:read'] : ['policy:write', 'policy:admin'];
+  if (segments[0] === 'v1' && segments[1] === 'scans') return ['scans:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'upstreams') return method === 'GET' ? ['upstreams:read', 'registry:read'] : ['upstreams:write', 'upstreams:admin'];
+  if (segments[0] === 'v1' && segments[1] === 'imports') return ['imports:create', 'upstreams:write', 'skills:publish', 'proxy:resolve'];
+  if (segments[0] === 'v1' && segments[1] === 'proxy' && segments[2] === 'resolve') return ['imports:create', 'skills:publish', 'proxy:resolve'];
+  if (segments[0] === 'v1' && segments[1] === 'audit') return ['audit:read', 'registry:admin'];
+  if (segments[0] === 'internal' && segments[1] === 'jobs') {
+    if (segments.length === 3 && segments[2] === 'claim') return ['jobs:claim'];
+    if (segments.length === 4 && segments[3] === 'artifact') return ['jobs:artifact', 'jobs:read'];
+    if (segments.length === 4 && segments[3] === 'complete') return ['jobs:complete'];
+    return ['jobs:read'];
+  }
+  return [];
 }
 
 function publicPrincipal(principal: Principal): Principal {
@@ -618,6 +749,7 @@ async function createSessionResponse(
   const result = await auth.createSession(token);
   if (!result) throw new RegistryApiError('UNAUTHORIZED', 'Session token is invalid', 401);
   assertPrincipal(result.principal, organizationId);
+  assertUserPrincipal(result.principal);
   return jsonResponse({ principal: publicPrincipal(result.principal) }, 200, {
     'cache-control': 'no-store',
     'set-cookie': result.cookie,
@@ -835,7 +967,12 @@ function resolveResource(
         return !!skill && canReadNamespace(principal, skill.name) && (skill.id === ref || skill.name === ref) && (version === undefined || skill.version === version);
       });
       const pendingImport = pending || state.jobs.find((job) => {
-        return job.kind === 'import' && !!job.import && canPublishName(principal, job.import.name) && job.import.name === ref && (version === undefined || job.import.version === version);
+        return (job.state === 'queued' || job.state === 'running') &&
+          job.kind === 'import' &&
+          !!job.import &&
+          canPublishName(principal, job.import.name) &&
+          job.import.name === ref &&
+          (version === undefined || job.import.version === version);
       });
       return pendingImport ? { kind: 'pending', job: pendingImport } : { kind: 'unavailable' };
     }
@@ -1128,6 +1265,7 @@ async function createDownloadGrant(
 
 async function serveTransferGrant(
   grantIdPart: string,
+  principal: Principal,
   deps: RegistryDependencies,
   config: Required<RegistryConfiguration>,
   requestId: string,
@@ -1135,18 +1273,19 @@ async function serveTransferGrant(
   const grantId = decodePathPart(grantIdPart);
   const state = await readState(deps.repository, config.organizationId);
   const grant = state.grants.find((candidate) => candidate.id === grantId);
-  if (!grant || grant.organizationId !== config.organizationId || timestampExpired(grant.expiresAt)) {
+  if (
+    !grant ||
+    grant.organizationId !== config.organizationId ||
+    grant.subject !== principal.subject ||
+    timestampExpired(grant.expiresAt)
+  ) {
     throw unavailable();
   }
   const authorization = state.authorizations.find((candidate) => candidate.id === grant.authorizationId && candidate.subject === grant.subject);
   if (!authorization || timestampExpired(authorization.expiresAt)) throw unavailable();
-  assertCurrentResolution(state, {
-    organizationId: config.organizationId,
-    subject: grant.subject,
-    roles: ['reader'],
-  }, authorization.resolution);
+  assertCurrentResolution(state, principal, authorization.resolution);
   const skill = state.skills.find((candidate) => candidate.id === grant.resourceId);
-  if (!skill || skill.state !== 'approved' || skill.artifact.digest !== grant.digest) throw unavailable();
+  if (!skill || !skillCurrentlyApproved(state, skill) || skill.artifact.digest !== grant.digest) throw unavailable();
   let bytes: Uint8Array;
   try {
     bytes = await deps.blobs.get(skill.artifact.key);
@@ -1471,6 +1610,175 @@ async function createImportJob(
   config: Required<RegistryConfiguration>,
   requestId: string,
 ): Promise<Response> {
+  const result = await resolveOrQueueImport(body, principal, deps, config, requestId);
+  // Keep the historical `/v1/imports` operation field for callers that use
+  // imports as a job API, while also returning the actual resolution on a
+  // warm approved cache hit.
+  if (result.status === 200) {
+    return jsonResponse({ operation: result.job, resolution: result.resolution }, 200);
+  }
+  return jsonResponse({ operation: result.job }, 202);
+}
+
+async function resolveProxyRequest(
+  body: JsonObject,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  const result = await resolveOrQueueImport(body, principal, deps, config, requestId);
+  if (result.status === 200) {
+    return jsonResponse({ resolution: result.resolution }, 200);
+  }
+  return jsonResponse({ operation: result.job }, 202);
+}
+
+type ImportResolutionResult =
+  | { status: 202; job: Job }
+  | { status: 200; job: Job; resolution: Resolution };
+
+/**
+ * Validate a pull-through request and atomically join/cache/queue it.  The
+ * cache identity is organization-scoped and includes every caller-selected
+ * source field.  The durable job also retains an immutable upstream snapshot;
+ * a later mapping change cannot turn a warm hit into a different origin.
+ */
+async function resolveOrQueueImport(
+  body: JsonObject,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<ImportResolutionResult> {
+  const importRequest = parseImportRequest(body);
+  if (!canPublishName(principal, importRequest.name)) {
+    throw new RegistryApiError('FORBIDDEN', 'Namespace publish denied', 403);
+  }
+
+  const state = await readState(deps.repository, config.organizationId);
+  const upstream = findImportUpstream(state, importRequest, principal);
+  const cacheKey = importCacheKey(config.organizationId, importRequest);
+
+  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+    const mutable = ensureState(mutableState, state.policy);
+    const currentUpstream = findImportUpstream(mutable, importRequest, principal);
+    if (!sameUpstreamOrigin(currentUpstream, upstream)) {
+      throw new RegistryApiError(
+        'PROVENANCE_CONFLICT',
+        'The upstream mapping changed while this import was being resolved',
+        409,
+      );
+    }
+
+    const sameSource = (candidate: ImportRequest | undefined): boolean =>
+      !!candidate && importRequestsMatch(candidate, importRequest);
+    const sameJobSource = (candidate: Job): boolean =>
+      candidate.organizationId === config.organizationId &&
+      candidate.kind === 'import' &&
+      sameSource(candidate.import) &&
+      !!candidate.upstream &&
+      sameUpstreamOrigin(candidate.upstream, currentUpstream);
+
+    const activeTargets = mutable.jobs.filter((candidate) =>
+      (candidate.state === 'queued' || candidate.state === 'running') &&
+      candidate.kind === 'import' &&
+      candidate.import?.name === importRequest.name &&
+      candidate.import.version === importRequest.version,
+    );
+    if (activeTargets.length > 0) {
+      const activeTarget = activeTargets.find((candidate) => sameJobSource(candidate));
+      if (activeTarget && activeTargets.every((candidate) => sameJobSource(candidate))) {
+        appendAudit(mutable, audit(principal, 'skill.import.joined', activeTarget.id, {
+          cacheKey,
+          upstreamId: importRequest.upstreamId,
+          name: importRequest.name,
+          version: importRequest.version,
+          requestId,
+        }, config.organizationId));
+        return { job: activeTarget, status: 202 as const };
+      }
+      throw new RegistryApiError(
+        'PROVENANCE_CONFLICT',
+        'That skill version is already being imported from another source',
+        409,
+      );
+    }
+
+    const existingSkill = mutable.skills.find(
+      (skill) => skill.organizationId === config.organizationId && skill.name === importRequest.name && skill.version === importRequest.version,
+    );
+    const completedTarget = mutable.jobs.find((candidate) =>
+      candidate.state === 'completed' &&
+      sameJobSource(candidate) &&
+      candidate.resourceId === existingSkill?.id,
+    );
+
+    if (existingSkill) {
+      if (
+        completedTarget &&
+        importProvenanceMatches(existingSkill, importRequest) &&
+        skillCurrentlyApproved(mutable, existingSkill)
+      ) {
+        const resolution = skillResolution(existingSkill);
+        appendAudit(mutable, audit(principal, 'skill.import.cache-hit', completedTarget.id, {
+          cacheKey,
+          upstreamId: importRequest.upstreamId,
+          name: importRequest.name,
+          version: importRequest.version,
+          digest: existingSkill.artifact.digest,
+          requestId,
+        }, config.organizationId));
+        return { job: completedTarget, resolution, status: 200 as const };
+      }
+      // A name/version is immutable.  This also catches an imported artifact
+      // whose worker-reported provenance no longer agrees with its request.
+      throw new RegistryApiError(
+        'PROVENANCE_CONFLICT',
+        'That skill version is already bound to a different source or state',
+        409,
+      );
+    }
+
+    // A completed import without its corresponding skill is an inconsistent
+    // durable state.  Do not silently fetch the source a second time.
+    const completedWithoutSkill = mutable.jobs.find((candidate) =>
+      candidate.state === 'completed' && sameJobSource(candidate) && !candidate.resourceId,
+    );
+    if (completedWithoutSkill) {
+      throw new RegistryApiError(
+        'PROVENANCE_CONFLICT',
+        'The source import completed without an immutable release',
+        409,
+      );
+    }
+
+    const job: Job = {
+      id: randomId('job'),
+      organizationId: config.organizationId,
+      kind: 'import',
+      state: 'queued',
+      policyRevision: mutable.policy.revision,
+      policy: clonePolicy(mutable.policy),
+      import: importRequest,
+      upstream: currentUpstream,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      attempts: 0,
+    };
+    mutable.jobs.push(job);
+    appendAudit(mutable, audit(principal, 'skill.import.queued', job.id, {
+      cacheKey,
+      upstreamId: importRequest.upstreamId,
+      name: importRequest.name,
+      version: importRequest.version,
+      requestId,
+    }, config.organizationId));
+    return { job, status: 202 as const };
+  });
+}
+
+function parseImportRequest(body: JsonObject): ImportRequest {
   const upstreamId = stringValue(body.upstreamId);
   const path = stringValue(body.path);
   const name = requireSkillName(body.name);
@@ -1478,51 +1786,113 @@ async function createImportJob(
   if (
     !upstreamId ||
     !path ||
+    path.length > 4096 ||
     path.startsWith('/') ||
+    path.endsWith('/') ||
     path.includes('\\') ||
     path.includes('\u0000') ||
-    path.split('/').some((part) => part === '..' || part === '.')
+    /[\u0001-\u001f\u007f]/u.test(path) ||
+    path.split('/').some((part) => part.length === 0 || part === '..' || part === '.')
   ) {
     throw new RegistryApiError('INVALID_IMPORT', 'upstreamId and a safe relative path are required', 400);
   }
-  if (!canPublishName(principal, name)) throw new RegistryApiError('FORBIDDEN', 'Namespace publish denied', 403);
-  const state = await readState(deps.repository, config.organizationId);
-  const upstream = state.upstreams.find((candidate) => candidate.id === upstreamId && candidate.enabled);
-  if (!upstream || !canReadNamespace(principal, upstream.namespace)) throw unavailable();
-  const importRequest: ImportRequest = {
-    upstreamId,
-    repository: stringValue(body.repository),
-    path,
-    ref: stringValue(body.ref),
-    name,
-    version,
-  };
-  const job: Job = {
-    id: randomId('job'),
-    organizationId: config.organizationId,
-    kind: 'import',
-    state: 'queued',
-    policyRevision: state.policy.revision,
-    policy: clonePolicy(state.policy),
-    import: importRequest,
-    upstream,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    attempts: 0,
-  };
-  const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
-    const mutable = ensureState(mutableState, state.policy);
-    if (mutable.skills.some((skill) => skill.name === name && skill.version === version)) throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
-    mutable.jobs.push(job);
-    appendAudit(mutable, audit(principal, 'skill.import.queued', job.id, {
-      upstreamId,
-      name,
-      version,
-      requestId,
-    }, config.organizationId));
-    return job;
+  const repository = optionalImportField(body.repository, 'repository');
+  const ref = optionalImportField(body.ref, 'ref');
+  return { upstreamId, repository, path, ref, name, version };
+}
+
+function optionalImportField(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new RegistryApiError('INVALID_IMPORT', `${field} is invalid`, 400);
+  }
+  return value;
+}
+
+function findImportUpstream(
+  state: RegistryState,
+  request: ImportRequest,
+  principal: Principal,
+): Upstream {
+  // Keep this lookup explicit rather than accepting a caller-provided upstream
+  // object.  `readState`/`ensureState` already enforce the organization, and
+  // the route only receives the immutable upstream ID from the request.
+  const selected = state.upstreams.find((candidate) =>
+    candidate.organizationId === principal.organizationId &&
+    candidate.id === request.upstreamId &&
+    candidate.enabled,
+  );
+  if (!selected || !canReadNamespace(principal, selected.namespace) || !upstreamAllowsImport(selected, request.repository)) {
+    throw unavailable();
+  }
+  return selected;
+}
+
+function upstreamAllowsImport(upstream: Upstream, repository: string | undefined): boolean {
+  if (upstream.kind !== 'github') return true;
+  const allowlist = upstream.repositories;
+  if (!allowlist || allowlist.length === 0) return false;
+  if (repository === undefined) return allowlist.length === 1;
+  const normalized = repository.trim().toLocaleLowerCase('en-US').replace(/^https?:\/\/github\.com\//u, '').replace(/^github\.com\//u, '').replace(/^\/+|\/+$/gu, '').replace(/\.git$/iu, '');
+  return allowlist.some((candidate) => candidate.trim().toLocaleLowerCase('en-US').replace(/^https?:\/\/github\.com\//u, '').replace(/^github\.com\//u, '').replace(/^\/+|\/+$/gu, '').replace(/\.git$/iu, '') === normalized);
+}
+
+function importCacheKey(organizationId: string, request: ImportRequest): string {
+  return stableStringify({
+    organizationId,
+    upstreamId: request.upstreamId,
+    path: request.path,
+    ref: request.ref ?? null,
+    name: request.name,
+    version: request.version,
+    repository: request.repository ?? null,
   });
-  return jsonResponse({ operation: result }, 202);
+}
+
+function importRequestsMatch(left: ImportRequest, right: ImportRequest): boolean {
+  return importCacheKey('__request__', left) === importCacheKey('__request__', right);
+}
+
+function sameUpstreamOrigin(left: Upstream, right: Upstream): boolean {
+  return stableStringify({
+    id: left.id,
+    name: left.name,
+    kind: left.kind,
+    namespace: left.namespace,
+    baseUrl: left.baseUrl ?? null,
+    credentialEnv: left.credentialEnv ?? null,
+    repositories: [...(left.repositories ?? [])].sort(),
+  }) === stableStringify({
+    id: right.id,
+    name: right.name,
+    kind: right.kind,
+    namespace: right.namespace,
+    baseUrl: right.baseUrl ?? null,
+    credentialEnv: right.credentialEnv ?? null,
+    repositories: [...(right.repositories ?? [])].sort(),
+  });
+}
+
+function importProvenanceMatches(skill: SkillVersion, request: ImportRequest): boolean {
+  const provenance = skill.provenance;
+  if (provenance.kind === 'native' || provenance.upstreamId !== request.upstreamId || provenance.path !== request.path) {
+    return false;
+  }
+  if (request.repository !== undefined && provenance.repository !== request.repository) return false;
+  if (provenance.sourceDigest !== undefined && provenance.sourceDigest !== skill.artifact.digest) return false;
+  return typeof provenance.revision === 'string' && provenance.revision.length > 0;
+}
+
+function skillResolution(skill: SkillVersion): Resolution {
+  return {
+    kind: 'skill',
+    resourceId: skill.id,
+    organizationId: skill.organizationId,
+    name: skill.name,
+    version: skill.version,
+    digest: skill.artifact.digest,
+    members: [skill],
+  };
 }
 
 async function handleJobsRoute(
@@ -1871,6 +2241,9 @@ function parseScanResult(
   ) {
     throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result timestamp/duration is invalid', 400);
   }
+  if (raw.error !== undefined && (typeof raw.error !== 'string' || raw.error.length > 2_048)) {
+    throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result error is invalid', 400);
+  }
   const result: ScanResult = {
     id,
     organizationId,
@@ -1909,6 +2282,12 @@ function parseFinding(raw: unknown): Finding {
   const message = stringValue(raw.message);
   if (!ruleId || !fingerprint || !category || !message) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Finding fields are incomplete', 400);
   if (ruleId.length > 128 || fingerprint.length > 256 || category.length > 128 || message.length > 4_096) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Finding fields are too long', 400);
+  if (
+    (raw.file !== undefined && (typeof raw.file !== 'string' || raw.file.length === 0 || raw.file.length > 1_024)) ||
+    (raw.redactedEvidence !== undefined && (typeof raw.redactedEvidence !== 'string' || raw.redactedEvidence.length > 2_048))
+  ) {
+    throw new RegistryApiError('INVALID_SCAN_RESULT', 'Finding optional fields are invalid', 400);
+  }
   const line = raw.line === undefined ? undefined : raw.line;
   if (line !== undefined && (typeof line !== 'number' || !Number.isInteger(line) || line < 1)) {
     throw new RegistryApiError('INVALID_SCAN_RESULT', 'Finding line is invalid', 400);
@@ -1931,16 +2310,20 @@ function evaluatePolicy(
   digest: Digest,
 ): { state: DistributionState; error?: string } {
   const scanners = Array.isArray(policy.scanners) ? policy.scanners : [];
-  const relevant = results.filter((result) => result.artifactDigest === digest);
+  const relevant = results.filter((result) => result.artifactDigest === digest && result.policyRevision === policy.revision);
   const required = scanners.filter((scanner) => scanner.mode === 'required');
   const enabled = scanners.filter((scanner) => scanner.mode !== 'disabled');
   for (const scanner of required) {
-    const result = relevant.find((candidate) => candidate.scannerId === scanner.id);
+    const result = latestScanForScanner(relevant, scanner.id);
     if (!result) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not return evidence` };
     if (result.status !== 'completed') return { state: 'scan-error', error: `Required scanner ${scanner.id} returned ${result.status}` };
     if (evidenceExpired(result, policy.evidenceMaxAgeSeconds)) return { state: 'scan-error', error: `Required scanner ${scanner.id} evidence is stale` };
     if (result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not analyze any files` };
-    if (result.coverage.filesSkipped > 0 || result.coverage.filesUnsupported > 0) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not cover every file` };
+    if (
+      result.coverage.filesSkipped > 0 ||
+      result.coverage.filesUnsupported > 0 ||
+      result.coverage.filesAnalyzed !== result.coverage.filesEnumerated
+    ) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not cover every file` };
     if (result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return { state: 'quarantined', error: `Required scanner ${scanner.id} reported a blocking finding` };
   }
   if (required.length > 0) return { state: 'approved' };
@@ -1952,13 +2335,21 @@ function evaluatePolicy(
   const missingAdvisory = enabled.some((scanner) => !relevant.some((result) => result.scannerId === scanner.id));
   if (missingAdvisory && !policy.allowUnscanned) return { state: 'scan-error', error: 'Scanner evidence is incomplete and unscanned distribution is disabled' };
   for (const scanner of enabled) {
-    const result = relevant.find((candidate) => candidate.scannerId === scanner.id);
+    const result = latestScanForScanner(relevant, scanner.id);
     if (result && result.status === 'completed' && result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) {
       // Advisory scanners record findings but do not block distribution.
       continue;
     }
   }
   return { state: 'approved' };
+}
+
+function latestScanForScanner(results: ScanResult[], scannerId: ScannerId): ScanResult | undefined {
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    const result = results[index];
+    if (result?.scannerId === scannerId) return result;
+  }
+  return undefined;
 }
 
 function evidenceExpired(result: ScanResult, maxAgeSeconds: number): boolean {
@@ -1976,12 +2367,35 @@ function timestampExpired(value: string | undefined, now = Date.now()): boolean 
 
 function normalizeProvenance(raw: unknown, request: ImportRequest, digest: Digest): Provenance {
   const value = isObject(raw) ? raw : {};
+  const requestedKind = value.kind === undefined ? 'github' : value.kind;
+  if (!normalizeProvenanceKind(requestedKind) || requestedKind === 'native') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifacts require an upstream provenance kind', 409);
+  }
+  const suppliedUpstreamId = stringValue(value.upstreamId);
+  if (suppliedUpstreamId !== undefined && suppliedUpstreamId !== request.upstreamId) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different upstream', 409);
+  }
+  const suppliedPath = stringValue(value.path);
+  if (suppliedPath !== undefined && suppliedPath !== request.path) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different source path', 409);
+  }
+  const suppliedRepository = stringValue(value.repository);
+  if (request.repository !== undefined && suppliedRepository !== undefined && suppliedRepository !== request.repository) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different repository', 409);
+  }
+  const suppliedSourceDigest = stringValue(value.sourceDigest);
+  if (suppliedSourceDigest !== undefined && suppliedSourceDigest !== digest) {
+    throw new RegistryApiError('DIGEST_MISMATCH', 'Imported artifact provenance digest does not match the canonical bundle', 409);
+  }
   return {
-    kind: value.kind === 'github' || value.kind === 'registry' || value.kind === 'native' ? value.kind : 'github',
+    kind: requestedKind,
     upstreamId: request.upstreamId,
-    repository: stringValue(value.repository) || request.repository,
-    path: stringValue(value.path) || request.path,
-    revision: stringValue(value.revision) || request.ref,
+    repository: suppliedRepository || request.repository,
+    path: suppliedPath || request.path,
+    // A worker should provide the immutable resolved revision.  When an older
+    // worker omits it, the sealed distribution digest is still an immutable
+    // provenance pin; never fall back to a mutable branch/tag alias.
+    revision: stringValue(value.revision) || digest,
     sourceDigest: digest,
   };
 }
@@ -2070,7 +2484,7 @@ async function readState(repository: StateRepository, organizationId: string): P
   try {
     const state = await repository.read(organizationId);
     const normalized = ensureState(state, defaultPolicy());
-    validateStateStatuses(normalized);
+    validateStateStatuses(normalized, organizationId);
     return normalized;
   } catch (error) {
     if (error instanceof RegistryApiError) throw error;
@@ -2078,18 +2492,36 @@ async function readState(repository: StateRepository, organizationId: string): P
   }
 }
 
-function validateStateStatuses(state: RegistryState): void {
+function validateStateStatuses(state: RegistryState, organizationId: string): void {
   validatePolicyRuntime(state.policy);
-  for (const skill of state.skills) assertKnownDistributionState(skill.state);
+  for (const skill of state.skills) {
+    assertOrganization(skill.organizationId, organizationId);
+    assertKnownDistributionState(skill.state);
+  }
   for (const pack of state.packs) {
+    assertOrganization(pack.organizationId, organizationId);
     if (!PACK_STATES.has(pack.state)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Pack state is invalid', 500);
   }
   for (const job of state.jobs) {
+    assertOrganization(job.organizationId, organizationId);
+    if (job.upstream) assertOrganization(job.upstream.organizationId, organizationId);
     if (!JOB_STATES.has(job.state)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job state is invalid', 500);
   }
   for (const scan of state.scans) {
+    assertOrganization(scan.organizationId, organizationId);
     if (!SCAN_STATUSES.has(scan.status)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Scan result status is invalid', 500);
   }
+  for (const upstream of state.upstreams) assertOrganization(upstream.organizationId, organizationId);
+  for (const authorization of state.authorizations) {
+    assertOrganization(authorization.organizationId, organizationId);
+    if (authorization.resolution.organizationId !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Authorization resolution organization is invalid', 500);
+  }
+  for (const grant of state.grants) assertOrganization(grant.organizationId, organizationId);
+  for (const event of state.audit) assertOrganization(event.organizationId, organizationId);
+}
+
+function assertOrganization(value: unknown, organizationId: string): void {
+  if (value !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Registry state organization is invalid', 500);
 }
 
 function validatePolicyRuntime(policy: Policy): void {

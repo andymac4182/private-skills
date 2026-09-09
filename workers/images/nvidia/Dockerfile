@@ -5,6 +5,7 @@ LABEL org.opencontainers.image.title="Private Skills NVIDIA SkillSpector" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="2.11.1" \
       io.private-skills.scanner.id="nvidia-skillspector" \
+      io.private-skills.scanner.source-ref="v2.11.1" \
       io.private-skills.scanner.source-revision="704bc9544260c2f41222dc0f92982521709496ab"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

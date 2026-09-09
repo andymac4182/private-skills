@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 const SERVICE: &str = "private-skills";
@@ -145,10 +146,72 @@ fn write_private_json(path: &PathBuf, value: &ConfigFile) -> Result<(), Credenti
         })?;
     }
     let bytes = serde_json::to_vec_pretty(value)?;
-    let temp = path.with_extension("json.tmp");
-    fs::write(&temp, bytes).map_err(|source| CredentialError::WriteConfig {
-        path: temp.clone(),
-        source,
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Err(CredentialError::WriteConfig {
+                path: path.clone(),
+                source: io::Error::other("credential configuration is a symbolic link"),
+            });
+        }
+    }
+    let parent = path.parent().ok_or(CredentialError::NoConfigDirectory)?;
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.json");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut temp = None;
+    for attempt in 0..32u32 {
+        let candidate = parent.join(format!(
+            ".{stem}.tmp-{}-{nonce}-{attempt}",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    file.set_permissions(fs::Permissions::from_mode(0o600))
+                        .map_err(|source| CredentialError::WriteConfig {
+                            path: candidate.clone(),
+                            source,
+                        })?;
+                }
+                file.write_all(&bytes)
+                    .map_err(|source| CredentialError::WriteConfig {
+                        path: candidate.clone(),
+                        source,
+                    })?;
+                file.sync_all()
+                    .map_err(|source| CredentialError::WriteConfig {
+                        path: candidate.clone(),
+                        source,
+                    })?;
+                temp = Some(candidate);
+                break;
+            }
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(CredentialError::WriteConfig {
+                    path: candidate,
+                    source,
+                })
+            }
+        }
+    }
+    let temp = temp.ok_or_else(|| CredentialError::WriteConfig {
+        path: path.clone(),
+        source: io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not allocate temporary configuration file",
+        ),
     })?;
     fs::rename(&temp, path).map_err(|source| CredentialError::WriteConfig {
         path: path.clone(),
@@ -202,7 +265,13 @@ fn keyring_get(service: &str, account: &str, registry: &str) -> Result<Option<St
         let output = run_keyring(
             "secret-tool",
             &[
-                "lookup", "service", service, "account", account, "registry", registry,
+                "lookup",
+                "service",
+                service,
+                "account",
+                account.as_str(),
+                "registry",
+                registry,
             ],
             None,
         )?;
@@ -257,7 +326,7 @@ fn keyring_set(service: &str, account: &str, registry: &str, token: &str) -> Res
                 "service",
                 service,
                 "account",
-                account,
+                account.as_str(),
                 "registry",
                 registry,
             ],
@@ -299,7 +368,13 @@ fn keyring_delete(service: &str, account: &str, registry: &str) -> Result<(), St
         let output = run_keyring(
             "secret-tool",
             &[
-                "clear", "service", service, "account", account, "registry", registry,
+                "clear",
+                "service",
+                service,
+                "account",
+                account.as_str(),
+                "registry",
+                registry,
             ],
             None,
         )?;

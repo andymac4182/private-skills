@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,10 @@ pub enum PathError {
     RelativeExplicit(PathBuf),
     #[error("install directory cannot be a file: {0}")]
     File(PathBuf),
+    #[error("install directory contains a symbolic-link component: {0}")]
+    Symlink(PathBuf),
+    #[error("install directory contains a parent traversal component: {0}")]
+    Traversal(PathBuf),
     #[error("cannot inspect install directory `{path}`: {source}")]
     Io {
         path: PathBuf,
@@ -93,7 +97,9 @@ pub fn agent_root(agent: Agent, scope: InstallScope) -> PathBuf {
     }
 }
 pub fn normalize_destination(path: &Path) -> Result<PathBuf, PathError> {
+    reject_unsafe_components(path)?;
     if path.exists() {
+        reject_symlink_components(path)?;
         return std::fs::canonicalize(path).map_err(|source| PathError::Io {
             path: path.to_path_buf(),
             source,
@@ -107,6 +113,7 @@ pub fn normalize_destination(path: &Path) -> Result<PathBuf, PathError> {
         }
         current = current.parent().unwrap_or_else(|| Path::new("."));
     }
+    reject_symlink_components(current)?;
     let mut result = std::fs::canonicalize(current).map_err(|source| PathError::Io {
         path: current.to_path_buf(),
         source,
@@ -115,4 +122,47 @@ pub fn normalize_destination(path: &Path) -> Result<PathBuf, PathError> {
         result.push(component);
     }
     Ok(result)
+}
+
+fn reject_unsafe_components(path: &Path) -> Result<(), PathError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(PathError::Traversal(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn reject_symlink_components(path: &Path) -> Result<(), PathError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => current.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => return Err(PathError::Traversal(path.to_path_buf())),
+            Component::Normal(part) => current.push(part),
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(&current) {
+            if metadata.file_type().is_symlink() && !is_platform_path_alias(&current) {
+                return Err(PathError::Symlink(current));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_platform_path_alias(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        matches!(path, p if p == Path::new("/var")
+            || p == Path::new("/tmp")
+            || p == Path::new("/etc"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
 }

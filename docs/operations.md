@@ -9,7 +9,7 @@ Use Node 24 and pnpm 11.19.0.
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
-cp .env.example .env
+pnpm setup:dev
 pnpm dev
 ```
 
@@ -19,15 +19,15 @@ The development server normally uses `http://localhost:5173`. Verify liveness wi
 curl --fail http://localhost:5173/health
 ```
 
-For the built Node profile:
+For a local check of the built Node profile using your generated development settings:
 
 ```sh
 pnpm build
-pnpm --filter @private-skills/web start
+PSKILLS_PUBLIC_ORIGIN=http://localhost:3000 node --env-file=.env apps/web/.output/server/index.mjs
 curl --fail http://localhost:3000/health
 ```
 
-The self-hosted baseline starts PostgreSQL, the API, and the worker with the pinned compose configuration:
+The self-hosted baseline starts PostgreSQL and the API with the pinned compose configuration. Configure production variables using [`deployment/README.md`](../deployment/README.md), then run the scanner controller on a dedicated Docker-capable host as described below:
 
 ```sh
 docker compose up --build
@@ -44,6 +44,7 @@ Use the web form for browser work. For a scripted check, keep the token in the p
 cookie_file="$(mktemp)"
 curl --fail -c "$cookie_file" \
   -H 'content-type: application/json' \
+  -H "Origin: ${PSKILLS_PUBLIC_ORIGIN:-http://localhost:5173}" \
   --data "{\"token\":\"${PSKILLS_BOOTSTRAP_TOKEN}\"}" \
   http://localhost:5173/auth/session
 curl --fail -b "$cookie_file" http://localhost:5173/v1/me
@@ -55,9 +56,9 @@ The exchange turns a configured user token into a short-lived signed `HttpOnly` 
 The CLI stores a token bound to an exact registry origin:
 
 ```sh
-printf '%s' "$PSKILLS_BOOTSTRAP_TOKEN" | pnpm cli -- login --registry http://localhost:5173 --token-stdin
-pnpm cli -- --registry http://localhost:5173 health
-pnpm cli -- --registry http://localhost:5173 whoami
+printf '%s' "$PSKILLS_BOOTSTRAP_TOKEN" | pnpm cli login --registry http://localhost:5173 --token-stdin
+pnpm cli --registry http://localhost:5173 health
+pnpm cli --registry http://localhost:5173 whoami
 ```
 
 `pskills login` intentionally has no interactive browser/device flow in this build. Use the registry-issued token path and keep it out of shell history and logs.
@@ -72,7 +73,7 @@ The worker claims scan/import jobs from the internal API and completes them with
 - `PSKILLS_IMAGE_CISCO`, `PSKILLS_IMAGE_NVIDIA`, and `PSKILLS_IMAGE_SKILLSGUARD`: reviewed scanner image references;
 - `PSKILLS_POLL_INTERVAL_MS`: optional poll interval.
 
-Then run:
+The local command loads optional `.env` settings without replacing explicitly exported variables. Run this on the host that has Docker and the reviewed scanner images; the API container does not execute scanners:
 
 ```sh
 pnpm worker
@@ -81,6 +82,16 @@ pnpm worker
 The worker defaults to `DockerExecutor`. Its scanner containers have no network, read-only artifact input, separate report output, dropped capabilities, no-new-privileges, bounded memory/CPU/PIDs, and bounded output. A trusted local executor is available for adapter tests; it is not the production default. The worker's event log is metadata-only and must not be expanded to include artifact bytes, lease tokens, credentials, or scanner stderr.
 
 If a required scanner image or executable is unavailable, the resulting evidence is unsupported/error and the core policy remains closed. Install and test scanner images on the dedicated worker boundary before selecting `required` for production traffic.
+
+Build and exercise the pinned engines with `./scripts/scanner-acceptance.sh all`. Use `PSKILLS_DOCKER_CONTEXT=desktop-linux` for a Docker Desktop controller, or the default daemon on a dedicated Linux worker. SkillsGuard can provide complete static evidence for supported files. Cisco's current JSON coverage and NVIDIA's offline OSV fallback are reported as degraded; they are useful in advisory mode, while required mode correctly blocks incomplete evidence. No scanner proves a skill harmless.
+
+Deployment code may inject local `ingest.validate` and `artifact.evaluate` hooks into `WorkerRunner`. Required hook rejection, timeout, or error denies approval. Automatic outbound webhook delivery is disabled; no remote URL receives skill content or job metadata automatically.
+
+## Pull-through proxy
+
+Configure an allowlisted upstream in the Sources screen. `pskills proxy @team/name@1.0.0 --upstream <id> --path skills/name --ref <commit-or-ref>` asks the registry to acquire and scan the complete source, waits for the operation, and then installs the approved artifact. GitHub acquisition records the resolved commit. The API is `POST /v1/proxy/resolve` with `{ upstreamId, path, ref?, repository?, name, version }`.
+
+A cold request returns `202 { operation }`; matching pending requests join that job. An approved exact-source cache hit returns `200 { resolution }` without contacting the upstream. A changed source cannot replace an existing name/version. Proxy creation requires publisher access. Readers can install an already cached approved version with ordinary `pskills install`.
 
 ## State and artifact storage
 
@@ -132,9 +143,9 @@ Do not copy a live file-state directory while it is being written. Do not overwr
 4. Verify known artifact and pack digests through the registry and CLI. A restored pack must resolve its exact members and still reference the expected immutable bytes.
 
    ```sh
-   pnpm cli -- --registry "$RECOVERY_ORIGIN" health
-   pnpm cli -- --registry "$RECOVERY_ORIGIN" search recovery-check
-   pnpm cli -- --registry "$RECOVERY_ORIGIN" pack list
+   pnpm cli --registry "$RECOVERY_ORIGIN" health
+   pnpm cli --registry "$RECOVERY_ORIGIN" search recovery-check
+   pnpm cli --registry "$RECOVERY_ORIGIN" pack list
    ```
 
 5. Start the worker only after metadata and object verification passes. Let queued jobs claim through the normal lease path. Requeue or rescan evidence that is stale under the restored policy; never mark a release approved by editing state directly.
@@ -151,6 +162,6 @@ If metadata is available but an artifact digest is missing, leave the release un
 - Treat `required` scanner coverage and evidence age as release gates. Advisory findings remain visible but do not approve missing required evidence.
 - Keep external upstream mappings HTTPS-only, allowlisted, and server-side. The acquisition code rejects unsafe redirects, private/metadata destinations, unbounded responses, and mutable identity where an immutable revision is required.
 
-## Verification still required
+## Deployment verification
 
-The source includes Node, Vercel, and Cloudflare/Nitro profiles, the GitHub native OS workflow, provider adapters, and real Docker scanner execution code. Their final status needs environment evidence: hosted authenticated flows, each selected storage backend, scanner image findings, GitHub Linux/macOS/Windows CI, and a metadata/object restore rehearsal. Those results should be appended to [`docs/verification.md`](verification.md), rather than inferred from a successful development server or a checked-in template.
+See [`docs/verification.md`](verification.md) for actual checks. Nitro builds, native workerd tests, and local container checks are separate from deployment to a cloud account. Before production use, test the selected host and storage credentials, restore a metadata/object backup, and verify authenticated allowed and denied transfers at that origin.

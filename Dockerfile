@@ -46,7 +46,7 @@ CMD ["node", "apps/web/.output/server/index.mjs"]
 
 # The worker intentionally has its own image target and command.  It shares no
 # Docker socket with the API or host; scanner isolation is supplied by a
-# separately configured executor boundary (see compose.yaml and deployment/).
+# separately configured host-controller boundary (see deployment/README.md).
 FROM runtime AS worker
 COPY --from=build --chown=node:node /app/workers ./workers
 ENV NODE_ENV=production

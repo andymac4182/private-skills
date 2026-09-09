@@ -1,9 +1,10 @@
 name: private-skills
 
-# This is the self-hosted Node/PostgreSQL baseline.  It keeps artifacts private
-# on a named volume by default.  Start the optional S3-compatible profile with
+# This is the self-hosted Node/PostgreSQL baseline. It keeps artifacts private
+# on a named volume by default. Start the optional S3-compatible profile with
 # `docker compose --profile s3 up` after setting the S3 variables described in
-# deployment/README.md.
+# deployment/README.md. The scanner worker is deliberately run by a host
+# controller (see that runbook): this image has no Docker CLI or daemon socket.
 
 x-runtime-environment: &runtime-environment
   NODE_ENV: production
@@ -31,22 +32,7 @@ x-runtime-environment: &runtime-environment
   PSKILLS_SESSION_SECRET: ${PSKILLS_SESSION_SECRET:?Set PSKILLS_SESSION_SECRET in .env}
   PSKILLS_WORKER_TOKEN: ${PSKILLS_WORKER_TOKEN:?Set PSKILLS_WORKER_TOKEN in .env}
   PSKILLS_ALLOW_UNSCANNED: ${PSKILLS_ALLOW_UNSCANNED:-false}
-  PSKILLS_SCANNER_EXECUTOR_URL: ${PSKILLS_SCANNER_EXECUTOR_URL:-}
   DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (for example, postgresql://private_skills:<password>@db:5432/private_skills)}
-
-x-worker-environment: &worker-environment
-  # Keep this separate from the API environment so the worker never receives
-  # database, bootstrap, session, or provider credentials it does not need.
-  NODE_ENV: production
-  PSKILLS_ENVIRONMENT: ${PSKILLS_ENVIRONMENT:-production}
-  PSKILLS_API_URL: http://api:3000
-  PSKILLS_WORKER_TOKEN: ${PSKILLS_WORKER_TOKEN:?Set PSKILLS_WORKER_TOKEN in .env}
-  PSKILLS_WORKER_ID: ${PSKILLS_WORKER_ID:-compose-worker}
-  PSKILLS_POLL_INTERVAL_MS: ${PSKILLS_POLL_INTERVAL_MS:-1000}
-  PSKILLS_IMAGE_CISCO: ${PSKILLS_IMAGE_CISCO:-}
-  PSKILLS_IMAGE_NVIDIA: ${PSKILLS_IMAGE_NVIDIA:-}
-  PSKILLS_IMAGE_SKILLSGUARD: ${PSKILLS_IMAGE_SKILLSGUARD:-}
-  PSKILLS_SCANNER_EXECUTOR_URL: ${PSKILLS_SCANNER_EXECUTOR_URL:-}
 
 x-hardening: &hardening
   read_only: true
@@ -98,31 +84,6 @@ services:
       retries: 5
       start_period: 20s
     <<: *hardening
-    networks:
-      - private-skills
-
-  worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: worker
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      api:
-        condition: service_healthy
-    environment: *worker-environment
-    volumes:
-      - artifacts:/var/lib/private-skills/artifacts
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m
-      - /var/lib/private-skills/scan:rw,noexec,nosuid,nodev,size=1g
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     networks:
       - private-skills
 
