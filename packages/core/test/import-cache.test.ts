@@ -147,10 +147,37 @@ describe('import pull-through cache identity', () => {
     const job = (await json<{ job: { id: string; leaseToken: string } }>(claim)).job;
     const imported = bundle();
     const digest = await digestBytes(encodeBundle(imported));
+    const omittedProvenance = await handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({ leaseToken: job.leaseToken, artifactDigest: digest, bundle: imported }),
+    }));
+    expect(omittedProvenance.status).toBe(409);
+    expect((await json<{ error: { code: string } }>(omittedProvenance)).error.code).toBe('PROVENANCE_CONFLICT');
+
+    const mismatchedKind = await handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({
+        leaseToken: job.leaseToken,
+        artifactDigest: digest,
+        bundle: imported,
+        provenance: {
+          kind: 'github',
+          upstreamId: source.upstreamId,
+          repository: 'offline/repository',
+          path: source.path,
+          revision: '0123456789012345678901234567890123456789',
+        },
+      }),
+    }));
+    expect(mismatchedKind.status).toBe(409);
+    expect((await json<{ error: { code: string } }>(mismatchedKind)).error.code).toBe('PROVENANCE_CONFLICT');
+
     const complete = await handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
       method: 'POST',
       headers: workerHeaders,
-      body: JSON.stringify({ leaseToken: job.leaseToken, artifactDigest: digest, bundle: imported, provenance: { kind: 'registry', repository: 'https://offline.example', path: source.path, revision: digest } }),
+      body: JSON.stringify({ leaseToken: job.leaseToken, artifactDigest: digest, bundle: imported, provenance: { kind: 'registry', upstreamId: source.upstreamId, repository: 'https://offline.example', path: source.path, revision: digest } }),
     }));
     expect(complete.status).toBe(200);
 
@@ -199,6 +226,46 @@ describe('import pull-through cache identity', () => {
     }));
     expect(refConflict.status).toBe(409);
     expect((await json<{ error: { code: string } }>(refConflict)).error.code).toBe('PROVENANCE_CONFLICT');
+
+    const githubUpstreamResponse = await handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: JSON.stringify({ name: 'github-source', kind: 'github', namespace: '@team', baseUrl: 'https://github.example', repositories: ['octo/repo'] }),
+    }));
+    expect(githubUpstreamResponse.status).toBe(201);
+    const githubUpstreamId = (await json<{ upstream: { id: string } }>(githubUpstreamResponse)).upstream.id;
+    const githubQueued = await handler(new Request(`${ORIGIN}/v1/imports`, {
+      method: 'POST',
+      headers: userHeaders,
+      body: JSON.stringify({ upstreamId: githubUpstreamId, repository: 'octo/repo', path: 'skills/github', ref: 'main', name: '@team/github', version: '1.0.0' }),
+    }));
+    expect(githubQueued.status).toBe(202);
+    const githubOperation = (await json<{ operation: { id: string } }>(githubQueued)).operation;
+    const githubClaim = await handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST', headers: workerHeaders }));
+    const githubJob = (await json<{ job: { id: string; leaseToken: string } }>(githubClaim)).job;
+    const githubBadRevision = await handler(new Request(`${ORIGIN}/internal/jobs/${githubJob.id}/complete`, {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({
+        leaseToken: githubJob.leaseToken,
+        artifactDigest: digest,
+        bundle: imported,
+        provenance: { kind: 'github', upstreamId: githubUpstreamId, repository: 'octo/repo', path: 'skills/github', revision: 'main' },
+      }),
+    }));
+    expect(githubBadRevision.status).toBe(409);
+    const githubComplete = await handler(new Request(`${ORIGIN}/internal/jobs/${githubJob.id}/complete`, {
+      method: 'POST',
+      headers: workerHeaders,
+      body: JSON.stringify({
+        leaseToken: githubJob.leaseToken,
+        artifactDigest: digest,
+        bundle: imported,
+        provenance: { kind: 'github', upstreamId: githubUpstreamId, repository: 'octo/repo', path: 'skills/github', revision: '0123456789012345678901234567890123456789' },
+      }),
+    }));
+    expect(githubComplete.status).toBe(200);
+    expect((await json<{ operation: { id: string } }>(githubComplete)).operation.id).toBe(githubOperation.id);
 
     await repository.transaction('org-cache', (state) => {
       const current = state.upstreams.find((candidate) => candidate.id === source.upstreamId);

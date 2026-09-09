@@ -1717,7 +1717,7 @@ async function resolveOrQueueImport(
     if (existingSkill) {
       if (
         completedTarget &&
-        importProvenanceMatches(existingSkill, importRequest) &&
+        importProvenanceMatches(existingSkill, importRequest, currentUpstream) &&
         skillCurrentlyApproved(mutable, existingSkill)
       ) {
         const resolution = skillResolution(existingSkill);
@@ -1873,14 +1873,22 @@ function sameUpstreamOrigin(left: Upstream, right: Upstream): boolean {
   });
 }
 
-function importProvenanceMatches(skill: SkillVersion, request: ImportRequest): boolean {
+function importProvenanceMatches(skill: SkillVersion, request: ImportRequest, upstream: Upstream): boolean {
   const provenance = skill.provenance;
-  if (provenance.kind === 'native' || provenance.upstreamId !== request.upstreamId || provenance.path !== request.path) {
+  if (
+    provenance.kind !== upstream.kind ||
+    provenance.upstreamId !== upstream.id ||
+    provenance.upstreamId !== request.upstreamId ||
+    provenance.path !== request.path ||
+    !provenance.repository ||
+    !isValidImportRevision(upstream, provenance.revision)
+  ) {
     return false;
   }
   if (request.repository !== undefined && provenance.repository !== request.repository) return false;
-  if (provenance.sourceDigest !== undefined && provenance.sourceDigest !== skill.artifact.digest) return false;
-  return typeof provenance.revision === 'string' && provenance.revision.length > 0;
+  if (!provenanceRepositoryMatches(upstream, provenance.repository)) return false;
+  if (provenance.sourceDigest !== undefined && (!isDigest(provenance.sourceDigest) || provenance.sourceDigest !== skill.artifact.digest)) return false;
+  return true;
 }
 
 function skillResolution(skill: SkillVersion): Resolution {
@@ -2153,7 +2161,7 @@ async function completeJob(
       policyRevision: currentJob.policyRevision,
       createdAt: nowIso(),
       approvedAt: evaluation.state === 'approved' ? nowIso() : undefined,
-      provenance: normalizeProvenance(body.provenance, request, imported.digest),
+      provenance: normalizeProvenance(body.provenance, request, imported.digest, currentJob.upstream),
       fileCount: imported.bundle.files.length,
       scanIds: scanResults.map((scan) => scan.id),
     };
@@ -2365,39 +2373,76 @@ function timestampExpired(value: string | undefined, now = Date.now()): boolean 
   return !Number.isFinite(timestamp) || timestamp <= now;
 }
 
-function normalizeProvenance(raw: unknown, request: ImportRequest, digest: Digest): Provenance {
-  const value = isObject(raw) ? raw : {};
-  const requestedKind = value.kind === undefined ? 'github' : value.kind;
-  if (!normalizeProvenanceKind(requestedKind) || requestedKind === 'native') {
-    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifacts require an upstream provenance kind', 409);
+function normalizeProvenance(
+  raw: unknown,
+  request: ImportRequest,
+  digest: Digest,
+  upstream: Upstream | undefined,
+): Provenance {
+  if (!upstream || !isObject(raw)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'An import completion requires complete provenance', 409);
   }
-  const suppliedUpstreamId = stringValue(value.upstreamId);
-  if (suppliedUpstreamId !== undefined && suppliedUpstreamId !== request.upstreamId) {
+  if (upstream.id !== request.upstreamId) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Import job provenance is bound to a different upstream', 409);
+  }
+  const kind = raw.kind;
+  const suppliedUpstreamId = stringValue(raw.upstreamId);
+  const suppliedRepository = stringValue(raw.repository);
+  const suppliedPath = stringValue(raw.path);
+  const suppliedRevision = stringValue(raw.revision);
+  if (
+    !normalizeProvenanceKind(kind) ||
+    kind !== upstream.kind ||
+    !suppliedUpstreamId ||
+    !suppliedRepository ||
+    !suppliedPath ||
+    !suppliedRevision
+  ) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is incomplete or does not match its upstream', 409);
+  }
+  if (suppliedUpstreamId !== request.upstreamId) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different upstream', 409);
   }
-  const suppliedPath = stringValue(value.path);
-  if (suppliedPath !== undefined && suppliedPath !== request.path) {
+  if (suppliedPath !== request.path) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different source path', 409);
   }
-  const suppliedRepository = stringValue(value.repository);
-  if (request.repository !== undefined && suppliedRepository !== undefined && suppliedRepository !== request.repository) {
+  if (request.repository !== undefined && suppliedRepository !== request.repository) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different repository', 409);
   }
-  const suppliedSourceDigest = stringValue(value.sourceDigest);
-  if (suppliedSourceDigest !== undefined && suppliedSourceDigest !== digest) {
+  if (!provenanceRepositoryMatches(upstream, suppliedRepository)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names an unapproved repository', 409);
+  }
+  if (!isValidImportRevision(upstream, suppliedRevision)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is not pinned to a valid immutable revision', 409);
+  }
+  const suppliedSourceDigest = stringValue(raw.sourceDigest);
+  if (suppliedSourceDigest !== undefined && (!isDigest(suppliedSourceDigest) || suppliedSourceDigest !== digest)) {
     throw new RegistryApiError('DIGEST_MISMATCH', 'Imported artifact provenance digest does not match the canonical bundle', 409);
   }
   return {
-    kind: requestedKind,
-    upstreamId: request.upstreamId,
-    repository: suppliedRepository || request.repository,
-    path: suppliedPath || request.path,
-    // A worker should provide the immutable resolved revision.  When an older
-    // worker omits it, the sealed distribution digest is still an immutable
-    // provenance pin; never fall back to a mutable branch/tag alias.
-    revision: stringValue(value.revision) || digest,
-    sourceDigest: digest,
+    kind,
+    upstreamId: suppliedUpstreamId,
+    repository: suppliedRepository,
+    path: suppliedPath,
+    revision: suppliedRevision,
+    ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
   };
+}
+
+function provenanceRepositoryMatches(upstream: Upstream, repository: string): boolean {
+  if (upstream.kind === 'github') return upstreamAllowsImport(upstream, repository);
+  if (!upstream.baseUrl) return false;
+  try {
+    return new URL(repository).origin === new URL(upstream.baseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function isValidImportRevision(upstream: Upstream, revision: unknown): revision is string {
+  if (typeof revision !== 'string' || revision.length === 0 || revision.length > 256) return false;
+  if (upstream.kind === 'github') return /^[0-9a-f]{40}$/iu.test(revision);
+  return isDigest(revision) || /^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(revision);
 }
 
 function parsePolicy(body: JsonObject): Policy {

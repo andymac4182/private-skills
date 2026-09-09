@@ -93,6 +93,8 @@ Configure an allowlisted upstream in the Sources screen. `pskills proxy @team/na
 
 A cold request returns `202 { operation }`; matching pending requests join that job. An approved exact-source cache hit returns `200 { resolution }` without contacting the upstream. A changed source cannot replace an existing name/version. Proxy creation requires publisher access. Readers can install an already cached approved version with ordinary `pskills install`.
 
+Pack versions also record the policy revision under which they were published. After changing policy, rescan the member skills and publish a new pack version under the current revision. Historical pack versions remain immutable and do not silently acquire new approval.
+
 ## State and artifact storage
 
 Select the profile through the environment-backed runtime factory:

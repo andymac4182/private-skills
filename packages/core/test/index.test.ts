@@ -311,6 +311,13 @@ describe('registry core handler', () => {
         leaseToken: job.leaseToken,
         artifactDigest: digest,
         bundle: importedBundle,
+        provenance: {
+          kind: 'registry',
+          upstreamId,
+          repository: 'https://source.example.test',
+          path: 'skills/imported',
+          revision: digest,
+        },
       }),
     }));
     expect(complete.status).toBe(200);

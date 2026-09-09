@@ -148,13 +148,13 @@ Build and inspect the generated output before deploying:
 
 ```sh
 PSKILLS_RUNTIME_PROFILE=edge NITRO_PRESET=cloudflare_module pnpm --filter @private-skills/web build
-# Run this with a reviewed Wrangler installation in the deployment environment.
-wrangler deploy --config deployment/cloudflare/wrangler.jsonc
+# Use the repository-pinned Wrangler CLI.
+pnpm exec wrangler deploy --config deployment/cloudflare/wrangler.jsonc
 ```
 
-The repository does not add Wrangler as an application dependency. Pin and
-provision the CLI in the deployment environment before using the command; the
-command above is a runbook example and has not been run by this change.
+Wrangler is pinned as a development dependency. Native local workerd validation
+is recorded in `platform-compatibility.md`; the cloud deployment command above
+requires your own account and route configuration and has not been run.
 Cloudflare Workers cannot provide the Node filesystem, PostgreSQL native
 connection, or child-process scanner execution directly. Use the authenticated
 HTTP state/storage transport and the host worker/controller described above,
