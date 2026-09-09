@@ -1,6 +1,6 @@
 # Verification record
 
-Verified on 9 September 2026. This record separates working runtime checks from deployment to a cloud account.
+Verified on 9 September 2026. This record separates working runtime checks from deployment to a cloud account. The sections below describe the v0.1.3 baseline; see the [v0.2.0 verification record](verification-v0.2.0.md) for subsequent intelligence and hosting work.
 
 ## Automated checks
 
@@ -62,7 +62,7 @@ See [platform compatibility](../deployment/platform-compatibility.md) for the ed
 
 ## Explicit release boundaries
 
-- No live Vercel or Cloudflare account deployment was created. Their build/native-runtime checks do not establish cloud credentials, routes, provider permissions, or a Git-triggered cloud deployment.
+- At the v0.1.3 baseline, no live Vercel or Cloudflare account deployment had been created. Their build/native-runtime checks did not establish cloud credentials, routes, provider permissions, or a Git-triggered cloud deployment. Subsequent Vercel work is recorded separately above.
 - Nitro portability requires durable backing services. Edge targets use authenticated HTTP gateways and an external scanner worker; filesystem, direct PostgreSQL, and scanner subprocesses belong on a compatible Node/worker host.
 - Filesystem and S3-compatible storage have live conformance evidence. Other Files SDK providers require their optional SDK peers, credentials, and provider-specific deployment tests.
 - The initial native archives cover Linux x86_64, macOS arm64, and Windows x86_64. Other architectures can build from Rust source but are not claimed as release-tested targets.

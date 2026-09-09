@@ -165,9 +165,12 @@ include its source revision and prepared artifact digest:
 PSKILLS_IMAGE_SKILLSGUARD=snapshot:<snapshot-id>|revision:<source-commit>|artifact:sha256:<64-lowercase-hex>
 ```
 
-The provisioning script is source-pinned and non-provisioning by default. For
-production rotation, set a finite 30-day lifetime and run the dry-run mapping
-before requesting a remote snapshot:
+The provisioning script is source-pinned and non-provisioning by default. A
+finite snapshot lifetime is optional. The currently promoted verified
+source-built snapshot uses the non-expiring mapping (`expiresAt: null`); replace
+it when the pinned source/build changes or through an explicit operator
+rotation. If a deployment chooses a finite 30-day lifetime, run the dry-run
+mapping before requesting a remote snapshot:
 
 ```sh
 PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
@@ -176,13 +179,15 @@ PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
   pnpm exec tsx scripts/provision-scanner-sandbox.ts --provision
 ```
 
-Persist the returned mapping, update `PSKILLS_IMAGE_SKILLSGUARD`, and rotate
-before `expiresAt`. The script defaults to no expiry when the variable is not
-set; a production hosted worker should set `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30`
-and must not reuse a mutable snapshot id. The snapshot source is the exact
-SkillsGuard revision recorded in `workers/images/scanner-metadata.json`; do
-not describe a snapshot as provisioned until the `--provision` command has
-returned and its immutable mapping has been reviewed.
+Persist the returned mapping and update `PSKILLS_IMAGE_SKILLSGUARD`. Rotate
+before `expiresAt` when the mapping has a finite expiry; with the current
+non-expiring mapping, `expiresAt` is `null` and source/build changes still
+require an explicit replacement. `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS` defaults
+to `0` (no expiry), and a bare or mutable snapshot id is never sufficient
+provenance. The snapshot source is the exact SkillsGuard revision recorded in
+`workers/images/scanner-metadata.json`; do not describe a snapshot as
+provisioned until the `--provision` command has returned and its immutable
+mapping has been reviewed.
 
 ## Eve reviewer
 

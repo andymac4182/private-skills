@@ -208,9 +208,10 @@ keep at least one configured required scanner. Do not set
 `PSKILLS_ALLOW_UNSCANNED=true` to fit a function limit.
 
 For the source-built SkillsGuard snapshot, run the source-pinned provisioning
-script with an explicit 30-day rotation policy. Its default invocation only
+script when creating or replacing a mapping. Its default invocation only
 prints the immutable mapping; `--provision` is the remote operation and must
-be recorded before the returned reference is placed in the secret store:
+be recorded before the returned reference is placed in the secret store. A
+finite 30-day rotation policy is optional:
 
 ```sh
 PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
@@ -219,10 +220,12 @@ PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=30 \
   pnpm exec tsx scripts/provision-scanner-sandbox.ts --provision
 ```
 
-Rotate before `expiresAt`, keep the source revision and artifact digest in the
-mapping, and never treat an unexpired mutable snapshot id as provenance. The
-script defaults to no expiry when `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS` is not
-set, so production must set it to `30` when a 30-day rotation is required.
+The currently promoted verified source-built snapshot is nonexpiring, with
+`expiresAt: null`; replace it when the pinned source/build changes or by an
+explicit operator action. For finite mappings, rotate before `expiresAt` and
+keep the source revision and artifact digest in the mapping. The script
+defaults to `PSKILLS_SCANNER_SNAPSHOT_TTL_DAYS=0` (no expiry), and a bare or
+mutable snapshot id is never sufficient provenance.
 
 ## Cloudflare Workers
 
