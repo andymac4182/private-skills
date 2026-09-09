@@ -1,7 +1,12 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
-**Status:** v0.3.0 implementation merged; skills.sh is intentionally disconnected at the owner's request on 2026-09-10.
+**Status:** v0.3.0 implementation merged; server-side forwarding of the
+Vercel project OIDC token to skills.sh is verified for the current production
+directory evidence. ComputeSDK required-scan evidence is also verified on
+`dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi`. The final CSS deployment
+`dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready and its final narrow browser proof
+now passes; full C1 acceptance remains partial.
 **Scope:** the current skills.sh site, its documented API, and the public
 `vercel-labs/skills` repository. The review uses official sources only. It does
 not use Tessl pages or GitHub issues as evidence.
@@ -15,25 +20,50 @@ traversal.
 
 ## Current configuration
 
-The owner has deferred connecting skills.sh. Private-registry deployment and
-refinement continue independently. A disabled integration returns HTTP 503 with
-`DIRECTORY_NOT_CONFIGURED` and `retryable: false`; clients show an intentional
-disconnected state. Actual upstream outages retain `DIRECTORY_UNAVAILABLE`.
-Connecting later remains a separate decision; no OIDC forwarding is enabled.
+The owner authorized connecting skills.sh with the Vercel project request-scoped
+OIDC token on 2026-09-10, superseding the earlier disconnected deferral. Current
+production deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` proves authenticated
+directory access and the ComputeSDK scan. The earlier captured deployment
+remains historical disabled-configuration evidence: it returns HTTP 503 with
+`DIRECTORY_NOT_CONFIGURED` and `retryable: false`, while actual upstream
+outages retain `DIRECTORY_UNAVAILABLE`.
 
 The directory client, authenticated registry routes, Rust commands, cloud views,
-and governed import worker are implemented. `PSKILLS_DIRECTORY_ENABLED` defaults
-to false. The runtime credential callback is not yet connected: automatic
-approval review rejected both sending the Vercel OIDC token to skills.sh and
-adding that forwarding code pending explicit destination authorization. Enabling
-the flag alone does not supply authentication and is not a working production
-catalog configuration.
+and governed import worker are implemented. `PSKILLS_DIRECTORY_ENABLED=false`
+describes the historical disconnected capture; the current production evidence
+has the enabled, authenticated directory path. Full pagination, selected-row
+import, Topics membership, and external Packs preview remain separate
+acceptance gates.
 
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
 artifacts. Pack preview runs through Web APIs on both Node and edge profiles.
 Private pack creation and installation continue to use existing approved local
 releases. Automatic external pack migration is a future feature.
+
+## Current production evidence
+
+- The sanitized [v0.3 production record](../work/production-v03-evidence.json)
+  from `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` records authenticated list/search,
+  Official, detail, and audit responses. It observed list page zero with
+  `total=9736` and `hasMore=true`, two search results, 100 Official owners with
+  5,497 skills, one detail file, and five audit entries. Topics is explicitly
+  `not_exposed` and the pack preview is explicitly `skipped` because no
+  operator-supplied unlisted URL was present.
+- The [scan record](../work/production-v03-scan-evidence.json) is
+  `verified=true` for driver `computesdk`: one file analyzed, zero findings,
+  unchanged approved digest, and `allowUnscanned=false`. Scan
+  `44cd2613-b29b-4b54-9c5a-4efc932afbe0` ran as job
+  `job_fd182a70-9c73-45d8-9d1b-a1732d98d107`.
+- Final CSS deployment `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` is ready with output
+  hash `665727f37999113a2d018eb348ad32b47d1cbd817d9c8b4762b35c0ea760549a`.
+  The final 390px Packs, dashboard, and catalog captures pass without
+  horizontal overflow; the 1280px Packs capture also passes. The evidence is
+  linked from `docs/design/production-final-*.png`.
+
+These results prove the current authenticated endpoints and sandbox scan path;
+they do not by themselves prove complete catalog pagination, representative
+GitHub/well-known imports, or metadata-only Packs preview.
 
 An administrator can configure a `skills-sh` upstream with `repositories: ["*"]`
 to admit any public catalog source into an authorized namespace, or list exact
@@ -87,13 +117,14 @@ The current API documentation describes these versioned endpoints:
 | Rate/error behavior | Authenticated requests expose `X-RateLimit-*`; `429` includes `Retry-After`; documented errors include 400, 401, 404, 429, and 503. List/search cache for 30–60 seconds; detail/curated cache for five minutes. | Proxy and cache server-side, obey `Retry-After`, use bounded retries, surface stale metadata, and retain source response time/age. |
 
 The API examples contain dynamic install and total values. They are examples,
-not schema constants. A live authenticated spotcheck on 2026-09-10 observed
-`pagination.total = 9,735` from `/api/v1/skills?per_page=2`. The current
-homepage displayed an approximately 1.4-million install headline. Those are
-different measures (skill-row count versus aggregate installs), so the
-apparent disparity is not a catalog integrity finding. The adapter must read
-the response's `total` at request time and never bake either number into code
-or completion criteria.
+not schema constants. A prior live authenticated spotcheck on 2026-09-10
+observed `pagination.total = 9,735` from `/api/v1/skills?per_page=2`; the
+current sanitized production record observed `total=9,736` on page zero. The
+homepage displayed an approximately 1.4-million install headline. These are
+different measures (skill-row count versus aggregate installs), so the apparent
+disparity is not a catalog integrity finding. The adapter must read the
+response's `total` at request time and never bake any number into code or
+completion criteria.
 
 The current site also exposes these views:
 
@@ -494,13 +525,13 @@ because its manifest could be previewed.
 
 ### AUTH, OPS, and AGENTS — deployment and ecosystem boundaries
 
-- **OPS-1 authentication portability:** Vercel deployment tests obtain a fresh
-  request-scoped OIDC credential as documented. A non-Vercel deployment test
-  uses an explicitly configured supported gateway/credential provider; absent
-  configuration returns a retryable unavailable state. No undocumented public
-  API assumption is required for either path. The Vercel OIDC destination
-  approval is pending auto-review at this checkpoint, so live cloud acceptance
-  remains pending until that approval is recorded.
+- **OPS-1 authentication portability:** current Vercel deployment evidence
+  obtains and accepts a request-scoped project OIDC credential for skills.sh.
+  A non-Vercel deployment test still uses an explicitly configured supported
+  gateway/credential provider; absent configuration returns a retryable
+  unavailable state. No undocumented public API assumption is required. The
+  current record still requires browser/log credential-negative evidence and
+  does not treat the prior disconnected 503 as current behavior.
 - **OPS-2 rate/error behavior:** tests honor `Retry-After`, back off boundedly,
   cap concurrent page/detail requests, expose response status/request
   correlation, and never retry a malformed or unauthorized request forever.
@@ -522,12 +553,15 @@ because its manifest could be previewed.
 
 ## Dependencies and non-goals
 
-The near-term implementation dependency is an authenticated, portable
-skills.sh gateway contract. Without it, the UI can still ship an explicit
-disabled state and fixture-backed adapter, but it cannot claim live cloud
-coverage from a non-Vercel Nitro deployment. Other dependencies are the
-external identity fields, a public source resolver, a bounded detail cache, and
-an import operation that can carry external provenance through the existing
+The near-term implementation dependency is now partially satisfied: current
+production evidence covers the authenticated Vercel OIDC directory path and a
+required ComputeSDK scan. Remaining C1 dependencies are complete pagination,
+source resolution/import readback, Topics page parsing, an operator-supplied
+Packs preview, browser/log credential-negative evidence, and tenant/secrecy
+checks. A non-Vercel Nitro deployment still needs an explicitly configured
+supported gateway/credential provider. Other dependencies are the external
+identity fields, a public source resolver, a bounded detail cache, and an
+import operation that can carry external provenance through the existing
 scanner job.
 
 This work must not silently turn the current release into a public marketplace
@@ -560,9 +594,10 @@ Primary official pages and files used for this review:
 - [`src/find.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/find.ts)
 - [`src/telemetry.ts`](https://raw.githubusercontent.com/vercel-labs/skills/main/src/telemetry.ts)
 
-The report is a design and evidence record. The implementation and package
-changes described below are planned; this document does not claim that the
-cloud catalog, pullthrough adapter, or CLI parity features are implemented.
+The report is a design and evidence record. Current production evidence covers
+the authenticated directory endpoints and ComputeSDK scan above; complete
+cloud catalog coverage, representative pullthrough, and CLI parity are not
+claimed until their remaining acceptance criteria pass.
 
 ## CLI and agent compatibility review
 

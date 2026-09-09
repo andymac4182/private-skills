@@ -4,13 +4,17 @@ Private Skills is a registry, pull-through proxy, and cross-platform installer f
 
 ## Current status
 
-The baseline is implemented as of 9 September 2026. Native Windows, macOS, and Linux CI, real scanner runs, browser/CLI flows, storage, and recovery checks passed; see [`docs/verification.md`](docs/verification.md) for the evidence and deployment limits. Private CLI archives and checksums are available through [GitHub Releases](https://github.com/andymac4182/private-skills/releases).
+The baseline implementation and its recorded v0.2 checks were established on
+9 September 2026. The v0.3 production checkpoint and its remaining gates are
+tracked separately in [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md);
+that record distinguishes completed evidence from pending deployment/provider
+checks. Published CLI archives and checksums are linked through [GitHub Releases](https://github.com/andymac4182/private-skills/releases); in-flight or prerelease packaging is not represented as a published release.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
 | Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | Directory lookups are bounded; workers acquire and scan release artifacts, and uploaded content is never executed |
-| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | OIDC, device flow, and interactive browser identity providers are not part of this baseline |
+| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; server-side skills.sh Vercel project OIDC forwarding is verified for the current directory evidence, and device flow/interactive identity providers are not part of this baseline |
 | Artifacts | Implemented bounded canonical `pskills-bundle-v1` JSON, digest checks, private sealed-object storage, and transfer grants | Bundle content is data; the registry never runs skill scripts or install hooks |
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
@@ -19,21 +23,29 @@ The baseline is implemented as of 9 September 2026. Native Windows, macOS, and L
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
-| skills.sh directory | Catalog, search, Official, Topics, external Audits, pack preview, and governed individual imports | Server-side authentication is opt-in; live catalog acceptance for v0.3.0 is pending |
+| skills.sh directory | Production list/search/Official/detail/audits are verified with governed directory plumbing; recorded 390px Packs/dashboard/catalog and 1280px Packs layouts pass | Current deployment evidence proves server-side Vercel project OIDC and a ComputeSDK scan; full pagination, selected imports, Topics parsing, Packs preview, and tenant/secrecy evidence remain pending |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The v0.2.0 registry is deployed at
+The current registry checkpoint is deployed at
 [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
 with Neon PostgreSQL/pgvector, private Blob storage, and required SkillsGuard
-scanning. Authenticated production publishing, search, CLI pack installation,
-analytics, and Eve review were verified. The separate reviewer runs at
+scanning. The v0.3.0 verification record covers the current deployment and
+its remaining production gates; the recorded authenticated publishing, search,
+CLI pack installation, analytics, and Eve review flows are carried forward from
+the verified private-registry evidence. The separate reviewer runs at
 [`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
 with a registered daily `0 22 * * *` UTC schedule. Git-triggered deployment
-verification remains pending. See [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md).
+verification, full C1 catalog acceptance, and hosted restore remain pending.
+See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
-The v0.3.0 checkout adds the external directory and ComputeSDK integration.
+The v0.3.0 checkout adds the external directory and ComputeSDK integration. The
+current production evidence verifies the server-side Vercel project OIDC
+directory path, a required ComputeSDK scan, and the final captured 390px
+Packs/dashboard/catalog plus 1280px Packs layouts. Full C1 acceptance remains
+open. The historical disconnected deployment and the prior ComputeSDK
+pre-analysis failure remain preserved in the verification record.
 See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.
@@ -144,7 +156,7 @@ The request handler owns authorization, resolution, policy state, and audit reco
 - [`docs/semantic-search.md`](docs/semantic-search.md) documents the authorization-aware index and PostgreSQL/state adapter boundary.
 - [`docs/eve-reviewer.md`](docs/eve-reviewer.md) documents the separate Eve app, fixed tools, schedule, and human-only decision boundary.
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
-- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the deployed v0.2.0 release evidence.
+- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the historical v0.2.0 release evidence.
 - [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md) records the directory and sandbox implementation checkpoint and remaining acceptance gates.
 - [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
 - [`docs/completion-criteria.md`](docs/completion-criteria.md) turns the roadmap into measurable, non-blocking future milestones.
