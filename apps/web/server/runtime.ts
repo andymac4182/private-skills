@@ -19,14 +19,15 @@ async function createRuntime(env: RuntimeEnvironment) {
   };
   const infrastructure = await createInfrastructure(env);
   const auth = await createAuthenticatorFromEnv(env);
-  // Directory access is an explicit server-side opt-in.  The credentialed
-  // OIDC/gateway token provider is host-owned and is intentionally not read
-  // or forwarded by this generic runtime until the deployment grants the
-  // destination; tests and adapters can inject a request-scoped client into
-  // createRegistryHandler directly.
+  // Directory access is an explicit server-side opt-in. The selected
+  // infrastructure profile owns the credential callback: Node resolves the
+  // official Vercel OIDC helper per request for skills.sh, while edge keeps
+  // custom gateway authentication disconnected until separately configured.
+  // The callback is never exposed to browser code.
   const directory = env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsDirectoryClient({
       baseURL: env.PSKILLS_DIRECTORY_GATEWAY_URL ?? env.PSKILLS_SKILLS_SH_BASE_URL,
+      getToken: infrastructure.directoryTokenProvider,
     })
     : undefined;
   // Unlisted pack discovery is public and never uses a directory bearer token.

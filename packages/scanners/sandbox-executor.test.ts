@@ -12,6 +12,12 @@ import {
   type SandboxInstance,
   type SandboxSdk,
 } from './src/sandbox-executor.js';
+import {
+  COMPUTE_SDK_VERSIONS,
+  createComputeSdkVercelSdk,
+  type ComputeSdkVercelModule,
+  type ComputeSdkVercelProvider,
+} from '../sandbox-provider/src/index.js';
 
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 const IMAGE = `vcr.private-skills/scanner@${DIGEST}`;
@@ -136,6 +142,88 @@ describe('SandboxExecutor', () => {
       expect(harness.written.has('/vercel/sandbox/private-skills/input/nested/run.py')).toBe(true);
       expect(harness.stopped).toBe(1);
     });
+  });
+
+  it('skips an absent optional report through the ComputeSDK adapter without exposing provider errors', async () => {
+    let stopped = 0;
+    const native = {
+      fs: {
+        async stat() {
+          return { size: 0, isFile: () => false, isSymbolicLink: () => false };
+        },
+        async lstat() {
+          const failure = new Error('Authorization: Bearer output-secret') as Error & { code: 'ENOENT' };
+          failure.code = 'ENOENT';
+          throw failure;
+        },
+        async readFile() {
+          return Buffer.alloc(0);
+        },
+      },
+      persistent: false,
+      networkPolicy: 'deny-all',
+      image: IMAGE,
+      timeout: 6_000,
+      vcpus: 1,
+      async mkDir() { /* staging */ },
+      async writeFiles() { /* staging */ },
+      async readFileToBuffer() {
+        const failure = new Error('Authorization: Bearer output-secret') as Error & { code: 'ENOENT' };
+        failure.code = 'ENOENT';
+        throw failure;
+      },
+      async runCommand() {
+        return {
+          async wait() { return { exitCode: 0, durationMs: 1 }; },
+          async *logs() { /* no scanner output */ },
+          async kill() { /* no-op */ },
+        };
+      },
+      async stop() { stopped += 1; },
+    };
+    const provider: ComputeSdkVercelProvider = {
+      name: 'vercel',
+      sandbox: {
+        async create() {
+          return {
+            sandboxId: 'sandbox-optional-report',
+            getInstance: () => native,
+            async destroy() { /* no-op */ },
+          };
+        },
+      },
+    };
+    const module: ComputeSdkVercelModule = {
+      versions: { ...COMPUTE_SDK_VERSIONS },
+      vercel: () => provider,
+    };
+    const sdk = await createComputeSdkVercelSdk({
+      moduleLoader: async () => module,
+      providerFactory: () => provider,
+      oidcTokenResolver: async () => {
+        const payload = Buffer.from(JSON.stringify({ owner_id: 'team-test', project_id: 'project-test' })).toString('base64url');
+        return `header.${payload}.signature`;
+      },
+      versionEvidence: { ...COMPUTE_SDK_VERSIONS },
+    });
+
+    await withWorkspace(async (inputDir, outputDir) => {
+      const result = await new SandboxExecutor({ sdk }).run({
+        command: 'skillsguard',
+        args: [inputDir, '--output', join(outputDir, 'skillsguard.json')],
+        inputDir,
+        outputDir,
+        image: IMAGE,
+        timeoutMs: 1_000,
+        maxOutputBytes: 4 * 1024,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toBe('');
+      await expect(readFile(join(outputDir, 'skillsguard.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    expect(stopped).toBe(1);
   });
 
   it('fails closed for scanner credentials and always cleans up', async () => {

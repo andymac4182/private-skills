@@ -142,12 +142,53 @@ jobs:
           mkdir -p release
           tar -C "target/${{ matrix.target }}/release" -czf "release/pskills-${{ matrix.target }}.tar.gz" pskills
 
+      - name: Smoke the packaged Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          archive="release/pskills-${{ matrix.target }}.tar.gz"
+          extraction="$(mktemp -d)"
+          trap 'rm -rf "$extraction"' EXIT
+          test "$(tar -tzf "$archive")" = pskills
+          tar -xzf "$archive" -C "$extraction"
+          test -x "$extraction/pskills"
+          test "$("$extraction/pskills" --version)" = "pskills ${RELEASE_TAG#v}"
+          "$extraction/pskills" --help >/dev/null
+
       - name: Package the Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           Compress-Archive -Path "target/${{ matrix.target }}/release/pskills.exe" -DestinationPath "release/pskills-${{ matrix.target }}.zip"
+
+      - name: Smoke the packaged Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $archive = "release/pskills-${{ matrix.target }}.zip"
+          $extraction = Join-Path $env:RUNNER_TEMP "pskills-release-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          New-Item -ItemType Directory -Force $extraction | Out-Null
+          try {
+            Expand-Archive -LiteralPath $archive -DestinationPath $extraction -Force
+            $entries = @(Get-ChildItem -LiteralPath $extraction -Force -Recurse)
+            if ($entries.Count -ne 1 -or $entries[0].PSIsContainer -or $entries[0].Name -ne 'pskills.exe') {
+              throw 'Windows release archive must contain exactly one pskills.exe file'
+            }
+            $binary = Join-Path $extraction 'pskills.exe'
+            $expected = "pskills $($env:RELEASE_TAG.Substring(1))"
+            if ((& $binary --version).Trim() -ne $expected) {
+              throw 'Packaged Windows binary version does not match the release tag'
+            }
+            & $binary --help | Out-Null
+          } finally {
+            Remove-Item -LiteralPath $extraction -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Upload the private release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

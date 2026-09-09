@@ -285,6 +285,7 @@ export class SkillsDirectoryClient {
       }
       return result;
     } catch (error) {
+      if (callerSignal?.aborted || controller.signal.aborted) throw requestTimeoutError();
       if (error instanceof SkillsDirectoryError) throw error;
       if (isAbortError(error) || error instanceof TimeoutMarker) throw requestTimeoutError();
       // Do not expose provider errors, which can contain credential material.
@@ -324,6 +325,7 @@ export class SkillsDirectoryClient {
     } catch (error) {
       clearTimeout(timer);
       callerSignal?.removeEventListener('abort', abortCaller);
+      if (callerSignal?.aborted || controller.signal.aborted) throw requestTimeoutError();
       throw error;
     }
   }
@@ -434,7 +436,7 @@ function normalizeOwner(value: unknown): string {
 }
 
 function normalizeSkillId(value: unknown): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_IDENTIFIER_BYTES || value.trim() !== value || /[\u0000-\u001f\u007f?#\\]/u.test(value)) {
+  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > MAX_IDENTIFIER_BYTES || value.trim() !== value || /[\u0000-\u001f\u007f?#\\]/u.test(value)) {
     throw invalidInputError('id');
   }
   const segments = value.split('/');
@@ -599,7 +601,7 @@ function normalizeAuditEntry(value: unknown, limits: DirectoryLimits, context: s
     riskLevel = null;
   } else if (riskLevelValue !== undefined) {
     const candidate = boundedMetadataString(riskLevelValue, limits, `${context}.riskLevel`);
-    if (!['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(candidate)) throw invalidResponseError(`${context}.riskLevel`);
+    if (!['SAFE', 'NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(candidate)) throw invalidResponseError(`${context}.riskLevel`);
     riskLevel = candidate as SkillAuditEntry['riskLevel'];
   }
   let categories: SkillAuditEntry['categories'];

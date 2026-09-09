@@ -89,6 +89,14 @@ describe('SkillsDirectoryClient', () => {
             auditedAt: '2026-04-15T12:05:00.000Z',
             riskLevel: null,
             categories: null,
+          }, {
+            provider: 'Agent Trust Hub',
+            slug: 'agent-trust-hub',
+            status: 'pass',
+            summary: 'No risks detected',
+            auditedAt: '2026-04-15T12:00:00.000Z',
+            riskLevel: 'SAFE',
+            categories: ['NO_CODE'],
           }],
         });
       }
@@ -114,6 +122,8 @@ describe('SkillsDirectoryClient', () => {
     expect(audits.audits[0]?.status).toBe('pass');
     expect(audits.audits[0]?.riskLevel).toBeNull();
     expect(audits.audits[0]?.categories).toBeNull();
+    expect(audits.audits[1]?.riskLevel).toBe('SAFE');
+    expect(audits.audits[1]?.categories).toEqual(['NO_CODE']);
     expect(String(fetch.mock.calls[1]?.[0])).toBe('https://skills.sh/api/v1/skills/mintlify.com/mintlify');
     expect(String(fetch.mock.calls[2]?.[0])).toBe('https://skills.sh/api/v1/skills/audit/vercel-labs/skills/find-skills');
   });
