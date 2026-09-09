@@ -1,4 +1,4 @@
-# Product roadmap and Tessl gap review
+# Product roadmap, competitor gaps, and editor review
 
 This roadmap records the product gaps identified by comparing Private Skills
 with the official Tessl documentation and product pages checked on 9 September
@@ -8,8 +8,9 @@ The explicitly requested skills.sh catalog, source pullthrough, and cloud-view
 delivery is tracked separately from the Tessl comparison in
 [`skills-sh.md`](skills-sh.md). That review used the current skills.sh site,
 its documented API, and the official `vercel-labs/skills` repository.
-The current release baseline and its remaining production gates are recorded in
-[`verification-v0.2.0.md`](verification-v0.2.0.md). The measurable exit gates
+The current v0.3.0 release baseline and its remaining production gates are
+recorded in [`verification-v0.3.0.md`](verification-v0.3.0.md), with the
+historical v0.2.0 checkpoint retained separately. The measurable exit gates
 for this roadmap are in [`completion-criteria.md`](completion-criteria.md).
 The Private Skills status column is based on [`README.md`](../README.md),
 [`implementation.md`](implementation.md), the CLI and pack contract
@@ -17,6 +18,11 @@ The Private Skills status column is based on [`README.md`](../README.md),
 ([`semantic-search.md`](semantic-search.md)), and the latest verification
 record; proposed language in older design documents is not treated as shipped
 behavior.
+
+The Diffs review was added on 10 September 2026 from the official
+[`diffs.com`](https://diffs.com/) pages and the linked
+[`pierrecomputer/pierre` source](https://github.com/pierrecomputer/pierre).
+It describes an optional future editor surface, not a current release gate.
 
 ## Ordering
 
@@ -38,7 +44,23 @@ new content and execution boundaries.
   user-supplied unlisted Packs. Existing private-pack management remains in
   scope; external batch migration is a later milestone. This is the explicitly
   requested next product delivery after G0; it does not retroactively expand
-  the v0.2.0 launch gate or require a bulk mirror of the public catalog.
+  the v0.2.0 launch gate or require a bulk mirror of the public catalog. The
+  owner has authorized the Vercel project OIDC destination; implementation,
+  deployment, and live acceptance evidence remain pending.
+- **Deferred P1/P2: full browser editor and upload/edit review.** Integrate the
+  Diffs editor primitives with a Private Skills file tree, durable private
+  drafts, immutable new releases, and a separate upload/edit Eve reviewer.
+  The Diffs integration, persistence, identity, review jobs, UI findings,
+  scanner authority, malicious-content boundary, and accessibility gates are
+  specified in **M6** below and [`completion-criteria.md`](completion-criteria.md).
+  This milestone is deliberately later work; it is not a G0 or C1 blocker.
+- **Deferred P1/P2: OpenClaw skills feed interoperability.** After the
+  skills.sh contract is stable, add a versioned producer and consumer for the
+  official ClawHub hosted skills-feed contract. The later **M7** milestone
+  below covers the wire schema, exact source/digest mapping, bounded snapshot
+  refresh, tenant-safe publication, local scanner admission, and
+  producer/consumer fixtures. It is an interoperability milestone, not a
+  requirement to mirror the public catalog or a G0, C1, or M6 blocker.
 - **P1: CLI compatibility after the cloud contract.** Add registry-mediated
   `find`/source selectors, lock check/restore/sync, source-aware lock
   provenance, multi-skill selection, and a data-driven agent registry only
@@ -68,7 +90,11 @@ the official API and site pages confirm concrete endpoints and view semantics,
 while the current verification record has not yet accepted a production-complete
 skills.sh adapter or cloud catalog views. The gap is therefore **targeted and
 pending acceptance**, rather than a claim that in-flight implementation work is
-absent. The full contract and source links are in [`skills-sh.md`](skills-sh.md).
+absent. The owner has now authorized server-side forwarding of the Vercel
+project OIDC token to skills.sh; directory-agent implementation and
+infrastructure configuration remain in progress, and authorization does not
+count as live evidence. The full contract and source links are in
+[`skills-sh.md`](skills-sh.md).
 
 | Priority | Confirmed skills.sh capability | Private Skills today | Current delivery target |
 | --- | --- | --- | --- |
@@ -76,7 +102,7 @@ absent. The full contract and source links are in [`skills-sh.md`](skills-sh.md)
 | Current | A listing row has a stable `source/slug`, `sourceType` (`github` or `well-known`), install URL/page URL, and optional duplicate flag; detail can return files plus an external hash or `null`. | `Provenance` models native/GitHub/registry sources; skills.sh identity, source type, snapshot hash, and detail status are not yet production-verified. | Preserve external ID/source/slug/install URL, separate external snapshot hash from the Private Skills artifact digest, and assign every enumerated row an explicit metadata/source/pullthrough status. |
 | Current | Official CLI source code resolves GitHub trees/paths and well-known discovery, including preferred and legacy indexes and bounded archives ([`vercel-labs/skills` sources](skills-sh.md#official-clirepository-evidence-relevant-to-pullthrough)). | Existing acquisition safely imports approved GitHub/registry sources, but requires an administrator upstream and caller path/name/version; a public catalog resolver is not yet production-verified. | Resolve GitHub commit/tree/path and well-known v0.2/v0.1 sources on demand. Retain exact source provenance, never infer SemVer, never follow arbitrary credentials, and pass bytes through the existing validation/scanner policy. |
 | Current | Site views expose unlisted Packs, curated Topics pages, maker-curated Official skills, and combined partner Audits ([Packs](https://www.skills.sh/docs/packs), [Topics](https://www.skills.sh/topic), [Official](https://www.skills.sh/official), [Audits](https://www.skills.sh/audits)). | Packs are private immutable org manifests and `AuditView` is an administrative history; production completion of the external cloud views is not yet verified. | Add and verify separate external views. Topics must retain its curated-page/source limitation because no documented JSON membership API exists. The Packs view accepts a user-supplied URL and renders an unlisted metadata-only manifest preview plus link; it does not enumerate packs, fetch member bytes, imply approval, or migrate members automatically. |
-| Current | API docs require Vercel OIDC and document rate/error/cache behavior; no portable non-Vercel credential is documented. | Nitro is portable and currently has no skills.sh credential gateway. | Provide a server-side Vercel OIDC or explicitly configured supported gateway path; otherwise show a retryable unavailable state. Never assume undocumented anonymous API access. The Vercel OIDC destination approval is pending auto-review before live cloud acceptance. |
+| Current | API docs require Vercel OIDC and document rate/error/cache behavior; no portable non-Vercel credential is documented. | Nitro is portable; the owner has authorized server-side Vercel project OIDC forwarding, but the new wiring and deployment proof are not yet accepted. | Provide the server-side Vercel OIDC or explicitly configured supported gateway path; otherwise show a retryable unavailable state. Never assume undocumented anonymous API access. Authorization supersedes the prior deferral but does not satisfy live cloud acceptance. |
 | Future P1 | An unlisted pack URL can contain multiple public, private, or GitHub-backed skills and can be updated or deleted ([Packs documentation](https://www.skills.sh/docs/packs)). | The current delivery previews external pack metadata and retains existing tenant-scoped private-pack management; it does not batch-migrate external members. | Add an explicit, separately authorized migration operation. Resolve every selected member to an immutable source, validate and scan every member, and create one private immutable pack only after all members pass; any unresolved/changed/deleted member leaves no partial private pack and records the failure. |
 | Future P1 | Upstream CLI provides `find`, source grammar, lock provenance/check/restore, many agent adapters, selectors, `init`, telemetry, and optional `use` ([CLI parity review](skills-sh.md#cli-and-agent-compatibility-review)). | Current Rust CLI supports governed registry operations and three agent targets. | Prioritize these after the cloud contract; preserve registry authorization, immutable transfer, scanner gates, and non-execution boundaries. |
 
@@ -85,6 +111,120 @@ observations, not roadmap constants. A live API total must never be confused
 with the homepage’s aggregate install headline. Full coverage means every
 enumerated row is represented with a status; it does not mean a refresh stores
 every artifact.
+
+## Deferred Diffs editor and upload/edit review
+
+This milestone is a product request recorded on 10 September 2026 and is
+explicitly deliver-later. The official Diffs material confirms an open source
+`@pierre/diffs` renderer and beta edit mode. It does not establish a hosted
+editor service or provide Private Skills' release, identity, scanner, storage,
+or review orchestration.
+
+| Evidence status | Official capability | Private Skills implication |
+| --- | --- | --- |
+| Confirmed | Diffs renders arbitrary files, file versions, patches, and diffs in React or vanilla JavaScript, with split or stacked layouts, syntax highlighting, line selection, annotations, and accept/reject UI hooks ([home](https://diffs.com/), [official package README](https://raw.githubusercontent.com/pierrecomputer/pierre/main/packages/diffs/README.md)). | Use it as the rendering substrate for a skill editor/review surface. The application owns file identity, data loading, authorization, and action semantics. |
+| Confirmed, beta/experimental | Edit mode attaches an `Editor` to `File`, `FileDiff`, `MultiFileDiff`, `PatchDiff`, or `CodeView` items. The official edit page documents in-place editing, undo/redo, find/replace, markers, selection actions, unified/split views, virtualized files, and mobile/a11y behavior ([edit page](https://diffs.com/edit), [docs](https://diffs.com/docs)). | Test and pin the dependency, preserve a read-only fallback, and build the surrounding draft/version workflow. Diffs' edit state is a client editing session; it is not a persisted release. |
+| Confirmed, separate package | The official source describes `@pierre/trees` as a path-first web file-tree UI with search, selection, virtualization, and React/SSR entry points ([Trees README](https://raw.githubusercontent.com/pierrecomputer/pierre/main/packages/trees/README.md)). Diffs says it pairs with Trees for agentic UI experiences. | Compose the file tree and Diffs editor, then enforce canonical safe paths and tenant-scoped content in the registry. A Diffs dependency alone does not provide a tree, routing, or source model. |
+| Confirmed limitation | Diffs docs describe retained edit state as bounded and in memory; the documented editor APIs expose change/completion callbacks and application-owned initial state ([docs](https://diffs.com/docs)). | Durable drafts, reload/resume, optimistic concurrency, exact content digests, and immutable releases are Private Skills responsibilities. |
+| Unverified/absent in checked official material | The checked Diffs pages and linked source do not document upload handling, authentication, workspace tenancy, server persistence, immutable release/version semantics, scanner policy, or an Eve/review job service. | Do not attribute these to Diffs. The M6 contract below supplies them through existing Private Skills storage, auth, worker, scanner, and AI Gateway boundaries. |
+
+The current checkout already uploads a complete folder for a new release and
+shows read-only release/external detail plus the daily consolidation Eve review.
+M6 must make the read-only release view and the editing workflow separate:
+viewing a skill opens an authorized, immutable version through a Diffs file view,
+while editing is an explicit action that creates a draft route. The checkout
+has no draft route, file editor, file-tree/editor synchronization, or upload/edit
+review queue. The new reviewer must remain distinct from the daily
+common-skill consolidation Eve: it receives an exact upload/draft snapshot,
+uses its own least-privilege tool boundary and configurable AI Gateway model,
+and returns advisory findings for a human. Neither Eve may execute candidate
+content, publish, merge, install, or change scanner policy automatically.
+
+The proposed delivery order is:
+
+| Slice | Later acceptance target | Dependencies and rationale |
+| --- | --- | --- |
+| M6-VIEW | An authorized reader can open a selected immutable release/version from skill detail, browse its canonical file tree, and view the full content of every allowed file through the Diffs read-only surface. The selected version and canonical digest stay visible; binary and oversize files have explicit bounded states, and unauthorized retrieval or candidate execution is impossible. | Existing release authorization, Files SDK retrieval, canonical manifest, and `@pierre/diffs`; this makes inspection useful without creating an editable copy. |
+| M6-EDIT | An authorized publisher takes an explicit edit action from an immutable release, creating a tenant-scoped draft route with base release/version/digest. Saving and reloading restores draft revisions and bytes; a Diffs comparison shows changes against the base, and a separate author action starts the scanner/publication transition. | Depends on M6-VIEW, draft persistence, canonical digesting, and the existing scanner/publish boundary; an editor save is never a release. |
+| M6-UI | Authenticated publishers can open a private draft, browse a canonical file tree, edit files, switch file/diff views, and see line/path annotations. | Existing web auth, bundle validator, `@pierre/diffs`, and `@pierre/trees`; the UI value arrives before release automation. |
+| M6-RELEASE | Save creates a new immutable release with a server-computed canonical digest, base/draft provenance, and explicit scan/publish transition; previous releases remain byte-identical. | Existing Files SDK, state, worker, and scanner policy; avoids treating an editor save as publication. |
+| M6-REVIEW | Upload/edit Eve runs asynchronously against the exact draft digest/revision, persists findings and status, marks results stale when content or policy changes, and exposes human actions. | Existing AI Gateway/Eve patterns plus a separate queue and review-result schema; daily consolidation remains independent. |
+| M6-SAFE | Malicious or untrusted uploaded content is treated as data, validated and scanned in the existing isolated worker; no script, hook, MCP, or candidate instruction executes or escapes tenant boundaries. | Existing canonical bundle and scanner controls are authoritative; Diffs annotations/rendering cannot weaken them. |
+| M6-A11Y | File tree, editor, diff, findings, and actions pass keyboard/focus/screen-reader/contrast/reduced-motion checks at 390px and desktop widths. | Requires browser evidence for the complete route, including narrow layouts; current production catalog mobile overflow is a known separate verification gap. |
+
+M6 is complete only when the checkable gates in
+[`completion-criteria.md`](completion-criteria.md) pass. Diffs features are
+the UI substrate; draft durability, release identity, review persistence,
+tenant isolation, safety, and policy behavior remain Private Skills product
+criteria.
+
+## M7 — OpenClaw skills feed interoperability (future P1/P2)
+
+M7 is a later interoperability milestone for producing and consuming a
+versioned OpenClaw skills feed. It is not a G0, C1, or M6 prerequisite and does
+not require a mirror of the public catalog. The source review found a concrete
+primary contract in ClawHub's hosted-feed specification: the ClawHub skills
+feed uses feed ID `clawhub-official`, `schemaVersion: 1`, and the
+`/v1/feeds/skills` route. It uses the same envelope as the hosted plugin feed,
+but emits `type: "skill"` entries with `@publisher/slug` identities, exact
+release/install coordinates, SHA-256 integrity, `official` publisher trust,
+`available` state, and `generatedAt`, monotonic `sequence`, and `expiresAt`
+metadata. The contract says the current skills feed is unsigned and caps a
+snapshot at 1,000 eligible entries until pagination or sharding is defined;
+those facts must remain visible in our implementation status.
+
+The ClawHub contract is the target for M7's skills path. OpenClaw's official
+marketplace documentation and [consumer source](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts)
+describe a generic hosted plugin-catalog consumer that currently accepts
+schema versions 1 and 2, validates feed identity and timestamps, bounds the
+response, supports conditional snapshots/fallback, and can verify DSSE when a
+trusted profile is configured. That is evidence for consumer safety and
+compatibility behavior, not evidence that the ClawHub skills route is v2 or
+signed. The checked ClawHub contract says signing still requires a production
+key-management decision. M7 must pin the skills contract at v1 and treat
+signing as conditional on an explicit upstream declaration and configured trust
+root.
+
+| Evidence status | Primary source | Confirmed capability | Private Skills gap |
+| --- | --- | --- | --- |
+| Confirmed | [ClawHub hosted catalog feed specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md) | Canonical producer contract: feed ID, schema version, `/v1/feeds/skills`, skill entry identity/type, exact version/integrity/trust/state, expiry/sequence, eligibility filters, deterministic bytes/order, cache validators, and the 1,000-entry interim cap. | No OpenClaw feed producer, consumer, schema adapter, feed cache, or source/provenance mapping exists in the current product. |
+| Confirmed | [ClawHub GitHub-backed skills specification](https://github.com/openclaw/clawhub/blob/main/specs/github-backed-skills.md) | A GitHub-backed skill remains tied to the upstream repository/path and immutable commit/content hash; current content must complete the required scan before normal install/update. | The current cloud pullthrough work has source mapping and local scanning goals, but no OpenClaw feed-specific `public-github` adapter or commit/content-hash contract is accepted yet. |
+| Confirmed, scoped | [OpenClaw marketplace documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/cli/plugins.md) and [official catalog consumer](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts) | Hosted consumer behavior includes HTTPS URL restrictions, bounded UTF-8 JSON, schema/id/time/sequence validation, expiry, expected SHA, ETag/Last-Modified snapshots, offline fallback, and DSSE/feed-ID binding when signing is configured. The command surface is documented for plugin catalogs. | Write a skills-specific adapter and map entries into Private Skills' admission flow. Do not equate plugin-catalog install authority or generic v2 support with the ClawHub skills-feed contract. |
+| Confirmed, separate format | [OpenClaw skills documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/tools/skills.md), [ClawHub skill format](https://docs.openclaw.ai/clawhub/skill-format), and [ClawHub product spec](https://github.com/openclaw/clawhub/blob/main/specs/spec.md) | Individual skills are `SKILL.md` folders with supporting files and versioned releases; third-party skill content is untrusted and local policy applies. These pages do not replace the hosted-feed envelope. | Feed ingestion must transfer metadata or selected bytes only to the canonical validator and scanner. It must never execute a skill, hook, MCP server, or OpenClaw package manager. |
+| Conditional/unverified | [ClawHub hosted feed specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md) and [OpenClaw catalog consumer](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts) | The checked ClawHub spec describes an unsigned current publication; OpenClaw supports DSSE for configured generic feeds. A production signing key/trust root for the skills route was not established by this review. | Store and display signed/unsigned status. Verify DSSE only after the skills publisher declares the envelope and our trusted keys are explicitly configured; never bootstrap trust from the feed. |
+
+M7's product contract has these boundaries:
+
+- The consumer fetches only configured, allowlisted HTTPS feeds. A feed row is
+  a candidate and provenance record; selecting it resolves one exact source
+  release or GitHub commit/path and pulls through the existing canonical
+  validator, required scanner policy, and immutable transfer path.
+- The producer emits schema-v1-compatible JSON with a Private Skills feed ID
+  assigned by this product. It must never claim the reserved
+  `clawhub-official` identity unless Private Skills is actually the ClawHub
+  authoritative publisher. A private tenant feed is authenticated and
+  tenant-scoped; a deliberately public feed contains only deliberately public
+  records and no private metadata, bytes, credentials, or scanner reports.
+- Feed trust, remote audit state, and `available` status never override local
+  authorization, source allowlists, digest checks, scanner evidence, or policy.
+  Expired, malformed, unsupported, replayed, or digest-mismatched entries are
+  unavailable and cannot become installable.
+- Snapshot caching and individual pullthrough are bounded and on demand. M7
+  does not silently bulk-import or mirror all entries. The upstream 1,000-row
+  interim cap is recorded; complete multi-shard coverage requires a later
+  versioned upstream contract rather than an invented pagination scheme.
+
+| Slice | Future acceptance target | Dependencies and rationale |
+| --- | --- | --- |
+| M7-SPEC | Freeze a dated copy/reference of the ClawHub skills-feed schema-v1 contract, including feed ID, route, required envelope fields, skill entry shape, source profiles, eligibility, cap, expiry, cache, and unsigned status. Record a review whenever the upstream contract changes; do not infer v2 fields from the generic plugin consumer. | Requires a versioned adapter and an explicit product decision about supported external feed IDs. This is the compatibility anchor. |
+| M7-PRODUCER | Generate deterministic schema-v1 snapshots from eligible records with stable entry/key ordering, exact release/version and `sha256:` integrity, publisher trust/state, generated/sequence/expiry metadata, and no secrets/private bytes. Serve unchanged bytes with ETag/Last-Modified/304 and bounded cache headers. | Requires an approved feed publication policy, public/private visibility model, and tenant-aware storage. It does not require public marketplace launch. |
+| M7-CONSUMER | Fetch with HTTPS/no-credential/query/fragment restrictions, body/timeout/UTF-8 limits, required-field/schema/feed-ID/timestamp/sequence validation, expiry, duplicate handling, conditional revalidation, and a bounded last-known-good snapshot. Malformed or wrong-ID snapshots never write artifacts. | Reuses existing upstream gateway and durable state patterns; the generic OpenClaw parser is a reference for safety, while the skills adapter owns skill semantics. |
+| M7-PROVENANCE | Preserve `public-clawhub` release identity and `public-github` repository/path/commit/content-hash identity. Recompute downloaded bytes and reject a source or artifact that differs from the declared digest. Keep external feed hash separate from the Private Skills canonical digest. | Depends on C1 exact source mapping and immutable artifact storage. It prevents feed metadata from silently substituting another skill. |
+| M7-ADMISSION | Route selected entries through canonical bundle validation, existing Cisco/NVIDIA/SkillsGuard/local scanner policy, authorization, and immutable transfer. Remote publisher trust or audit is advisory and cannot admit a release or install. No execution, install, merge, publish, hook, MCP, or package-manager side effect occurs during feed ingestion. | Reuses the current fail-closed worker/scanner contract and preserves the current release boundary. |
+| M7-AUTH | Keep feed credentials server side; expose no bearer, source token, private feed metadata, or cross-tenant cache entry to a browser or other tenant. Private feed responses and candidate/source details are scoped to organization and principal, with safe unauthorized responses. | Requires the existing tenant/role model and portable gateway configuration; do not assume Vercel-only hosting. |
+| M7-INTEROP | Ship producer/consumer fixtures and a reference parse check for valid v1, empty, duplicate, wrong schema/id, missing fields, invalid time/sequence, expired, replayed, oversized/truncated, wrong digest, changed/removed GitHub source, conditional 304, fallback, and the 1,000-entry boundary. Add signed DSSE fixtures only if the official skills-feed contract enables them. | Requires a pinned source contract and fixture provenance. The OpenClaw CLI plugin command is not itself a skills-feed acceptance test. |
+| M7-PORTABILITY | Run feed publication, refresh, cache, source resolution, and local admission through the Nitro deployment modes and supported provider gateway without a Vercel-only API or filesystem assumption. | Keeps the interop surface portable and preserves explicit credentials for provider-specific infrastructure. |
+| M7-EVIDENCE | Capture the source URL and contract revision, producer bytes/digest, consumer result, cache/conditional behavior, exact source mapping, scanner decision, tenant isolation, and no-execution evidence for a representative accepted and rejected entry. Record public feed availability separately from implementation readiness. | Makes upstream drift and deployment gaps visible without promoting this future milestone into G0 or C1. |
 
 ## Confirmed comparison
 
@@ -112,7 +252,14 @@ The comparison rows map to the completion criteria as follows: context package,
 manifest, MCP, and native-agent work to **M1**; quality review and scenario
 evaluation to **M2**; memberships and artifact lifecycle to **M3**; author CI to
 **M4-1**, standards to **M4-2**, and library context to **M4-3**; and
-visibility/automation to **M5**.
+visibility/automation to **M5**. The deferred Diffs editor and upload/edit
+review slices map to **M6-EDITOR**, **M6-DRAFT**, **M6-TREE-DIFF**,
+**M6-RELEASE**, **M6-UPLOAD-EVE**, **M6-REVIEW**, **M6-POLICY**,
+**M6-AUTH**, **M6-SAFETY**, **M6-A11Y**, and **M6-EVIDENCE**; the explicit
+read-only and edit workflows map to **M6-VIEW** and **M6-EDIT**. OpenClaw
+skills feed production and consumption map to **M7-SPEC**, **M7-PRODUCER**,
+**M7-CONSUMER**, **M7-PROVENANCE**, **M7-ADMISSION**, **M7-AUTH**,
+**M7-INTEROP**, **M7-PORTABILITY**, and **M7-EVIDENCE**.
 
 ## Advertised or unresolved capabilities
 
