@@ -1422,16 +1422,7 @@ fn try_lock_file(file: &File) -> io::Result<()> {
         offset_high: 0,
         event: std::ptr::null_mut(),
     };
-    let result = unsafe {
-        LockFileEx(
-            file.as_raw_handle() as *mut c_void,
-            3,
-            0,
-            1,
-            0,
-            &mut overlapped,
-        )
-    };
+    let result = unsafe { LockFileEx(file.as_raw_handle(), 3, 0, 1, 0, &mut overlapped) };
     if result != 0 {
         Ok(())
     } else {
@@ -1469,13 +1460,7 @@ fn unlock_file(file: &File) {
         event: std::ptr::null_mut(),
     };
     unsafe {
-        let _ = UnlockFileEx(
-            file.as_raw_handle() as *mut c_void,
-            0,
-            1,
-            0,
-            &mut overlapped,
-        );
+        let _ = UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &mut overlapped);
     }
 }
 

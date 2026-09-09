@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -219,6 +220,7 @@ fn write_private_json(path: &PathBuf, value: &ConfigFile) -> Result<(), Credenti
     })
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_keyring(
     command: &str,
     args: &[&str],
@@ -278,7 +280,7 @@ fn keyring_get(service: &str, account: &str, registry: &str) -> Result<Option<St
         if output.status.success() {
             return Ok(Some(String::from_utf8_lossy(&output.stdout).trim().into()));
         }
-        return Ok(None);
+        Ok(None)
     }
     #[cfg(target_os = "windows")]
     {
