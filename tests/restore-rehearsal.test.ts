@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -20,7 +22,14 @@ import {
 } from '../packages/core/src/index.js';
 import { createNodeFilesSdkBlobStore } from '../packages/storage/src/node.js';
 import { digestBytes } from '../packages/storage/src/index.js';
+import {
+  createLogicalBackup,
+  createFileStateSeed,
+  readLogicalBackup,
+  restoreLogicalBackup,
+} from '../scripts/restore-backup.js';
 import type {
+  BlobStore,
   InstallAuthorization,
   RegistryConfiguration,
   RegistryDependencies,
@@ -28,6 +37,8 @@ import type {
   SkillVersion,
   TransferDescriptor,
 } from '../packages/contracts/src/index.js';
+
+const execFileAsync = promisify(execFile);
 
 const ORGANIZATION = 'restore-rehearsal-org';
 const NAMESPACE = '@acme';
@@ -172,12 +183,12 @@ describe('filesystem restore rehearsal', () => {
     const revokedRestoredMetadata = join(root, 'revoked-restored-metadata');
     const revokedRestoredBlobs = join(root, 'revoked-restored-blobs');
     await Promise.all([
-      mkdir(sourceMetadata, { recursive: true }),
-      mkdir(sourceBlobs, { recursive: true }),
-      mkdir(restoredMetadata, { recursive: true }),
-      mkdir(restoredBlobs, { recursive: true }),
-      mkdir(revokedRestoredMetadata, { recursive: true }),
-      mkdir(revokedRestoredBlobs, { recursive: true }),
+      mkdir(sourceMetadata, { recursive: true, mode: 0o700 }),
+      mkdir(sourceBlobs, { recursive: true, mode: 0o700 }),
+      mkdir(restoredMetadata, { recursive: true, mode: 0o700 }),
+      mkdir(restoredBlobs, { recursive: true, mode: 0o700 }),
+      mkdir(revokedRestoredMetadata, { recursive: true, mode: 0o700 }),
+      mkdir(revokedRestoredBlobs, { recursive: true, mode: 0o700 }),
     ]);
 
     const token = `restore-rehearsal-${randomUUID()}`;
@@ -388,5 +399,542 @@ describe('filesystem restore rehearsal', () => {
     await expect(json<{ error: { code: string } }>(revokedTransfer)).resolves.toMatchObject({
       error: { code: 'POLICY_BLOCKED' },
     });
+  });
+});
+
+describe('logical backup utility', () => {
+  let root: string | undefined;
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
+  async function sourceFixture() {
+    root = await mkdtemp(join(tmpdir(), 'private-skills-logical-backup-'));
+    const sourceMetadata = join(root, 'source-metadata');
+    const sourceBlobs = join(root, 'source-blobs');
+    const backup = join(root, 'backup');
+    const targetMetadata = join(root, 'target-metadata');
+    const targetBlobs = join(root, 'target-blobs');
+    await mkdir(sourceMetadata, { recursive: true, mode: 0o700 });
+    await mkdir(sourceBlobs, { recursive: true, mode: 0o700 });
+    await mkdir(targetMetadata, { recursive: true, mode: 0o700 });
+    await mkdir(targetBlobs, { recursive: true, mode: 0o700 });
+    const initial = defaultRegistryState({
+      production: false,
+      allowUnscanned: true,
+      policyRevision: 'logical-backup-policy',
+    });
+    const sourceRepository = createFileStateRepository({
+      directory: sourceMetadata,
+      stateFactory: () => structuredClone(initial),
+    });
+    const sourceBlobStore = await createNodeFilesSdkBlobStore({
+      provider: 'fs',
+      root: sourceBlobs,
+      prefix: 'source-registry',
+    });
+    const bytes = new TextEncoder().encode('logical backup exact bytes');
+    const stored = await sourceBlobStore.put(bytes);
+    await sourceRepository.transaction(ORGANIZATION, (state) => {
+      state.skills.push({
+        id: 'logical-backup-skill',
+        organizationId: ORGANIZATION,
+        name: `${NAMESPACE}/logical-backup`,
+        skillName: 'logical-backup',
+        version: '1.0.0',
+        description: 'logical backup fixture',
+        artifact: stored,
+        state: 'revoked',
+        policyRevision: state.policy.revision,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        provenance: { kind: 'native' },
+        fileCount: 1,
+        scanIds: [],
+      });
+      state.audit.push({
+        id: 'logical-backup-revocation',
+        organizationId: ORGANIZATION,
+        subject: 'logical-backup-admin',
+        action: 'skill.revoke',
+        resourceId: 'logical-backup-skill',
+        createdAt: '2026-01-01T00:01:00.000Z',
+      });
+    });
+    // A restore must preserve a realistic revision greater than the first
+    // write; the generic transaction API cannot fake this by assigning a
+    // revision inside its updater.
+    await sourceRepository.transaction(ORGANIZATION, (state) => {
+      state.audit.push({
+        id: 'logical-backup-checkpoint',
+        organizationId: ORGANIZATION,
+        subject: 'logical-backup-admin',
+        action: 'backup.checkpoint',
+        createdAt: '2026-01-01T00:02:00.000Z',
+      });
+    });
+    return {
+      sourceMetadata,
+      sourceBlobs,
+      backup,
+      targetMetadata,
+      targetBlobs,
+      sourceRepository,
+      sourceBlobStore,
+      stored,
+      bytes,
+    };
+  }
+
+  it('captures exact references and restores policy, revision, revocation, and digest', async () => {
+    const fixture = await sourceFixture();
+    const sourceLocation = {
+      kind: 'filesystem' as const,
+      identity: 'offline-source-registry',
+      roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+    };
+    const backup = await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-isolated-source-and-target',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+      now: () => new Date('2026-01-01T00:02:00.000Z'),
+    });
+    expect(backup.manifest.metadataRevision).toBe(2);
+    expect(backup.manifest.objects).toHaveLength(1);
+    expect(backup.manifest.objects[0]).toMatchObject({
+      key: fixture.stored.key,
+      digest: fixture.stored.digest,
+      size: fixture.stored.size,
+      references: ['state.skills[0].artifact'],
+    });
+    expect((await stat(join(fixture.backup, 'manifest.json'))).mode & 0o077).toBe(0);
+
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({
+      provider: 'fs',
+      root: fixture.targetBlobs,
+      prefix: 'target-registry',
+    });
+    const restored = await restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+    });
+    expect(restored).toMatchObject({
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      targetIdentity: 'offline-target-registry',
+      metadataRevision: 2,
+      objectCount: 1,
+      remappedObjectCount: 1,
+    });
+    const restoredState = await targetRepository.read(ORGANIZATION);
+    expect(restoredState.metadataRevision).toBe(2);
+    expect(restoredState.policy).toEqual((await fixture.sourceRepository.read(ORGANIZATION)).policy);
+    expect(restoredState.skills[0]).toMatchObject({
+      organizationId: ORGANIZATION,
+      state: 'revoked',
+      artifact: { digest: fixture.stored.digest, size: fixture.stored.size },
+    });
+    expect(restoredState.skills[0]!.artifact.key).not.toBe(fixture.stored.key);
+    await expect(targetBlobStore.get(restoredState.skills[0]!.artifact.key)).resolves.toEqual(fixture.bytes);
+    expect(restoredState.audit).toHaveLength(2);
+  });
+
+  it('requires explicit fence evidence and refuses source or non-isolated targets', async () => {
+    const fixture = await sourceFixture();
+    const sourceLocation = {
+      kind: 'filesystem' as const,
+      identity: 'offline-source-registry',
+      roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+    };
+    await expect(createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: undefined as never,
+    })).rejects.toMatchObject({ code: 'FENCE_REQUIRED' });
+
+    await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-fence',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+    });
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({ provider: 'fs', root: fixture.targetBlobs, prefix: 'target-registry' });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-source-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-source-registry',
+        roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+    })).rejects.toMatchObject({ code: 'SOURCE_TARGET_SAME' });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: false as never,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+    })).rejects.toMatchObject({ code: 'INVALID_OPTIONS' });
+  });
+
+  it('enforces the aggregate object budget before copying or mutating the target', async () => {
+    const fixture = await sourceFixture();
+    const sourceLocation = {
+      kind: 'filesystem' as const,
+      identity: 'offline-source-registry',
+      roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+    };
+    const fence = {
+      scope: 'offline' as const,
+      kind: 'offline-test' as const,
+      evidenceRef: 'vitest-fence',
+      observedAt: '2026-01-01T00:02:00.000Z',
+    };
+    await expect(createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: fence,
+      maxTotalObjectBytes: fixture.bytes.byteLength - 1,
+    })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+    await expect(readdir(fixture.backup)).resolves.toEqual([]);
+
+    const backup = await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: fence,
+    });
+    await expect(readLogicalBackup(fixture.backup, {
+      maxTotalObjectBytes: fixture.bytes.byteLength - 1,
+    })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({
+      provider: 'fs',
+      root: fixture.targetBlobs,
+      prefix: 'target-registry',
+    });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+      maxTotalObjectBytes: fixture.bytes.byteLength - 1,
+    })).rejects.toMatchObject({ code: 'SIZE_LIMIT' });
+    await expect(readdir(fixture.targetMetadata)).resolves.toEqual([]);
+    await expect(readdir(fixture.targetBlobs)).resolves.toEqual([]);
+    expect(backup.manifest.objects).toHaveLength(1);
+  });
+
+  it('rejects tampered or world-readable backup files before metadata commit', async () => {
+    const fixture = await sourceFixture();
+    const sourceLocation = {
+      kind: 'filesystem' as const,
+      identity: 'offline-source-registry',
+      roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+    };
+    const backup = await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation,
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-fence',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+    });
+    const objectPath = join(fixture.backup, backup.manifest.objects[0]!.archivePath);
+    await writeFile(objectPath, 'tampered bytes');
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({ provider: 'fs', root: fixture.targetBlobs, prefix: 'target-registry' });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+    })).rejects.toMatchObject({ code: 'OBJECT_DIGEST_MISMATCH' });
+    expect((await targetRepository.read(ORGANIZATION)).skills).toHaveLength(0);
+
+    await chmod(join(fixture.backup, 'manifest.json'), 0o644);
+    await expect(readLogicalBackup(fixture.backup)).rejects.toMatchObject({ code: 'PERMISSION' });
+  });
+
+  it('refuses a generic target before reading or mutating an isolated destination', async () => {
+    const fixture = await sourceFixture();
+    const backup = await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation: {
+        kind: 'filesystem',
+        identity: 'offline-source-registry',
+        roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+      },
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-fence',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+    });
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({
+      provider: 'fs',
+      root: fixture.targetBlobs,
+      prefix: 'target-registry',
+    });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: undefined as never,
+    })).rejects.toMatchObject({ code: 'REVISION_UNSUPPORTED' });
+    await expect(readdir(fixture.targetMetadata)).resolves.toEqual([]);
+    await expect(readdir(fixture.targetBlobs)).resolves.toEqual([]);
+    expect(backup.manifest.metadataRevision).toBeGreaterThan(1);
+  });
+
+  it('verifies target bytes after put and leaves metadata unseeded on a faulty provider', async () => {
+    const fixture = await sourceFixture();
+    await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation: {
+        kind: 'filesystem',
+        identity: 'offline-source-registry',
+        roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+      },
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-fence',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+    });
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    let seeded = false;
+    const faultyTarget: BlobStore = {
+      async put(bytes) {
+        return {
+          key: `target-registry/sealed/${'a'.repeat(48)}`,
+          digest: await digestBytes(bytes),
+          size: bytes.byteLength,
+        };
+      },
+      async get() {
+        return new TextEncoder().encode('faulty read-back');
+      },
+      async remove() {
+        // The rehearsal never calls remove; retaining this no-op keeps the
+        // fixture explicit about the provider interface.
+      },
+    };
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: faultyTarget,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: {
+        kind: 'isolated-empty-state-v1',
+        async seed() {
+          seeded = true;
+        },
+      },
+    })).rejects.toMatchObject({ code: 'TARGET_DIGEST_MISMATCH' });
+    expect(seeded).toBe(false);
+    expect((await targetRepository.read(ORGANIZATION)).skills).toHaveLength(0);
+  });
+
+  it('rejects a symlinked backup parent before a target write', async () => {
+    if (process.platform === 'win32') return;
+    const fixture = await sourceFixture();
+    await createLogicalBackup({
+      sourceRepository: fixture.sourceRepository,
+      sourceBlobs: fixture.sourceBlobStore,
+      organizationId: ORGANIZATION,
+      sourceIdentity: 'offline-source-registry',
+      sourceLocation: {
+        kind: 'filesystem',
+        identity: 'offline-source-registry',
+        roots: [fixture.sourceMetadata, fixture.sourceBlobs],
+      },
+      backupDirectory: fixture.backup,
+      captureConsistency: 'offline-filesystem',
+      deletionFence: {
+        scope: 'offline',
+        kind: 'offline-test',
+        evidenceRef: 'vitest-fence',
+        observedAt: '2026-01-01T00:02:00.000Z',
+      },
+    });
+    const realObjects = join(fixture.backup, 'objects-real');
+    await rename(join(fixture.backup, 'objects'), realObjects);
+    await symlink(realObjects, join(fixture.backup, 'objects'), 'junction');
+    const targetRepository = createFileStateRepository({ directory: fixture.targetMetadata });
+    const targetBlobStore = await createNodeFilesSdkBlobStore({ provider: 'fs', root: fixture.targetBlobs, prefix: 'target-registry' });
+    await expect(restoreLogicalBackup({
+      targetRepository,
+      targetBlobs: targetBlobStore,
+      organizationId: ORGANIZATION,
+      targetIdentity: 'offline-target-registry',
+      targetLocation: {
+        kind: 'filesystem',
+        identity: 'offline-target-registry',
+        roots: [fixture.targetMetadata, fixture.targetBlobs],
+      },
+      backupDirectory: fixture.backup,
+      targetIsolated: true,
+      targetSeed: createFileStateSeed(fixture.targetMetadata),
+    })).rejects.toMatchObject({ code: 'PERMISSION' });
+    await expect((await targetRepository.read(ORGANIZATION)).skills).toHaveLength(0);
+  });
+
+  it('runs the executable local backup and restore path with sanitized output', async () => {
+    if (process.platform === 'win32') return;
+    root = await mkdtemp(join(tmpdir(), 'private-skills-restore-cli-'));
+    const script = join(process.cwd(), 'scripts', 'restore-backup');
+    const sourceState = join(root, 'source-state');
+    const sourceBlobs = join(root, 'source-blobs');
+    const backup = join(root, 'backup');
+    const targetState = join(root, 'target-state');
+    const targetBlobs = join(root, 'target-blobs');
+    const run = (args: string[]) => execFileAsync(script, args, { encoding: 'utf8' });
+    const backupResult = await run([
+      'backup',
+      '--organization', ORGANIZATION,
+      '--state-dir', sourceState,
+      '--blob-dir', sourceBlobs,
+      '--blob-prefix', 'private-registry',
+      '--source-id', 'cli-source',
+      '--output', backup,
+      '--fence-evidence', 'vitest-cli-fence',
+    ]);
+    expect(JSON.parse(backupResult.stdout)).toEqual({
+      ok: true,
+      operation: 'backup',
+      organizationId: ORGANIZATION,
+      metadataRevision: 0,
+      objectCount: 0,
+    });
+    const restoreResult = await run([
+      'restore',
+      '--organization', ORGANIZATION,
+      '--backup', backup,
+      '--target-state-dir', targetState,
+      '--target-blob-dir', targetBlobs,
+      '--blob-prefix', 'private-registry',
+      '--target-id', 'cli-target',
+      '--target-isolated', 'true',
+    ]);
+    expect(JSON.parse(restoreResult.stdout)).toEqual({
+      ok: true,
+      operation: 'restore',
+      organizationId: ORGANIZATION,
+      metadataRevision: 0,
+      objectCount: 0,
+      remappedObjectCount: 0,
+    });
+    expect(restoreResult.stdout).not.toMatch(/manifest|sealed|token|secret/i);
   });
 });
