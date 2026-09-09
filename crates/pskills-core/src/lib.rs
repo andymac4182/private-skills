@@ -21,5 +21,5 @@ pub use install::{InstallPlan, InstallResult, InstalledEntry, LocalState};
 pub use model::*;
 pub use paths::{agent_root, resolve_directory, Agent, InstallScope};
 
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVICE: &str = "private-skills";

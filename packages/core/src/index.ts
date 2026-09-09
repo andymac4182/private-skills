@@ -43,7 +43,7 @@ import {
  * edge Nitro targets alike.
  */
 
-const SERVICE_VERSION = '0.1.0';
+const SERVICE_VERSION = '0.1.1';
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_LEASE_SECONDS = 300;
 const TRANSFER_TTL_SECONDS = 60;
