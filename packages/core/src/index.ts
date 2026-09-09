@@ -4,6 +4,7 @@ import {
   type Authenticator,
   type Digest,
   type DistributionState,
+  type ExternalProvenance,
   type Finding,
   type ImportRequest,
   type InstallAuthorization,
@@ -45,6 +46,17 @@ import {
   parseSkillMetadata,
   validateBundle,
 } from '../../storage/src/index.js';
+import {
+  SkillsDirectoryError,
+  type CuratedSkillsResponse,
+  type SkillAuditResponse,
+  type SkillDetailResponse,
+  type SkillListResponse,
+  type SkillSearchResponse,
+  type SkillSourceType,
+  type V1Skill,
+} from '../../directory/src/index.js';
+import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -63,6 +75,8 @@ const MAX_ANALYTICS_DAYS = 90;
 const MAX_INSTALL_RECEIPTS = 100_000;
 const MAX_INSTALL_RECEIPT_TICKETS = 100_000;
 const MAX_CLIENT_VERSION_LENGTH = 128;
+const DIRECTORY_METADATA_LOOKUP_DEADLINE_MS = 30_000;
+const DIRECTORY_METADATA_LOOKUP_MAX_PAGES = 100;
 const SUPPORTED_SCANNERS: readonly ScannerId[] = [
   'cisco-skill-scanner',
   'nvidia-skillspector',
@@ -142,6 +156,30 @@ export interface RegistryHandler {
   (request: Request): Promise<Response>;
 }
 
+/**
+ * The directory adapter is injected so the core remains portable and never
+ * performs a source fetch itself.  A structural interface keeps the core
+ * independent from a provider SDK while accepting SkillsDirectoryClient and
+ * small test fakes alike.
+ */
+export interface RegistryDirectoryClient {
+  list(options?: { view?: 'all-time' | 'trending' | 'hot'; page?: number; perPage?: number; signal?: AbortSignal }): Promise<SkillListResponse>;
+  search(options: { q: string; owner?: string; limit?: number; signal?: AbortSignal }): Promise<SkillSearchResponse>;
+  curated(options?: { signal?: AbortSignal }): Promise<CuratedSkillsResponse>;
+  detail(id: string, options?: { signal?: AbortSignal }): Promise<SkillDetailResponse>;
+  audit(id: string, options?: { signal?: AbortSignal }): Promise<SkillAuditResponse>;
+}
+
+/** Metadata-only pack discovery seam; member bytes remain a separate worker operation. */
+export interface RegistryDirectoryPackClient {
+  inspect(input: string | URL): Promise<SkillsPackManifest>;
+}
+
+export type RegistryHandlerDependencies = RegistryDependencies & {
+  directory?: RegistryDirectoryClient;
+  directoryPacks?: RegistryDirectoryPackClient;
+};
+
 /** A safe, empty state used by memory repositories and migration shims. */
 export function createEmptyRegistryState(policy: Policy = defaultPolicy()): RegistryState {
   return {
@@ -184,7 +222,7 @@ export function defaultPolicy(): Policy {
  * script, or use a provider SDK.  Network/source acquisition and scanning are
  * worker responsibilities and arrive through the fenced job completion route.
  */
-export function createRegistryHandler(deps: RegistryDependencies): RegistryHandler {
+export function createRegistryHandler(deps: RegistryHandlerDependencies): RegistryHandler {
   const config = normalizeConfiguration(deps.config);
 
   return async function registryHandler(request: Request): Promise<Response> {
@@ -264,6 +302,7 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
             packs: true,
             imports: true,
             proxyResolve: true,
+            directory: !!deps.directory,
             installAuthorizations: true,
             installReceipts: true,
             transferMode: 'gateway',
@@ -276,6 +315,19 @@ export function createRegistryHandler(deps: RegistryDependencies): RegistryHandl
           },
           scanners: [...SUPPORTED_SCANNERS],
         });
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'directory') {
+        return await handleDirectoryRoute(
+          method,
+          segments,
+          url,
+          request,
+          principal,
+          deps,
+          config,
+          requestId,
+        );
       }
 
       if (segments[0] === 'v1' && segments[1] === 'skills') {
@@ -656,6 +708,11 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (segments[0] === 'v1' && segments[1] === 'analytics') {
     return ['analytics:read', 'registry:admin'];
   }
+  if (segments[0] === 'v1' && segments[1] === 'directory') {
+    return segments.length === 3 && segments[2] === 'import'
+      ? ['imports:create', 'skills:publish', 'proxy:resolve']
+      : ['skills:read', 'registry:read'];
+  }
   if (segments[0] === 'v1' && segments[1] === 'artifacts') return ['artifacts:download', 'install:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'packs') return method === 'GET' ? ['packs:read', 'registry:read'] : ['packs:publish', 'packs:write'];
   if (segments[0] === 'v1' && segments[1] === 'policy') return method === 'GET' ? ['policy:read', 'registry:read'] : ['policy:write', 'policy:admin'];
@@ -851,6 +908,460 @@ async function handleSkillsRoute(
   }
 
   throw new RegistryApiError('NOT_FOUND', 'Route not found', 404);
+}
+
+/**
+ * Server-side skills.sh catalog proxy.  The injected client owns all network
+ * policy and request-scoped credentials; this route only authenticates the
+ * caller, validates bounded query/body fields, and returns its validated DTO.
+ */
+async function handleDirectoryRoute(
+  method: HttpMethod,
+  segments: string[],
+  url: URL,
+  request: Request,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  const directory = deps.directory;
+
+  if (segments.length === 4 && segments[2] === 'packs' && segments[3] === 'preview') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    assertSessionRequestSafe(request, config, method);
+    requireReader(principal);
+    const packDirectory = deps.directoryPacks;
+    if (!packDirectory) throw directoryUnavailable();
+    const body = await readJson(request, config.maxBodyBytes);
+    const packUrl = requireDirectoryPackUrl(body.url);
+    const result = await directoryPackRequest(() => packDirectory.inspect(packUrl));
+    return jsonResponse(result);
+  }
+
+  if (!directory) throw directoryUnavailable();
+
+  if (segments.length === 3 && segments[2] === 'skills') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    const view = optionalDirectoryView(url.searchParams.get('view'));
+    const page = optionalDirectoryInteger(url.searchParams.get('page'), 'page', 0, Number.MAX_SAFE_INTEGER);
+    const perPage = optionalDirectoryInteger(url.searchParams.get('per_page'), 'per_page', 1, 500);
+    const result = await directoryRequest(() => directory.list({ view, page, perPage }));
+    return jsonResponse(result);
+  }
+
+  if (segments.length === 3 && segments[2] === 'search') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    const q = url.searchParams.get('q')?.trim() || '';
+    if ([...q].length < 2 || q.length > 16_384 || /[\u0000-\u001f\u007f]/u.test(q)) {
+      throw new RegistryApiError('INVALID_REQUEST', 'q must contain at least two characters', 400);
+    }
+    const ownerRaw = url.searchParams.get('owner');
+    const owner = ownerRaw === null ? undefined : ownerRaw.trim();
+    if (owner !== undefined && (!owner || owner.length > 512 || /[\u0000-\u001f\u007f/\\]/u.test(owner))) {
+      throw new RegistryApiError('INVALID_REQUEST', 'owner is invalid', 400);
+    }
+    const limit = optionalDirectoryInteger(url.searchParams.get('limit'), 'limit', 1, 200);
+    const result = await directoryRequest(() => directory.search({ q, owner, limit }));
+    return jsonResponse(result);
+  }
+
+  if (segments.length === 3 && segments[2] === 'official') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    const result = await directoryRequest(() => directory.curated());
+    return jsonResponse(result);
+  }
+
+  if (segments.length === 3 && (segments[2] === 'detail' || segments[2] === 'audits')) {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    const id = requireDirectoryId(url.searchParams.get('id'));
+    const result = segments[2] === 'detail'
+      ? await directoryRequest(() => directory.detail(id))
+      : await directoryRequest(() => directory.audit(id));
+    return jsonResponse(result);
+  }
+
+  if (segments.length === 3 && segments[2] === 'import') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    // Browser callers use the same cookie mutation protections as session and
+    // receipt routes; bearer CLI callers remain usable without an Origin.
+    assertSessionRequestSafe(request, config, method);
+    requirePublisher(principal);
+    const body = await readJson(request, config.maxBodyBytes);
+    return await createDirectoryImport(body, principal, directory, deps, config, requestId, request.signal);
+  }
+
+  throw new RegistryApiError('NOT_FOUND', 'Route not found', 404);
+}
+
+async function createDirectoryImport(
+  body: JsonObject,
+  principal: Principal,
+  directory: RegistryDirectoryClient,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+  requestSignal?: AbortSignal,
+): Promise<Response> {
+  const id = requireDirectoryId(stringValue(body.id));
+  const name = requireSkillName(body.name);
+  const version = requireVersion(body.version);
+  if (!canPublishName(principal, name)) {
+    throw new RegistryApiError('FORBIDDEN', 'Namespace publish denied', 403);
+  }
+
+  const requestedUpstreamId = optionalImportField(body.upstreamId, 'upstreamId');
+  const stateBeforeDetail = await readState(deps.repository, config.organizationId);
+  if (requestedUpstreamId !== undefined) {
+    const requestedMapping = stateBeforeDetail.upstreams.find((upstream) => upstream.id === requestedUpstreamId);
+    if (
+      !requestedMapping ||
+      requestedMapping.organizationId !== config.organizationId ||
+      requestedMapping.kind !== 'skills-sh' ||
+      !requestedMapping.enabled ||
+      !canReadNamespace(principal, requestedMapping.namespace)
+    ) {
+      throw unavailable();
+    }
+  } else if (!stateBeforeDetail.upstreams.some((upstream) =>
+    upstream.organizationId === config.organizationId &&
+    upstream.kind === 'skills-sh' &&
+    upstream.enabled &&
+    canReadNamespace(principal, upstream.namespace),
+  )) {
+    // Do not contact the public catalog when this principal has no eligible
+    // source mapping at all.  The source-specific allowlist still gets
+    // checked after the exact detail row is known.
+    throw unavailable();
+  }
+  // A completed/active import already contains the server-validated external
+  // identity and mapping.  Reuse it directly so an approved warm hit never
+  // calls the directory detail endpoint or observes a mutable catalog row.
+  const cachedRequest = findDirectoryCachedImportRequest(
+    stateBeforeDetail,
+    id,
+    name,
+    version,
+    principal,
+    requestedUpstreamId,
+  );
+  if (cachedRequest) {
+    return await createImportJob({ ...cachedRequest }, principal, deps, config, requestId);
+  }
+
+  // Fetch exactly the selected catalog row.  A bounded metadata lookup is
+  // performed only when this row has no immutable snapshot hash, and the
+  // returned identity is checked before queueing.
+  const detail = await directoryRequest(() => directory.detail(id));
+  if (
+    detail.id !== id ||
+    detail.id !== `${detail.source}/${detail.slug}` ||
+    !detail.source ||
+    !detail.slug ||
+    !isSafeDirectoryExternalValue(detail.source) ||
+    !isSafeDirectoryExternalValue(detail.slug)
+  ) {
+    throw new RegistryApiError('DIRECTORY_INTEGRITY', 'Directory detail identity is inconsistent', 502, { retryable: true });
+  }
+  // A null catalog snapshot cannot by itself tell the worker whether the
+  // public source is GitHub or a well-known host.  Resolve that one row from
+  // the trusted list/search metadata before queueing; never infer the type
+  // from an ID shape or pass a browser-supplied hint through to the worker.
+  const trustedRow = detail.hash === null || detail.files === null
+    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
+    : undefined;
+  const candidates = stateBeforeDetail.upstreams
+    .filter((upstream) =>
+      upstream.organizationId === config.organizationId &&
+      upstream.kind === 'skills-sh' &&
+      upstream.enabled &&
+      canReadNamespace(principal, upstream.namespace) &&
+      upstreamAllowsImport(upstream, detail.source),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const selected = requestedUpstreamId
+    ? candidates.find((upstream) => upstream.id === requestedUpstreamId)
+    : candidates.length === 1 ? candidates[0] : undefined;
+  if (requestedUpstreamId && !selected) throw unavailable();
+  if (!selected) {
+    if (candidates.length === 0) throw unavailable();
+    // An administrator can deliberately configure multiple source mappings;
+    // do not silently choose an origin when the UI has not selected one.
+    throw new RegistryApiError('UPSTREAM_MAPPING_REQUIRED', 'Select an authorized skills.sh upstream mapping', 409, {
+      details: {
+        upstreams: candidates.map((upstream) => ({ id: upstream.id, name: upstream.name, namespace: upstream.namespace })),
+      },
+    });
+  }
+
+  const importBody: JsonObject = {
+    upstreamId: selected.id,
+    repository: detail.source,
+    // Preserve the complete skills.sh ID in the durable request.  The worker
+    // uses this identity when it performs its governed source acquisition.
+    path: detail.id,
+    name,
+    version,
+    externalId: detail.id,
+    externalSnapshotHash: detail.hash,
+    ...(trustedRow ? {
+      externalSourceType: trustedRow.sourceType,
+    } : {}),
+    ...(detail.hash ? { ref: detail.hash } : {}),
+  };
+  return await createImportJob(importBody, principal, deps, config, requestId);
+}
+
+/**
+ * Resolve the source type for a detail row whose snapshot hash is absent.
+ * Search is preferred because it is narrow; the bounded leaderboard walk is
+ * a compatibility fallback for directory deployments whose search index does
+ * not contain the row yet.  Both paths compare the complete external identity
+ * before accepting any metadata.
+ */
+async function lookupDirectoryCatalogRow(
+  directory: RegistryDirectoryClient,
+  detail: SkillDetailResponse,
+  requestSignal?: AbortSignal,
+): Promise<V1Skill> {
+  const deadline = createDirectoryLookupSignal(requestSignal, DIRECTORY_METADATA_LOOKUP_DEADLINE_MS);
+  try {
+    const owner = directorySearchOwner(detail.source);
+    const searchOptions = {
+      q: detail.slug,
+      limit: 200,
+      signal: deadline.signal,
+      ...(owner === undefined ? {} : { owner }),
+    };
+    // The public search API requires at least two characters.  A one-character
+    // catalog slug therefore goes directly to the bounded list fallback.
+    if ([...detail.slug].length >= 2) {
+      const searched = await directoryLookupRequest(() => directory.search(searchOptions));
+      const searchMatch = searched ? exactDirectoryCatalogRow(searched.data, detail) : undefined;
+      if (searchMatch) return searchMatch;
+
+      // An owner-filtered fuzzy search can omit a valid row when a provider's
+      // owner index is stale.  One unfiltered query remains bounded and still
+      // requires the complete id/source/slug match below.
+      if (owner !== undefined) {
+        const unfiltered = await directoryLookupRequest(() => directory.search({
+          q: detail.slug,
+          limit: 200,
+          signal: deadline.signal,
+        }));
+        const unfilteredMatch = unfiltered ? exactDirectoryCatalogRow(unfiltered.data, detail) : undefined;
+        if (unfilteredMatch) return unfilteredMatch;
+      }
+    }
+
+    for (let page = 0; page < DIRECTORY_METADATA_LOOKUP_MAX_PAGES; page += 1) {
+      const listed = await directoryLookupRequest(() => directory.list({
+        view: 'all-time',
+        page,
+        perPage: 500,
+        signal: deadline.signal,
+      }));
+      if (!listed) continue;
+      const listMatch = exactDirectoryCatalogRow(listed.data, detail);
+      if (listMatch) return listMatch;
+      if (!listed.pagination.hasMore) break;
+    }
+  } finally {
+    deadline.close();
+  }
+  throw new RegistryApiError(
+    'DIRECTORY_INTEGRITY',
+    'The directory did not return trusted source metadata for this skill',
+    502,
+    { retryable: true },
+  );
+}
+
+async function directoryLookupRequest<T>(action: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await action();
+  } catch (error) {
+    // Search/list may be absent on older directory deployments.  Treat only
+    // an explicit not-found as an empty result; outages and malformed data
+    // remain errors and do not silently weaken provenance.
+    if (error instanceof SkillsDirectoryError && error.code === 'not_found') return undefined;
+    if (error instanceof SkillsDirectoryError) throw directoryApiError(error);
+    throw error;
+  }
+}
+
+function exactDirectoryCatalogRow(rows: readonly V1Skill[], detail: SkillDetailResponse): V1Skill | undefined {
+  return rows.find((row) =>
+    row.id === detail.id &&
+    row.source === detail.source &&
+    row.slug === detail.slug &&
+    row.id === `${row.source}/${row.slug}` &&
+    (row.sourceType === 'github' || row.sourceType === 'well-known'),
+  );
+}
+
+function directorySearchOwner(source: string): string | undefined {
+  const parts = source.split('/');
+  if (parts.length === 2 && parts[0] && parts[0].length <= 512 && !/[\u0000-\u001f\u007f/\\]/u.test(parts[0])) return parts[0];
+  if (/^github\.com\//iu.test(source) && parts.length >= 3 && parts[1] && parts[1].length <= 512 && !/[\u0000-\u001f\u007f/\\]/u.test(parts[1])) return parts[1];
+  return undefined;
+}
+
+function createDirectoryLookupSignal(parent: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  close: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortParent = () => controller.abort();
+  if (parent?.aborted) controller.abort();
+  else parent?.addEventListener('abort', abortParent, { once: true });
+  return {
+    signal: controller.signal,
+    close: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', abortParent);
+    },
+  };
+}
+
+function findDirectoryCachedImportRequest(
+  state: RegistryState,
+  id: string,
+  name: string,
+  version: string,
+  principal: Principal,
+  requestedUpstreamId: string | undefined,
+): ImportRequest | undefined {
+  const matches = state.jobs
+    .filter((job) => {
+      if (job.organizationId !== principal.organizationId || job.kind !== 'import') return false;
+      if (job.state !== 'queued' && job.state !== 'running' && job.state !== 'completed') return false;
+      const request = job.import;
+      if (!request || request.externalId !== id || request.path !== id || request.name !== name || request.version !== version) return false;
+      if (requestedUpstreamId !== undefined && request.upstreamId !== requestedUpstreamId) return false;
+      const currentUpstream = state.upstreams.find((upstream) => upstream.id === request.upstreamId);
+      return !!currentUpstream &&
+        currentUpstream.kind === 'skills-sh' &&
+        currentUpstream.enabled &&
+        canReadNamespace(principal, currentUpstream.namespace) &&
+        upstreamAllowsImport(currentUpstream, request.repository);
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1) {
+    throw new RegistryApiError('UPSTREAM_MAPPING_REQUIRED', 'Select an authorized skills.sh upstream mapping', 409, {
+      details: {
+        upstreams: [...new Set(matches.map((job) => job.import?.upstreamId).filter((value): value is string => !!value))],
+      },
+    });
+  }
+  const request = matches[0]?.import;
+  return request ? { ...request } : undefined;
+}
+
+function optionalDirectoryView(value: string | null): 'all-time' | 'trending' | 'hot' | undefined {
+  if (value === null || value === '') return undefined;
+  if (value === 'all-time' || value === 'trending' || value === 'hot') return value;
+  throw new RegistryApiError('INVALID_REQUEST', 'view is invalid', 400);
+}
+
+function optionalDirectoryInteger(
+  value: string | null,
+  field: string,
+  minimum: number,
+  maximum: number,
+): number | undefined {
+  if (value === null || value === '') return undefined;
+  if (!/^\d+$/u.test(value)) throw new RegistryApiError('INVALID_REQUEST', `${field} is invalid`, 400);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new RegistryApiError('INVALID_REQUEST', `${field} is invalid`, 400);
+  }
+  return parsed;
+}
+
+function requireDirectoryId(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 2_048 ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f?#\\]/u.test(value)
+  ) {
+    throw new RegistryApiError('INVALID_REQUEST', 'id is invalid', 400);
+  }
+  const parts = value.split('/');
+  if ((parts.length !== 2 && parts.length !== 3) || parts.some((part) => part === '' || part === '.' || part === '..')) {
+    throw new RegistryApiError('INVALID_REQUEST', 'id is invalid', 400);
+  }
+  return value;
+}
+
+function isSafeDirectoryExternalValue(value: string): boolean {
+  return value.length > 0 && value.length <= 2_048 && !/[\u0000-\u001f\u007f?#\\]/u.test(value);
+}
+
+async function directoryRequest<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!(error instanceof SkillsDirectoryError)) throw error;
+    throw directoryApiError(error);
+  }
+}
+
+function directoryApiError(error: SkillsDirectoryError): RegistryApiError {
+  if (error.code === 'not_found') throw unavailable();
+  if (error.code === 'invalid_input') {
+    return new RegistryApiError('INVALID_REQUEST', 'Directory request is invalid', 400);
+  }
+  const retryable = error.code === 'unavailable' || error.code === 'rate_limited' || error.code === 'request_timeout' || error.code === 'http_error';
+  return new RegistryApiError(
+    'DIRECTORY_UNAVAILABLE',
+    'The skills.sh directory is temporarily unavailable',
+    503,
+    { retryable },
+  );
+}
+
+function directoryUnavailable(): RegistryApiError {
+  return new RegistryApiError('DIRECTORY_UNAVAILABLE', 'The skills.sh directory is not configured', 503, { retryable: true });
+}
+
+function requireDirectoryPackUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_048 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new RegistryApiError('INVALID_REQUEST', 'url is invalid', 400);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new RegistryApiError('INVALID_REQUEST', 'url is invalid', 400);
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./u, '');
+  if (parsed.protocol !== 'https:' || host !== 'skills.sh' || parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash || !/^\/p\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}\/?$/u.test(parsed.pathname)) {
+    throw new RegistryApiError('INVALID_REQUEST', 'url is not a valid skills.sh pack URL', 400);
+  }
+  return value;
+}
+
+async function directoryPackRequest<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== 'SkillsPackError') throw error;
+    const code = (error as { code?: unknown }).code;
+    if (code === 'not_found') throw unavailable();
+    if (code === 'invalid_input' || code === 'invalid_manifest' || code === 'unsafe_path') {
+      throw new RegistryApiError('INVALID_REQUEST', 'The skills.sh pack manifest is invalid', 400);
+    }
+    throw new RegistryApiError('DIRECTORY_UNAVAILABLE', 'The skills.sh pack is temporarily unavailable', 503, { retryable: true });
+  }
 }
 
 async function publishSkill(
@@ -1865,7 +2376,9 @@ async function createUpstream(
   if (!name || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) {
     throw new RegistryApiError('INVALID_UPSTREAM', 'upstream name is invalid', 400);
   }
-  if (kind !== 'github' && kind !== 'registry') throw new RegistryApiError('INVALID_UPSTREAM', 'kind must be github or registry', 400);
+  if (kind !== 'github' && kind !== 'registry' && kind !== 'skills-sh') {
+    throw new RegistryApiError('INVALID_UPSTREAM', 'kind must be github, registry, or skills-sh', 400);
+  }
   if (!namespace || !/^@[a-z0-9][a-z0-9._-]{0,63}$/.test(namespace)) throw new RegistryApiError('INVALID_UPSTREAM', 'namespace is invalid', 400);
   if (!canReadNamespace(principal, namespace)) throw new RegistryApiError('FORBIDDEN', 'Namespace access denied', 403);
   const baseUrl = stringValue(body.baseUrl);
@@ -1896,6 +2409,12 @@ async function createUpstream(
     : undefined;
   if (Array.isArray(repositoriesInput) && repositories && repositories.length !== repositoriesInput.length) {
     throw new RegistryApiError('INVALID_UPSTREAM', 'repositories must be strings', 400);
+  }
+  if (kind === 'skills-sh' && (!repositories || repositories.length === 0)) {
+    throw new RegistryApiError('INVALID_UPSTREAM', 'skills-sh upstreams require a source allowlist', 400);
+  }
+  if (repositories?.some((repository) => repository.length === 0 || repository.length > 2_048 || /[\u0000-\u001f\u007f]/u.test(repository))) {
+    throw new RegistryApiError('INVALID_UPSTREAM', 'repositories contains an invalid source identity', 400);
   }
   if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
     throw new RegistryApiError('INVALID_UPSTREAM', 'enabled must be a boolean', 400);
@@ -2120,7 +2639,37 @@ function parseImportRequest(body: JsonObject): ImportRequest {
   }
   const repository = optionalImportField(body.repository, 'repository');
   const ref = optionalImportField(body.ref, 'ref');
-  return { upstreamId, repository, path, ref, name, version };
+  const externalId = optionalImportField(body.externalId, 'externalId');
+  const externalSourceType = body.externalSourceType === undefined || body.externalSourceType === null || body.externalSourceType === ''
+    ? undefined
+    : body.externalSourceType;
+  if (externalSourceType !== undefined && externalSourceType !== 'github' && externalSourceType !== 'well-known') {
+    throw new RegistryApiError('INVALID_IMPORT', 'externalSourceType is invalid', 400);
+  }
+  const externalSnapshotHash = parseExternalSnapshotHash(body.externalSnapshotHash);
+  if (externalId !== undefined && externalId !== path) {
+    throw new RegistryApiError('INVALID_IMPORT', 'externalId must match path', 400);
+  }
+  return {
+    upstreamId,
+    repository,
+    path,
+    ref,
+    name,
+    version,
+    ...(externalId ? { externalId } : {}),
+    ...(externalSourceType !== undefined ? { externalSourceType: externalSourceType as ImportRequest['externalSourceType'] } : {}),
+    ...(externalSnapshotHash !== undefined ? { externalSnapshotHash } : {}),
+  };
+}
+
+function parseExternalSnapshotHash(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new RegistryApiError('INVALID_IMPORT', 'externalSnapshotHash is invalid', 400);
+  }
+  return value;
 }
 
 function optionalImportField(value: unknown, field: string): string | undefined {
@@ -2144,19 +2693,42 @@ function findImportUpstream(
     candidate.id === request.upstreamId &&
     candidate.enabled,
   );
-  if (!selected || !canReadNamespace(principal, selected.namespace) || !upstreamAllowsImport(selected, request.repository)) {
+  if (
+    !selected ||
+    !canReadNamespace(principal, selected.namespace) ||
+    !upstreamAllowsImport(selected, request.repository) ||
+    (selected.kind === 'skills-sh' && (!request.externalId || request.externalId !== request.path))
+  ) {
     throw unavailable();
   }
   return selected;
 }
 
 function upstreamAllowsImport(upstream: Upstream, repository: string | undefined): boolean {
+  if (upstream.kind === 'skills-sh') {
+    const allowlist = upstream.repositories;
+    if (!allowlist || allowlist.length === 0) return false;
+    if (repository === undefined) return allowlist.length === 1;
+    const normalized = normalizeSkillsDirectorySource(repository);
+    return allowlist.some((candidate) => candidate === '*' || normalizeSkillsDirectorySource(candidate) === normalized);
+  }
   if (upstream.kind !== 'github') return true;
   const allowlist = upstream.repositories;
   if (!allowlist || allowlist.length === 0) return false;
   if (repository === undefined) return allowlist.length === 1;
   const normalized = repository.trim().toLocaleLowerCase('en-US').replace(/^https?:\/\/github\.com\//u, '').replace(/^github\.com\//u, '').replace(/^\/+|\/+$/gu, '').replace(/\.git$/iu, '');
   return allowlist.some((candidate) => candidate.trim().toLocaleLowerCase('en-US').replace(/^https?:\/\/github\.com\//u, '').replace(/^github\.com\//u, '').replace(/^\/+|\/+$/gu, '').replace(/\.git$/iu, '') === normalized);
+}
+
+function normalizeSkillsDirectorySource(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase('en-US')
+    .replace(/^https?:\/\/(?:www\.)?skills\.sh\//u, '')
+    .replace(/^https?:\/\/(?:www\.)?github\.com\//u, '')
+    .replace(/^github\.com\//u, '')
+    .replace(/^\/+|\/+$/gu, '')
+    .replace(/\.git$/iu, '');
 }
 
 function importCacheKey(organizationId: string, request: ImportRequest): string {
@@ -2168,6 +2740,9 @@ function importCacheKey(organizationId: string, request: ImportRequest): string 
     name: request.name,
     version: request.version,
     repository: request.repository ?? null,
+    externalId: request.externalId ?? null,
+    externalSourceType: request.externalSourceType ?? null,
+    externalSnapshotHash: request.externalSnapshotHash ?? null,
   });
 }
 
@@ -2184,6 +2759,8 @@ function sameUpstreamOrigin(left: Upstream, right: Upstream): boolean {
     baseUrl: left.baseUrl ?? null,
     credentialEnv: left.credentialEnv ?? null,
     repositories: [...(left.repositories ?? [])].sort(),
+    // skills.sh mappings are identity-bearing policy, so a change cannot
+    // turn an existing warm resolution into a different origin.
   }) === stableStringify({
     id: right.id,
     name: right.name,
@@ -2203,12 +2780,28 @@ function importProvenanceMatches(skill: SkillVersion, request: ImportRequest, up
     provenance.upstreamId !== request.upstreamId ||
     provenance.path !== request.path ||
     !provenance.repository ||
-    !isValidImportRevision(upstream, provenance.revision)
+    !isValidImportRevision(upstream, provenance.revision, request.externalSnapshotHash)
   ) {
     return false;
   }
   if (request.repository !== undefined && provenance.repository !== request.repository) return false;
   if (!provenanceRepositoryMatches(upstream, provenance.repository)) return false;
+  if (upstream.kind === 'skills-sh') {
+    if (!request.externalId || provenance.externalId !== request.externalId || provenance.path !== request.externalId) return false;
+    if (request.externalSourceType !== undefined && provenance.externalSourceType !== request.externalSourceType) return false;
+    if (request.externalSnapshotHash !== undefined && provenance.externalSnapshotHash !== request.externalSnapshotHash) return false;
+    if (!isValidSkillsShRevision(provenance.revision, request.externalSnapshotHash)) return false;
+    if (provenance.external) {
+      if (
+        provenance.external.provider !== 'skills.sh' ||
+        provenance.external.externalId !== request.externalId ||
+        provenance.external.source !== provenance.repository ||
+        provenance.external.externalId !== `${provenance.external.source}/${provenance.external.slug}` ||
+        provenance.external.externalSnapshotHash !== (provenance.externalSnapshotHash ?? null) ||
+        (provenance.externalSourceType !== undefined && provenance.external.sourceType !== provenance.externalSourceType)
+      ) return false;
+    }
+  }
   if (provenance.sourceDigest !== undefined && (!isDigest(provenance.sourceDigest) || provenance.sourceDigest !== skill.artifact.digest)) return false;
   return true;
 }
@@ -2735,9 +3328,41 @@ function normalizeProvenance(
   if (!provenanceRepositoryMatches(upstream, suppliedRepository)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names an unapproved repository', 409);
   }
-  if (!isValidImportRevision(upstream, suppliedRevision)) {
+  if (!isValidImportRevision(upstream, suppliedRevision, request.externalSnapshotHash)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is not pinned to a valid immutable revision', 409);
   }
+  const suppliedExternalId = stringValue(raw.externalId);
+  const suppliedExternalSourceType = raw.externalSourceType === undefined || raw.externalSourceType === null
+    ? undefined
+    : raw.externalSourceType;
+  const suppliedExternalSnapshotHash = raw.externalSnapshotHash === null
+    ? null
+    : stringValue(raw.externalSnapshotHash);
+  if (
+    raw.externalSnapshotHash !== undefined &&
+    raw.externalSnapshotHash !== null &&
+    (typeof raw.externalSnapshotHash !== 'string' || raw.externalSnapshotHash.length === 0 || raw.externalSnapshotHash.length > 256 || /[\u0000-\u001f\u007f]/u.test(raw.externalSnapshotHash))
+  ) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external snapshot hash is invalid', 409);
+  }
+  if (suppliedExternalSourceType !== undefined && suppliedExternalSourceType !== 'github' && suppliedExternalSourceType !== 'well-known') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external source type is invalid', 409);
+  }
+  if (upstream.kind === 'skills-sh') {
+    if (
+      !request.externalId ||
+      suppliedExternalId !== request.externalId ||
+      suppliedExternalId !== suppliedPath ||
+      (request.externalSourceType !== undefined && suppliedExternalSourceType !== request.externalSourceType) ||
+      (request.externalSnapshotHash !== undefined && suppliedExternalSnapshotHash !== request.externalSnapshotHash) ||
+      !isValidSkillsShRevision(suppliedRevision, request.externalSnapshotHash)
+    ) {
+      throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance does not match its skills.sh identity', 409);
+    }
+  }
+  const skillsShEvidence = upstream.kind === 'skills-sh'
+    ? normalizeSkillsShEvidence(raw, request, suppliedRepository, suppliedExternalId, suppliedExternalSourceType, suppliedExternalSnapshotHash)
+    : {};
   const suppliedSourceDigest = stringValue(raw.sourceDigest);
   if (suppliedSourceDigest !== undefined && (!isDigest(suppliedSourceDigest) || suppliedSourceDigest !== digest)) {
     throw new RegistryApiError('DIGEST_MISMATCH', 'Imported artifact provenance digest does not match the canonical bundle', 409);
@@ -2748,12 +3373,127 @@ function normalizeProvenance(
     repository: suppliedRepository,
     path: suppliedPath,
     revision: suppliedRevision,
+    ...(suppliedExternalId ? { externalId: suppliedExternalId } : {}),
+    ...(suppliedExternalSourceType ? { externalSourceType: suppliedExternalSourceType as Provenance['externalSourceType'] } : {}),
+    ...(raw.externalSnapshotHash !== undefined ? { externalSnapshotHash: suppliedExternalSnapshotHash } : {}),
+    ...skillsShEvidence,
     ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
   };
 }
 
+/** Preserve only bounded, identity-checked skills.sh source evidence. */
+function normalizeSkillsShEvidence(
+  raw: JsonObject,
+  request: ImportRequest,
+  repository: string,
+  externalId: string | undefined,
+  sourceType: unknown,
+  snapshotHash: string | null | undefined,
+): Partial<Provenance> {
+  const nestedValue = raw.external;
+  if (nestedValue !== undefined && !isObject(nestedValue)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external provenance is invalid', 409);
+  }
+  const nested = nestedValue as JsonObject | undefined;
+  const provider = nested?.provider ?? raw.provider;
+  const nestedExternalId = optionalProvenanceString(nested?.externalId, 'external.externalId', 2_048);
+  const nestedSource = optionalProvenanceString(nested?.source ?? raw.source, 'external.source', 2_048);
+  const nestedSlug = optionalProvenanceString(nested?.slug ?? raw.slug, 'external.slug', 2_048);
+  const nestedSourceType = nested?.sourceType ?? raw.sourceType ?? sourceType;
+  const nestedSourceUrl = optionalProvenanceString(nested?.sourceUrl ?? raw.sourceUrl, 'external.sourceUrl', 4_096);
+  const nestedPageUrl = optionalProvenanceString(nested?.pageUrl ?? raw.pageUrl, 'external.pageUrl', 4_096);
+  const nestedSnapshotHash = nested?.externalSnapshotHash === null
+    ? null
+    : optionalProvenanceString(nested?.externalSnapshotHash, 'external.externalSnapshotHash', 256);
+  const effectiveSnapshotHash = nested?.externalSnapshotHash === undefined ? snapshotHash : nestedSnapshotHash;
+  if (provider !== undefined && provider !== 'skills.sh') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external provider is invalid', 409);
+  }
+  if (nestedExternalId !== undefined && nestedExternalId !== externalId) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external id is inconsistent', 409);
+  }
+  if (nestedSource !== undefined && nestedSource !== repository) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external source is inconsistent', 409);
+  }
+  if (nestedSourceType !== undefined && nestedSourceType !== 'github' && nestedSourceType !== 'well-known') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external source type is invalid', 409);
+  }
+  if (effectiveSnapshotHash !== snapshotHash && snapshotHash !== undefined) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external snapshot is inconsistent', 409);
+  }
+  if (nestedSource !== undefined && nestedSlug !== undefined && externalId !== `${nestedSource}/${nestedSlug}`) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external identity is inconsistent', 409);
+  }
+
+  const externalDigest = optionalProvenanceString(nested?.externalDigest ?? raw.externalDigest, 'externalDigest', 128);
+  if (externalDigest !== undefined && !isDigest(externalDigest)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external digest is invalid', 409);
+  }
+  const skillPath = optionalProvenanceString(nested?.skillPath ?? raw.skillPath, 'skillPath', 4_096);
+  const requestedRef = optionalProvenanceString(nested?.requestedRef ?? raw.requestedRef, 'requestedRef', 256);
+  const resolvedCommit = optionalProvenanceString(nested?.resolvedCommit ?? raw.resolvedCommit, 'resolvedCommit', 128);
+  const resolvedTree = optionalProvenanceString(nested?.resolvedTree ?? raw.resolvedTree, 'resolvedTree', 128);
+  if (resolvedCommit !== undefined && !/^[0-9a-f]{40}$/iu.test(resolvedCommit)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved commit is invalid', 409);
+  }
+  if (resolvedTree !== undefined && !/^[0-9a-f]{40}$/iu.test(resolvedTree)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved tree is invalid', 409);
+  }
+  const wellKnownIndexUrl = optionalProvenanceString(nested?.wellKnownIndexUrl ?? raw.wellKnownIndexUrl, 'wellKnownIndexUrl', 4_096);
+  const artifactUrl = optionalProvenanceString(nested?.artifactUrl ?? raw.artifactUrl, 'artifactUrl', 4_096);
+  const sourceUrl = nestedSourceUrl;
+  const pageUrl = nestedPageUrl;
+  const frontmatterName = optionalProvenanceString(nested?.frontmatterName ?? raw.frontmatterName, 'frontmatterName', 512);
+  const frontmatterDescription = optionalProvenanceString(nested?.frontmatterDescription ?? raw.frontmatterDescription, 'frontmatterDescription', 4_096);
+
+  const external: ExternalProvenance | undefined = provider === 'skills.sh' && externalId && nestedSource && nestedSlug && nestedSourceType && sourceUrl
+    ? {
+      provider: 'skills.sh',
+      externalId,
+      source: nestedSource,
+      slug: nestedSlug,
+      sourceType: nestedSourceType,
+      sourceUrl,
+      ...(pageUrl === undefined ? {} : { pageUrl }),
+      externalSnapshotHash: effectiveSnapshotHash ?? null,
+      ...(externalDigest === undefined ? {} : { externalDigest }),
+      ...(skillPath === undefined ? {} : { skillPath }),
+      ...(requestedRef === undefined ? {} : { requestedRef }),
+      ...(resolvedCommit === undefined ? {} : { resolvedCommit }),
+      ...(resolvedTree === undefined ? {} : { resolvedTree }),
+      ...(wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl }),
+      ...(artifactUrl === undefined ? {} : { artifactUrl }),
+      ...(frontmatterName === undefined ? {} : { frontmatterName }),
+      ...(frontmatterDescription === undefined ? {} : { frontmatterDescription }),
+    }
+    : undefined;
+
+  return {
+    ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    ...(pageUrl === undefined ? {} : { pageUrl }),
+    ...(artifactUrl === undefined ? {} : { artifactUrl }),
+    ...(skillPath === undefined ? {} : { skillPath }),
+    ...(requestedRef === undefined ? {} : { requestedRef }),
+    ...(resolvedCommit === undefined ? {} : { resolvedCommit }),
+    ...(resolvedTree === undefined ? {} : { resolvedTree }),
+    ...(wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl }),
+    ...(frontmatterName === undefined ? {} : { frontmatterName }),
+    ...(frontmatterDescription === undefined ? {} : { frontmatterDescription }),
+    ...(externalDigest === undefined ? {} : { externalDigest }),
+    ...(external === undefined ? {} : { external }),
+  };
+}
+
+function optionalProvenanceString(value: unknown, field: string, maximum: number): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', `Imported artifact ${field} is invalid`, 409);
+  }
+  return value;
+}
+
 function provenanceRepositoryMatches(upstream: Upstream, repository: string): boolean {
-  if (upstream.kind === 'github') return upstreamAllowsImport(upstream, repository);
+  if (upstream.kind === 'github' || upstream.kind === 'skills-sh') return upstreamAllowsImport(upstream, repository);
   if (!upstream.baseUrl) return false;
   try {
     return new URL(repository).origin === new URL(upstream.baseUrl).origin;
@@ -2762,10 +3502,20 @@ function provenanceRepositoryMatches(upstream: Upstream, repository: string): bo
   }
 }
 
-function isValidImportRevision(upstream: Upstream, revision: unknown): revision is string {
+function isValidImportRevision(upstream: Upstream, revision: unknown, expectedSnapshotHash?: string | null): revision is string {
   if (typeof revision !== 'string' || revision.length === 0 || revision.length > 256) return false;
   if (upstream.kind === 'github') return /^[0-9a-f]{40}$/iu.test(revision);
+  if (upstream.kind === 'skills-sh') return isValidSkillsShRevision(revision, expectedSnapshotHash);
   return isDigest(revision) || /^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(revision);
+}
+
+function isValidSkillsShRevision(revision: unknown, expectedSnapshotHash?: string | null): revision is string {
+  if (typeof revision !== 'string' || revision.length === 0 || revision.length > 256 || /[\u0000-\u001f\u007f\s]/u.test(revision)) return false;
+  // When the detail endpoint supplies a snapshot hash, completion must echo
+  // that exact immutable value.  A null hash is allowed only when the worker
+  // returns a source-native immutable commit or canonical digest.
+  if (expectedSnapshotHash !== undefined && expectedSnapshotHash !== null) return revision === expectedSnapshotHash;
+  return isDigest(revision) || /^[0-9a-f]{40,128}$/iu.test(revision);
 }
 
 function parsePolicy(body: JsonObject): Policy {
@@ -3074,7 +3824,7 @@ function appendAudit(state: RegistryState, event: AuditEvent): void {
 }
 
 function normalizeProvenanceKind(value: unknown): value is Provenance['kind'] {
-  return value === 'native' || value === 'github' || value === 'registry';
+  return value === 'native' || value === 'github' || value === 'registry' || value === 'skills-sh';
 }
 
 function redactJobError(error: string): string {

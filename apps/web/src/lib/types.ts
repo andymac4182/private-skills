@@ -11,6 +11,22 @@ import type {
   Upstream,
 } from '../../../../packages/contracts/src/index'
 import type { ReviewRun, ReviewSkillSnapshot, ReviewSuggestion } from '../../../../packages/reviews/src/index'
+import type {
+  CuratedOwner,
+  CuratedSkillsResponse,
+  SkillAuditEntry,
+  SkillAuditResponse,
+  SkillDetailFile,
+  SkillDetailResponse,
+  SkillListResponse as DirectorySkillListResponse,
+  SkillPagination,
+  SkillSearchResponse,
+  SkillSearchType,
+  SkillSourceType,
+  SkillView,
+  V1Skill,
+} from '../../../../packages/directory/src/index'
+import type { SkillsPackManifest, SkillsPackMember } from '../../../../packages/directory-packs/src/index'
 
 export type {
   AuditEvent,
@@ -28,6 +44,22 @@ export type {
 export type ReviewRunView = Omit<ReviewRun, 'leaseToken' | 'leaseExpiresAt'> & { snapshotValid: boolean }
 export type ReviewSuggestionView = ReviewSuggestion & { snapshotValid: boolean }
 export type { ReviewSkillSnapshot }
+export type {
+  CuratedOwner,
+  CuratedSkillsResponse,
+  SkillAuditEntry,
+  SkillAuditResponse,
+  SkillDetailFile,
+  SkillDetailResponse,
+  DirectorySkillListResponse,
+  SkillPagination,
+  SkillSearchResponse,
+  SkillSearchType,
+  SkillSourceType,
+  SkillView,
+  V1Skill,
+}
+export type { SkillsPackManifest, SkillsPackMember }
 
 export interface ApiErrorShape {
   code?: string

@@ -4,6 +4,8 @@ import type {
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
   ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
+  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillView,
+  SkillsPackManifest,
 } from './types'
 
 export class ApiError extends Error {
@@ -79,4 +81,27 @@ export const api = {
   search(query: string) { return request<SearchResponse>('/v1/search', { query: { q: query } }).then(unwrap) },
   searchStatus() { return request<SearchStatusResponse>('/v1/search/status').then(unwrap) },
   reindexSearch(cursor?: string) { return request<SearchReindexResponse>('/v1/search/reindex', { method: 'POST', body: cursor ? { cursor } : {} }).then(unwrap) },
+  directorySkills(options: { view?: SkillView; page?: number; perPage?: number } = {}) {
+    return request<DirectorySkillListResponse>('/v1/directory/skills', { query: {
+      view: options.view,
+      page: options.page === undefined ? undefined : String(options.page),
+      per_page: options.perPage === undefined ? undefined : String(options.perPage),
+    } })
+  },
+  directorySearch(query: string, options: { limit?: number; owner?: string } = {}) {
+    return request<SkillSearchResponse>('/v1/directory/search', { query: {
+      q: query,
+      limit: options.limit === undefined ? undefined : String(options.limit),
+      owner: options.owner,
+    } })
+  },
+  directoryOfficial() { return request<CuratedSkillsResponse>('/v1/directory/official') },
+  directoryDetail(id: string) { return request<SkillDetailResponse>('/v1/directory/detail', { query: { id } }) },
+  directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
+  directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {
+    return request<OperationResponse>('/v1/directory/import', { method: 'POST', body: input })
+  },
+  directoryPackPreview(input: { url: string }) {
+    return request<SkillsPackManifest>('/v1/directory/packs/preview', { method: 'POST', body: input })
+  },
 }

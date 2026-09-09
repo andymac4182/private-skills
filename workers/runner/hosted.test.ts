@@ -53,6 +53,15 @@ describe('hosted worker route', () => {
     expect(body).not.toContain('secret report excerpt');
   });
 
+  it('rejects unsupported sandbox driver/provider settings before creating the worker route', () => {
+    expect(() => createHostedWorkerHandler({ ...options({ claimed: false }), sandboxDriver: 'docker' as never })).toThrow(
+      'PSKILLS_SANDBOX_DRIVER must be computesdk or native',
+    );
+    expect(() => createHostedWorkerHandler({ ...options({ claimed: false }), sandboxProvider: 'e2b' })).toThrow(
+      'Unsupported PSKILLS_SANDBOX_PROVIDER',
+    );
+  });
+
   it('builds configuration from the documented environment names', () => {
     const handler = createHostedWorkerHandlerFromEnv({
       PSKILLS_API_URL: 'https://registry.example.test',

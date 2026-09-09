@@ -102,11 +102,29 @@ function verifyRelocatedSymlinks(sourceDirectory, destinationDirectory) {
   console.log(`Verified ${symlinks.length} relocated Vercel output symlinks`)
 }
 
-function verifySandboxDependency(functionDirectory) {
-  const packageJsonPath = resolve(functionDirectory, 'node_modules/@vercel/sandbox/package.json')
-  if (!existsSync(packageJsonPath)) {
-    throw new Error(`Vercel function output does not include @vercel/sandbox: ${packageJsonPath}`)
-  }
+function verifyNodeDependencies(functionDirectory) {
+  const dependencies = [
+    {
+      name: '@vercel/sandbox',
+      assertion: "!module.Sandbox || typeof module.Sandbox.create !== 'function'",
+      label: 'Sandbox.create',
+    },
+    {
+      name: '@computesdk/vercel',
+      assertion: "typeof module.vercel !== 'function'",
+      label: 'vercel provider factory',
+    },
+    {
+      name: '@computesdk/provider',
+      assertion: "typeof module.defineProvider !== 'function'",
+      label: 'provider factory',
+    },
+    {
+      name: 'computesdk',
+      assertion: "typeof module.compute !== 'function'",
+      label: 'compute API',
+    },
+  ]
 
   const isolationRoot = mkdtempSync(resolve(tmpdir(), 'private-skills-vercel-sandbox-'))
   const isolatedFunctionDirectory = resolve(isolationRoot, '__server.func')
@@ -116,31 +134,36 @@ function verifySandboxDependency(functionDirectory) {
       force: true,
       verbatimSymlinks: true,
     })
-    const isolatedPackageJsonPath = resolve(isolatedFunctionDirectory, 'node_modules/@vercel/sandbox/package.json')
-    const packageJson = JSON.parse(readFileSync(isolatedPackageJsonPath, 'utf8'))
-    const probe = [
-      "const load = new Function('specifier', 'return import(specifier)')",
-      "const module = await load('@vercel/sandbox')",
-      "if (!module.Sandbox || typeof module.Sandbox.create !== 'function') throw new Error('Sandbox export is unavailable')",
-    ].join(';')
-    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', probe], {
-      cwd: isolatedFunctionDirectory,
-      env: { PATH: process.env.PATH ?? '' },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    if (result.error) throw result.error
-    if (result.status !== 0) {
-      throw new Error(
-        `Vercel function output could not load @vercel/sandbox ${packageJson.version ?? 'unknown'} from its isolated node_modules`,
-      )
+    for (const dependency of dependencies) {
+      const isolatedPackageJsonPath = resolve(isolatedFunctionDirectory, `node_modules/${dependency.name}/package.json`)
+      if (!existsSync(isolatedPackageJsonPath)) {
+        throw new Error(`Vercel function output does not include ${dependency.name}: ${isolatedPackageJsonPath}`)
+      }
+      const packageJson = JSON.parse(readFileSync(isolatedPackageJsonPath, 'utf8'))
+      const probe = [
+        "const load = new Function('specifier', 'return import(specifier)')",
+        `const module = await load(${JSON.stringify(dependency.name)})`,
+        `if (${dependency.assertion}) throw new Error(${JSON.stringify(`${dependency.name} ${dependency.label} is unavailable`)})`,
+      ].join(';')
+      const result = spawnSync(process.execPath, ['--input-type=module', '--eval', probe], {
+        cwd: isolatedFunctionDirectory,
+        env: { PATH: process.env.PATH ?? '' },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      if (result.error) throw result.error
+      if (result.status !== 0) {
+        throw new Error(
+          `Vercel function output could not load ${dependency.name} ${packageJson.version ?? 'unknown'} from its isolated node_modules`,
+        )
+      }
+      console.log(`Verified isolated ${dependency.name} ${packageJson.version ?? 'unknown'} ${dependency.label}`)
     }
-    console.log(`Verified isolated @vercel/sandbox ${packageJson.version ?? 'unknown'} function dependency`)
   } finally {
     rmSync(isolationRoot, { recursive: true, force: true })
   }
 }
 
 verifyRelocatedSymlinks(webOutput, rootOutput)
-verifySandboxDependency(resolve(rootOutput, 'functions/__server.func'))
+verifyNodeDependencies(resolve(rootOutput, 'functions/__server.func'))
 console.log(`Copied Vercel Build Output API output to ${rootOutput}`)

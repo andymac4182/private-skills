@@ -21,7 +21,56 @@ export interface ScanResult {
   coverage: { filesEnumerated: number; filesAnalyzed: number; filesSkipped: number; filesUnsupported: number; limitations: string[]; externalDestinations: string[]; };
   createdAt: string; durationMs: number; error?: string;
 }
-export interface Provenance { kind: 'native' | 'github' | 'registry'; upstreamId?: string; repository?: string; path?: string; revision?: string; sourceDigest?: Digest; }
+/**
+ * Provenance supplied by an external catalog adapter.  These fields identify
+ * the catalog row/snapshot and are intentionally separate from sourceDigest,
+ * which always means the registry's canonical bundle digest.
+ */
+export interface Provenance {
+  kind: 'native' | 'github' | 'registry' | 'skills-sh';
+  upstreamId?: string;
+  repository?: string;
+  path?: string;
+  revision?: string;
+  sourceDigest?: Digest;
+  externalId?: string;
+  externalSourceType?: 'github' | 'well-known';
+  externalSnapshotHash?: string | null;
+  /** Digest advertised by a well-known source, kept distinct from the local artifact digest. */
+  externalDigest?: Digest;
+  /** Optional source-resolution evidence returned by the skills.sh worker. */
+  sourceUrl?: string;
+  pageUrl?: string;
+  artifactUrl?: string;
+  skillPath?: string;
+  requestedRef?: string;
+  resolvedCommit?: string;
+  resolvedTree?: string;
+  wellKnownIndexUrl?: string;
+  frontmatterName?: string;
+  frontmatterDescription?: string;
+  external?: ExternalProvenance;
+}
+export interface ExternalProvenance {
+  provider: 'skills.sh';
+  externalId: string;
+  source: string;
+  slug: string;
+  sourceType: 'github' | 'well-known';
+  sourceUrl: string;
+  pageUrl?: string;
+  externalSnapshotHash: string | null;
+  externalDigest?: Digest;
+  repository?: string;
+  skillPath?: string;
+  requestedRef?: string;
+  resolvedCommit?: string;
+  resolvedTree?: string;
+  wellKnownIndexUrl?: string;
+  artifactUrl?: string;
+  frontmatterName?: string;
+  frontmatterDescription?: string;
+}
 export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; }
 export interface PackMember { resourceId: string; name: string; version: string; digest: Digest; }
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }
@@ -112,8 +161,23 @@ export interface InstallAnalytics {
 }
 export interface TransferGrant { id: string; organizationId: string; subject: string; resourceId: string; authorizationId: string; digest: Digest; expiresAt: string; }
 export interface TransferDescriptor { mode: 'gateway' | 'signed-url'; url: string; method: 'GET'; headers: Record<string, string>; expiresAt: string; size: number; digest: Digest; rangeSupported: boolean; }
-export interface Upstream { id: string; organizationId: string; name: string; kind: 'github' | 'registry'; enabled: boolean; repositories?: string[]; baseUrl?: string; credentialEnv?: string; namespace: string; }
-export interface ImportRequest { upstreamId: string; repository?: string; path: string; ref?: string; name: string; version: string; }
+export interface Upstream { id: string; organizationId: string; name: string; kind: 'github' | 'registry' | 'skills-sh'; enabled: boolean; repositories?: string[]; baseUrl?: string; credentialEnv?: string; namespace: string; }
+/**
+ * Optional external identity fields are server-derived for directory imports.
+ * `path` remains the full external identifier for skills.sh rows so workers
+ * cannot silently substitute a different catalog item.
+ */
+export interface ImportRequest {
+  upstreamId: string;
+  repository?: string;
+  path: string;
+  ref?: string;
+  name: string;
+  version: string;
+  externalId?: string;
+  externalSourceType?: 'github' | 'well-known';
+  externalSnapshotHash?: string | null;
+}
 export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
 export interface RegistryState {

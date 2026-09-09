@@ -11,15 +11,15 @@ This document describes the code that exists in the repository now. The earlier 
 | Registry handler | `packages/core/src/index.ts` | Health, session exchange, catalog, publishing, operations, pack resolution, policy, scans, upstreams/imports, transfers, audit, and worker routes | The handler does not fetch upstreams or execute bundle content |
 | Contracts | `packages/contracts/src/index.ts` | TypeScript records for skills, bundles, artifacts, policies, scans, jobs, packs, grants, and audit | Rust and TypeScript compatibility vectors remain release verification work |
 | Authentication | `packages/auth/src/index.ts` | Hashed bootstrap tokens, scoped user/worker principals, signed short-lived sessions, `HttpOnly` cookie, same-origin mutation check | No OIDC, device flow, or interactive identity provider |
-| Metadata | `packages/database/src` | Memory, atomic file, PostgreSQL JSONB transaction, and authenticated HTTP CAS repositories | Choose one durable profile per deployment |
+| Metadata | `packages/database/src` | Memory, atomic file, PostgreSQL JSONB transaction, and authenticated HTTP CAS repositories | The production registry is connected to Neon PostgreSQL; file and authenticated HTTP remain the other deployment profiles |
 | Artifacts | `packages/storage/src` | Canonical bundle encoding/validation, SHA-256 digesting, random sealed object keys, read-back integrity, and transfer gateway | Provider credentials and backend conformance remain deployment work |
 | Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | External upstream access needs approved mappings and credentials |
 | Scanners | `packages/scanners/src` | Cisco, NVIDIA, and SkillsGuard adapter contracts, normalized reports, coverage, policy modes, and executors | Installed scanner images and live findings are environment-specific |
 | Worker | `workers/runner/src` | Claims scan/import jobs, verifies artifact digests, materializes a bounded bundle, executes scanners, and completes with fencing data | Run as a separate worker with a worker token |
 | Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
-| Eve reviewer | `apps/reviewer`, `packages/reviews` | Separate bounded Eve reviewer records proposals and human decisions through fixed internal routes | It cannot publish, merge, edit source, authorize installs, or execute candidate content |
-| Hosted worker | `workers/runner/src/hosted.ts`, `packages/scanners/src/sandbox-executor.ts` | Authenticated one-shot Node/Vercel Sandbox execution with immutable image or snapshot provenance | Requires Vercel Sandbox credentials and reviewed scanner references; edge builds do not run it |
-| CLI | `crates/pskills-core`, `crates/pskills-cli` | Rust package and binary `pskills` for login, health, catalog, publish, install, verify, remove, update, scans, and packs | Native OS CI/release runs after the repository workflow executes |
+| Eve reviewer | `apps/reviewer`, `packages/reviews` | Separate bounded Eve reviewer records proposals and human decisions through fixed internal routes | Production evidence completed one run, accepted one suggestion, and preserved both artifact digests; it cannot publish, merge, edit source, authorize installs, or execute candidate content |
+| Hosted worker | `workers/runner/src/hosted.ts`, `packages/scanners/src/sandbox-executor.ts` | Authenticated one-shot Node/Vercel Sandbox execution with immutable image or snapshot provenance | Production evidence approved two fixtures with SkillsGuard required and `allowUnscanned=false`; edge builds do not run it |
+| CLI | `crates/pskills-core`, `crates/pskills-cli` | Rust package and binary `pskills` for login, health, catalog, publish, install, verify, remove, update, scans, and packs | Private v0.2.0 archives exist for Linux, macOS Apple Silicon, and Windows; the macOS archive was downloaded and SHA-verified |
 
 The Node production runtime factory starts Cisco (`cisco-skill-scanner`) as
 `required`, NVIDIA Skillspector as `advisory`, and SkillsGuard as `advisory`,
@@ -30,6 +30,11 @@ with disabled scanners and `allowUnscanned=false` for tests and migration
 shims; that fallback is not the production factory. The web application
 surfaces the actual API response and does not ship catalog or operation
 fixtures as pretend data.
+
+The deployed production evidence used policy revision
+`policy_44f241a8-2e94-4380-b5f2-55078b71deb0` with Cisco and NVIDIA disabled,
+SkillsGuard required, and `allowUnscanned=false`. This explicit deployment
+policy is recorded separately from the source factory defaults above.
 
 ## Runtime composition
 
@@ -89,7 +94,11 @@ Metadata has three durable deployment shapes:
 
 Blob storage has the corresponding Node and edge boundaries. Node loads the selected Files SDK adapter (`fs`, `s3`, `r2`, `gcs`, `azure`, or `vercel-blob`) only in the Node runtime. Edge and provider-isolated deployments use `HttpBlobStore` and the internal gateway, keeping provider credentials out of the web process. Private access is required; a public base URL is not accepted as a substitute for a grant or gateway.
 
-The source provides adapters for these profiles; live credentials, optional peer packages, privacy checks, migration, and restore tests are still required before declaring a provider production-ready.
+The production registry has exercised the Neon PostgreSQL state path and the
+PostgreSQL/pgvector search path with two indexed fixtures. File and
+authenticated HTTP remain supported profiles; provider-specific credentials,
+privacy checks, migration, and restore tests remain deployment work for any
+profile not covered by the recorded evidence.
 
 ## Jobs, acquisition, and scanners
 
@@ -120,48 +129,45 @@ Install planning uses explicit project/global scope, target-agent adapters (`cod
 
 The repository includes a production Node image and compose profile, a Vercel
 Nitro template, and a Cloudflare Workers template using the edge HTTP adapters.
-These are build and deployment inputs, not claims that the main registry is
-hosted. The GitHub workflow defines Node web checks, native Linux/macOS/Windows
-Rust jobs, and a container build; a checkpoint result is evidence for the
-recorded revision only.
+The main registry is now deployed at
+[private-skills-theta.vercel.app](https://private-skills-theta.vercel.app),
+with recorded deployment `dpl_9hojtmSKjjUGi8AqEaeauPJEhqja`. Its free Neon
+PostgreSQL integration is provisioned and connected, and private object
+storage is configured. The GitHub workflow still defines Node web checks,
+native Linux/macOS/Windows Rust jobs, and a container build; the historical
+checkpoint result remains evidence only for its recorded revision.
 
 The v0.2.0 verification record reports passing root/Eve TypeScript checks, 110
 tests with two optional integration suites skipped locally, Rust formatting/
 compilation with 30 tests, and passing Nitro Vercel, Cloudflare, and Eve builds.
 PostgreSQL/pgvector passed a separate real-service conformance test. The
-isolated registry integration used file state, real Vercel AI Gateway
-embeddings, Vercel Sandbox scanning, the Eve service, and the compiled Rust
-CLI. It found both harmless fixtures through semantic search, persisted a
-human Eve decision without mutating artifacts, and measured one changed
-install plus one up-to-date check in analytics. Scanner acceptance recorded
-zero findings for the benign fixture and 15 for the inert malicious fixture,
-with complete one-file evidence; fixture instructions were not executed. See
+production integration then authenticated against the deployed registry,
+approved two fixtures with SkillsGuard required and `allowUnscanned=false`,
+returned both through the real pgvector search path, completed an Eve review
+with one accepted suggestion, and read back unchanged artifact digests. See
 [`verification-v0.2.0.md`](verification-v0.2.0.md) for the command-level record
 and its limits.
 
-That isolated verification explicitly configured SkillsGuard as `required`
-with `allowUnscanned=false` for the hosted-worker fixture checks. It is a
-deliberate deployment policy and does not replace the Node production factory
-defaults documented above (Cisco required; NVIDIA and SkillsGuard advisory).
+The production CLI installed a two-member pack, verified both member trees,
+and repeated the install without changes. Its analytics delta was two
+operations: zero direct skill installs, one pack install, and one up-to-date
+check. The private v0.2.0 release contains Linux x86_64, macOS Apple Silicon,
+and Windows x86_64 archives plus `SHA256SUMS`; the downloaded macOS archive
+passed checksum verification. The separate member records keep per-skill
+counts distinct from the pack count.
 
-The Eve reviewer is deployed separately and its public health/authentication
-boundary is verified. The main registry project and private Blob storage are
-provisioned, but no production registry publication, search, CLI install, or
-scheduled Eve review is claimed: Neon terms/user setup remains a prerequisite
-for the selected production database. GitHub Vercel app security-key
-confirmation is separately required for Git-triggered deployments.
+Vercel registered the reviewer cron at 22:00 UTC. The authenticated route
+check requires `x-vercel-cron-schedule` and returned `200`; the unauthenticated
+check returned `401`. This verifies the route boundary and handler, not a
+calendar-trigger observation. A negative failed-scanner check returned `404`
+before install authorization, demonstrating fail-closed behavior for a
+required scan failure.
 
-The following remain explicit release or environment acceptance work:
-
-- deploy the main registry and run its authenticated publish, import, scan,
-  pack, transfer, revocation, and recovery flow;
-- qualify the selected Files SDK provider and HTTP gateway with private-access,
-  byte-integrity, failure, and restore checks;
-- run the final source revision through CI and produce the private CLI release
-  archives;
-- rehearse metadata/object backup and restore in an isolated environment;
-- add OIDC/device authentication, if required, as a separate feature rather
-  than treating bootstrap tokens as an identity provider.
+GitHub's Vercel app security-key confirmation remains pending, so a
+Git-triggered deployment is not claimed. `skills.sh` discovery and Compute
+SDK features remain under development and are not completed v0.2.0 features.
+OIDC/device authentication, if required, remains a separate feature rather
+than an implied capability of bootstrap-token authentication.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence

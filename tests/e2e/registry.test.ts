@@ -73,7 +73,7 @@ describe('registry HTTP protocol', () => {
     await expect(jsonResponse(health)).resolves.toMatchObject({
       ok: true,
       service: 'private-skills',
-      version: '0.2.0',
+      version: '0.3.0',
     });
 
     const unauthenticatedCapabilities = await request(handler, origin, '/v1/capabilities');

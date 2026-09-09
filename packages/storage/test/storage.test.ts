@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   BundleValidationError,
@@ -37,16 +38,17 @@ class InMemoryFilesClient {
   }
 }
 
+const toBase64 = (value: string): string => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
 const skill = (frontmatter = "name: hello-world\ndescription: A safe skill"): {
   format: "pskills-bundle-v1";
   files: { path: string; content: string }[];
 } => {
-  const toBase64 = (value: string) => {
-    const bytes = new TextEncoder().encode(value);
-    let binary = "";
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary);
-  };
   return {
     format: "pskills-bundle-v1",
     files: [
@@ -160,6 +162,60 @@ describe("canonical skill bundles", () => {
     expect(() =>
       parseSkillMetadata(skill('name: hello\ndescription: "\\u0000"'))
     ).toThrow(/control|unsafe/u);
+  });
+
+  it("accepts standard Agent Skills block scalars and metadata maps", async () => {
+    const fixture = await readFile(
+      new URL("./fixtures/standard-skill.md", import.meta.url),
+      "utf8"
+    );
+    const metadata = parseSkillMetadata({
+      format: "pskills-bundle-v1",
+      files: [{ path: "SKILL.md", content: toBase64(fixture) }],
+    });
+
+    expect(metadata.skillName).toBe("standard-multiline");
+    expect(metadata.description).toBe(
+      "Create and update project files safely.\n\nUse this skill when a task needs the repository workflow.\n"
+    );
+    expect(metadata.frontmatter.compatibility).toBe(
+      "Requires a standard Agent Skills host with repository file access."
+    );
+    expect(metadata.frontmatter["allowed-tools"]).toBe(
+      "Bash(git:*) Bash(rg:*)"
+    );
+    expect(metadata.frontmatter.metadata).toMatchObject({
+      author: "Example Team",
+      license: "Apache-2.0",
+      version: "1.0",
+    });
+  });
+
+  it("rejects nested executable shapes and YAML object features", () => {
+    const rejected = [
+      "name: hello\ndescription: safe\nmetadata:\n  plugins: enabled",
+      "name: hello\ndescription: safe\nmetadata:\n  owner:\n    name: team",
+      "name: hello\ndescription: safe\nmetadata:\n  count: 1",
+      "name: hello\ndescription: &description safe",
+      "name: hello\ndescription: *description",
+      "name: hello\ndescription: !!str safe",
+      "name: hello\ndescription: safe\nmetadata:\n  - author",
+    ];
+    for (const frontmatter of rejected) {
+      expect(() => parseSkillMetadata(skill(frontmatter))).toThrow(
+        /frontmatter|plugin|unsafe|scalar/u
+      );
+    }
+  });
+
+  it("retains duplicate-key and frontmatter bounds checks", () => {
+    expect(() =>
+      parseSkillMetadata(
+        skill("name: hello\ndescription: safe\nName: duplicate")
+      )
+    ).toThrow(/duplicate|frontmatter/u);
+    const tooLarge = "name: hello\ndescription: |\n  " + "x".repeat(130_000);
+    expect(() => parseSkillMetadata(skill(tooLarge))).toThrow(/limit|frontmatter/u);
   });
 });
 

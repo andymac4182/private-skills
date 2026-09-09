@@ -8,12 +8,20 @@ import { PublishView } from './PublishView'
 import { UpstreamsView } from './UpstreamsView'
 import { OverviewView } from './OverviewView'
 import { ReviewsView } from './ReviewsView'
+import { DirectoryView } from './DirectoryView'
+import { OfficialView } from './OfficialView'
+import { TopicsView } from './TopicsView'
+import { DirectoryAuditsView } from './DirectoryAuditsView'
 
 export function SectionView({ section }: { section: string }) {
   switch (section) {
     case 'overview': return <OverviewView />
     case 'catalog': return <CatalogView />
     case 'packs': return <PacksView />
+    case 'directory': return <DirectoryView />
+    case 'official': return <OfficialView />
+    case 'topics': return <TopicsView />
+    case 'cloud-audits': return <DirectoryAuditsView />
     case 'analytics': return <AnalyticsView />
     case 'reviews': return <ReviewsView />
     case 'publish': return <PublishView />

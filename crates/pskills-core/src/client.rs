@@ -113,6 +113,100 @@ impl ApiClient {
         extract(value, "skills")
     }
 
+    /// List the registry's authenticated directory view.  The registry is
+    /// the only network boundary here: this client never fetches skills.sh
+    /// or another directory source directly.
+    pub fn directory_list(&self, view: &str, page: u32, per_page: u32) -> Result<Value, ApiError> {
+        if !matches!(view, "all-time" | "trending" | "hot") {
+            return Err(ApiError::Response(format!(
+                "directory view must be one of all-time, trending, or hot (received `{view}`)"
+            )));
+        }
+        if per_page == 0 || per_page > 500 {
+            return Err(ApiError::Response(
+                "directory per_page must be between 1 and 500".into(),
+            ));
+        }
+        let url = self.directory_url(
+            "skills",
+            &[
+                ("view", view.to_string()),
+                ("page", page.to_string()),
+                ("per_page", per_page.to_string()),
+            ],
+        )?;
+        self.get_json(&url, true)
+    }
+
+    /// Search the registry's directory index.  Results and any source data
+    /// remain owned by the registry response; the CLI does not contact the
+    /// public directory or upstream repositories.
+    pub fn directory_search(
+        &self,
+        query: &str,
+        owner: Option<&str>,
+        limit: u32,
+    ) -> Result<Value, ApiError> {
+        let query = query.trim();
+        if query.chars().count() < 2 {
+            return Err(ApiError::Response(
+                "directory search query must contain at least two characters".into(),
+            ));
+        }
+        if limit == 0 || limit > 200 {
+            return Err(ApiError::Response(
+                "directory search limit must be between 1 and 200".into(),
+            ));
+        }
+        let owner = owner.map(str::trim).filter(|value| !value.is_empty());
+        let mut query_parameters = vec![("q", query.to_string()), ("limit", limit.to_string())];
+        if let Some(owner) = owner {
+            query_parameters.push(("owner", owner.to_string()));
+        }
+        let url = self.directory_url("search", &query_parameters)?;
+        self.get_json(&url, true)
+    }
+
+    /// Return the registry's first-party directory grouping.
+    pub fn directory_official(&self) -> Result<Value, ApiError> {
+        self.get_json(&self.directory_url("official", &[])?, true)
+    }
+
+    /// Return bounded metadata for one directory identifier.
+    pub fn directory_detail(&self, id: &str) -> Result<Value, ApiError> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(ApiError::Response(
+                "directory detail id must not be empty".into(),
+            ));
+        }
+        let url = self.directory_url("detail", &[("id", id.to_string())])?;
+        self.get_json(&url, true)
+    }
+
+    /// Return external audit evidence for one directory identifier.
+    pub fn directory_audits(&self, id: &str) -> Result<Value, ApiError> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(ApiError::Response(
+                "directory audits id must not be empty".into(),
+            ));
+        }
+        let url = self.directory_url("audits", &[("id", id.to_string())])?;
+        self.get_json(&url, true)
+    }
+
+    /// Ask the registry to import a directory entry.  The response is kept
+    /// opaque because a registry may return an accepted operation, a cached
+    /// resolution, or another versioned operation envelope.
+    pub fn directory_import(&self, request: &DirectoryImportRequest) -> Result<Value, ApiError> {
+        self.post_json(
+            &self.endpoint(&["v1", "directory", "import"])?,
+            request,
+            true,
+        )
+    }
+
     pub fn show_skill(
         &self,
         reference: &str,
@@ -499,6 +593,14 @@ impl ApiClient {
         Ok(url)
     }
 
+    fn directory_url(&self, resource: &str, query: &[(&str, String)]) -> Result<Url, ApiError> {
+        let mut url = self.endpoint(&["v1", "directory", resource])?;
+        for (key, value) in query {
+            url.query_pairs_mut().append_pair(key, value);
+        }
+        Ok(url)
+    }
+
     fn authorized(&self, request: RequestBuilder) -> RequestBuilder {
         let request = request.header(USER_AGENT, format!("{SERVICE}/{VERSION}"));
         if let Some(token) = self.token.as_deref() {
@@ -716,6 +818,45 @@ mod tests {
     }
 
     #[test]
+    fn directory_list_uses_registry_route_and_query_contract() {
+        let client = ApiClient::new("https://registry.example", None).expect("client");
+        let url = client
+            .directory_url(
+                "skills",
+                &[
+                    ("view", "trending".into()),
+                    ("page", "3".into()),
+                    ("per_page", "25".into()),
+                ],
+            )
+            .expect("directory URL");
+        assert_eq!(
+            url.as_str(),
+            "https://registry.example/v1/directory/skills?view=trending&page=3&per_page=25"
+        );
+    }
+
+    #[test]
+    fn directory_import_serializes_private_import_contract() {
+        let value = serde_json::to_value(DirectoryImportRequest {
+            id: "owner/repo/skill".into(),
+            name: "@team/demo".into(),
+            version: "1.2.3".into(),
+            upstream_id: Some("skills-sh".into()),
+        })
+        .expect("import JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": "owner/repo/skill",
+                "name": "@team/demo",
+                "version": "1.2.3",
+                "upstreamId": "skills-sh"
+            })
+        );
+    }
+
+    #[test]
     fn receipt_request_uses_contract_field_names() {
         let request = InstallReceiptRequest {
             authorization_id: "auth-1".into(),
@@ -729,6 +870,92 @@ mod tests {
         assert_eq!(value["changed"], false);
         assert_eq!(value["clientVersion"], "0.1.3");
         assert!(value.get("authorization_id").is_none());
+    }
+
+    #[test]
+    fn external_directory_provenance_is_preserved_in_lock_serialization() {
+        let provenance = Provenance {
+            kind: "skills-sh".into(),
+            upstream_id: Some("skills-sh".into()),
+            repository: Some("https://skills.sh".into()),
+            path: Some("vercel-labs/skills/find-skills".into()),
+            revision: Some("sha256:source".into()),
+            source_digest: Some("sha256:bundle".into()),
+            external_id: Some("vercel-labs/skills/find-skills".into()),
+            external_source_type: Some("github".into()),
+            external_snapshot_hash: Some("snapshot-1".into()),
+            external_digest: Some("sha256:external".into()),
+            source_url: Some("https://github.com/vercel-labs/skills".into()),
+            page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
+            artifact_url: Some("https://github.com/vercel-labs/skills/archive/main.zip".into()),
+            skill_path: Some("skills/find-skills".into()),
+            requested_ref: Some("main".into()),
+            resolved_commit: Some("0123456789012345678901234567890123456789".into()),
+            resolved_tree: Some("abcdefabcdefabcdefabcdefabcdefabcdefabcd".into()),
+            well_known_index_url: Some(
+                "https://example.test/.well-known/agent-skills/index.json".into(),
+            ),
+            frontmatter_name: Some("Find Skills".into()),
+            frontmatter_description: Some("Find available skills".into()),
+            external: Some(ExternalProvenance {
+                provider: "skills.sh".into(),
+                external_id: "vercel-labs/skills/find-skills".into(),
+                source: "vercel-labs/skills".into(),
+                slug: "find-skills".into(),
+                source_type: "github".into(),
+                source_url: "https://github.com/vercel-labs/skills".into(),
+                page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
+                external_snapshot_hash: Some("snapshot-1".into()),
+                external_digest: Some("sha256:external".into()),
+                repository: Some("vercel-labs/skills".into()),
+                skill_path: Some("skills/find-skills".into()),
+                requested_ref: Some("main".into()),
+                resolved_commit: Some("0123456789012345678901234567890123456789".into()),
+                resolved_tree: Some("abcdefabcdefabcdefabcdefabcdefabcdefabcd".into()),
+                well_known_index_url: Some(
+                    "https://example.test/.well-known/agent-skills/index.json".into(),
+                ),
+                artifact_url: Some("https://github.com/vercel-labs/skills/archive/main.zip".into()),
+                frontmatter_name: Some("Find Skills".into()),
+                frontmatter_description: Some("Find available skills".into()),
+            }),
+        };
+        let lock = LockSkill {
+            key: "skills-sh/@team/find-skills@1.0.0".into(),
+            registry: "https://registry.example".into(),
+            reference: "@team/find-skills".into(),
+            version: "1.0.0".into(),
+            skill_name: "find-skills".into(),
+            artifact_digest: "sha256:bundle".into(),
+            tree_digest: "sha256:tree".into(),
+            owners: vec!["direct".into()],
+            provenance,
+        };
+        let value = serde_json::to_value(lock).expect("lock JSON");
+        assert_eq!(
+            value["provenance"]["externalId"],
+            "vercel-labs/skills/find-skills"
+        );
+        assert_eq!(value["provenance"]["externalSourceType"], "github");
+        assert_eq!(value["provenance"]["externalSnapshotHash"], "snapshot-1");
+        assert_eq!(value["provenance"]["externalDigest"], "sha256:external");
+        assert_eq!(
+            value["provenance"]["resolvedCommit"],
+            "0123456789012345678901234567890123456789"
+        );
+        assert_eq!(
+            value["provenance"]["external"]["frontmatterName"],
+            "Find Skills"
+        );
+        assert!(value["provenance"].get("external_id").is_none());
+
+        let legacy: Provenance = serde_json::from_value(serde_json::json!({
+            "kind": "native"
+        }))
+        .expect("legacy provenance");
+        assert_eq!(legacy.external_id, None);
+        assert_eq!(legacy.external_source_type, None);
+        assert_eq!(legacy.external_snapshot_hash, None);
     }
 
     #[test]

@@ -6,6 +6,8 @@ import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastr
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
+import { createSkillsDirectoryClient } from '../../../packages/directory/src/index';
+import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const config = {
@@ -17,7 +19,20 @@ async function createRuntime(env: RuntimeEnvironment) {
   };
   const infrastructure = await createInfrastructure(env);
   const auth = await createAuthenticatorFromEnv(env);
-  const registry = createRegistryHandler({ ...infrastructure, auth, config });
+  // Directory access is an explicit server-side opt-in.  The credentialed
+  // OIDC/gateway token provider is host-owned and is intentionally not read
+  // or forwarded by this generic runtime until the deployment grants the
+  // destination; tests and adapters can inject a request-scoped client into
+  // createRegistryHandler directly.
+  const directory = env.PSKILLS_DIRECTORY_ENABLED === 'true'
+    ? createSkillsDirectoryClient({
+      baseURL: env.PSKILLS_DIRECTORY_GATEWAY_URL ?? env.PSKILLS_SKILLS_SH_BASE_URL,
+    })
+    : undefined;
+  // Unlisted pack discovery is public and never uses a directory bearer token.
+  const directoryPacks = env.PSKILLS_PACK_DIRECTORY_ENABLED === 'true' || env.PSKILLS_DIRECTORY_ENABLED === 'true'
+    ? createSkillsPackClient() : undefined;
+  const registry = createRegistryHandler({ ...infrastructure, auth, config, directory, directoryPacks });
   const embeddingProvider = createEmbeddingProvider(env);
   const intelligence = createIntelligenceHandler({
     repository: infrastructure.repository, blobs: infrastructure.blobs,
@@ -50,7 +65,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
     if (infrastructure.hostedWorker && env.CRON_SECRET && response.ok && request.method === 'POST' &&
-        (path === '/v1/publish' || path === '/v1/imports' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
+        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.
       const drain = async () => {

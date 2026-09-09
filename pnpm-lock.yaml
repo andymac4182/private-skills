@@ -26,6 +26,12 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: 3.1079.0
         version: 3.1079.0
+      '@computesdk/provider':
+        specifier: 2.1.5
+        version: 2.1.5
+      '@computesdk/vercel':
+        specifier: 1.7.33
+        version: 1.7.33
       '@tanstack/react-router':
         specifier: 1.170.33
         version: 1.170.33(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -41,6 +47,9 @@ importers:
       ai:
         specifier: 7.0.94
         version: 7.0.94(zod@4.5.4)
+      computesdk:
+        specifier: 4.1.4
+        version: 4.1.4
       eve:
         specifier: 0.52.3
         version: 0.52.3(ai@7.0.94(zod@4.5.4))
@@ -358,6 +367,15 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@computesdk/cmd@0.4.1':
+    resolution: {integrity: sha512-hhcYrwMnOpRSwWma3gkUeAVsDFG56nURwSaQx8vCepv0IuUv39bK4mMkgszolnUQrVjBDdW7b3lV+l5B2S8fRA==}
+
+  '@computesdk/provider@2.1.5':
+    resolution: {integrity: sha512-y1vmqZui7pQDzfCrZErUmNi6Ny7x76p8sz4J1iPl+ueuLX/teysyrrng6B3OZCiyrknzB4AtLXlDkzWmNnP8DA==}
+
+  '@computesdk/vercel@1.7.33':
+    resolution: {integrity: sha512-MoZQ7+3upxgvSwf88ulBMMRF/ni1IgYgXKLjRRdtFuJ2/H4U6KXAROFC49WV1JSFOExbnHn31SP09i5CF13hNQ==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -1480,6 +1498,9 @@ packages:
     resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
     engines: {node: '>=22.12.0'}
 
+  computesdk@4.1.4:
+    resolution: {integrity: sha512-PRBMwJ2yRTMvVc+8mC8wM2EKI96kco1Dk9/kSAOsABlv7YP+h9v5qbqVIQQ6xKr46KL81MLpIOKf0dVZbIEafg==}
+
   consola@3.4.2:
     resolution: {integrity: sha512-5IKcdX0nnYavi6G7TtOhwkYzyjfJlatbjMjuLSfE2kYT5pMDOilZ4OvMhi637CcDICTmz3wARPoyhqyX1Y+XvA==}
     engines: {node: ^14.18.0 || >=16.10.0}
@@ -1532,6 +1553,11 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
+  daemond@0.1.4:
+    resolution: {integrity: sha512-xiLScBiwYGGPmxfcAb24aH+FkmR/ZSd+PxOvigGpKda6OsDjE2Gj6/4oAX2N3hMWoL4atti1hYyF9dLV3FFM0A==}
+    engines: {node: '>=18.0.0'}
+    os: [linux, darwin]
 
   db0@0.4.1:
     resolution: {integrity: sha512-6RBY/bSn42UrqATwsiULj2uYFyEykB3XeA/NLIVQeHNXlYV6D4Idxx3/aa6k5Y45Dwzx7sygeLotnqHWSeURYA==}
@@ -3070,6 +3096,24 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260908.1':
     optional: true
 
+  '@computesdk/cmd@0.4.1': {}
+
+  '@computesdk/provider@2.1.5':
+    dependencies:
+      '@computesdk/cmd': 0.4.1
+      computesdk: 4.1.4
+      daemond: 0.1.4
+
+  '@computesdk/vercel@1.7.33':
+    dependencies:
+      '@computesdk/provider': 2.1.5
+      '@vercel/sandbox': 3.2.2
+      computesdk: 4.1.4
+      ms: 2.1.3
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - react-native-b4a
+
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
@@ -3985,6 +4029,11 @@ snapshots:
 
   commander@15.0.0: {}
 
+  computesdk@4.1.4:
+    dependencies:
+      '@computesdk/cmd': 0.4.1
+      daemond: 0.1.4
+
   consola@3.4.2: {}
 
   content-disposition@1.1.0:
@@ -4025,6 +4074,8 @@ snapshots:
       srvx: 1.0.4
 
   csstype@3.2.3: {}
+
+  daemond@0.1.4: {}
 
   db0@0.4.1: {}
 
