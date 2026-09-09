@@ -233,6 +233,158 @@ describe('SkillsDirectoryClient', () => {
     expect(result.data[0]).toMatchObject({ sourceType: 'well-known', installUrl: null, installs: 675_505 });
   });
 
+  it('supports bounded nested slugs for GitHub and well-known identities', async () => {
+    const githubSkill = {
+      id: 'claude-office-skills/skills/facebook/meta-ads',
+      slug: 'facebook/meta-ads',
+      name: 'meta-ads',
+      source: 'claude-office-skills/skills',
+      installs: 240,
+      sourceType: 'github' as const,
+      installUrl: 'https://github.com/claude-office-skills/skills',
+      url: 'https://skills.sh/claude-office-skills/skills/facebook/meta-ads',
+    };
+    const wellKnownSkill = {
+      id: 'example.com/team/tool',
+      slug: 'team/tool',
+      name: 'tool',
+      source: 'example.com',
+      installs: 12,
+      sourceType: 'well-known' as const,
+      installUrl: null,
+      url: 'https://skills.sh/example.com/team/tool',
+    };
+    const fetch = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/audit/')) {
+        return response({
+          id: githubSkill.id,
+          source: githubSkill.source,
+          slug: githubSkill.slug,
+          audits: [{
+            provider: 'Socket',
+            slug: 'socket',
+            status: 'pass',
+            summary: 'No alerts',
+            auditedAt: '2026-04-15T12:05:00.000Z',
+          }],
+        });
+      }
+      if (url.includes('/claude-office-skills/skills/facebook/meta-ads')) {
+        return response({
+          id: githubSkill.id,
+          source: githubSkill.source,
+          slug: githubSkill.slug,
+          installs: githubSkill.installs,
+          hash: null,
+          files: null,
+        });
+      }
+      return response({
+        data: [githubSkill, wellKnownSkill],
+        pagination: { page: 0, perPage: 100, total: 2, hasMore: false },
+      });
+    });
+    const client = new SkillsDirectoryClient({ fetch });
+
+    const listed = await client.list();
+    const detail = await client.detail(githubSkill.id);
+    const audits = await client.audit(githubSkill.id);
+
+    expect(listed.data.map((entry) => entry.id)).toEqual([githubSkill.id, wellKnownSkill.id]);
+    expect(listed.data[1]).toMatchObject({ sourceType: 'well-known', source: 'example.com', slug: 'team/tool' });
+    expect(detail).toMatchObject({ id: githubSkill.id, source: githubSkill.source, slug: githubSkill.slug });
+    expect(audits).toMatchObject({ id: githubSkill.id, source: githubSkill.source, slug: githubSkill.slug });
+    expect(String(fetch.mock.calls[1]?.[0])).toBe('https://skills.sh/api/v1/skills/claude-office-skills/skills/facebook/meta-ads');
+    expect(String(fetch.mock.calls[2]?.[0])).toBe('https://skills.sh/api/v1/skills/audit/claude-office-skills/skills/facebook/meta-ads');
+  });
+
+  it('rejects nested traversal, encoded delimiters, and excessive identifier depth', async () => {
+    const fetch = vi.fn(async () => response({}));
+    const client = new SkillsDirectoryClient({ fetch });
+    const tooDeep = Array.from({ length: 65 }, (_, index) => `segment-${index}`).join('/');
+    for (const id of [
+      'claude-office-skills/skills/facebook/../meta-ads',
+      'claude-office-skills/skills/facebook/%2e%2e/meta-ads',
+      'claude-office-skills/skills/facebook/%252fmeta-ads',
+      'claude-office-skills/skills/facebook//meta-ads',
+      tooDeep,
+    ]) {
+      await expect(client.detail(id)).rejects.toMatchObject({ code: 'invalid_input' });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects lone surrogates before URL encoding but preserves paired Unicode IDs', async () => {
+    const invalidFetch = vi.fn(async () => response({}));
+    const invalidClient = new SkillsDirectoryClient({ fetch: invalidFetch });
+    await expect(invalidClient.detail('example.com/\ud800')).rejects.toMatchObject({ code: 'invalid_input' });
+    expect(invalidFetch).not.toHaveBeenCalled();
+
+    const validId = 'example.com/😀';
+    const validFetch = vi.fn(async (input: string | URL) => {
+      expect(String(input)).toBe('https://skills.sh/api/v1/skills/example.com/%F0%9F%98%80');
+      return response({ id: validId, source: 'example.com', slug: '😀', installs: 1, hash: null, files: null });
+    });
+    const validClient = new SkillsDirectoryClient({ fetch: validFetch });
+    await expect(validClient.detail(validId)).resolves.toMatchObject({ id: validId, source: 'example.com', slug: '😀' });
+  });
+
+  it('preserves bounded pagination metadata across pages and accepts duplicate, null-snapshot, and well-known rows', async () => {
+    const duplicate = {
+      id: 'catalog-owner/skills/facebook/meta-ads',
+      slug: 'facebook/meta-ads',
+      name: 'meta-ads',
+      source: 'catalog-owner/skills',
+      installs: 320,
+      sourceType: 'github' as const,
+      installUrl: 'https://github.com/catalog-owner/skills',
+      url: 'https://skills.sh/catalog-owner/skills/facebook/meta-ads',
+    };
+    const nullSnapshotWellKnown = {
+      id: 'open.feishu.cn/lark-doc',
+      slug: 'lark-doc',
+      name: 'lark-doc',
+      source: 'open.feishu.cn',
+      installs: 675_505,
+      sourceType: 'well-known' as const,
+      installUrl: null,
+      url: 'https://www.skills.sh/site/open.feishu.cn/lark-doc',
+      files: null,
+    };
+    const pages = new Map([
+      [0, { data: [duplicate], pagination: { page: 0, perPage: 2, total: 3, hasMore: true } }],
+      [1, { data: [nullSnapshotWellKnown, duplicate], pagination: { page: 1, perPage: 2, total: 3, hasMore: true } }],
+      [2, { data: [], pagination: { page: 2, perPage: 2, total: 3, hasMore: false } }],
+    ]);
+    const fetch = vi.fn(async (input: string | URL) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      const fixture = pages.get(page);
+      if (!fixture) throw new Error(`unexpected page ${page}`);
+      return response(fixture);
+    });
+    const client = new SkillsDirectoryClient({ fetch });
+
+    const first = await client.list({ page: 0, perPage: 2 });
+    const second = await client.list({ page: 1, perPage: 2 });
+    const third = await client.list({ page: 2, perPage: 2 });
+
+    expect(first.pagination).toEqual({ page: 0, perPage: 2, total: 3, hasMore: true });
+    expect(second.pagination).toEqual({ page: 1, perPage: 2, total: 3, hasMore: true });
+    expect(third.pagination).toEqual({ page: 2, perPage: 2, total: 3, hasMore: false });
+    expect(first.data[0]?.id).toBe('catalog-owner/skills/facebook/meta-ads');
+    expect(second.data[1]?.id).toBe(first.data[0]?.id);
+    expect(second.data[0]).toMatchObject({
+      id: 'open.feishu.cn/lark-doc',
+      source: 'open.feishu.cn',
+      slug: 'lark-doc',
+      sourceType: 'well-known',
+      installUrl: null,
+    });
+    expect(second.data[0]).not.toHaveProperty('files');
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
   it('cancels a never-closing response stream at the request deadline', async () => {
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({

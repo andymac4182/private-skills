@@ -42,6 +42,8 @@ const DEFAULT_SEARCH_LIMIT = 50;
 const MAX_QUERY_BYTES = 16 * 1024;
 const MAX_OWNER_BYTES = 512;
 const MAX_IDENTIFIER_BYTES = 2_048;
+const MAX_IDENTIFIER_SEGMENTS = 64;
+const MAX_IDENTIFIER_SEGMENT_BYTES = 512;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -436,14 +438,41 @@ function normalizeOwner(value: unknown): string {
 }
 
 function normalizeSkillId(value: unknown): string {
-  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > MAX_IDENTIFIER_BYTES || value.trim() !== value || /[\u0000-\u001f\u007f?#\\]/u.test(value)) {
+  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > MAX_IDENTIFIER_BYTES || value.trim() !== value || hasUnpairedSurrogate(value) || /[\u0000-\u001f\u007f?#%\\]/u.test(value)) {
     throw invalidInputError('id');
   }
   const segments = value.split('/');
-  if ((segments.length !== 2 && segments.length !== 3) || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+  if (segments.length < 2 || segments.length > MAX_IDENTIFIER_SEGMENTS || segments.some((segment) => {
+    const segmentBytes = new TextEncoder().encode(segment).byteLength;
+    return segment.length === 0 || segment === '.' || segment === '..' || segmentBytes > MAX_IDENTIFIER_SEGMENT_BYTES;
+  })) {
     throw invalidInputError('id');
   }
   return value;
+}
+
+function isSafeSkillIdentity(id: string, source: string, slug: string): boolean {
+  if (id !== `${source}/${slug}`) return false;
+  if (new TextEncoder().encode(id).byteLength > MAX_IDENTIFIER_BYTES || id.trim() !== id || hasUnpairedSurrogate(id) || /[\u0000-\u001f\u007f?#%\\]/u.test(id)) return false;
+  const segments = id.split('/');
+  return segments.length >= 2 && segments.length <= MAX_IDENTIFIER_SEGMENTS && segments.every((segment) => {
+    const segmentBytes = new TextEncoder().encode(segment).byteLength;
+    return segment.length > 0 && segment !== '.' && segment !== '..' && segmentBytes <= MAX_IDENTIFIER_SEGMENT_BYTES;
+  });
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function pathEncodeId(id: string): string {
@@ -490,6 +519,10 @@ function normalizeCuratedSkillsResponse(value: unknown, limits: DirectoryLimits,
 
 function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _baseURL: URL): SkillDetailResponse {
   const record = responseRecord(value, 'detail');
+  const id = boundedMetadataString(record.id, limits, 'detail.id');
+  const source = boundedMetadataString(record.source, limits, 'detail.source');
+  const slug = boundedMetadataString(record.slug, limits, 'detail.slug');
+  if (!isSafeSkillIdentity(id, source, slug)) throw invalidResponseError('detail.identity');
   const filesValue = record.files;
   let files: SkillDetailFile[] | null;
   if (filesValue === null) {
@@ -511,9 +544,9 @@ function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _
     });
   }
   return {
-    id: boundedMetadataString(record.id, limits, 'detail.id'),
-    source: boundedMetadataString(record.source, limits, 'detail.source'),
-    slug: boundedMetadataString(record.slug, limits, 'detail.slug'),
+    id,
+    source,
+    slug,
     installs: nonNegativeInteger(record.installs, 'detail.installs'),
     hash: nullableSnapshotHash(record.hash, limits, 'detail.hash'),
     files,
@@ -522,12 +555,16 @@ function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _
 
 function normalizeSkillAuditResponse(value: unknown, limits: DirectoryLimits, _baseURL: URL): SkillAuditResponse {
   const record = responseRecord(value, 'audit');
+  const id = boundedMetadataString(record.id, limits, 'audit.id');
+  const source = boundedMetadataString(record.source, limits, 'audit.source');
+  const slug = boundedMetadataString(record.slug, limits, 'audit.slug');
+  if (!isSafeSkillIdentity(id, source, slug)) throw invalidResponseError('audit.identity');
   const audits = responseArray(record.audits, 'audit.audits');
   if (audits.length > limits.maxFiles) throw invalidResponseError('audit.audits');
   return {
-    id: boundedMetadataString(record.id, limits, 'audit.id'),
-    source: boundedMetadataString(record.source, limits, 'audit.source'),
-    slug: boundedMetadataString(record.slug, limits, 'audit.slug'),
+    id,
+    source,
+    slug,
     audits: audits.map((entry, index) => normalizeAuditEntry(entry, limits, `audit.audits[${index}]`)),
   };
 }
@@ -536,14 +573,18 @@ function normalizeSkill(value: unknown, limits: DirectoryLimits, baseURL: URL, c
   const record = responseRecord(value, context);
   const sourceType = boundedMetadataString(record.sourceType, limits, `${context}.sourceType`);
   if (sourceType !== 'github' && sourceType !== 'well-known') throw invalidResponseError(`${context}.sourceType`);
+  const id = boundedMetadataString(record.id, limits, `${context}.id`);
+  const slug = boundedMetadataString(record.slug, limits, `${context}.slug`);
+  const source = boundedMetadataString(record.source, limits, `${context}.source`);
+  if (!isSafeSkillIdentity(id, source, slug)) throw invalidResponseError(`${context}.identity`);
   const installUrl = record.installUrl === null
     ? null
     : httpsUrl(record.installUrl, limits, `${context}.installUrl`, baseURL, false);
   const normalized: V1Skill = {
-    id: boundedMetadataString(record.id, limits, `${context}.id`),
-    slug: boundedMetadataString(record.slug, limits, `${context}.slug`),
+    id,
+    slug,
     name: boundedMetadataString(record.name, limits, `${context}.name`),
-    source: boundedMetadataString(record.source, limits, `${context}.source`),
+    source,
     installs: nonNegativeInteger(record.installs, `${context}.installs`),
     sourceType,
     installUrl,

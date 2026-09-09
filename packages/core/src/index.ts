@@ -77,6 +77,8 @@ const MAX_INSTALL_RECEIPT_TICKETS = 100_000;
 const MAX_CLIENT_VERSION_LENGTH = 128;
 const DIRECTORY_METADATA_LOOKUP_DEADLINE_MS = 30_000;
 const DIRECTORY_METADATA_LOOKUP_MAX_PAGES = 100;
+const DIRECTORY_ID_MAX_SEGMENTS = 64;
+const DIRECTORY_ID_MAX_SEGMENT_BYTES = 512;
 const SUPPORTED_SCANNERS: readonly ScannerId[] = [
   'cisco-skill-scanner',
   'nvidia-skillspector',
@@ -1289,21 +1291,49 @@ function requireDirectoryId(value: unknown): string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    value.length > 2_048 ||
+    !isWellFormedUnicodeString(value) ||
+    new TextEncoder().encode(value).byteLength > 2_048 ||
     value.trim() !== value ||
-    /[\u0000-\u001f\u007f?#\\]/u.test(value)
+    /[\u0000-\u001f\u007f?#%\\]/u.test(value)
   ) {
     throw new RegistryApiError('INVALID_REQUEST', 'id is invalid', 400);
   }
   const parts = value.split('/');
-  if ((parts.length !== 2 && parts.length !== 3) || parts.some((part) => part === '' || part === '.' || part === '..')) {
+  if (parts.length < 2 || parts.length > DIRECTORY_ID_MAX_SEGMENTS || parts.some((part) => !isSafeDirectorySegment(part))) {
     throw new RegistryApiError('INVALID_REQUEST', 'id is invalid', 400);
   }
   return value;
 }
 
 function isSafeDirectoryExternalValue(value: string): boolean {
-  return value.length > 0 && value.length <= 2_048 && !/[\u0000-\u001f\u007f?#\\]/u.test(value);
+  return isWellFormedUnicodeString(value) &&
+    new TextEncoder().encode(value).byteLength <= 2_048 &&
+    value.length > 0 &&
+    value.trim() === value &&
+    value.split('/').every((part) => isSafeDirectorySegment(part)) &&
+    !/[\u0000-\u001f\u007f?#%\\]/u.test(value);
+}
+
+function isSafeDirectorySegment(value: string): boolean {
+  return isWellFormedUnicodeString(value) &&
+    value.length > 0 &&
+    value !== '.' &&
+    value !== '..' &&
+    new TextEncoder().encode(value).byteLength <= DIRECTORY_ID_MAX_SEGMENT_BYTES;
+}
+
+function isWellFormedUnicodeString(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function directoryRequest<T>(action: () => Promise<T>): Promise<T> {
@@ -2499,6 +2529,10 @@ async function resolveOrQueueImport(
 
   const state = await readState(deps.repository, config.organizationId);
   const upstream = findImportUpstream(state, importRequest, principal);
+  // skills.sh IDs are catalog identities rather than arbitrary relative
+  // source paths. Validate them with the same bounded, Unicode-safe rules as
+  // the directory routes before entering the transaction or any worker fetch.
+  if (upstream.kind === 'skills-sh') requireDirectoryId(importRequest.path);
   const cacheKey = importCacheKey(config.organizationId, importRequest);
 
   return await deps.repository.transaction(config.organizationId, (mutableState) => {

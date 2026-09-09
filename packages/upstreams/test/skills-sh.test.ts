@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The acquisition tests use a fetch fixture, so resolve the canonical origin
+// to the loopback fixture without making a network request. This keeps the
+// production SSRF checks active while allowLoopbackForTests is enabled.
+vi.mock('node:dns/promises', () => ({
+  lookup: async () => [{ address: '127.0.0.1' }],
+}));
 
 import {
   acquireSkillsShSkill,
@@ -9,6 +16,7 @@ import {
 import type { AcquireSkillInput } from '../src/index.js';
 
 const BASE = 'http://127.0.0.1:32123';
+const DISCOVERY_SCHEMA = 'https://schemas.agentskills.io/discovery/0.2.0/schema.json';
 const COMMIT = '0123456789012345678901234567890123456789';
 const TREE = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd';
 
@@ -158,6 +166,254 @@ describe('skills.sh source acquisition', () => {
     } finally {
       delete process.env.PSKILLS_SKILLS_SH_TOKEN;
     }
+  });
+
+  it('gets a fresh request-scoped token for each canonical catalog acquisition', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Fresh token demo\n---\n# demo\n', 'utf8');
+    const seen: Array<{ path: string; authorization: string | undefined }> = [];
+    let acquisition = 0;
+    let tokenCalls = 0;
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      const url = new URL(input.toString());
+      seen.push({ path: url.pathname, authorization: init?.headers?.authorization });
+      if (url.origin !== 'https://skills.sh' || url.pathname !== '/api/v1/skills/octo/repo/demo') {
+        return json({ error: 'unexpected source request' }, 404);
+      }
+      acquisition += 1;
+      return json({
+        id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github',
+        installUrl: 'https://github.com/octo/repo/tree/main/skills/demo', url: '/site/octo/repo/demo', hash: `snapshot-${acquisition}`,
+        files: [{ path: 'SKILL.md', contents: skill.toString('utf8') }],
+      });
+    };
+    const input = request('octo/repo/demo', fetchImpl);
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh' };
+    input.getSkillsShToken = async (signal) => {
+      expect(signal?.aborted).toBe(false);
+      tokenCalls += 1;
+      return `catalog-token-${tokenCalls}`;
+    };
+
+    await acquireSkillsShSkill(input);
+    await acquireSkillsShSkill(input);
+
+    expect(tokenCalls).toBe(2);
+    expect(seen).toEqual([
+      { path: '/api/v1/skills/octo/repo/demo', authorization: 'Bearer catalog-token-1' },
+      { path: '/api/v1/skills/octo/repo/demo', authorization: 'Bearer catalog-token-2' },
+    ]);
+  });
+
+  it('keeps the catalog token off GitHub source requests', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Catalog credential demo\n---\n# demo\n', 'utf8');
+    const skillSha = sha(skill);
+    const seen: Array<{ origin: string; path: string; authorization: string | undefined }> = [];
+    let tokenCalls = 0;
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      const url = new URL(input.toString());
+      seen.push({ origin: url.origin, path: url.pathname, authorization: init?.headers?.authorization });
+      if (url.origin === 'https://skills.sh' && url.pathname === '/api/v1/skills/octo/repo/demo') {
+        return json({
+          id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github',
+          installUrl: 'https://github.com/octo/repo/tree/main/skills/demo', url: '/site/octo/repo/demo', hash: null, files: null,
+        });
+      }
+      if (url.pathname === '/github/repos/octo/repo') return json({ default_branch: 'main' });
+      if (url.pathname === `/github/repos/octo/repo/commits/main`) return json({ sha: COMMIT });
+      if (url.pathname === `/github/repos/octo/repo/git/trees/${COMMIT}`) return json({ sha: TREE, truncated: false, tree: [
+        { path: 'skills/demo', mode: '040000', type: 'tree', sha: TREE },
+        { path: 'skills/demo/SKILL.md', mode: '100644', type: 'blob', sha: skillSha, size: skill.length },
+      ] });
+      if (url.pathname === `/github/repos/octo/repo/git/blobs/${skillSha}`) return json({ encoding: 'base64', content: skill.toString('base64'), size: skill.length, sha: skillSha });
+      return json({ error: 'not found' }, 404);
+    };
+    const input = request('octo/repo/demo', fetchImpl);
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh', githubApiBaseUrl: `${BASE}/github` } as AcquireSkillInput['upstream'];
+    input.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return `catalog-token-${tokenCalls}`;
+    };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files).toHaveLength(1);
+    expect(tokenCalls).toBe(1);
+    expect(seen.find((entry) => entry.origin === 'https://skills.sh')?.authorization).toBe('Bearer catalog-token-1');
+    expect(seen.filter((entry) => entry.origin !== 'https://skills.sh').every((entry) => entry.authorization === undefined)).toBe(true);
+  });
+
+  it('keeps the catalog token off well-known indexes, artifacts, and artifact redirects', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Well-known credential demo\n---\n# demo\n', 'utf8');
+    const expected = digest(skill);
+    const seen: Array<{ origin: string; path: string; authorization: string | undefined }> = [];
+    let tokenCalls = 0;
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      const url = new URL(input.toString());
+      seen.push({ origin: url.origin, path: url.pathname, authorization: init?.headers?.authorization });
+      if (url.origin === 'https://skills.sh' && url.pathname === '/api/v1/skills/example.test/demo') {
+        return json({
+          id: 'example.test/demo', source: 'example.test', slug: 'demo', name: 'demo', sourceType: 'well-known',
+          installUrl: `${BASE}/published/.well-known/agent-skills/demo`, url: '/site/example.test/demo', hash: null, files: null,
+        });
+      }
+      if (url.pathname === '/published/.well-known/agent-skills/index.json') {
+        return json({ $schema: DISCOVERY_SCHEMA, skills: [{
+          name: 'demo', type: 'skill-md', description: 'Well-known credential demo', url: '/artifact/demo.md', digest: expected,
+        }] });
+      }
+      if (url.pathname === '/artifact/demo.md') return new Response(null, { status: 302, headers: { location: '/artifact/final.md' } });
+      if (url.pathname === '/artifact/final.md') return bytes(skill, 'text/markdown');
+      return json({ error: 'not found' }, 404);
+    };
+    const input = request('example.test/demo', fetchImpl);
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh' } as AcquireSkillInput['upstream'];
+    input.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return `catalog-token-${tokenCalls}`;
+    };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files).toHaveLength(1);
+    expect(tokenCalls).toBe(1);
+    expect(seen.find((entry) => entry.origin === 'https://skills.sh')?.authorization).toBe('Bearer catalog-token-1');
+    expect(seen.filter((entry) => entry.origin !== 'https://skills.sh').every((entry) => entry.authorization === undefined)).toBe(true);
+  });
+
+  it('does not invoke the request-scoped provider for a custom catalog destination', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Custom destination demo\n---\n# demo\n', 'utf8');
+    let tokenCalls = 0;
+    let authorization: string | undefined;
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      authorization = init?.headers?.authorization;
+      const url = new URL(input.toString());
+      if (url.pathname === '/catalog/api/v1/skills/octo/repo/demo') {
+        return json({ id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github', hash: 'snapshot', files: [{ path: 'SKILL.md', contents: skill.toString('utf8') }] });
+      }
+      return json({ error: 'not found' }, 404);
+    };
+    const input = request('octo/repo/demo', fetchImpl);
+    input.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return 'must-not-be-used';
+    };
+
+    await acquireSkillsShSkill(input);
+
+    expect(tokenCalls).toBe(0);
+    expect(authorization).toBeUndefined();
+  });
+
+  it('accepts bounded Unicode IDs and rejects malformed or over-limit IDs before I/O', async () => {
+    const unicodeId = '团队/工具/🔍';
+    const unicodeInput = request(unicodeId, async () => json({
+      id: unicodeId,
+      source: '团队',
+      slug: '工具/🔍',
+      name: 'unicode-demo',
+      sourceType: 'github',
+      hash: 'snapshot',
+      files: [{ path: 'SKILL.md', contents: '---\nname: unicode-demo\ndescription: Unicode demo\n---\n# demo\n' }],
+    }));
+    unicodeInput.upstream = { ...unicodeInput.upstream!, repositories: ['团队'] };
+    await expect(acquireSkillsShSkill(unicodeInput)).resolves.toMatchObject({ provenance: { path: unicodeId } });
+
+    let fetchCalls = 0;
+    let tokenCalls = 0;
+    const fetchImpl = async (): Promise<Response> => {
+      fetchCalls += 1;
+      return json({ error: 'unexpected request' }, 500);
+    };
+    const template = request('octo/repo/demo', fetchImpl);
+    template.upstream = { ...template.upstream!, baseUrl: 'https://skills.sh' };
+    template.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return 'must-not-be-called';
+    };
+    const overSegment = `octo/repo/${'a'.repeat(513)}`;
+    const overSegments = ['octo', 'repo', ...Array.from({ length: 63 }, () => 'a')].join('/');
+    const overTotal = ['octo', 'repo', ...Array.from({ length: 62 }, () => 'a'.repeat(512))].join('/');
+    const invalidIds = [
+      overSegment,
+      overSegments,
+      overTotal,
+      'octo/repo/../demo',
+      'octo/repo/a?b',
+      'octo/repo/a#b',
+      'octo/repo/a%2Fb',
+      'octo/repo/a\\b',
+      'octo/repo/\ud800',
+    ];
+
+    for (const path of invalidIds) {
+      await expect(acquireSkillsShSkill({
+        ...template,
+        importRequest: { ...template.importRequest!, path },
+      })).rejects.toMatchObject({ code: 'invalid_source' });
+    }
+    expect(fetchCalls).toBe(0);
+    expect(tokenCalls).toBe(0);
+  });
+
+  it('rejects malformed Unicode before encoding the catalog request', async () => {
+    let fetchCalls = 0;
+    let tokenCalls = 0;
+    const input = request('octo/repo/demo', async () => {
+      fetchCalls += 1;
+      return json({ error: 'unexpected request' }, 500);
+    });
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh' };
+    input.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return 'must-not-be-called';
+    };
+
+    await expect(acquireSkillsShSkill({
+      ...input,
+      importRequest: { ...input.importRequest!, path: 'octo/repo/\ud800' },
+    })).rejects.toMatchObject({ code: 'invalid_source' });
+    expect(fetchCalls).toBe(0);
+    expect(tokenCalls).toBe(0);
+  });
+
+  it('redacts request-scoped credential provider failures and fails closed', async () => {
+    let fetchCalls = 0;
+    const input = request('octo/repo/demo', async () => {
+      fetchCalls += 1;
+      return json({ error: 'unexpected request' }, 500);
+    });
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh', credentialEnv: 'PSKILLS_SKILLS_SH_FALLBACK_TOKEN' };
+    input.getSkillsShToken = async () => {
+      throw new Error('provider-secret-must-not-escape');
+    };
+
+    process.env.PSKILLS_SKILLS_SH_FALLBACK_TOKEN = 'fallback-token-must-not-be-used';
+    let error: unknown;
+    try {
+      error = await acquireSkillsShSkill(input).catch((value: unknown) => value);
+    } finally {
+      delete process.env.PSKILLS_SKILLS_SH_FALLBACK_TOKEN;
+    }
+
+    expect(error).toMatchObject({ code: 'credential_unavailable', message: 'skills.sh catalog authentication unavailable' });
+    expect(String(error)).not.toContain('provider-secret-must-not-escape');
+    expect(fetchCalls).toBe(0);
+  });
+
+  it('times out a request-scoped credential provider and fails closed', async () => {
+    let fetchCalls = 0;
+    const input = request('octo/repo/demo', async () => {
+      fetchCalls += 1;
+      return json({ error: 'unexpected request' }, 500);
+    });
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh' };
+    input.limits = { requestTimeoutMs: 5 };
+    input.getSkillsShToken = async () => new Promise<string>(() => { /* deliberately pending */ });
+
+    const error = await acquireSkillsShSkill(input).catch((value: unknown) => value);
+
+    expect(error).toMatchObject({ code: 'credential_timeout', message: 'skills.sh catalog authentication timed out' });
+    expect(fetchCalls).toBe(0);
   });
 
   it('resolves a null GitHub snapshot by immutable commit and selected path', async () => {

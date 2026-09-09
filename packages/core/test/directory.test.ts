@@ -188,6 +188,105 @@ describe('skills.sh directory routes', () => {
     expect(await warm.json()).toHaveProperty('resolution.digest', artifactDigest);
   });
 
+  it('accepts nested catalog slugs but rejects unsafe identity segments', async () => {
+    const id = 'claude-office-skills/skills/facebook/meta-ads';
+    let detailCalls = 0;
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async (requestedId) => {
+        detailCalls += 1;
+        return {
+          id: requestedId,
+          source: 'claude-office-skills/skills',
+          slug: 'facebook/meta-ads',
+          installs: 1,
+          hash: 'snapshot-nested',
+          files: [{ path: 'SKILL.md', contents: '---\nname: meta-ads\ndescription: Nested directory fixture\n---\n' }],
+        };
+      },
+    };
+    const test = setup(undefined, directory);
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ name: 'nested-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['claude-office-skills/skills'], baseUrl: 'https://skills.sh' }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ id, name: '@team/meta-ads', version: '1.0.0' }),
+    }));
+    expect(queued.status).toBe(202);
+    expect(detailCalls).toBe(1);
+    const { operation } = await queued.json() as { operation: { import: Record<string, unknown> } };
+    expect(operation.import).toMatchObject({
+      path: id,
+      externalId: id,
+      repository: 'claude-office-skills/skills',
+    });
+
+    const traversal = await test.handler(new Request(`${ORIGIN}/v1/directory/detail?id=claude-office-skills%2Fskills%2Ffacebook%2F..%2Fmeta-ads`, {
+      headers,
+    }));
+    expect(traversal.status).toBe(400);
+    expect(await traversal.json()).toHaveProperty('error.code', 'INVALID_REQUEST');
+  });
+
+  it('preflights generic skills.sh imports with the bounded Unicode-safe ID rules', async () => {
+    const test = setup();
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        name: 'generic-skills-catalog',
+        kind: 'skills-sh',
+        namespace: '@team',
+        repositories: ['claude-office-skills/skills'],
+        baseUrl: 'https://skills.sh',
+      }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+    const upstreamId = (await upstreamResponse.json() as { upstream: { id: string } }).upstream.id;
+    const valid = {
+      upstreamId,
+      repository: 'claude-office-skills/skills',
+      path: 'claude-office-skills/skills/facebook/meta-ads',
+      externalId: 'claude-office-skills/skills/facebook/meta-ads',
+      name: '@team/meta-ads',
+      version: '1.0.0',
+    };
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/imports`, {
+      method: 'POST', headers, body: JSON.stringify(valid),
+    }));
+    expect(queued.status).toBe(202);
+    expect(await queued.json()).toHaveProperty('operation.import.path', valid.path);
+    expect((await test.repository.read()).jobs).toHaveLength(1);
+
+    const invalid = [
+      { label: 'traversal', path: 'claude-office-skills/skills/facebook/../meta-ads' },
+      { label: 'surrogate', path: `claude-office-skills/skills/facebook/${String.fromCharCode(0xd800)}` },
+      { label: 'oversized segment', path: `claude-office-skills/skills/${'x'.repeat(513)}` },
+      { label: 'too many segments', path: Array.from({ length: 65 }, () => 'x').join('/') },
+      { label: 'oversized ID', path: Array.from({ length: 4 }, () => 'x'.repeat(512)).join('/') },
+      { label: 'encoded delimiter', path: 'claude-office-skills/skills/facebook/meta%2Fads' },
+    ];
+    for (const candidate of invalid) {
+      const response = await test.handler(new Request(`${ORIGIN}/v1/imports`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ...valid,
+          path: candidate.path,
+          externalId: candidate.path,
+          name: `@team/${candidate.label.replace(/\s+/gu, '-')}`,
+        }),
+      }));
+      expect(response.status, candidate.label).toBe(400);
+    }
+    expect((await test.repository.read()).jobs).toHaveLength(1);
+  });
+
   it('does not silently choose between multiple authorized source mappings', async () => {
     const test = setup();
     const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };

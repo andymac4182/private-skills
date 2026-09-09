@@ -121,10 +121,28 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
+  // The official skills.sh token provider is request-scoped. Keep the
+  // resolver function in the long-lived runtime, never its token, and pass it
+  // into hosted import jobs so each catalog request obtains a fresh project
+  // OIDC credential. Disabled directory access leaves existing env-backed
+  // upstream credentials untouched.
+  const directoryTokenProvider = createDirectoryTokenProvider(env);
+  const hostedSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
+    const token = await directoryTokenProvider(signal);
+    if (typeof token !== 'string' || token.trim().length === 0) {
+      throw new Error(DIRECTORY_AUTH_UNAVAILABLE);
+    }
+    return token;
+  };
   const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
-    ? createHostedWorkerHandlerFromEnv({ ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN })
+    ? createHostedWorkerHandlerFromEnv(
+      { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
+      env.PSKILLS_DIRECTORY_ENABLED === 'true'
+        ? { acquisition: { getSkillsShToken: hostedSkillsShToken } }
+        : {},
+    )
     : undefined;
-  return { repository, blobs, hostedWorker, directoryTokenProvider: createDirectoryTokenProvider(env), createSearchIndex: (profile) => {
+  return { repository, blobs, hostedWorker, directoryTokenProvider, createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {
       if (!postgresPool) throw new Error('pgvector search requires PostgreSQL metadata');
