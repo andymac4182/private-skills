@@ -26,9 +26,10 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified for the recorded failure check:** the production worker/hosting
   boundary proves required scanner failures are fail-closed and does not expose
   artifact bytes, credentials, or reports;
-- **pending for the latest source revision:** final CI is green on Linux, macOS,
-  and Windows, the latest source revision is covered, and v0.2.0
-  archives/checksums are published and tested by a clean consumer;
+- **current-head CI reported green:** source head `a4ea17c` has 229 tests
+  passed and two environment-dependent skips, with all CI checks green;
+  **pending:** v0.2.0 release archives/checksums must still be published and
+  tested by a clean consumer;
 - **pending:** a restore rehearsal resolves the original digest and preserves revocation,
   authorization, and tenant boundaries.
 
@@ -52,10 +53,22 @@ validation/scanner worker. The C1 deployment may be verified independently of
 the remaining G0 GitHub integration step.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
 skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
-directory-agent wiring and infrastructure configuration remain in progress;
-that authorization does not count as live Vercel cloud acceptance. A new
-deployment must still prove authenticated listing, detail, import, and view
-behavior before C1 is complete.
+directory-agent wiring is present, and earlier deployment evidence proves the
+authorized request-scoped token is accepted. The latest production deployment
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
+`b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) proves
+metadata-only pagination, but this evidence subset does not count as complete
+C1 cloud acceptance. A deployment must still prove authenticated listing,
+detail, import, and view behavior together before C1 is complete.
+
+Current evidence closes the bounded metadata-enumeration portion: 20 all-time
+pages at `per_page=500` returned `totalDeclared=9738`, `totalObserved=9738`,
+and `uniqueIds=9738`, with no duplicate rows/IDs or artifact writes. The
+earlier OIDC/endpoint/ComputeSDK evidence and the current nested-route probe
+are recorded with their own deployment provenance in [`verification-v0.3.0.md`](verification-v0.3.0.md).
+Selected GitHub/well-known imports still await separately requested
+restricted-source approval and scanner-admission readback; a conditionally
+approved isolated CLI folder is not import acceptance evidence.
 
 Completion requires all of the following:
 
@@ -69,10 +82,11 @@ Completion requires all of the following:
    compatibility-only and cannot silently become the cloud contract.
 2. **C1-PAGE — complete metadata coverage without mirroring.** The bounded
    pagination adapter can enumerate list pages from zero until `hasMore=false`
-   for coverage verification or an on-demand catalog slice, records observed
-   count versus response `total`, and deduplicates by complete external
-   `source/slug` ID. A fixture of at least three pages, a duplicate row, a
-   `files: null` row, and a well-known row completes without a silent drop.
+   for coverage verification or an on-demand catalog slice, uses the complete
+   external `source/slug` ID as its coverage key, records duplicate rows/IDs,
+   and deduplicates the unique coverage count without silently dropping a
+   listing. A fixture of at least three pages, a duplicate row, a `files: null`
+   row, and a well-known row completes without a silent drop.
    Normal browse/search fetches only requested pages/results; no user-triggered
    “refresh all” operation is required, and no artifact bytes or private blob
    writes occur until a user selects an import.
@@ -103,6 +117,14 @@ Completion requires all of the following:
    install count, branch name, or first-seen date is presented as an upstream
    SemVer; a private import requires an explicit private release version or a
    separately specified immutable revision mode.
+   Current-head fixtures accept the valid nested ID
+   `claude-office-skills/skills/facebook/meta-ads` and reject traversal,
+   encoded-delimiter, and excessive-depth variants. The live upstream probe
+   returned 400 `invalid_path` for direct/full-ID encoding, 200 with the wrong
+   identity for one-slug-segment encoding, and 404 for double encoding; the
+   current production nested probe returned 503 for detail/audit. This is an
+   upstream compatibility/availability limitation, and does not count as a
+   successful detail or import.
 6. **C1-GITHUB — exact public GitHub mapping.** For a GitHub row whose detail
    has no snapshot, a fixture resolves owner/repository, default or requested
    ref, immutable commit, recursive tree, exact `SKILL.md` path, selected tree

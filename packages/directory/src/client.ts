@@ -1,4 +1,12 @@
 import {
+  DirectoryCacheKeyTooLargeError,
+  DirectoryResponseCache,
+  directoryCacheKey,
+  type DirectoryCacheEndpoint,
+  type DirectoryCacheLoadResult,
+  type DirectoryCacheStats,
+} from './cache.js';
+import {
   SKILLS_DIRECTORY_DEFAULT_BASE_URL,
   SkillsDirectoryError,
   type CuratedOwner,
@@ -22,6 +30,13 @@ import {
   type V1Skill,
   type RequestOptions,
 } from './types.js';
+import {
+  SKILLS_TOPIC_PARSER_REVISION,
+  SkillsTopicParseError,
+  parseSkillsTopicPage,
+  topicUnavailable,
+  type SkillsTopicResponse,
+} from './topic.js';
 
 /** Conservative limits for data retained from an external directory. */
 export const DEFAULT_DIRECTORY_LIMITS: Readonly<DirectoryLimits> = Object.freeze({
@@ -58,8 +73,9 @@ interface FetchAttempt {
  *
  * Authentication is deliberately request scoped: `getToken` is called once
  * for every public API method invocation and its result is kept only for that
- * request's bounded retry loop.  No token or response metadata is cached by
- * this class.
+ * request's bounded retry loop. Successful normalized metadata is retained by
+ * the per-client bounded cache; tokens, headers, raw bodies, and errors are
+ * never cached.
  */
 export class SkillsDirectoryClient {
   private readonly baseURL: URL;
@@ -67,6 +83,7 @@ export class SkillsDirectoryClient {
   private readonly getToken?: SkillsTokenProvider;
   private readonly limits: DirectoryLimits;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly responseCache?: DirectoryResponseCache;
 
   constructor(options: SkillsDirectoryClientOptions = {}) {
     this.baseURL = normalizeBaseURL(options.baseURL);
@@ -74,6 +91,12 @@ export class SkillsDirectoryClient {
     this.getToken = options.getToken;
     this.limits = normalizeLimits(options);
     this.sleep = options.sleep ?? defaultSleep;
+    this.responseCache = options.cache === false ? undefined : new DirectoryResponseCache(options.cache);
+  }
+
+  /** Return safe cache metadata without exposing cached response values. */
+  cacheStats(): DirectoryCacheStats | null {
+    return this.responseCache?.inspect() ?? null;
   }
 
   /** Return one bounded leaderboard page. */
@@ -91,6 +114,7 @@ export class SkillsDirectoryClient {
       query,
       options.signal,
       (body) => normalizeSkillListResponse(body, this.limits, this.baseURL),
+      'list',
     );
   }
 
@@ -120,6 +144,7 @@ export class SkillsDirectoryClient {
       query,
       searchOptions.signal,
       (body) => normalizeSkillSearchResponse(body, this.limits, this.baseURL),
+      'search',
     );
   }
 
@@ -130,6 +155,7 @@ export class SkillsDirectoryClient {
       undefined,
       options.signal,
       (body) => normalizeCuratedSkillsResponse(body, this.limits, this.baseURL),
+      'curated',
     );
   }
 
@@ -145,6 +171,7 @@ export class SkillsDirectoryClient {
         if (detail.id !== normalizedId) throw invalidResponseError('detail.id');
         return detail;
       },
+      'detail',
     );
   }
 
@@ -160,7 +187,55 @@ export class SkillsDirectoryClient {
         if (audit.id !== normalizedId) throw invalidResponseError('audit.id');
         return audit;
       },
+      'audit',
     );
+  }
+
+  /** Fetch one public topic page and retain only its recognized metadata. */
+  async topic(slug: string, options: RequestOptions = {}): Promise<SkillsTopicResponse> {
+    const normalizedSlug = normalizeTopicSlug(slug);
+    const sourceUrl = this.topicURL(normalizedSlug);
+    let html: string;
+    try {
+      html = await this.requestTopicDocument(sourceUrl, options.signal);
+    } catch (error) {
+      if (error instanceof SkillsDirectoryError && error.code === 'not_found') {
+        return topicUnavailable({
+          slug: normalizedSlug,
+          sourceUrl,
+          status: 'unavailable',
+          reason: 'skills.sh did not return this topic page',
+        });
+      }
+      if (error instanceof SkillsDirectoryError && error.code === 'invalid_response') {
+        return topicUnavailable({
+          slug: normalizedSlug,
+          sourceUrl,
+          status: 'stale',
+          reason: 'skills.sh returned an unrecognized topic document',
+        });
+      }
+      throw error;
+    }
+
+    try {
+      return parseSkillsTopicPage(html, {
+        slug: normalizedSlug,
+        sourceUrl,
+        fetchedAt: new Date().toISOString(),
+        parserRevision: SKILLS_TOPIC_PARSER_REVISION,
+      });
+    } catch (error) {
+      if (error instanceof SkillsTopicParseError) {
+        return topicUnavailable({
+          slug: normalizedSlug,
+          sourceUrl,
+          status: 'stale',
+          reason: 'skills.sh changed the topic page shape; refresh is required',
+        });
+      }
+      throw error;
+    }
   }
 
   private async request<T>(
@@ -168,12 +243,64 @@ export class SkillsDirectoryClient {
     query: URLSearchParams | undefined,
     signal: AbortSignal | undefined,
     normalize: (body: unknown) => T,
+    cacheEndpoint?: DirectoryCacheEndpoint,
   ): Promise<T> {
     if (signal?.aborted) throw requestTimeoutError();
 
-    // Resolve the token once for this high-level API request.  It is scoped to
-    // this invocation and is never saved on the client or shared globally.
-    const token = await this.resolveToken(signal);
+    if (!this.responseCache || cacheEndpoint === undefined) {
+      // Resolve the token once for this high-level API request.  It is scoped
+      // to this invocation and is never saved on the client or shared
+      // globally.
+      const token = await this.resolveToken(signal);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token);
+      return result.value;
+    }
+
+    let key: string;
+    try {
+      key = directoryCacheKey(this.baseURL, endpoint, query);
+    } catch (error) {
+      if (!(error instanceof DirectoryCacheKeyTooLargeError)) throw error;
+      // The API accepts a bounded query whose URL-encoded identity can be
+      // larger than the cache key budget. Keep the request's normal token,
+      // retry, response-size, and normalization behavior, but do not truncate
+      // or otherwise weaken the identity by caching it under a collision-prone
+      // key.
+      const token = await this.resolveToken(signal);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token);
+      return result.value;
+    }
+    try {
+      return await this.responseCache.get({
+        endpoint: cacheEndpoint,
+        key,
+        signal,
+        authenticate: (authSignal) => this.resolveToken(authSignal),
+        load: (credential, loadSignal) => this.requestUncached(
+          endpoint,
+          query,
+          loadSignal,
+          normalize,
+          credential as string | undefined,
+        ),
+      });
+    } catch (error) {
+      // The generic cache uses the platform AbortError shape so it remains
+      // independent of this package's error type. Preserve this client's
+      // stable timeout contract at the public boundary.
+      if (isAbortError(error)) throw requestTimeoutError();
+      throw error;
+    }
+  }
+
+  private async requestUncached<T>(
+    endpoint: string,
+    query: URLSearchParams | undefined,
+    signal: AbortSignal | undefined,
+    normalize: (body: unknown) => T,
+    token: string | undefined,
+  ): Promise<DirectoryCacheLoadResult<T>> {
+    if (signal?.aborted) throw requestTimeoutError();
     const url = this.urlFor(endpoint, query);
     const headers: Record<string, string> = { accept: 'application/json' };
     if (token !== undefined) headers.authorization = `Bearer ${token}`;
@@ -255,7 +382,7 @@ export class SkillsDirectoryClient {
           }
           throw error;
         }
-        return normalize(body);
+        return { value: normalize(body), status: response.status };
       } finally {
         attemptResult.cleanup();
       }
@@ -263,6 +390,84 @@ export class SkillsDirectoryClient {
 
     // The loop always returns or throws.  Keep a defensive branch so a future
     // change to the retry policy cannot accidentally create an undefined API.
+    throw unavailableError();
+  }
+
+  private async requestTopicDocument(url: URL, signal: AbortSignal | undefined): Promise<string> {
+    const headers: Record<string, string> = { accept: 'text/html, application/xhtml+xml' };
+    for (let attempt = 1; attempt <= this.limits.maxAttempts; attempt += 1) {
+      let attemptResult: FetchAttempt;
+      try {
+        // Topic pages are public HTML.  Do not resolve or forward the API
+        // bearer token for this request; credentials stay inside API calls.
+        attemptResult = await this.fetchOnce(url, headers, signal);
+      } catch (error) {
+        if (error instanceof SkillsDirectoryError) throw error;
+        if (isAbortError(error)) throw requestTimeoutError();
+        if (attempt < this.limits.maxAttempts) {
+          await this.retryDelay(undefined, attempt);
+          continue;
+        }
+        throw unavailableError();
+      }
+
+      try {
+        const { response } = attemptResult;
+        if (isRedirectStatus(response.status)) {
+          cancelBody(response);
+          throw new SkillsDirectoryError(
+            'redirect_denied',
+            'skills.sh returned a redirect that this client will not follow',
+            { status: response.status },
+          );
+        }
+        if (response.status === 404) {
+          cancelBody(response);
+          throw new SkillsDirectoryError('not_found', 'The requested skills.sh resource was not found', { status: 404 });
+        }
+        if (response.status === 401 || response.status === 403) {
+          cancelBody(response);
+          throw new SkillsDirectoryError('unauthorized', 'skills.sh authentication was rejected', { status: response.status });
+        }
+        if (response.status === 429) {
+          const retryAfter = parseRetryAfter(response.headers.get('retry-after'), this.limits.maxRetryAfterMs, attempt);
+          cancelBody(response);
+          if (retryAfter.exceedsMaximum || attempt >= this.limits.maxAttempts) {
+            throw new SkillsDirectoryError('rate_limited', 'skills.sh rate limit exceeded', { status: 429, retryAfterMs: retryAfter.milliseconds });
+          }
+          await this.sleep(retryAfter.milliseconds);
+          continue;
+        }
+        if (isRetryableStatus(response.status)) {
+          cancelBody(response);
+          if (attempt < this.limits.maxAttempts) {
+            await this.retryDelay(undefined, attempt);
+            continue;
+          }
+          throw unavailableError(response.status);
+        }
+        if (response.status < 200 || response.status >= 300) {
+          cancelBody(response);
+          throw new SkillsDirectoryError('http_error', 'skills.sh rejected the request', { status: response.status });
+        }
+        const contentType = response.headers.get('content-type')?.toLocaleLowerCase('en-US') ?? '';
+        if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+          cancelBody(response);
+          throw invalidResponseError('topic document content type');
+        }
+        try {
+          return await readTextResponse(response, this.limits.maxResponseBytes, attemptResult.controller.signal);
+        } catch (error) {
+          if (error instanceof TimeoutMarker || isAbortError(error)) {
+            cancelBody(response);
+            throw requestTimeoutError();
+          }
+          throw error;
+        }
+      } finally {
+        attemptResult.cleanup();
+      }
+    }
     throw unavailableError();
   }
 
@@ -344,6 +549,13 @@ export class SkillsDirectoryClient {
     url.pathname = `${prefix}/api/v1/${normalizedEndpoint}`.replace(/\/{2,}/gu, '/');
     url.search = query?.toString() ?? '';
     return url;
+  }
+
+  private topicURL(slug: string): URL {
+    // Topic HTML is public skills.sh content, not part of the configurable
+    // JSON gateway. Use the canonical host directly so gateway deployments do
+    // not rewrite provenance or make the client send HTML requests upstream.
+    return new URL(`https://www.skills.sh/topic/${encodeURIComponent(slug)}`);
   }
 }
 
@@ -447,6 +659,13 @@ function normalizeSkillId(value: unknown): string {
     return segment.length === 0 || segment === '.' || segment === '..' || segmentBytes > MAX_IDENTIFIER_SEGMENT_BYTES;
   })) {
     throw invalidInputError('id');
+  }
+  return value;
+}
+
+function normalizeTopicSlug(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128 || hasUnpairedSurrogate(value) || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)) {
+    throw invalidInputError('topic slug');
   }
   return value;
 }
@@ -735,6 +954,71 @@ function isSafeRelativePath(value: string): boolean {
   if (value.length === 0 || value.startsWith('/') || value.includes('\\') || /[\u0000-\u001f\u007f]/u.test(value)) return false;
   const segments = value.split('/');
   return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+}
+
+async function readTextResponse(response: Response, maxBytes: number, signal: AbortSignal | undefined): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null && /^\d+$/u.test(contentLength) && Number(contentLength) > maxBytes) {
+    cancelBody(response);
+    throw invalidResponseError('response size');
+  }
+
+  let bytes: Uint8Array;
+  try {
+    if (response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      const abortReader = () => {
+        try {
+          const cancellation = reader.cancel();
+          void cancellation.catch(() => undefined);
+        } catch {
+          // The stream may already be closed while the deadline fires.
+        }
+      };
+      signal?.addEventListener('abort', abortReader, { once: true });
+      try {
+        while (true) {
+          if (signal?.aborted) throw new TimeoutMarker();
+          const result = await reader.read();
+          if (result.done) break;
+          const chunk = result.value instanceof Uint8Array ? result.value : new Uint8Array(result.value);
+          total += chunk.byteLength;
+          if (total > maxBytes) {
+            await reader.cancel();
+            throw invalidResponseError('response size');
+          }
+          chunks.push(chunk);
+        }
+        if (signal?.aborted) throw new TimeoutMarker();
+      } finally {
+        signal?.removeEventListener('abort', abortReader);
+        reader.releaseLock();
+      }
+      bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    } else {
+      const text = await response.text();
+      if (signal?.aborted) throw new TimeoutMarker();
+      bytes = new TextEncoder().encode(text);
+      if (bytes.byteLength > maxBytes) throw invalidResponseError('response size');
+    }
+  } catch (error) {
+    if (error instanceof SkillsDirectoryError) throw error;
+    if (error instanceof TimeoutMarker || isAbortError(error)) throw requestTimeoutError();
+    throw unavailableError();
+  }
+
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw invalidResponseError('topic document encoding');
+  }
 }
 
 async function readJsonResponse(response: Response, maxBytes: number, signal: AbortSignal | undefined): Promise<unknown> {

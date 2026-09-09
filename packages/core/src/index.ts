@@ -54,6 +54,7 @@ import {
   type SkillListResponse,
   type SkillSearchResponse,
   type SkillSourceType,
+  type SkillsTopicResponse,
   type V1Skill,
 } from '../../directory/src/index.js';
 import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
@@ -170,6 +171,8 @@ export interface RegistryDirectoryClient {
   curated(options?: { signal?: AbortSignal }): Promise<CuratedSkillsResponse>;
   detail(id: string, options?: { signal?: AbortSignal }): Promise<SkillDetailResponse>;
   audit(id: string, options?: { signal?: AbortSignal }): Promise<SkillAuditResponse>;
+  /** Return one validated, source-backed topic page DTO. */
+  topic?(slug: string, options?: { signal?: AbortSignal }): Promise<SkillsTopicResponse>;
 }
 
 /** Metadata-only pack discovery seam; member bytes remain a separate worker operation. */
@@ -977,6 +980,19 @@ async function handleDirectoryRoute(
     return jsonResponse(result);
   }
 
+  if (segments.length === 3 && segments[2] === 'topic') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    if (typeof directory.topic !== 'function') throw directoryUnavailable();
+    const slugValues = url.searchParams.getAll('slug');
+    if (slugValues.length !== 1) {
+      throw new RegistryApiError('INVALID_REQUEST', 'slug is invalid', 400);
+    }
+    const slug = requireDirectoryTopicSlug(slugValues[0]);
+    const result = await directoryRequest(() => directory.topic!(slug, { signal: request.signal }));
+    return jsonResponse(result);
+  }
+
   if (segments.length === 3 && (segments[2] === 'detail' || segments[2] === 'audits')) {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
@@ -1376,6 +1392,21 @@ function requireDirectoryPackUrl(value: unknown): string {
   const host = parsed.hostname.toLowerCase().replace(/^www\./u, '');
   if (parsed.protocol !== 'https:' || host !== 'skills.sh' || parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash || !/^\/p\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}\/?$/u.test(parsed.pathname)) {
     throw new RegistryApiError('INVALID_REQUEST', 'url is not a valid skills.sh pack URL', 400);
+  }
+  return value;
+}
+
+function requireDirectoryTopicSlug(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !isWellFormedUnicodeString(value) ||
+    value.length > 128 ||
+    new TextEncoder().encode(value).byteLength > 512 ||
+    value.trim() !== value ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value)
+  ) {
+    throw new RegistryApiError('INVALID_REQUEST', 'slug is invalid', 400);
   }
   return value;
 }

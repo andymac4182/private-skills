@@ -1,3 +1,5 @@
+import type { DirectoryCacheOptions } from './cache.js';
+
 /**
  * Host-neutral contracts for the public skills.sh directory API.
  *
@@ -184,6 +186,12 @@ export interface SkillsDirectoryClientOptions {
   maxRetryAfterMs?: number;
   /** Injected delay function so callers/tests can avoid wall-clock waits. */
   sleep?: Sleep;
+  /**
+   * Per-client bounded metadata cache. Set to false to disable caching for a
+   * host that needs explicit refresh behavior. Credentials are resolved for
+   * every request before a cache lookup and are never retained by the cache.
+   */
+  cache?: false | DirectoryCacheOptions;
 }
 
 export type SkillsDirectoryErrorCode =

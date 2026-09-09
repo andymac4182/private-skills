@@ -6,6 +6,7 @@ import {
   type RegistryDirectoryClient,
   type RegistryDirectoryPackClient,
 } from '../src/index.js';
+import { SkillsDirectoryError } from '../../directory/src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 import type {
   Authenticator,
@@ -16,6 +17,7 @@ import type {
   StateRepository,
   StoredBlob,
 } from '../../contracts/src/index.js';
+import type { SkillsTopicResponse } from '../../directory/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 
@@ -141,6 +143,121 @@ describe('skills.sh directory routes', () => {
     expect(await detail.json()).toMatchObject({ id: 'acme/repo/my-skill', source: 'acme/repo' });
     test.setPrincipal(null);
     expect((await test.handler(new Request(`${ORIGIN}/v1/directory/official`))).status).toBe(401);
+  });
+
+  it('returns a bounded topic DTO to an authenticated reader', async () => {
+    let requestedSlug: string | undefined;
+    let receivedSignal: AbortSignal | undefined;
+    const topic: SkillsTopicResponse = {
+      provider: 'skills.sh',
+      slug: 'react',
+      status: 'fresh',
+      title: 'React',
+      description: 'React skills and workflows.',
+      capabilities: ['components'],
+      compatibleAgents: 'Codex and Claude',
+      skills: [{ id: 'acme/repo/react-patterns', name: 'react-patterns', source: 'acme/repo', slug: 'react-patterns', description: 'React patterns.', url: 'https://skills.sh/acme/repo/react-patterns' }],
+      faqs: [{ question: 'What is React?', answer: 'A UI library.' }],
+      relatedTopics: [{ slug: 'nextjs', name: 'Next.js', url: 'https://skills.sh/topic/nextjs' }],
+      sourceUrl: 'https://skills.sh/topic/react',
+      fetchedAt: '2026-09-10T00:00:00.000Z',
+      parserRevision: 'skills-sh-topic-html-v1',
+      reason: null,
+    };
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      topic: async (slug, options) => {
+        requestedSlug = slug;
+        receivedSignal = options?.signal;
+        return topic;
+      },
+    };
+    const test = setup(undefined, directory);
+    const controller = new AbortController();
+    const request = new Request(`${ORIGIN}/v1/directory/topic?slug=react`, {
+      signal: controller.signal,
+      headers: { authorization: 'Bearer user' },
+    });
+    const response = await test.handler(request);
+    expect(response.status).toBe(200);
+    expect(requestedSlug).toBe('react');
+    expect(receivedSignal).toBe(request.signal);
+    controller.abort();
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(await response.json()).toEqual(topic);
+
+    const marketing = await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=marketing`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(marketing.status).toBe(200);
+    expect(requestedSlug).toBe('marketing');
+  });
+
+  it('bounds topic slugs and keeps topic access tenant and role scoped', async () => {
+    let topicCalls = 0;
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      topic: async (slug) => {
+        topicCalls += 1;
+        return {
+          provider: 'skills.sh',
+          slug,
+          status: 'fresh',
+          title: null,
+          description: null,
+          capabilities: [],
+          compatibleAgents: null,
+          skills: [],
+          faqs: [],
+          relatedTopics: [],
+          sourceUrl: `https://skills.sh/topic/${slug}`,
+          fetchedAt: '2026-09-10T00:00:00.000Z',
+          parserRevision: 'skills-sh-topic-html-v1',
+          reason: null,
+        };
+      },
+    };
+    const test = setup(undefined, directory);
+    const invalidSlugs = ['', 'React', 'react.other', 'react_topic', 'react~topic', 'react/other', '../react', 'react?x', 'react%2Fother', ' react', 'x'.repeat(129), String.fromCharCode(0xd800)];
+    for (const slug of invalidSlugs) {
+      const encodedSlug = slug === String.fromCharCode(0xd800) ? '%ED%A0%80' : encodeURIComponent(slug);
+      const response = await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=${encodedSlug}`, {
+        headers: { authorization: 'Bearer user' },
+      }));
+      expect(response.status, slug).toBe(400);
+    }
+    expect(topicCalls).toBe(0);
+
+    test.setPrincipal(worker());
+    expect((await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=react`, {
+      headers: { authorization: 'Bearer worker' },
+    }))).status).toBe(403);
+    test.setPrincipal({ ...user(), organizationId: 'other-tenant' });
+    expect((await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=react`, {
+      headers: { authorization: 'Bearer user' },
+    }))).status).toBe(403);
+    expect(topicCalls).toBe(0);
+
+    test.setPrincipal(user());
+    const duplicate = await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=react&slug=marketing`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(duplicate.status).toBe(400);
+    expect(topicCalls).toBe(0);
+  });
+
+  it('maps topic client outages through the directory error boundary', async () => {
+    const test = setup(undefined, {
+      ...directoryClient(),
+      topic: async () => {
+        throw new SkillsDirectoryError('unavailable', 'credential details must stay private');
+      },
+    });
+    const response = await test.handler(new Request(`${ORIGIN}/v1/directory/topic?slug=react`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: 'DIRECTORY_UNAVAILABLE', message: 'The skills.sh directory is temporarily unavailable' } });
   });
 
   it('queues a governed import, retains external identity, and warms by the exact identity', async () => {

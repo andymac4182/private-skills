@@ -23,6 +23,9 @@ import type {
   SkillSearchResponse,
   SkillSearchType,
   SkillSourceType,
+  SkillsTopicLink,
+  SkillsTopicResponse,
+  SkillsTopicSkill,
   SkillView,
   V1Skill,
 } from '../../../../packages/directory/src/index'
@@ -56,6 +59,9 @@ export type {
   SkillSearchResponse,
   SkillSearchType,
   SkillSourceType,
+  SkillsTopicLink,
+  SkillsTopicResponse,
+  SkillsTopicSkill,
   SkillView,
   V1Skill,
 }
