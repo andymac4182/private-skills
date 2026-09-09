@@ -33,7 +33,13 @@ export default defineConfig(({ mode }) => {
   const provider = providerForBuild(profile)
   const traceDeps = edge
     ? ['!files-sdk']
-    : ['@vercel/sandbox', ...(provider ? ['files-sdk', `files-sdk/${provider}`] : [])]
+    : [
+      '@vercel/sandbox',
+      '@computesdk/vercel',
+      '@computesdk/provider',
+      'computesdk',
+      ...(provider ? ['files-sdk', `files-sdk/${provider}`] : []),
+    ]
   return {
     root,
     resolve: { alias: { '#pskills-infrastructure': infrastructure } },

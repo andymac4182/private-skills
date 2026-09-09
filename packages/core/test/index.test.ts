@@ -12,6 +12,7 @@ import type {
   RegistryState,
   StateRepository,
 } from '../../contracts/src/index.js';
+import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 const ORIGIN = 'https://registry.example.test';
 
@@ -127,7 +128,7 @@ describe('registry core handler', () => {
     const test = setup({ principal: null });
     const health = await test.handler(new Request(`${ORIGIN}/health`));
     expect(health.status).toBe(200);
-    expect(await json(health)).toEqual({ ok: true, service: 'private-skills', version: '0.2.0' });
+    expect(await json(health)).toEqual({ ok: true, service: 'private-skills', version: SERVICE_VERSION });
 
     const me = await test.handler(new Request(`${ORIGIN}/v1/me`));
     expect(me.status).toBe(401);

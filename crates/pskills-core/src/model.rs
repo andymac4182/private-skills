@@ -37,6 +37,43 @@ pub struct StoredBlob {
     pub size: u64,
 }
 
+/// Typed external directory/catalog resolution evidence persisted alongside
+/// the canonical registry provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalProvenance {
+    pub provider: String,
+    pub external_id: String,
+    pub source: String,
+    pub slug: String,
+    pub source_type: String,
+    pub source_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_snapshot_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_digest: Option<Digest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_tree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub well_known_index_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontmatter_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontmatter_description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Provenance {
@@ -51,6 +88,37 @@ pub struct Provenance {
     pub revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<Digest>,
+    /// Optional identity supplied by an external directory/catalog adapter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_source_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_snapshot_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_digest: Option<Digest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_tree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub well_known_index_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontmatter_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontmatter_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalProvenance>,
 }
 impl Default for Provenance {
     fn default() -> Self {
@@ -61,6 +129,21 @@ impl Default for Provenance {
             path: None,
             revision: None,
             source_digest: None,
+            external_id: None,
+            external_source_type: None,
+            external_snapshot_hash: None,
+            external_digest: None,
+            source_url: None,
+            page_url: None,
+            artifact_url: None,
+            skill_path: None,
+            requested_ref: None,
+            resolved_commit: None,
+            resolved_tree: None,
+            well_known_index_url: None,
+            frontmatter_name: None,
+            frontmatter_description: None,
+            external: None,
         }
     }
 }
@@ -367,6 +450,20 @@ pub struct ImportRequest {
     pub name: String,
     pub version: String,
 }
+
+/// A request to import a directory entry through the registry.  The CLI
+/// deliberately sends this only to the authenticated registry; it never
+/// resolves the public directory or its upstream sources locally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryImportRequest {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadRequest {

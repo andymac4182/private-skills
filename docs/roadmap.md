@@ -4,6 +4,10 @@ This roadmap records the product gaps identified by comparing Private Skills
 with the official Tessl documentation and product pages checked on 9 September
 2026. The evidence review used `docs.tessl.io` and `tessl.io`; `tessl.com` was
 not used as evidence. It is a product planning document, not a parity promise.
+The explicitly requested skills.sh catalog, source pullthrough, and cloud-view
+delivery is tracked separately from the Tessl comparison in
+[`skills-sh.md`](skills-sh.md). That review used the current skills.sh site,
+its documented API, and the official `vercel-labs/skills` repository.
 The current release baseline and its remaining production gates are recorded in
 [`verification-v0.2.0.md`](verification-v0.2.0.md). The measurable exit gates
 for this roadmap are in [`completion-criteria.md`](completion-criteria.md).
@@ -22,10 +26,24 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close v0.2.0.** Finish the Neon terms/setup dependency, the GitHub
-  Vercel integration, final production deployment and authenticated checks,
-  final CI, and release archives. The latest record marks these gates as
-  pending.
+- **Now: close v0.2.0.** Finish the remaining GitHub Vercel integration,
+  Git-triggered deployment evidence, final source-revision checks, and restore
+  rehearsal. The Neon production integration, storage, secrets, authenticated
+  production flow, and released CLI evidence are recorded as complete; the
+  latest verification record identifies the remaining gates.
+- **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
+  on-demand skills.sh catalog adapter, exact source mapping and pullthrough,
+  and the Packs, Topics, Official, and external Audits views described in
+  [`skills-sh.md`](skills-sh.md), including a metadata-only preview/link for
+  user-supplied unlisted Packs. Existing private-pack management remains in
+  scope; external batch migration is a later milestone. This is the explicitly
+  requested next product delivery after G0; it does not retroactively expand
+  the v0.2.0 launch gate or require a bulk mirror of the public catalog.
+- **P1: CLI compatibility after the cloud contract.** Add registry-mediated
+  `find`/source selectors, lock check/restore/sync, source-aware lock
+  provenance, multi-skill selection, and a data-driven agent registry only
+  after the cloud contract is stable. These are future compatibility work, not
+  claims about the current Rust CLI.
 - **P1: make the registry an agent-context package manager.** Add a safe
   package model for rules and documentation, a project manifest/lock and
   dependency sync, an agent-facing MCP/context bridge, and the first native
@@ -42,6 +60,31 @@ new content and execution boundaries.
 - **P3: organization-wide visibility and automation.** Investigate activation
   telemetry, repository inventory, and a conversational operations agent only
   after privacy, retention, consent, and tenant boundaries are specified.
+
+## Skills.sh current delivery
+
+The skills.sh work has a different evidence status from the Tessl comparison:
+the official API and site pages confirm concrete endpoints and view semantics,
+while the current verification record has not yet accepted a production-complete
+skills.sh adapter or cloud catalog views. The gap is therefore **targeted and
+pending acceptance**, rather than a claim that in-flight implementation work is
+absent. The full contract and source links are in [`skills-sh.md`](skills-sh.md).
+
+| Priority | Confirmed skills.sh capability | Private Skills today | Current delivery target |
+| --- | --- | --- | --- |
+| Current | Versioned all/trending/hot pages, bounded search, curated Official data, detail snapshots, and per-skill audit results ([API reference](https://www.skills.sh/docs/api)). | Private `/v1/skills` and semantic search are authorization-scoped to this registry; no production-complete skills.sh adapter is verified yet. | Add and verify a server-side, authenticated v1 adapter with bounded page/search caching, stable external IDs, explicit unavailable/error states, and no browser-held upstream token. |
+| Current | A listing row has a stable `source/slug`, `sourceType` (`github` or `well-known`), install URL/page URL, and optional duplicate flag; detail can return files plus an external hash or `null`. | `Provenance` models native/GitHub/registry sources; skills.sh identity, source type, snapshot hash, and detail status are not yet production-verified. | Preserve external ID/source/slug/install URL, separate external snapshot hash from the Private Skills artifact digest, and assign every enumerated row an explicit metadata/source/pullthrough status. |
+| Current | Official CLI source code resolves GitHub trees/paths and well-known discovery, including preferred and legacy indexes and bounded archives ([`vercel-labs/skills` sources](skills-sh.md#official-clirepository-evidence-relevant-to-pullthrough)). | Existing acquisition safely imports approved GitHub/registry sources, but requires an administrator upstream and caller path/name/version; a public catalog resolver is not yet production-verified. | Resolve GitHub commit/tree/path and well-known v0.2/v0.1 sources on demand. Retain exact source provenance, never infer SemVer, never follow arbitrary credentials, and pass bytes through the existing validation/scanner policy. |
+| Current | Site views expose unlisted Packs, curated Topics pages, maker-curated Official skills, and combined partner Audits ([Packs](https://www.skills.sh/docs/packs), [Topics](https://www.skills.sh/topic), [Official](https://www.skills.sh/official), [Audits](https://www.skills.sh/audits)). | Packs are private immutable org manifests and `AuditView` is an administrative history; production completion of the external cloud views is not yet verified. | Add and verify separate external views. Topics must retain its curated-page/source limitation because no documented JSON membership API exists. The Packs view accepts a user-supplied URL and renders an unlisted metadata-only manifest preview plus link; it does not enumerate packs, fetch member bytes, imply approval, or migrate members automatically. |
+| Current | API docs require Vercel OIDC and document rate/error/cache behavior; no portable non-Vercel credential is documented. | Nitro is portable and currently has no skills.sh credential gateway. | Provide a server-side Vercel OIDC or explicitly configured supported gateway path; otherwise show a retryable unavailable state. Never assume undocumented anonymous API access. The Vercel OIDC destination approval is pending auto-review before live cloud acceptance. |
+| Future P1 | An unlisted pack URL can contain multiple public, private, or GitHub-backed skills and can be updated or deleted ([Packs documentation](https://www.skills.sh/docs/packs)). | The current delivery previews external pack metadata and retains existing tenant-scoped private-pack management; it does not batch-migrate external members. | Add an explicit, separately authorized migration operation. Resolve every selected member to an immutable source, validate and scan every member, and create one private immutable pack only after all members pass; any unresolved/changed/deleted member leaves no partial private pack and records the failure. |
+| Future P1 | Upstream CLI provides `find`, source grammar, lock provenance/check/restore, many agent adapters, selectors, `init`, telemetry, and optional `use` ([CLI parity review](skills-sh.md#cli-and-agent-compatibility-review)). | Current Rust CLI supports governed registry operations and three agent targets. | Prioritize these after the cloud contract; preserve registry authorization, immutable transfer, scanner gates, and non-execution boundaries. |
+
+The current site’s install counts and catalog totals are dynamic. They are
+observations, not roadmap constants. A live API total must never be confused
+with the homepage’s aggregate install headline. Full coverage means every
+enumerated row is represented with a status; it does not mean a refresh stores
+every artifact.
 
 ## Confirmed comparison
 
@@ -67,8 +110,9 @@ documented Tessl capability with no current implementation in this checkout.
 
 The comparison rows map to the completion criteria as follows: context package,
 manifest, MCP, and native-agent work to **M1**; quality review and scenario
-evaluation to **M2**; memberships and artifact lifecycle to **M3**; author CI,
-standards, and library context to **M4**; and visibility/automation to **M5**.
+evaluation to **M2**; memberships and artifact lifecycle to **M3**; author CI to
+**M4-1**, standards to **M4-2**, and library context to **M4-3**; and
+visibility/automation to **M5**.
 
 ## Advertised or unresolved capabilities
 

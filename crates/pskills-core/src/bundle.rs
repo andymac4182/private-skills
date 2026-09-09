@@ -469,8 +469,8 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
             "missing YAML frontmatter".into(),
         ));
     }
-    let mut lines = normalized.lines();
-    if lines.next().unwrap_or_default() != "---" {
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    if lines.first().copied().unwrap_or_default() != "---" {
         return Err(BundleError::SkillFrontmatter(
             "frontmatter must start with `---`".into(),
         ));
@@ -479,50 +479,62 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
     let mut description = None;
     let mut closed = false;
     let mut seen = HashSet::new();
-    for line in lines {
+    let mut frontmatter_bytes = 0usize;
+    let mut frontmatter_lines = 0usize;
+    account_frontmatter_line(lines[0], &mut frontmatter_bytes, &mut frontmatter_lines)?;
+    let mut index = 1usize;
+    while index < lines.len() {
+        let line = lines[index];
         if line == "---" {
+            account_frontmatter_closing_line(line, &mut frontmatter_bytes, &mut frontmatter_lines)?;
             closed = true;
             break;
         }
         if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            account_frontmatter_line(line, &mut frontmatter_bytes, &mut frontmatter_lines)?;
+            index += 1;
             continue;
         }
-        if line.chars().next().is_some_and(char::is_whitespace) {
-            return Err(BundleError::SkillFrontmatter(
-                "frontmatter cannot contain indented or nested data".into(),
-            ));
-        }
         let (key, value) = line.split_once(':').ok_or_else(|| {
-            BundleError::SkillFrontmatter("frontmatter has an invalid field".into())
+            BundleError::SkillFrontmatter(format!(
+                "frontmatter has an invalid field on line {}",
+                index + 1
+            ))
         })?;
-        if key.is_empty()
-            || key.len() > 64
-            || !key.chars().enumerate().all(|(index, character)| {
-                if index == 0 {
-                    character.is_ascii_alphabetic()
-                } else {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-                }
-            })
-        {
+        validate_frontmatter_key(key, &mut seen)?;
+        account_frontmatter_line(line, &mut frontmatter_bytes, &mut frontmatter_lines)?;
+        let raw_value = strip_yaml_comment(value).trim();
+        if key.eq_ignore_ascii_case("metadata") && raw_value.is_empty() {
+            index += 1;
+            parse_metadata_map(
+                &lines,
+                &mut index,
+                &mut frontmatter_bytes,
+                &mut frontmatter_lines,
+            )?;
+            continue;
+        }
+        if key.eq_ignore_ascii_case("metadata") && raw_value.starts_with(['|', '>']) {
             return Err(BundleError::SkillFrontmatter(
-                "frontmatter has an invalid field name".into(),
+                "metadata must be a string map".into(),
             ));
         }
-        if is_dangerous_frontmatter_key(key) {
-            return Err(BundleError::SkillFrontmatter(
-                "frontmatter cannot enable plugins or execution".into(),
-            ));
-        }
-        let normalized_key = key.trim().to_ascii_lowercase().replace(['-', '_'], "");
-        if !seen.insert(normalized_key.clone())
-            || matches!(normalized_key.as_str(), "__proto__" | "constructor")
-        {
-            return Err(BundleError::SkillFrontmatter(
-                "frontmatter contains a duplicate or reserved field".into(),
-            ));
-        }
-        let parsed = parse_frontmatter_scalar(value, key)?;
+        let parsed = if raw_value.starts_with(['|', '>']) {
+            let block = parse_block_scalar(
+                &lines,
+                index,
+                raw_value,
+                key,
+                MAX_FRONTMATTER_VALUE_CHARS,
+                &mut frontmatter_bytes,
+                &mut frontmatter_lines,
+            )?;
+            index = block.next_index;
+            FrontmatterScalar::String(block.value)
+        } else {
+            index += 1;
+            parse_frontmatter_scalar(value, key)?
+        };
         match (key, parsed) {
             ("name", FrontmatterScalar::String(value)) => name = Some(value),
             ("description", FrontmatterScalar::String(value)) => description = Some(value),
@@ -535,7 +547,7 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
         ));
     }
     let name = name
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| BundleError::SkillFrontmatter("missing name".into()))?;
     if name.chars().count() > 64
         || !name
@@ -550,12 +562,346 @@ fn validate_skill_markdown(markdown: &str) -> Result<(), BundleError> {
         ));
     }
     let description = description
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| BundleError::SkillFrontmatter("missing description".into()))?;
     if description.chars().count() > 1024 {
         return Err(BundleError::SkillFrontmatter(
             "description exceeds 1024 bytes".into(),
         ));
+    }
+    Ok(())
+}
+
+const MAX_FRONTMATTER_BYTES: usize = 128 * 1024;
+const MAX_FRONTMATTER_LINES: usize = 4_096;
+const MAX_FRONTMATTER_FIELDS: usize = 256;
+const MAX_METADATA_FIELDS: usize = 128;
+const MAX_METADATA_VALUE_CHARS: usize = 4_096;
+const MAX_FRONTMATTER_VALUE_CHARS: usize = 16_384;
+
+fn account_frontmatter_line(
+    line: &str,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+) -> Result<(), BundleError> {
+    account_frontmatter_line_inner(line, total_bytes, total_lines, true)
+}
+
+fn account_frontmatter_closing_line(
+    line: &str,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+) -> Result<(), BundleError> {
+    account_frontmatter_line_inner(line, total_bytes, total_lines, false)
+}
+
+fn account_frontmatter_line_inner(
+    line: &str,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+    has_trailing_separator: bool,
+) -> Result<(), BundleError> {
+    *total_lines = total_lines
+        .checked_add(1)
+        .ok_or_else(|| BundleError::SkillFrontmatter("frontmatter line count overflow".into()))?;
+    let separator_bytes = usize::from(has_trailing_separator);
+    *total_bytes = total_bytes
+        .checked_add(line.len().saturating_add(separator_bytes))
+        .ok_or_else(|| BundleError::SkillFrontmatter("frontmatter size overflow".into()))?;
+    if *total_lines > MAX_FRONTMATTER_LINES || *total_bytes > MAX_FRONTMATTER_BYTES {
+        return Err(BundleError::SkillFrontmatter(
+            "frontmatter exceeds bounded size or depth limits".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_frontmatter_key(key: &str, seen: &mut HashSet<String>) -> Result<(), BundleError> {
+    if key.is_empty()
+        || key.len() > 64
+        || !key.chars().enumerate().all(|(index, character)| {
+            if index == 0 {
+                character.is_ascii_alphabetic()
+            } else {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            }
+        })
+    {
+        return Err(BundleError::SkillFrontmatter(
+            "frontmatter has an invalid field name".into(),
+        ));
+    }
+    if is_dangerous_frontmatter_key(key) {
+        return Err(BundleError::SkillFrontmatter(
+            "frontmatter cannot enable plugins or execution".into(),
+        ));
+    }
+    let normalized_key = key.trim().to_ascii_lowercase().replace(['-', '_'], "");
+    if !seen.insert(normalized_key.clone()) || matches!(key, "__proto__" | "constructor") {
+        return Err(BundleError::SkillFrontmatter(
+            "frontmatter contains a duplicate or reserved field".into(),
+        ));
+    }
+    if seen.len() > MAX_FRONTMATTER_FIELDS {
+        return Err(BundleError::SkillFrontmatter(
+            "frontmatter contains too many fields".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BlockChomp {
+    Strip,
+    Clip,
+    Keep,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BlockHeader {
+    folded: bool,
+    chomp: BlockChomp,
+    indent: Option<usize>,
+}
+
+#[derive(Debug)]
+struct BlockLine<'a> {
+    value: &'a str,
+    blank: bool,
+    more_indented: bool,
+}
+
+#[derive(Debug)]
+struct ParsedBlock {
+    value: String,
+    next_index: usize,
+}
+
+fn parse_block_header(raw: &str, key: &str) -> Result<BlockHeader, BundleError> {
+    let mut chars = raw.chars();
+    let style = chars.next().ok_or_else(|| {
+        BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} has an invalid block scalar"
+        ))
+    })?;
+    if !matches!(style, '|' | '>') {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} has an invalid block scalar"
+        )));
+    }
+    let mut chomp = BlockChomp::Clip;
+    let mut indent = None;
+    for indicator in chars {
+        match indicator {
+            '-' if matches!(chomp, BlockChomp::Clip) => chomp = BlockChomp::Strip,
+            '+' if matches!(chomp, BlockChomp::Clip) => chomp = BlockChomp::Keep,
+            '1'..='9' if indent.is_none() => {
+                indent = Some((indicator as u8 - b'0') as usize);
+            }
+            _ => {
+                return Err(BundleError::SkillFrontmatter(format!(
+                    "frontmatter field {key} has an invalid block scalar header"
+                )));
+            }
+        }
+    }
+    Ok(BlockHeader {
+        folded: style == '>',
+        chomp,
+        indent,
+    })
+}
+
+fn parse_block_scalar(
+    lines: &[&str],
+    start_index: usize,
+    raw_header: &str,
+    key: &str,
+    max_value_chars: usize,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+) -> Result<ParsedBlock, BundleError> {
+    let header = parse_block_header(raw_header, key)?;
+    let mut lines_out = Vec::new();
+    let mut inferred_indent = header.indent;
+    let mut index = start_index + 1;
+    while index < lines.len() {
+        let line = lines[index];
+        if line == "---" {
+            break;
+        }
+        if line.is_empty() {
+            account_frontmatter_line(line, total_bytes, total_lines)?;
+            lines_out.push(BlockLine {
+                value: "",
+                blank: true,
+                more_indented: false,
+            });
+            index += 1;
+            continue;
+        }
+        if line.starts_with('\t') {
+            return Err(BundleError::SkillFrontmatter(
+                "block scalar indentation must use spaces".into(),
+            ));
+        }
+        let indent = line
+            .chars()
+            .take_while(|character| *character == ' ')
+            .count();
+        if indent == 0 {
+            break;
+        }
+        if inferred_indent.is_none() {
+            inferred_indent = Some(indent);
+        }
+        let base_indent = inferred_indent.unwrap_or(indent);
+        if indent < base_indent {
+            break;
+        }
+        account_frontmatter_line(line, total_bytes, total_lines)?;
+        lines_out.push(BlockLine {
+            value: &line[base_indent..],
+            blank: line[base_indent..].trim().is_empty(),
+            more_indented: indent > base_indent,
+        });
+        index += 1;
+    }
+
+    let mut value = String::new();
+    for (line_index, line) in lines_out.iter().enumerate() {
+        if line_index > 0 {
+            let previous = &lines_out[line_index - 1];
+            if header.folded
+                && !previous.blank
+                && !line.blank
+                && !previous.more_indented
+                && !line.more_indented
+            {
+                value.push(' ');
+            } else if !(header.folded && previous.blank && !line.blank) {
+                value.push('\n');
+            }
+        }
+        value.push_str(line.value);
+    }
+    if !lines_out.is_empty() {
+        value.push('\n');
+    }
+    match header.chomp {
+        BlockChomp::Strip => {
+            while value.ends_with('\n') {
+                value.pop();
+            }
+        }
+        BlockChomp::Clip => {
+            while value.ends_with('\n') {
+                value.pop();
+            }
+            if !value.is_empty() {
+                value.push('\n');
+            }
+        }
+        BlockChomp::Keep => {}
+    }
+    if value.chars().count() > max_value_chars {
+        return Err(BundleError::SkillFrontmatter(
+            "block scalar exceeds bounded size limits".into(),
+        ));
+    }
+    Ok(ParsedBlock {
+        value,
+        next_index: index,
+    })
+}
+
+fn parse_metadata_map(
+    lines: &[&str],
+    index: &mut usize,
+    total_bytes: &mut usize,
+    total_lines: &mut usize,
+) -> Result<(), BundleError> {
+    let mut map_indent = None;
+    let mut seen = HashSet::new();
+    let mut entries = 0usize;
+    while *index < lines.len() {
+        let line = lines[*index];
+        if line == "---" {
+            break;
+        }
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            account_frontmatter_line(line, total_bytes, total_lines)?;
+            *index += 1;
+            continue;
+        }
+        if line.starts_with('\t') {
+            return Err(BundleError::SkillFrontmatter(
+                "metadata indentation must use spaces".into(),
+            ));
+        }
+        let indent = line
+            .chars()
+            .take_while(|character| *character == ' ')
+            .count();
+        if indent == 0 {
+            break;
+        }
+        let expected_indent = *map_indent.get_or_insert(indent);
+        if indent != expected_indent {
+            return Err(BundleError::SkillFrontmatter(
+                "metadata map nesting exceeds the supported depth".into(),
+            ));
+        }
+        let content = &line[expected_indent..];
+        let (key, value) = content.split_once(':').ok_or_else(|| {
+            BundleError::SkillFrontmatter(format!(
+                "metadata map has an invalid field on line {}",
+                *index + 1
+            ))
+        })?;
+        validate_frontmatter_key(key, &mut seen)?;
+        entries += 1;
+        if entries > MAX_METADATA_FIELDS {
+            return Err(BundleError::SkillFrontmatter(
+                "metadata map contains too many fields".into(),
+            ));
+        }
+        account_frontmatter_line(line, total_bytes, total_lines)?;
+        let raw_value = strip_yaml_comment(value).trim();
+        if raw_value.is_empty() {
+            return Err(BundleError::SkillFrontmatter(format!(
+                "metadata field {key} must be a scalar string"
+            )));
+        }
+        let entry_index = *index;
+        *index += 1;
+        if raw_value.starts_with(['|', '>']) {
+            let parsed = parse_block_scalar(
+                lines,
+                entry_index,
+                raw_value,
+                key,
+                MAX_METADATA_VALUE_CHARS,
+                total_bytes,
+                total_lines,
+            )?;
+            *index = parsed.next_index;
+        } else {
+            match parse_frontmatter_scalar(value, key)? {
+                FrontmatterScalar::String(value)
+                    if value.chars().count() <= MAX_METADATA_VALUE_CHARS => {}
+                FrontmatterScalar::String(_) => {
+                    return Err(BundleError::SkillFrontmatter(format!(
+                        "metadata field {key} exceeds bounded size limits"
+                    )));
+                }
+                FrontmatterScalar::Number | FrontmatterScalar::Boolean => {
+                    return Err(BundleError::SkillFrontmatter(format!(
+                        "metadata field {key} must be a scalar string"
+                    )));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -567,18 +913,61 @@ enum FrontmatterScalar {
     Boolean,
 }
 
+fn strip_yaml_comment(raw: &str) -> &str {
+    let mut quote = None;
+    let mut chars = raw.char_indices().peekable();
+    while let Some((index, character)) = chars.next() {
+        match quote {
+            Some('"') => {
+                if character == '\\' {
+                    let _ = chars.next();
+                } else if character == '"' {
+                    quote = None;
+                }
+            }
+            Some('\'') => {
+                if character == '\'' {
+                    if chars
+                        .peek()
+                        .is_some_and(|(_, next_character)| *next_character == '\'')
+                    {
+                        let _ = chars.next();
+                    } else {
+                        quote = None;
+                    }
+                }
+            }
+            None => match character {
+                '"' | '\'' => quote = Some(character),
+                '#' if index == 0
+                    || raw[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace) =>
+                {
+                    return &raw[..index];
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    raw
+}
+
 fn parse_frontmatter_scalar(raw: &str, key: &str) -> Result<FrontmatterScalar, BundleError> {
-    let value = raw.trim();
+    let value = strip_yaml_comment(raw).trim();
     if value.is_empty() {
         return Err(BundleError::SkillFrontmatter(format!(
             "frontmatter field {key} cannot be empty"
         )));
     }
-    if value.starts_with(['[', '{', '!']) {
+    if value.starts_with(['[', '{', '!', '&', '*']) {
         return Err(BundleError::SkillFrontmatter(format!(
             "frontmatter field {key} must be a scalar"
         )));
     }
+    let quoted = value.starts_with(['"', '\'']);
     let value = if value.starts_with('"') {
         if !value.ends_with('"') || value.len() < 2 {
             return Err(BundleError::SkillFrontmatter(format!(
@@ -598,6 +987,11 @@ fn parse_frontmatter_scalar(raw: &str, key: &str) -> Result<FrontmatterScalar, B
         }
         value[1..value.len() - 1].replace("''", "'")
     } else {
+        if value.starts_with(['!', '&', '*']) {
+            return Err(BundleError::SkillFrontmatter(format!(
+                "frontmatter field {key} cannot contain YAML tags, anchors, or aliases"
+            )));
+        }
         value.to_string()
     };
     if value.chars().any(char::is_control) {
@@ -605,13 +999,104 @@ fn parse_frontmatter_scalar(raw: &str, key: &str) -> Result<FrontmatterScalar, B
             "frontmatter field {key} contains control characters"
         )));
     }
-    if value == "true" || value == "false" {
+    if !quoted && matches!(value.to_ascii_lowercase().as_str(), "null" | "~") {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} must be a string, number, or boolean"
+        )));
+    }
+    if value.chars().count() > MAX_FRONTMATTER_VALUE_CHARS {
+        return Err(BundleError::SkillFrontmatter(format!(
+            "frontmatter field {key} exceeds bounded size limits"
+        )));
+    }
+    if !quoted && matches!(value.to_ascii_lowercase().as_str(), "true" | "false") {
         return Ok(FrontmatterScalar::Boolean);
     }
-    if value.parse::<f64>().is_ok() {
-        return Ok(FrontmatterScalar::Number);
+    if !quoted {
+        if is_non_finite_yaml_number(&value) {
+            return Err(BundleError::SkillFrontmatter(format!(
+                "frontmatter field {key} must use a finite number"
+            )));
+        }
+        if is_yaml_core_number(&value) {
+            return Ok(FrontmatterScalar::Number);
+        }
     }
     Ok(FrontmatterScalar::String(value))
+}
+
+fn is_non_finite_yaml_number(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if matches!(lower.as_str(), ".nan" | ".inf" | "+.inf" | "-.inf") {
+        return true;
+    }
+    match value.parse::<f64>() {
+        Ok(number) if !number.is_finite() => !matches!(
+            lower.as_str(),
+            "nan"
+                | "+nan"
+                | "-nan"
+                | "inf"
+                | "+inf"
+                | "-inf"
+                | "infinity"
+                | "+infinity"
+                | "-infinity"
+        ),
+        _ => false,
+    }
+}
+
+fn is_yaml_core_number(value: &str) -> bool {
+    let compact = value.replace('_', "");
+    if compact.is_empty() {
+        return false;
+    }
+    if compact.strip_prefix(['+', '-']).is_some_and(|unsigned| {
+        (unsigned.starts_with("0x") && unsigned[2..].chars().all(|c| c.is_ascii_hexdigit()))
+            || (unsigned.starts_with("0o") && unsigned[2..].chars().all(|c| matches!(c, '0'..='7')))
+            || (unsigned.starts_with("0b") && unsigned[2..].chars().all(|c| matches!(c, '0' | '1')))
+    }) {
+        return true;
+    }
+    if compact.starts_with(['+', '-']) {
+        let unsigned = &compact[1..];
+        if unsigned.is_empty() {
+            return false;
+        }
+        return is_yaml_decimal_number(unsigned);
+    }
+    if compact.starts_with("0x") || compact.starts_with("0o") || compact.starts_with("0b") {
+        return (compact.starts_with("0x") && compact[2..].chars().all(|c| c.is_ascii_hexdigit()))
+            || (compact.starts_with("0o") && compact[2..].chars().all(|c| matches!(c, '0'..='7')))
+            || (compact.starts_with("0b") && compact[2..].chars().all(|c| matches!(c, '0' | '1')));
+    }
+    is_yaml_decimal_number(&compact)
+}
+
+fn is_yaml_decimal_number(value: &str) -> bool {
+    if value.parse::<f64>().is_ok() {
+        return true;
+    }
+    let Some((mantissa, exponent)) = value.split_once(['e', 'E']) else {
+        return false;
+    };
+    !mantissa.is_empty()
+        && !exponent.is_empty()
+        && exponent
+            .strip_prefix(['+', '-'])
+            .unwrap_or(exponent)
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        && mantissa
+            .chars()
+            .filter(|character| *character == '.')
+            .count()
+            <= 1
+        && mantissa
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.')
+        && mantissa.chars().any(|character| character.is_ascii_digit())
 }
 
 fn is_dangerous_frontmatter_key(raw_key: &str) -> bool {
@@ -716,6 +1201,44 @@ mod tests {
             validate_bundle(&b, BundleLimits::default()),
             Err(BundleError::SkillFrontmatter(_))
         ));
+    }
+
+    #[test]
+    fn accepts_standard_block_description_and_metadata_string_map() {
+        let markdown = include_str!("../../../packages/storage/test/fixtures/standard-skill.md");
+        let b = bundle(&[("SKILL.md", markdown.as_bytes())]);
+        validate_bundle(&b, BundleLimits::default()).expect("standard frontmatter");
+    }
+
+    #[test]
+    fn accepts_folded_scalars_and_inline_comments() {
+        let markdown = r#"---
+name: demo # the skill name
+description: >-
+  A folded description
+  remains one safe scalar.
+metadata:
+  summary: "safe # text" # comment
+---
+"#;
+        let b = bundle(&[("SKILL.md", markdown.as_bytes())]);
+        validate_bundle(&b, BundleLimits::default()).expect("folded frontmatter");
+    }
+
+    #[test]
+    fn rejects_unsafe_yaml_nodes_and_nested_metadata() {
+        for markdown in [
+            "---\nname: &name demo\ndescription: safe\n---\n",
+            "---\nname: demo\ndescription: *description\n---\n",
+            "---\nname: demo\ndescription: safe\nmetadata:\n  nested:\n    key: value\n---\n",
+            "---\nname: demo\ndescription: safe\nmetadata:\n  enabled: true\n---\n",
+        ] {
+            let b = bundle(&[("SKILL.md", markdown.as_bytes())]);
+            assert!(
+                validate_bundle(&b, BundleLimits::default()).is_err(),
+                "accepted unsafe frontmatter: {markdown}"
+            );
+        }
     }
 
     #[test]

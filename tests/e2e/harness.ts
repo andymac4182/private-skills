@@ -14,12 +14,13 @@ import {
 import {
   createRegistryHandler,
   type RegistryHandler,
+  type RegistryDirectoryClient,
+  type RegistryHandlerDependencies,
 } from '../../packages/core/src/index.js';
 import { createNodeFilesSdkBlobStore } from '../../packages/storage/src/node.js';
 import type {
   Policy,
   RegistryConfiguration,
-  RegistryDependencies,
 } from '../../packages/contracts/src/index.js';
 
 export const E2E_ORIGIN = 'http://registry.test';
@@ -43,6 +44,8 @@ export interface LocalRegistryOptions {
   readonly token?: string;
   readonly workerToken?: string;
   readonly policy?: Policy;
+  readonly directory?: RegistryDirectoryClient;
+  readonly allowLoopbackUpstreams?: boolean;
 }
 
 /**
@@ -110,12 +113,14 @@ export async function createLocalRegistryHarness(
     maxBodyBytes: 2 * 1024 * 1024,
     organizationId,
     leaseSeconds: 60,
+    allowLoopbackUpstreams: options.allowLoopbackUpstreams,
   };
-  const dependencies: RegistryDependencies = {
+  const dependencies: RegistryHandlerDependencies = {
     repository,
     blobs,
     auth,
     config,
+    directory: options.directory,
   };
 
   return {

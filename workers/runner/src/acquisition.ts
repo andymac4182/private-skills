@@ -57,7 +57,7 @@ export async function acquireImportJob(
 }
 
 function asUpstream(value: unknown): Upstream {
-  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.organizationId !== 'string' || typeof value.name !== 'string' || (value.kind !== 'github' && value.kind !== 'registry') || typeof value.namespace !== 'string') {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.organizationId !== 'string' || typeof value.name !== 'string' || (value.kind !== 'github' && value.kind !== 'registry' && value.kind !== 'skills-sh') || typeof value.namespace !== 'string') {
     throw new Error('claimed import job omitted a valid upstream mapping');
   }
   return value as unknown as Upstream;

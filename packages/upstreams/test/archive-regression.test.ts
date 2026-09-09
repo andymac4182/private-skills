@@ -146,9 +146,12 @@ function archiveInput(
   archivePath: string,
   contentType: string,
   limits?: AcquireSkillInput['limits'],
+  type: 'archive' | 'skill-md' = 'archive',
+  sourceBase = BASE,
+  allowLoopbackForTests = true,
 ): AcquireSkillInput {
   const expectedDigest = digest(archive);
-  const artifactPath = new URL(archivePath, `${BASE}${INDEX_PATH}`).pathname;
+  const artifactPath = new URL(archivePath, `${sourceBase}${INDEX_PATH}`).pathname;
   const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (input) => {
     const path = new URL(input.toString()).pathname;
     if (path === DETAIL_PATH) {
@@ -158,7 +161,7 @@ function archiveInput(
         slug: 'demo',
         name: 'demo',
         sourceType: 'well-known',
-        installUrl: `${BASE}/published/.well-known/agent-skills/demo`,
+        installUrl: `${sourceBase}/published/.well-known/agent-skills/demo`,
         hash: null,
         files: null,
       }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -168,7 +171,7 @@ function archiveInput(
         $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
         skills: [{
           name: 'demo',
-          type: 'archive',
+          type,
           description: 'Archive fixture',
           url: archivePath,
           digest: expectedDigest,
@@ -192,7 +195,7 @@ function archiveInput(
       kind: 'skills-sh',
       enabled: true,
       repositories: ['example.test'],
-      baseUrl: `${BASE}/catalog`,
+      baseUrl: `${sourceBase}/catalog`,
       namespace: '@team',
     },
     importRequest: {
@@ -202,7 +205,7 @@ function archiveInput(
       version: '1.0.0',
     },
     fetchImpl,
-    allowLoopbackForTests: true,
+    allowLoopbackForTests,
     ...(limits === undefined ? {} : { limits }),
   };
 }
@@ -262,5 +265,44 @@ describe('skills.sh well-known archive regressions', () => {
   it('rejects tar headers with an invalid checksum', async () => {
     const archive = gzipSync(singleFileTar({ corruptChecksum: true }));
     await expectArchiveError(archiveInput(archive, '/published/demo.tar.gz', 'application/gzip'), 'digest_mismatch');
+  });
+
+  it('accepts a public HTTPS artifact origin without forwarding catalog credentials', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: CDN fixture\n---\n# demo\n', 'utf8');
+    const artifactUrl = 'https://8.8.8.8/published/demo.md';
+    const input = archiveInput(skill, artifactUrl, 'text/markdown', undefined, 'skill-md');
+    const originalFetch = input.fetchImpl!;
+    let artifactAuthorization: string | undefined;
+    input.fetchImpl = async (request, init) => {
+      const url = new URL(request.toString());
+      if (url.hostname === '8.8.8.8') artifactAuthorization = init?.headers?.authorization;
+      return originalFetch(request, init);
+    };
+    const result = await acquireSkillsShSkill(input);
+    expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: skill.toString('base64') }]);
+    expect(artifactAuthorization).toBeUndefined();
+    const metadata = result.provenance as unknown as Record<string, unknown>;
+    expect(metadata.artifactUrl).toBe(artifactUrl);
+  });
+
+  it('rejects a loopback artifact origin when production SSRF checks are enabled', async () => {
+    const artifactUrl = 'https://127.0.0.2/published/demo.md';
+    await expectArchiveError(
+      archiveInput(SKILL, artifactUrl, 'text/markdown', undefined, 'skill-md', 'https://8.8.8.8', false),
+      'ssrf_denied',
+    );
+  });
+
+  it('rejects a private artifact origin before invoking its fetch implementation', async () => {
+    const artifactUrl = 'https://192.168.0.1/published/demo.md';
+    const input = archiveInput(SKILL, artifactUrl, 'text/markdown', undefined, 'skill-md', 'https://8.8.8.8', false);
+    const originalFetch = input.fetchImpl!;
+    let artifactRequested = false;
+    input.fetchImpl = async (request, init) => {
+      if (new URL(request.toString()).hostname === '192.168.0.1') artifactRequested = true;
+      return originalFetch(request, init);
+    };
+    await expectArchiveError(input, 'ssrf_denied');
+    expect(artifactRequested).toBe(false);
   });
 });

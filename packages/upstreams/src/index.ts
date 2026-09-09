@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { gunzipSync, inflateRawSync } from 'node:zlib';
 
 import type {
   ImportRequest,
@@ -9,6 +10,7 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
+import { parseSkillMetadata } from '../../storage/src/bundle.js';
 
 /**
  * Limits applied while acquiring an upstream skill.  The limits are checked
@@ -163,6 +165,55 @@ interface GitHubBlobResponse {
   sha?: unknown;
 }
 
+interface SkillsShDetailResponse {
+  id?: unknown;
+  source?: unknown;
+  slug?: unknown;
+  name?: unknown;
+  sourceType?: unknown;
+  installUrl?: unknown;
+  url?: unknown;
+  hash?: unknown;
+  snapshotHash?: unknown;
+  files?: unknown;
+  ref?: unknown;
+}
+
+interface SkillsShFile {
+  path?: unknown;
+  contents?: unknown;
+  content?: unknown;
+}
+
+interface SkillsShResolutionMetadata {
+  provider: 'skills.sh';
+  externalId: string;
+  source: string;
+  slug: string;
+  sourceType?: 'github' | 'well-known';
+  sourceUrl: string;
+  pageUrl?: string;
+  externalSnapshotHash: string | null;
+  externalDigest?: string;
+  repository?: string;
+  skillPath?: string;
+  requestedRef?: string;
+  resolvedCommit?: string;
+  resolvedTree?: string;
+  wellKnownIndexUrl?: string;
+  artifactUrl?: string;
+  frontmatterName?: string;
+  frontmatterDescription?: string;
+}
+
+interface SkillsShTreeResponse extends GitHubTreeResponse {
+  tree?: unknown;
+}
+
+interface SkillsShRepositoryResponse {
+  default_branch?: unknown;
+}
+
 interface RegistryResolution {
   kind?: unknown;
   resourceId?: unknown;
@@ -228,11 +279,17 @@ export async function acquireSkill(
 
   assertUpstreamEnabled(normalized.upstream);
 
-  switch (normalized.upstream.kind) {
+  // The contracts package carries the skills.sh kind in the source branch
+  // that owns the registry API.  Keep this adapter forward-compatible while
+  // that shared union is rolled out across package boundaries.
+  const upstreamKind = (normalized.upstream as unknown as { kind: string }).kind;
+  switch (upstreamKind) {
     case 'github':
       return acquireGithub(normalized);
     case 'registry':
       return acquireRegistry(normalized);
+    case 'skills-sh':
+      return acquireSkillsSh(normalized);
     default:
       throw new UpstreamAcquisitionError(
         'unsupported_upstream',
@@ -269,6 +326,21 @@ export async function acquireRegistrySkill(
   }
   assertUpstreamEnabled(normalized.upstream);
   return acquireRegistry(normalized);
+}
+
+/** Explicit adapter export for the skills.sh catalog pullthrough worker. */
+export async function acquireSkillsShSkill(
+  input: AcquireSkillInput,
+): Promise<AcquisitionResult> {
+  const normalized = normalizeInput(input);
+  if ((normalized.upstream as unknown as { kind?: unknown }).kind !== 'skills-sh') {
+    throw new UpstreamAcquisitionError(
+      'upstream_kind_mismatch',
+      'acquireSkillsShSkill requires a skills.sh upstream',
+    );
+  }
+  assertUpstreamEnabled(normalized.upstream);
+  return acquireSkillsSh(normalized);
 }
 
 function assertUpstreamEnabled(upstream: Upstream): void {
@@ -631,6 +703,1133 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
       sourceDigest,
     },
   };
+}
+
+/**
+ * Pull a selected skills.sh catalog row through the server-side adapter.
+ *
+ * The catalog API is only an identity/metadata source.  A non-null detail
+ * snapshot is preferred; otherwise the worker resolves the advertised public
+ * source and applies the same immutable, bounded, non-executing acquisition
+ * rules as administrator-configured upstreams.  The skills.sh credential (if
+ * configured) is used only for the catalog API and is never forwarded to
+ * GitHub or a well-known source.
+ */
+async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResult> {
+  const { upstream, importRequest, options } = input;
+  const limits = mergeLimits(options.limits);
+  const externalId = validateSkillsShId(importRequest.path);
+  const upstreamRecord = upstream as unknown as Record<string, unknown>;
+  if (!Array.isArray(upstream.repositories) || upstream.repositories.length === 0 || upstream.repositories.some((candidate) => typeof candidate !== 'string' || candidate.trim() === '')) {
+    throw new UpstreamAcquisitionError('repository_denied', 'skills.sh upstream has no valid source allowlist');
+  }
+  if (importRequest.repository !== undefined && typeof importRequest.repository !== 'string') {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh import repository is invalid');
+  }
+  const apiBase = normalizeSkillsShBase(
+    typeof upstreamRecord.baseUrl === 'string' ? upstreamRecord.baseUrl : undefined,
+    options.allowLoopbackForTests,
+  );
+  const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
+  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
+  const headers: FetchHeaders = {
+    accept: 'application/json',
+    'user-agent': 'private-skills/0.1',
+  };
+  const credential = credentialHeader(upstream, 'skills-sh');
+  if (credential) headers.authorization = credential;
+
+  const detailURL = appendSkillsShDetailPath(apiBase, externalId);
+  const detailValue = await client.json<SkillsShDetailResponse>(detailURL, {
+    headers,
+    allowedOrigin: apiBase.origin,
+    retryable: false,
+  });
+  const importSourceType = (importRequest as unknown as { externalSourceType?: unknown }).externalSourceType;
+  if (importSourceType !== undefined && importSourceType !== 'github' && importSourceType !== 'well-known') {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh import source type is invalid');
+  }
+  const detail = parseSkillsShDetail(
+    detailValue,
+    externalId,
+    importSourceType,
+  );
+  const requestedExternalId = (importRequest as unknown as { externalId?: unknown }).externalId;
+  if (requestedExternalId !== undefined && requestedExternalId !== externalId) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh import externalId does not match its path',
+    );
+  }
+  const requestedSnapshotHash = (importRequest as unknown as { externalSnapshotHash?: unknown }).externalSnapshotHash;
+  if (requestedSnapshotHash !== undefined && requestedSnapshotHash !== detail.externalSnapshotHash) {
+    throw new UpstreamAcquisitionError('source_changed', 'skills.sh snapshot hash changed since the import request');
+  }
+  assertSkillsShSourceAllowed(upstream, detail.source, importRequest.repository);
+  const pageUrl = detail.pageUrl ?? `https://skills.sh/${externalId}`;
+  const sourceUrl = detail.installUrl ?? pageUrl;
+
+  if (detail.files !== null) {
+    const snapshot = bundleFromSnapshotFiles(detail.files, limits);
+    const frontmatter = readSkillFrontmatter(snapshot);
+    assertFrontmatterIdentity(frontmatter, detail);
+    const digest = digestBytes(serializeSkillBundle(snapshot));
+    return {
+      bundle: snapshot,
+      provenance: skillsShProvenance(upstream, detail, {
+        sourceUrl,
+        pageUrl,
+        externalSnapshotHash: detail.externalSnapshotHash,
+        frontmatterName: frontmatter.name,
+        frontmatterDescription: frontmatter.description,
+        sourceDigest: digest,
+      }),
+    };
+  }
+
+  if (detail.sourceType === 'github') {
+    const github = await acquireSkillsShGithub({
+      upstream,
+      importRequest,
+      options,
+      detail,
+      limits,
+    });
+    const frontmatter = readSkillFrontmatter(github.bundle);
+    return {
+      bundle: github.bundle,
+      provenance: skillsShProvenance(upstream, detail, {
+        sourceUrl,
+        pageUrl,
+        externalSnapshotHash: detail.externalSnapshotHash,
+        repository: github.repository,
+        skillPath: github.skillPath,
+        requestedRef: github.requestedRef,
+        resolvedCommit: github.resolvedCommit,
+        resolvedTree: github.resolvedTree,
+        revision: detail.externalSnapshotHash ?? github.resolvedCommit,
+        frontmatterName: frontmatter.name,
+        frontmatterDescription: frontmatter.description,
+        sourceDigest: digestBytes(serializeSkillBundle(github.bundle)),
+      }),
+    };
+  }
+
+  if (detail.sourceType !== 'well-known') {
+    throw new UpstreamAcquisitionError('source_unavailable', 'skills.sh detail has no verified sourceType for source fallback');
+  }
+  // Some catalog rows currently report a repository-shaped source with the
+  // well-known type (for example googleworkspace/cli).  There is no safe DNS
+  // origin to derive from such a value.  A narrowly gated GitHub candidate
+  // resolver is allowed for an owner/repository identity whose owner cannot
+  // be a hostname, and it still has to verify the exact frontmatter/path.
+  // Keep the reported sourceType as well-known in provenance for auditability.
+  if (isGithubCandidateSource(detail.source) && !hasConfiguredWellKnownSource(detail, upstreamRecord)) {
+    const github = await acquireSkillsShGithub({
+      upstream,
+      importRequest,
+      options,
+      detail,
+      limits,
+    });
+    const frontmatter = readSkillFrontmatter(github.bundle);
+    return {
+      bundle: github.bundle,
+      provenance: skillsShProvenance(upstream, detail, {
+        sourceUrl,
+        pageUrl,
+        externalSnapshotHash: detail.externalSnapshotHash,
+        repository: github.repository,
+        skillPath: github.skillPath,
+        requestedRef: github.requestedRef,
+        resolvedCommit: github.resolvedCommit,
+        resolvedTree: github.resolvedTree,
+        revision: detail.externalSnapshotHash ?? github.resolvedCommit,
+        frontmatterName: frontmatter.name,
+        frontmatterDescription: frontmatter.description,
+        sourceDigest: digestBytes(serializeSkillBundle(github.bundle)),
+      }),
+    };
+  }
+  const wellKnown = await acquireSkillsShWellKnown({
+    upstream,
+    importRequest,
+    options,
+    detail,
+    limits,
+  });
+  const frontmatter = readSkillFrontmatter(wellKnown.bundle);
+  return {
+    bundle: wellKnown.bundle,
+    provenance: skillsShProvenance(upstream, detail, {
+      sourceUrl,
+      pageUrl,
+      externalSnapshotHash: detail.externalSnapshotHash,
+      externalDigest: wellKnown.externalDigest,
+      wellKnownIndexUrl: wellKnown.indexUrl,
+      artifactUrl: wellKnown.artifactUrl,
+      revision: detail.externalSnapshotHash ?? wellKnown.externalDigest,
+      frontmatterName: frontmatter.name,
+      frontmatterDescription: frontmatter.description,
+      sourceDigest: digestBytes(serializeSkillBundle(wellKnown.bundle)),
+    }),
+  };
+}
+
+function isGithubCandidateSource(source: string): boolean {
+  try {
+    const repository = normalizeRepositoryIdentity(source);
+    return !repository.split('/')[0]!.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+function hasConfiguredWellKnownSource(detail: ParsedSkillsShDetail, upstream: Record<string, unknown>): boolean {
+  if (typeof upstream.wellKnownBaseUrl === 'string' && upstream.wellKnownBaseUrl.trim() !== '') return true;
+  if (!detail.installUrl) return false;
+  try {
+    const install = new URL(detail.installUrl);
+    return install.hostname !== 'skills.sh' && install.hostname !== 'www.skills.sh' && install.hostname !== 'github.com';
+  } catch {
+    return false;
+  }
+}
+
+function assertSkillsShSourceAllowed(upstream: Upstream, source: string, requestedRepository?: string): void {
+  const allowlist = upstream.repositories;
+  if (!allowlist || allowlist.length === 0) {
+    throw new UpstreamAcquisitionError('repository_denied', 'skills.sh upstream has no source allowlist');
+  }
+  if (requestedRepository !== undefined && normalizeSkillsShSource(requestedRepository) !== normalizeSkillsShSource(source)) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh detail source does not match the requested source mapping');
+  }
+  const normalized = normalizeSkillsShSource(source);
+  if (!allowlist.some((candidate) => candidate.trim() === '*' || normalizeSkillsShSource(candidate) === normalized)) {
+    throw new UpstreamAcquisitionError('repository_denied', `skills.sh source ${safeId(source)} is not allowlisted`);
+  }
+}
+
+function normalizeSkillsShSource(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase('en-US')
+    .replace(/^https?:\/\/(?:www\.)?skills\.sh\//u, '')
+    .replace(/^https?:\/\/(?:www\.)?github\.com\//u, '')
+    .replace(/^github\.com\//u, '')
+    .replace(/^\/+|\/+$/gu, '')
+    .replace(/\.git$/iu, '');
+}
+
+interface ParsedSkillsShDetail {
+  externalId: string;
+  source: string;
+  slug: string;
+  name: string;
+  sourceType?: 'github' | 'well-known';
+  installUrl: string | null;
+  pageUrl?: string;
+  externalSnapshotHash: string | null;
+  files: SkillsShFile[] | null;
+  ref?: string;
+}
+
+function parseSkillsShDetail(
+  value: unknown,
+  requestedId: string,
+  sourceTypeHint?: 'github' | 'well-known',
+): ParsedSkillsShDetail {
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail response is not an object');
+  }
+  const id = requireSkillsShString(value.id, 'skills.sh detail id', 1_024);
+  const source = requireSkillsShString(value.source, 'skills.sh detail source', 512);
+  const slug = requireSkillsShString(value.slug, 'skills.sh detail slug', 512);
+  const name = value.name === undefined || value.name === null
+    ? slug
+    : requireSkillsShString(value.name, 'skills.sh detail name', 512);
+  const sourceType = value.sourceType ?? sourceTypeHint;
+  if (sourceType !== undefined && sourceType !== 'github' && sourceType !== 'well-known') {
+    throw new UpstreamAcquisitionError('unsupported_source', 'skills.sh detail has an unsupported sourceType');
+  }
+  const canonicalId = validateSkillsShId(`${source}/${slug}`);
+  if (canonicalId !== requestedId || id !== requestedId) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh detail identity does not match the requested source/slug');
+  }
+  const files = value.files;
+  if (files === undefined) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail omitted files');
+  }
+  if (files !== null && !Array.isArray(files)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail files must be an array or null');
+  }
+  if (files === null && sourceType === undefined) {
+    throw new UpstreamAcquisitionError('source_unavailable', 'skills.sh detail has no verified sourceType for source fallback');
+  }
+  const installUrl = value.installUrl === null || value.installUrl === undefined
+    ? null
+    : requireSkillsShURL(value.installUrl, 'skills.sh installUrl');
+  const pageUrl = value.url === null || value.url === undefined
+    ? undefined
+    : requireSkillsShURL(value.url, 'skills.sh page URL');
+  const hasHash = Object.prototype.hasOwnProperty.call(value, 'hash');
+  const hasSnapshotHash = Object.prototype.hasOwnProperty.call(value, 'snapshotHash');
+  if (!hasHash && !hasSnapshotHash) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail omitted its snapshot hash');
+  }
+  if (hasHash && hasSnapshotHash && value.hash !== undefined && value.snapshotHash !== undefined && value.hash !== value.snapshotHash) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh detail contains conflicting snapshot hashes');
+  }
+  const hashValue = hasHash ? value.hash : value.snapshotHash;
+  const externalSnapshotHash = hashValue === null || hashValue === undefined
+    ? null
+    : requireSkillsShString(hashValue, 'skills.sh snapshot hash', 512);
+  const ref = value.ref === undefined ? undefined : validateRef(requireSkillsShString(value.ref, 'skills.sh detail ref', 256));
+  return {
+    externalId: requestedId,
+    source,
+    slug,
+    name,
+    sourceType,
+    installUrl,
+    ...(pageUrl === undefined ? {} : { pageUrl }),
+    externalSnapshotHash,
+    files: files === null ? null : files.map((file: unknown) => parseSkillsShFile(file)),
+    ...(ref === undefined ? {} : { ref }),
+  };
+}
+
+function parseSkillsShFile(value: unknown): SkillsShFile {
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail contains a malformed file');
+  }
+  if (typeof value.path !== 'string' || value.path.length === 0 || value.path.length > 4_096) {
+    throw new UpstreamAcquisitionError('invalid_path', 'skills.sh detail contains an invalid file path');
+  }
+  const contents = value.contents ?? value.content;
+  if (typeof contents !== 'string' || contents.length > DEFAULT_ACQUISITION_LIMITS.maxFileBytes * 2) {
+    throw new UpstreamAcquisitionError('invalid_source', `skills.sh file ${JSON.stringify(value.path)} is not bounded text`);
+  }
+  return { path: value.path, contents };
+}
+
+function skillsShProvenance(
+  upstream: Upstream,
+  detail: ParsedSkillsShDetail,
+  values: Omit<SkillsShResolutionMetadata, 'provider' | 'externalId' | 'source' | 'slug' | 'sourceType' | 'externalSnapshotHash'> & {
+    sourceUrl: string;
+    pageUrl?: string;
+    externalSnapshotHash: string | null;
+    sourceDigest: `sha256:${string}`;
+    revision?: string;
+  },
+): Provenance {
+  const resolution: SkillsShResolutionMetadata = {
+    provider: 'skills.sh',
+    externalId: detail.externalId,
+    source: detail.source,
+    slug: detail.slug,
+    ...(detail.sourceType === undefined ? {} : { sourceType: detail.sourceType }),
+    sourceUrl: values.sourceUrl,
+    ...(values.pageUrl === undefined ? {} : { pageUrl: values.pageUrl }),
+    externalSnapshotHash: values.externalSnapshotHash,
+    ...(values.externalDigest === undefined ? {} : { externalDigest: values.externalDigest }),
+    ...(values.repository === undefined ? {} : { repository: values.repository }),
+    // The root repository skill has an empty relative directory.  Keep that
+    // as an omitted optional evidence field because the completion contract
+    // treats empty metadata strings as invalid; the repository/revision still
+    // identify the immutable root source.
+    ...(values.skillPath ? { skillPath: values.skillPath } : {}),
+    ...(values.requestedRef === undefined ? {} : { requestedRef: values.requestedRef }),
+    ...(values.resolvedCommit === undefined ? {} : { resolvedCommit: values.resolvedCommit }),
+    ...(values.resolvedTree === undefined ? {} : { resolvedTree: values.resolvedTree }),
+    ...(values.wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl: values.wellKnownIndexUrl }),
+    ...(values.artifactUrl === undefined ? {} : { artifactUrl: values.artifactUrl }),
+    ...(values.frontmatterName === undefined ? {} : { frontmatterName: values.frontmatterName }),
+    ...(values.frontmatterDescription === undefined ? {} : { frontmatterDescription: values.frontmatterDescription }),
+  };
+  // Keep both the flat fields and, when the source type is verified, a grouped
+  // copy.  A detail snapshot can legitimately omit sourceType; emitting a
+  // nested object with an undefined required field would be malformed after
+  // JSON serialization and would fail the completion contract.
+  const revision = values.revision ?? values.externalSnapshotHash ?? values.externalDigest ?? values.sourceDigest;
+  return {
+    kind: 'skills-sh',
+    upstreamId: upstream.id,
+    repository: values.repository ?? detail.source,
+    path: detail.externalId,
+    revision,
+    sourceDigest: values.sourceDigest,
+    externalId: detail.externalId,
+    externalSourceType: detail.sourceType,
+    externalSnapshotHash: values.externalSnapshotHash,
+    ...(resolution as unknown as Record<string, unknown>),
+    ...(detail.sourceType === undefined ? {} : { external: resolution }),
+  } as unknown as Provenance;
+}
+
+function bundleFromSnapshotFiles(files: SkillsShFile[], limits: AcquisitionLimits): SkillBundle {
+  if (files.length === 0) {
+    throw new UpstreamAcquisitionError('source_not_found', 'skills.sh detail snapshot contains no files');
+  }
+  return bundleFromRawFiles(files.map((file) => ({ path: String(file.path), bytes: new TextEncoder().encode(String(file.contents)) })), limits);
+}
+
+function bundleFromRawFiles(
+  files: Array<{ path: string; bytes: Uint8Array; executable?: boolean }>,
+  limits: AcquisitionLimits,
+): SkillBundle {
+  if (files.length > limits.maxFiles) {
+    throw new UpstreamAcquisitionError('file_count_limit', `Selected source contains more than ${limits.maxFiles} files`);
+  }
+  const normalized = files.map((file) => ({
+    ...file,
+    path: validateSkillPath(file.path, limits, false),
+  }));
+  const skillPaths = normalized.filter((file) => file.path.toLocaleLowerCase('en-US').split('/').at(-1) === 'skill.md');
+  if (skillPaths.length !== 1) {
+    throw new UpstreamAcquisitionError(skillPaths.length === 0 ? 'missing_skill_file' : 'ambiguous_source', 'Selected source must contain exactly one SKILL.md');
+  }
+  const skillPath = skillPaths[0]!.path;
+  const slash = skillPath.lastIndexOf('/');
+  const prefix = slash < 0 ? '' : skillPath.slice(0, slash);
+  const selected = normalized.map((file) => {
+    if (prefix) {
+      if (file.path !== prefix && !file.path.startsWith(`${prefix}/`)) {
+        throw new UpstreamAcquisitionError('invalid_source', 'Selected source contains files outside its SKILL.md directory');
+      }
+      const relative = file.path === prefix ? '' : file.path.slice(prefix.length + 1);
+      if (!relative) throw new UpstreamAcquisitionError('invalid_path', 'Selected source contains a directory entry');
+      return { ...file, path: relative };
+    }
+    return file;
+  });
+  const candidate = {
+    format: 'pskills-bundle-v1' as const,
+    files: selected.map((file) => ({
+      path: file.path,
+      content: Buffer.from(file.bytes).toString('base64'),
+      ...(file.executable === true ? { executable: true } : {}),
+    })),
+  };
+  return validateSkillBundle(candidate, limits);
+}
+
+function readSkillFrontmatter(bundle: SkillBundle): { name: string; description: string } {
+  try {
+    const metadata = parseSkillMetadata(bundle);
+    return { name: metadata.skillName, description: metadata.description };
+  } catch {
+    // Keep the storage parser as the single frontmatter implementation.  Its
+    // detailed error can contain source-specific context; acquisition only
+    // needs a stable, non-content-bearing rejection code.
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'SKILL.md metadata is invalid');
+  }
+}
+
+function assertFrontmatterIdentity(
+  frontmatter: { name: string; description: string },
+  detail: ParsedSkillsShDetail,
+): void {
+  const allowed = new Set([detail.name, detail.slug].map((value) => value.toLocaleLowerCase('en-US')));
+  if (!allowed.has(frontmatter.name.toLocaleLowerCase('en-US'))) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'SKILL.md frontmatter does not match the skills.sh catalog row');
+  }
+}
+
+interface SkillsShGithubResult {
+  bundle: SkillBundle;
+  repository: string;
+  skillPath: string;
+  requestedRef: string;
+  resolvedCommit: string;
+  resolvedTree: string;
+}
+
+async function acquireSkillsShGithub(args: {
+  upstream: Upstream;
+  importRequest: ImportRequest;
+  options: AcquireSkillOptions;
+  detail: ParsedSkillsShDetail;
+  limits: AcquisitionLimits;
+}): Promise<SkillsShGithubResult> {
+  const { upstream, importRequest, detail, limits, options } = args;
+  const upstreamRecord = upstream as unknown as Record<string, unknown>;
+  const installHint = parseGithubInstallHint(detail.installUrl);
+  const repository = parseSkillsShGithubRepository(detail.source, installHint?.repository);
+  const configuredBase = typeof upstreamRecord.githubApiBaseUrl === 'string'
+    ? upstreamRecord.githubApiBaseUrl
+    : undefined;
+  const apiBase = normalizeGithubApiBase(configuredBase, options.allowLoopbackForTests);
+  const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
+  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
+  const headers: FetchHeaders = {
+    accept: 'application/vnd.github+json',
+    'x-github-api-version': GITHUB_API_VERSION,
+    'user-agent': 'private-skills/0.1',
+  };
+  const requestedSnapshotHash = (importRequest as unknown as { externalSnapshotHash?: unknown }).externalSnapshotHash;
+  // The core includes the detail snapshot hash in `ref` for compatibility
+  // with generic imports.  A skills.sh snapshot identifier is not a Git ref;
+  // only an independently supplied ref may select the GitHub branch/tag.
+  const importedRef = typeof importRequest.ref === 'string' && importRequest.ref !== requestedSnapshotHash
+    ? importRequest.ref
+    : undefined;
+  const explicitRef = importedRef ?? detail.ref ?? installHint?.ref;
+  let requestedRef = explicitRef;
+  if (!requestedRef) {
+    const repositoryResponse = await client.json<SkillsShRepositoryResponse>(appendApiPath(apiBase, [
+      'repos', repository.split('/')[0]!, repository.split('/')[1]!,
+    ]), { headers, allowedOrigin: apiBase.origin, retryable: false });
+    requestedRef = requireSkillsShString(repositoryResponse.default_branch, 'GitHub default branch', 256);
+  }
+  requestedRef = validateRef(requestedRef);
+  const commitResponse = await client.json<GitHubCommitResponse>(appendApiPath(apiBase, [
+    'repos', repository.split('/')[0]!, repository.split('/')[1]!, 'commits', requestedRef,
+  ]), { headers, allowedOrigin: apiBase.origin });
+  const resolvedCommit = requireSha(commitResponse.sha, 'GitHub commit response');
+  const treeResponse = await client.json<SkillsShTreeResponse>(appendApiPath(apiBase, [
+    'repos', repository.split('/')[0]!, repository.split('/')[1]!, 'git', 'trees', resolvedCommit,
+  ], { recursive: '1' }), { headers, allowedOrigin: apiBase.origin });
+  if (treeResponse.truncated !== false || !Array.isArray(treeResponse.tree)) {
+    throw new UpstreamAcquisitionError(treeResponse.truncated === true ? 'tree_truncated' : 'invalid_source', 'GitHub recursive tree is unavailable or truncated');
+  }
+  const candidates = treeResponse.tree.filter((raw): raw is Record<string, unknown> => {
+    if (!isRecord(raw) || raw.type !== 'blob' || typeof raw.path !== 'string') return false;
+    const path = raw.path;
+    return path.split('/').at(-1)?.toLocaleLowerCase('en-US') === 'skill.md';
+  });
+  if (candidates.length === 0) throw new UpstreamAcquisitionError('source_not_found', `No SKILL.md was found in ${repository}`);
+  if (candidates.length > limits.maxFiles) throw new UpstreamAcquisitionError('file_count_limit', 'GitHub source contains too many candidate SKILL.md files');
+
+  const candidateScores: Array<{ raw: Record<string, unknown>; score: number; frontmatter?: { name: string; description: string } }> = [];
+  for (const raw of candidates) {
+    const path = validateSkillPath(String(raw.path), limits, false);
+    const sha = requireSha(raw.sha, `GitHub candidate ${path}`);
+    const blob = await client.json<GitHubBlobResponse>(appendApiPath(apiBase, [
+      'repos', repository.split('/')[0]!, repository.split('/')[1]!, 'git', 'blobs', sha,
+    ]), { headers, allowedOrigin: apiBase.origin });
+    const decoded = decodeGithubBlob(blob, {
+      path,
+      sha,
+      size: raw.size,
+      mode: typeof raw.mode === 'string' ? raw.mode : '100644',
+      type: 'blob',
+    }, limits);
+    let frontmatter: { name: string; description: string } | undefined;
+    try {
+      frontmatter = parseSkillFrontmatterBytes(decoded.bytes);
+    } catch {
+      // The final selected bundle remains fail-closed.  A malformed candidate
+      // simply cannot win a frontmatter-name match during discovery.
+    }
+    const parent = path.slice(0, Math.max(0, path.lastIndexOf('/')));
+    const slugPath = detail.slug.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const lowerParent = parent.toLocaleLowerCase('en-US');
+    const lowerSlug = slugPath.toLocaleLowerCase('en-US');
+    let score = 0;
+    if (lowerParent === lowerSlug) score += 100;
+    if (lowerParent.endsWith(`/${lowerSlug}`)) score += 90;
+    if (parent.split('/').at(-1)?.toLocaleLowerCase('en-US') === detail.slug.toLocaleLowerCase('en-US')) score += 80;
+    if (frontmatter && frontmatter.name.toLocaleLowerCase('en-US') === detail.slug.toLocaleLowerCase('en-US')) score += 70;
+    if (frontmatter && frontmatter.name.toLocaleLowerCase('en-US') === detail.name.toLocaleLowerCase('en-US')) score += 60;
+    score += githubDirectoryPriority(parent);
+    candidateScores.push({ raw, score, ...(frontmatter === undefined ? {} : { frontmatter }) });
+  }
+  candidateScores.sort((left, right) => right.score - left.score || String(left.raw.path).localeCompare(String(right.raw.path)));
+  const selected = candidateScores[0]!;
+  const tied = candidateScores.filter((candidate) => candidate.score === selected.score);
+  if (tied.length > 1) throw new UpstreamAcquisitionError('ambiguous_source', `Multiple GitHub SKILL.md files match ${detail.externalId}`);
+  const selectedAbsolutePath = validateSkillPath(String(selected.raw.path), limits, false);
+  const selectedPath = selectedAbsolutePath.slice(0, Math.max(0, selectedAbsolutePath.lastIndexOf('/')));
+  const bundle = await downloadGithubDirectory(client, apiBase, repository, selectedPath, treeResponse.tree, headers, limits);
+  const frontmatter = readSkillFrontmatter(bundle);
+  assertFrontmatterIdentity(frontmatter, detail);
+  const selectedTreeEntry = treeResponse.tree.find((raw) => isRecord(raw) && raw.type === 'tree' && raw.path === selectedPath);
+  const resolvedTree = typeof treeResponse.sha === 'string' && /^[0-9a-f]{40}$/i.test(treeResponse.sha)
+    ? treeResponse.sha.toLocaleLowerCase('en-US')
+    : typeof selectedTreeEntry === 'object' && selectedTreeEntry !== null && typeof (selectedTreeEntry as Record<string, unknown>).sha === 'string'
+      ? String((selectedTreeEntry as Record<string, unknown>).sha)
+      : resolvedCommit;
+  return { bundle, repository, skillPath: selectedPath, requestedRef, resolvedCommit, resolvedTree };
+}
+
+function parseSkillFrontmatterBytes(bytes: Uint8Array): { name: string; description: string } {
+  try {
+    const metadata = parseSkillMetadata({
+      format: 'pskills-bundle-v1',
+      files: [{ path: 'SKILL.md', content: Buffer.from(bytes).toString('base64') }],
+    });
+    return { name: metadata.skillName, description: metadata.description };
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'SKILL.md metadata is invalid');
+  }
+}
+
+function githubDirectoryPriority(path: string): number {
+  const lower = path.toLocaleLowerCase('en-US');
+  if (!lower.includes('/')) return 30;
+  if (lower.startsWith('skills/')) return 20;
+  if (lower.startsWith('.agents/skills/')) return 10;
+  if (lower.startsWith('agent-skills/')) return 10;
+  return 0;
+}
+
+async function downloadGithubDirectory(
+  client: HttpClient,
+  apiBase: URL,
+  repository: string,
+  selectedPath: string,
+  tree: unknown[],
+  headers: FetchHeaders,
+  limits: AcquisitionLimits,
+): Promise<SkillBundle> {
+  const entries = selectTreeEntries(tree, selectedPath, limits);
+  if (entries.length === 0) throw new UpstreamAcquisitionError('source_not_found', `No files found at ${selectedPath || '/'}`);
+  let declaredExpandedBytes = 0;
+  for (const entry of entries) {
+    if (typeof entry.size === 'number') {
+      if (!Number.isSafeInteger(entry.size) || entry.size < 0) throw new UpstreamAcquisitionError('invalid_source', `Invalid size for GitHub file ${entry.path}`);
+      declaredExpandedBytes += entry.size;
+      if (declaredExpandedBytes > limits.maxExpandedBytes) throw new UpstreamAcquisitionError('expanded_size_limit', 'GitHub selected directory exceeds the expanded size limit');
+    }
+  }
+  const blobs = await mapWithConcurrency(entries, limits.concurrency, async (entry) => {
+    const sha = requireSha(entry.sha, `GitHub tree entry ${entry.path}`);
+    if (typeof entry.size === 'number' && entry.size > limits.maxFileBytes) throw new UpstreamAcquisitionError('file_size_limit', `GitHub file ${entry.path} exceeds the per-file limit`);
+    const blob = await client.json<GitHubBlobResponse>(appendApiPath(apiBase, [
+      'repos', repository.split('/')[0]!, repository.split('/')[1]!, 'git', 'blobs', sha,
+    ]), { headers, allowedOrigin: apiBase.origin });
+    return decodeGithubBlob(blob, entry, limits);
+  });
+  return bundleFromRawFiles(blobs.map((blob) => ({ path: blob.path, bytes: blob.bytes, ...(blob.executable === true ? { executable: true } : {}) })), limits);
+}
+
+function parseSkillsShGithubRepository(source: string, installRepository?: string): string {
+  try {
+    return normalizeRepositoryIdentity(source);
+  } catch {
+    if (installRepository) return normalizeRepositoryIdentity(installRepository);
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh GitHub source is not an owner/repository identity');
+  }
+}
+
+function parseGithubInstallHint(value: string | null): { repository: string; ref?: string } | undefined {
+  if (!value) return undefined;
+  let url: URL;
+  try { url = new URL(value); } catch { return undefined; }
+  if (url.protocol !== 'https:' || url.hostname.toLocaleLowerCase('en-US') !== 'github.com' || url.username || url.password || url.search || url.hash) return undefined;
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const repository = normalizeRepositoryIdentity(`${parts[0]}/${parts[1]}`);
+  if (parts[2] !== 'tree' && parts[2] !== 'blob') return { repository };
+  const ref = parts[3];
+  if (!ref) return { repository };
+  let decodedRef: string;
+  try {
+    decodedRef = decodeURIComponent(ref);
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_ref', 'GitHub install URL contains an invalid ref');
+  }
+  return { repository, ref: validateRef(decodedRef) };
+}
+
+interface SkillsShWellKnownResult {
+  bundle: SkillBundle;
+  indexUrl: string;
+  artifactUrl?: string;
+  externalDigest?: string;
+}
+
+interface WellKnownV1Entry {
+  name: string;
+  description: string;
+  files: string[];
+}
+
+interface WellKnownV2Entry {
+  name: string;
+  type: 'skill-md' | 'archive';
+  description: string;
+  url: string;
+  digest: string;
+}
+
+async function acquireSkillsShWellKnown(args: {
+  upstream: Upstream;
+  importRequest: ImportRequest;
+  options: AcquireSkillOptions;
+  detail: ParsedSkillsShDetail;
+  limits: AcquisitionLimits;
+}): Promise<SkillsShWellKnownResult> {
+  const { upstream, detail, limits, options } = args;
+  const upstreamRecord = upstream as unknown as Record<string, unknown>;
+  const base = normalizeWellKnownSourceBase(detail, upstreamRecord, options.allowLoopbackForTests);
+  const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
+  const client = new HttpClient(fetchImpl, limits, options, base.origin);
+  const headers: FetchHeaders = { accept: 'application/json', 'user-agent': 'private-skills/0.1' };
+  let lastUnavailable: UpstreamAcquisitionError | undefined;
+  for (const wellKnownDirectory of ['agent-skills', 'skills'] as const) {
+    const indexUrl = appendBasePath(base, ['.well-known', wellKnownDirectory, 'index.json']);
+    let raw: unknown;
+    try {
+      raw = await client.json(indexUrl, { headers, allowedOrigin: base.origin, retryable: false });
+    } catch (error) {
+      if (error instanceof UpstreamAcquisitionError && (error.status === 404 || error.status === 410)) {
+        lastUnavailable = error;
+        continue;
+      }
+      throw error;
+    }
+    const index = parseWellKnownIndex(raw, limits);
+    const entry = selectWellKnownEntry(index, detail);
+    if (index.kind === 'v2') {
+      const artifact = await fetchWellKnownV2(client, base, indexUrl, entry as WellKnownV2Entry, limits, fetchImpl, options);
+      const frontmatter = readSkillFrontmatter(artifact.bundle);
+      assertFrontmatterIdentity(frontmatter, detail);
+      return { bundle: artifact.bundle, indexUrl: indexUrl.toString(), artifactUrl: artifact.artifactUrl, externalDigest: (entry as WellKnownV2Entry).digest };
+    }
+    const bundle = await fetchWellKnownV1(client, base, wellKnownDirectory, entry as WellKnownV1Entry, limits);
+    const frontmatter = readSkillFrontmatter(bundle);
+    assertFrontmatterIdentity(frontmatter, detail);
+    return { bundle, indexUrl: indexUrl.toString() };
+  }
+  if (lastUnavailable) {
+    throw new UpstreamAcquisitionError(
+      'source_unavailable',
+      'No well-known skills index is available',
+      lastUnavailable.status,
+    );
+  }
+  throw new UpstreamAcquisitionError('source_unavailable', 'No well-known skills index is available');
+}
+
+function normalizeWellKnownSourceBase(
+  detail: ParsedSkillsShDetail,
+  upstream: Record<string, unknown>,
+  allowLoopbackForTests = false,
+): URL {
+  const configured = typeof upstream.wellKnownBaseUrl === 'string' ? upstream.wellKnownBaseUrl : undefined;
+  let candidate = configured;
+  if (!candidate && detail.installUrl) {
+    try {
+      const install = new URL(detail.installUrl);
+      if (install.hostname !== 'skills.sh' && install.hostname !== 'www.skills.sh') {
+        const marker = install.pathname.indexOf('/.well-known/');
+        install.pathname = marker >= 0 ? install.pathname.slice(0, marker) : '/';
+        install.search = '';
+        install.hash = '';
+        candidate = install.toString();
+      }
+    } catch {
+      // The detail parser has already validated installUrl.  This branch is
+      // defensive for a future URL shape.
+    }
+  }
+  if (!candidate) {
+    // A source such as "googleworkspace/cli" is a catalog repository-like
+    // identity, not a safe well-known host.  Without an explicit install URL
+    // or deployment mapping there is no origin we can resolve responsibly.
+    if (detail.source.includes('/')) {
+      throw new UpstreamAcquisitionError('source_unavailable', 'Well-known skills.sh source has no safe origin mapping');
+    }
+    const source = detail.source.includes('://') ? detail.source : `https://${detail.source}`;
+    candidate = source;
+  }
+  return parseFixedBase(candidate, allowLoopbackForTests);
+}
+
+type ParsedWellKnownIndex =
+  | { kind: 'v1'; entries: WellKnownV1Entry[] }
+  | { kind: 'v2'; entries: WellKnownV2Entry[] };
+
+const DISCOVERY_SCHEMA_V2 = 'https://schemas.agentskills.io/discovery/0.2.0/schema.json';
+
+function parseWellKnownIndex(value: unknown, limits: AcquisitionLimits): ParsedWellKnownIndex {
+  if (!isRecord(value) || !Array.isArray(value.skills)) {
+    throw new UpstreamAcquisitionError('unsupported_source', 'Well-known discovery index has an unsupported shape');
+  }
+  if (value.$schema === DISCOVERY_SCHEMA_V2) {
+    const entries: WellKnownV2Entry[] = [];
+    const names = new Set<string>();
+    for (const raw of value.skills) {
+      if (!isRecord(raw) || !isWellKnownName(raw.name) || typeof raw.description !== 'string' || raw.description.length === 0 || raw.description.length > 1_024 || (raw.type !== 'skill-md' && raw.type !== 'archive') || typeof raw.url !== 'string' || raw.url.length === 0 || typeof raw.digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(raw.digest)) {
+        throw new UpstreamAcquisitionError('invalid_source', 'Well-known v0.2 discovery entry is invalid');
+      }
+      if (names.has(raw.name)) throw new UpstreamAcquisitionError('ambiguous_source', `Well-known discovery contains duplicate skill ${raw.name}`);
+      names.add(raw.name);
+      if (raw.url.length > limits.maxPathBytes * 4) throw new UpstreamAcquisitionError('invalid_source', 'Well-known artifact URL is too long');
+      entries.push({ name: raw.name, description: raw.description, type: raw.type, url: raw.url, digest: raw.digest });
+    }
+    if (entries.length === 0) throw new UpstreamAcquisitionError('source_not_found', 'Well-known discovery index contains no skills');
+    return { kind: 'v2', entries };
+  }
+  if (value.$schema !== undefined) {
+    throw new UpstreamAcquisitionError('unsupported_source', 'Well-known discovery schema is unsupported');
+  }
+  const entries: WellKnownV1Entry[] = [];
+  const names = new Set<string>();
+  for (const raw of value.skills) {
+    if (!isRecord(raw) || !isWellKnownName(raw.name) || typeof raw.description !== 'string' || raw.description.length === 0 || raw.description.length > 1_024 || !Array.isArray(raw.files) || raw.files.length === 0 || raw.files.length > limits.maxFiles) {
+      throw new UpstreamAcquisitionError('invalid_source', 'Well-known legacy discovery entry is invalid');
+    }
+    if (names.has(raw.name)) throw new UpstreamAcquisitionError('ambiguous_source', `Well-known discovery contains duplicate skill ${raw.name}`);
+    names.add(raw.name);
+    const files = raw.files.map((file) => {
+      if (typeof file !== 'string' || file.length === 0 || file.length > limits.maxPathBytes || file.startsWith('/') || file.startsWith('\\') || file.includes('\\') || file.includes('\0') || file.split('/').some((part) => part === '.' || part === '..')) {
+        throw new UpstreamAcquisitionError('invalid_path', 'Well-known legacy discovery contains an unsafe file path');
+      }
+      return validateSkillPath(file, limits, false);
+    });
+    if (!files.some((file) => file.toLocaleLowerCase('en-US') === 'skill.md')) {
+      throw new UpstreamAcquisitionError('missing_skill_file', `Well-known skill ${raw.name} does not advertise SKILL.md`);
+    }
+    entries.push({ name: raw.name, description: raw.description, files });
+  }
+  if (entries.length === 0) throw new UpstreamAcquisitionError('source_not_found', 'Well-known discovery index contains no skills');
+  return { kind: 'v1', entries };
+}
+
+function isWellKnownName(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 1 && value.length <= 64 && /^[a-z0-9-]+$/.test(value) && !value.startsWith('-') && !value.endsWith('-') && !value.includes('--');
+}
+
+function selectWellKnownEntry(index: ParsedWellKnownIndex, detail: ParsedSkillsShDetail): WellKnownV1Entry | WellKnownV2Entry {
+  const target = new Set([detail.slug, detail.name, detail.externalId.split('/').at(-1) ?? ''].map((value) => value.toLocaleLowerCase('en-US')));
+  const matches = index.entries.filter((entry) => target.has(entry.name.toLocaleLowerCase('en-US')));
+  if (matches.length === 0) throw new UpstreamAcquisitionError('source_not_found', `Well-known source does not advertise ${detail.slug}`);
+  if (matches.length !== 1) throw new UpstreamAcquisitionError('ambiguous_source', `Well-known source advertises multiple matches for ${detail.slug}`);
+  return matches[0]!;
+}
+
+async function fetchWellKnownV1(
+  client: HttpClient,
+  base: URL,
+  wellKnownDirectory: 'agent-skills' | 'skills',
+  entry: WellKnownV1Entry,
+  limits: AcquisitionLimits,
+): Promise<SkillBundle> {
+  const files: Array<{ path: string; bytes: Uint8Array }> = [];
+  for (const path of entry.files) {
+    const url = appendBasePath(base, ['.well-known', wellKnownDirectory, entry.name, ...path.split('/')]);
+    const response = await client.bytes(url, { allowedOrigin: base.origin });
+    files.push({ path, bytes: response.bytes });
+  }
+  return bundleFromRawFiles(files, limits);
+}
+
+async function fetchWellKnownV2(
+  client: HttpClient,
+  base: URL,
+  indexUrl: URL,
+  entry: WellKnownV2Entry,
+  limits: AcquisitionLimits,
+  fetchImpl: FetchLike,
+  options: AcquireSkillOptions,
+): Promise<{ bundle: SkillBundle; artifactUrl: string }> {
+  let artifactUrl: URL;
+  try { artifactUrl = new URL(entry.url, indexUrl); } catch { throw new UpstreamAcquisitionError('invalid_source', 'Well-known artifact URL is invalid'); }
+  assertSafeURL(artifactUrl, clientAllowsLoopback(client));
+  // The discovery schema permits a public CDN/blob URL.  Use a new client
+  // fixed to that artifact origin so redirects remain same-origin to the
+  // artifact host, while no catalog/source credentials can be forwarded.
+  const artifactClient = artifactUrl.origin === base.origin
+    ? client
+    : new HttpClient(fetchImpl, limits, options, artifactUrl.origin);
+  const response = await artifactClient.bytes(artifactUrl, {});
+  const actualDigest = digestBytes(response.bytes);
+  if (actualDigest !== entry.digest) throw new UpstreamAcquisitionError('digest_mismatch', 'Well-known artifact digest does not match its discovery entry');
+  const rawFiles = entry.type === 'skill-md'
+    ? [{ path: 'SKILL.md', bytes: response.bytes }]
+    : extractWellKnownArchive(response.bytes, response.response.headers.get('content-type') ?? '', artifactUrl.toString(), limits);
+  return { bundle: bundleFromRawFiles(rawFiles, limits), artifactUrl: artifactUrl.toString() };
+}
+
+/** HttpClient always uses the worker's explicit loopback fixture switch. */
+function clientAllowsLoopback(client: HttpClient): boolean {
+  return (client as unknown as { options?: AcquireSkillOptions }).options?.allowLoopbackForTests === true;
+}
+
+const WELL_KNOWN_MAX_ARCHIVE_FILES = 1_000;
+const WELL_KNOWN_MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
+
+function extractWellKnownArchive(
+  bytes: Uint8Array,
+  contentType: string,
+  artifactUrl: string,
+  limits: AcquisitionLimits,
+): Array<{ path: string; bytes: Uint8Array }> {
+  const lowerType = contentType.toLocaleLowerCase('en-US');
+  const lowerURL = artifactUrl.toLocaleLowerCase('en-US');
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
+    return extractZipArchive(bytes, limits);
+  }
+  if ((bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) || lowerType.includes('gzip') || lowerURL.endsWith('.tar.gz') || lowerURL.endsWith('.tgz')) {
+    try {
+      // zlib otherwise expands a tiny compressed bomb before the tar parser
+      // can apply its file/expanded-byte limits.  Bound decompression by the
+      // archive cap plus tar header/padding overhead.
+      const expandedLimit = Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES);
+      const decompressed = gunzipSync(Buffer.from(bytes), {
+        maxOutputLength: expandedLimit + Math.min(limits.maxFiles, WELL_KNOWN_MAX_ARCHIVE_FILES) * 1_024 + 1_024,
+      });
+      return extractTarArchive(decompressed, limits);
+    } catch (error) {
+      if (error instanceof UpstreamAcquisitionError) throw error;
+      throw new UpstreamAcquisitionError('invalid_archive', 'Well-known gzip archive is invalid');
+    }
+  }
+  if (lowerType.includes('tar') || lowerURL.endsWith('.tar')) {
+    return extractTarArchive(bytes, limits);
+  }
+  throw new UpstreamAcquisitionError('unsupported_archive', 'Well-known archive is not a supported ZIP, tar, or tar.gz file');
+}
+
+function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocd = findZipEndOfCentralDirectory(bytes);
+  if (eocd < 0) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP archive has no end record');
+  const diskNumber = readU16(view, eocd + 4, 'ZIP disk number');
+  const centralDisk = readU16(view, eocd + 6, 'ZIP central disk number');
+  const entriesOnDisk = readU16(view, eocd + 8, 'ZIP entries on disk');
+  const entryCount = readU16(view, eocd + 10, 'ZIP entry count');
+  const centralSize = readU32(view, eocd + 12, 'ZIP central directory size');
+  const centralOffset = readU32(view, eocd + 16, 'ZIP central directory offset');
+  const commentLength = readU16(view, eocd + 20, 'ZIP comment length');
+  if (diskNumber !== 0 || centralDisk !== 0 || entriesOnDisk !== entryCount || eocd + 22 + commentLength !== bytes.length) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ZIP archive has unsupported disks or trailing data');
+  }
+  if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+    throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP64 archives are not supported');
+  }
+  if (entryCount > Math.min(WELL_KNOWN_MAX_ARCHIVE_FILES, limits.maxFiles) || centralOffset + centralSize !== eocd) {
+    throw new UpstreamAcquisitionError('archive_limit', 'ZIP archive exceeds entry or size limits');
+  }
+  const files: Array<{ path: string; bytes: Uint8Array }> = [];
+  const seen = new Set<string>();
+  const dataRanges: Array<{ start: number; end: number }> = [];
+  let cursor = centralOffset;
+  let total = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > bytes.length || readU32(view, cursor, 'ZIP central signature') !== 0x02014b50) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory is malformed');
+    }
+    const flags = readU16(view, cursor + 8, 'ZIP flags');
+    const method = readU16(view, cursor + 10, 'ZIP compression method');
+    const compressedSize = readU32(view, cursor + 20, 'ZIP compressed size');
+    const uncompressedSize = readU32(view, cursor + 24, 'ZIP uncompressed size');
+    const nameLength = readU16(view, cursor + 28, 'ZIP file name length');
+    const extraLength = readU16(view, cursor + 30, 'ZIP extra length');
+    const commentLength = readU16(view, cursor + 32, 'ZIP comment length');
+    const localOffset = readU32(view, cursor + 42, 'ZIP local header offset');
+    const recordEnd = cursor + 46 + nameLength + extraLength + commentLength;
+    if (recordEnd > bytes.length || (flags & 0x1) !== 0 || (flags & 0x8) !== 0) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'Encrypted or descriptor-based ZIP entries are not supported');
+    }
+    if (method !== 0 && method !== 8) throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP compression method is unsupported');
+    if (uncompressedSize > limits.maxFileBytes || uncompressedSize > WELL_KNOWN_MAX_ARCHIVE_BYTES || compressedSize > limits.maxResponseBytes) {
+      throw new UpstreamAcquisitionError('archive_limit', 'ZIP entry exceeds file limits');
+    }
+    const filenameBytes = bytes.subarray(cursor + 46, cursor + 46 + nameLength);
+    let rawName: string;
+    try { rawName = new TextDecoder((flags & 0x800) !== 0 ? 'utf-8' : 'latin1', { fatal: true }).decode(filenameBytes); } catch { throw new UpstreamAcquisitionError('invalid_archive', 'ZIP filename is not valid text'); }
+    const versionMadeBy = readU16(view, cursor + 4, 'ZIP creator version');
+    const externalAttributes = readU32(view, cursor + 38, 'ZIP external attributes');
+    // Unix symlinks are encoded in the high mode bits of the central record.
+    // They must never be materialized as ordinary files, even if their name
+    // and payload look harmless.
+    const creatorOs = versionMadeBy >>> 8;
+    const unixModeType = externalAttributes >>> 16 & 0xf000;
+    const dosDirectory = (externalAttributes & 0x10) !== 0;
+    if (creatorOs === 3 && unixModeType !== 0 && unixModeType !== 0x8000 && unixModeType !== 0x4000) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP archive contains a non-regular Unix entry');
+    }
+    if ((creatorOs === 0 || creatorOs === 10) && dosDirectory && !rawName.endsWith('/')) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP directory entry has an unsafe name');
+    }
+    if (creatorOs === 3 && unixModeType === 0x4000 && !rawName.endsWith('/')) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP directory entry has an unsafe name');
+    }
+    if (rawName.endsWith('/')) {
+      const directoryName = rawName.slice(0, -1);
+      if (directoryName) validateArchivePath(directoryName, limits);
+      cursor = recordEnd;
+      continue;
+    }
+    if ((creatorOs === 3 && unixModeType === 0x4000) || ((creatorOs === 0 || creatorOs === 10) && dosDirectory)) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP archive contains a directory entry');
+    }
+    const path = validateArchivePath(rawName, limits);
+    if (seen.has(path)) throw new UpstreamAcquisitionError('path_collision', `ZIP archive contains duplicate path ${path}`);
+    seen.add(path);
+    if (localOffset + 30 > bytes.length || readU32(view, localOffset, 'ZIP local signature') !== 0x04034b50) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local file header is malformed');
+    }
+    if (localOffset >= centralOffset) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header overlaps its central directory');
+    const localFlags = readU16(view, localOffset + 6, 'ZIP local flags');
+    const localMethod = readU16(view, localOffset + 8, 'ZIP local compression method');
+    const localCrc = readU32(view, localOffset + 14, 'ZIP local CRC');
+    const localCompressedSize = readU32(view, localOffset + 18, 'ZIP local compressed size');
+    const localUncompressedSize = readU32(view, localOffset + 22, 'ZIP local uncompressed size');
+    const localNameLength = readU16(view, localOffset + 26, 'ZIP local name length');
+    const localExtraLength = readU16(view, localOffset + 28, 'ZIP local extra length');
+    if (localFlags !== flags || localMethod !== method || localCrc !== readU32(view, cursor + 16, 'ZIP CRC') || localCompressedSize !== compressedSize || localUncompressedSize !== uncompressedSize) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header does not match its central record');
+    }
+    if (localOffset + 30 + localNameLength + localExtraLength > centralOffset) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header is truncated');
+    }
+    const localName = bytes.subarray(localOffset + 30, localOffset + 30 + localNameLength);
+    if (!sameBytes(localName, filenameBytes)) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local filename does not match its central record');
+    }
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > centralOffset) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP file data overlaps its central directory');
+    const priorRange = dataRanges.find((range) => localOffset < range.end && dataEnd > range.start);
+    if (priorRange) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP file data overlaps another entry');
+    dataRanges.push({ start: localOffset, end: dataEnd });
+    let content: Uint8Array;
+    try {
+      content = method === 0
+        ? bytes.slice(dataStart, dataEnd)
+        : Uint8Array.from(inflateRawSync(Buffer.from(bytes.subarray(dataStart, dataEnd)), {
+          maxOutputLength: Math.min(uncompressedSize, limits.maxFileBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES),
+        }));
+    } catch {
+      throw new UpstreamAcquisitionError('invalid_archive', `ZIP entry ${path} could not be decompressed`);
+    }
+    if (content.length !== uncompressedSize) throw new UpstreamAcquisitionError('size_mismatch', `ZIP entry ${path} size mismatch`);
+    if (crc32Bytes(content) !== readU32(view, cursor + 16, 'ZIP CRC')) throw new UpstreamAcquisitionError('digest_mismatch', `ZIP entry ${path} CRC mismatch`);
+    total += content.length;
+    if (total > Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES)) throw new UpstreamAcquisitionError('archive_limit', 'ZIP archive exceeds expanded size limits');
+    files.push({ path, bytes: content });
+    cursor = recordEnd;
+  }
+  if (cursor !== centralOffset + centralSize) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory size is inconsistent');
+  return files;
+}
+
+function findZipEndOfCentralDirectory(bytes: Uint8Array): number {
+  const lower = Math.max(0, bytes.length - 65_557);
+  for (let offset = bytes.length - 22; offset >= lower; offset -= 1) {
+    if (offset >= 0 && bytes[offset] === 0x50 && bytes[offset + 1] === 0x4b && bytes[offset + 2] === 0x05 && bytes[offset + 3] === 0x06) return offset;
+  }
+  return -1;
+}
+
+function readU16(view: DataView, offset: number, context: string): number {
+  if (offset < 0 || offset + 2 > view.byteLength) throw new UpstreamAcquisitionError('invalid_archive', `${context} is truncated`);
+  return view.getUint16(offset, true);
+}
+
+function readU32(view: DataView, offset: number, context: string): number {
+  if (offset < 0 || offset + 4 > view.byteLength) throw new UpstreamAcquisitionError('invalid_archive', `${context} is truncated`);
+  const value = view.getUint32(offset, true);
+  if (!Number.isSafeInteger(value)) throw new UpstreamAcquisitionError('invalid_archive', `${context} is invalid`);
+  return value;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function crc32Bytes(value: Uint8Array): number {
+  let result = 0xffffffff;
+  for (const byte of value) {
+    result ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) result = (result >>> 1) ^ (result & 1 ? 0xedb88320 : 0);
+  }
+  return (result ^ 0xffffffff) >>> 0;
+}
+
+function extractTarArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }> {
+  const files: Array<{ path: string; bytes: Uint8Array }> = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  let total = 0;
+  while (offset + 512 <= bytes.length) {
+    const header = bytes.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      if (offset + 1_024 > bytes.length || !bytes.subarray(offset + 512, offset + 1_024).every((byte) => byte === 0)) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'tar archive has a truncated end-of-archive marker');
+      }
+      if (bytes.subarray(offset + 1_024).some((byte) => byte !== 0)) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'tar archive contains trailing data');
+      }
+      return files.length === 0
+        ? (() => { throw new UpstreamAcquisitionError('source_not_found', 'tar archive contains no files'); })()
+        : files;
+    }
+    if (!isTarHeaderMagic(header)) throw new UpstreamAcquisitionError('invalid_archive', 'tar archive has an invalid header magic');
+    const storedChecksum = readTarOctal(header, 148, 8, 'tar checksum');
+    let calculatedChecksum = 0;
+    for (let index = 0; index < header.length; index += 1) calculatedChecksum += index >= 148 && index < 156 ? 0x20 : header[index]!;
+    if (storedChecksum !== calculatedChecksum) throw new UpstreamAcquisitionError('digest_mismatch', 'tar archive header checksum does not match');
+    const name = readTarString(header, 0, 100);
+    const prefix = readTarString(header, 345, 155);
+    const rawPath = prefix ? `${prefix}/${name}` : name;
+    const size = readTarOctal(header, 124, 12, 'tar entry size');
+    const type = header[156];
+    if (!Number.isSafeInteger(size) || size < 0 || size > limits.maxFileBytes || size > WELL_KNOWN_MAX_ARCHIVE_BYTES) throw new UpstreamAcquisitionError('archive_limit', 'tar archive entry exceeds size limits');
+    offset += 512;
+    const blocks = Math.ceil(size / 512);
+    const end = offset + blocks * 512;
+    if (end > bytes.length) throw new UpstreamAcquisitionError('invalid_archive', 'tar archive is truncated');
+    if (type === 0 || type === 0x30) {
+      const path = validateArchivePath(rawPath, limits);
+      if (seen.has(path)) throw new UpstreamAcquisitionError('path_collision', `tar archive contains duplicate path ${path}`);
+      seen.add(path);
+      const content = bytes.slice(offset, offset + size);
+      total += content.length;
+      if (total > Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES)) throw new UpstreamAcquisitionError('archive_limit', 'tar archive exceeds expanded size limits');
+      files.push({ path, bytes: content });
+    } else if (type === 0x35) {
+      if (rawPath) validateArchivePath(rawPath, limits);
+    } else {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'tar archive contains a link or unsupported entry');
+    }
+    offset = end;
+  }
+  throw new UpstreamAcquisitionError('invalid_archive', 'tar archive is missing its end-of-archive marker');
+}
+
+function isTarHeaderMagic(header: Uint8Array): boolean {
+  const magic = new TextDecoder('latin1').decode(header.subarray(257, 263));
+  return magic === 'ustar\0' || magic === 'ustar ';
+}
+
+function readTarOctal(bytes: Uint8Array, start: number, length: number, context: string): number {
+  const field = bytes.subarray(start, start + length);
+  let end = field.length;
+  while (end > 0 && (field[end - 1] === 0 || field[end - 1] === 0x20)) end -= 1;
+  let begin = 0;
+  while (begin < end && (field[begin] === 0 || field[begin] === 0x20)) begin += 1;
+  if (begin === end) return 0;
+  let result = 0;
+  for (let index = begin; index < end; index += 1) {
+    const digit = field[index]! - 0x30;
+    if (digit < 0 || digit > 7) throw new UpstreamAcquisitionError('invalid_archive', `${context} is not strict octal`);
+    result = result * 8 + digit;
+    if (!Number.isSafeInteger(result)) throw new UpstreamAcquisitionError('invalid_archive', `${context} is too large`);
+  }
+  return result;
+}
+
+function readTarString(bytes: Uint8Array, start: number, length: number): string {
+  const value = bytes.subarray(start, Math.min(bytes.length, start + length));
+  const end = value.indexOf(0);
+  const content = end >= 0 ? value.subarray(0, end) : value;
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(content).trim(); } catch { throw new UpstreamAcquisitionError('invalid_archive', 'tar archive path is not valid UTF-8'); }
+}
+
+function validateArchivePath(value: string, limits: AcquisitionLimits): string {
+  if (!value || value.startsWith('/') || value.startsWith('\\') || value.includes('\\') || value.includes('\0') || /^[A-Za-z]:/.test(value)) throw new UpstreamAcquisitionError('invalid_path', 'Archive contains an unsafe path');
+  return validateSkillPath(value, limits, false);
 }
 
 async function acquireRegistry(input: NormalizedInput): Promise<AcquisitionResult> {
@@ -1034,6 +2233,43 @@ function isBinaryBytes(bytes: Uint8Array): boolean {
   }
 }
 
+function normalizeSkillsShBase(value: string | undefined, allowLoopbackForTests = false): URL {
+  return parseFixedBase(value?.trim() || 'https://skills.sh', allowLoopbackForTests);
+}
+
+function appendSkillsShDetailPath(base: URL, externalId: string): URL {
+  const parts = externalId.split('/');
+  return appendBasePath(base, ['api', 'v1', 'skills', ...parts]);
+}
+
+function validateSkillsShId(value: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1_024 || value.includes('\\') || value.includes('\0') || /[\u0000-\u001f\u007f]/.test(value) || value.startsWith('/') || value.endsWith('/') || value.includes('//')) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh external id is invalid');
+  }
+  const parts = value.split('/');
+  if (parts.length < 2 || parts.some((part) => part === '.' || part === '..' || !/^[A-Za-z0-9._~:@-]+$/.test(part))) {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh external id must be a safe source/slug path');
+  }
+  return parts.join('/');
+}
+
+function requireSkillsShString(value: unknown, context: string, maxLength: number): string {
+  if (typeof value !== 'string' || value.length < 1 || value.length > maxLength || /[\u0000\r\n]/.test(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', `${context} is invalid`);
+  }
+  return value;
+}
+
+function requireSkillsShURL(value: unknown, context: string): string {
+  if (typeof value !== 'string' || value.length > 8_192) throw new UpstreamAcquisitionError('invalid_source', `${context} is invalid`);
+  let url: URL;
+  try { url = new URL(value, 'https://skills.sh'); } catch { throw new UpstreamAcquisitionError('invalid_source', `${context} is invalid`); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:' || url.username || url.password || url.search || url.hash) {
+    throw new UpstreamAcquisitionError('unsafe_url', `${context} is unsafe`);
+  }
+  return url.toString();
+}
+
 function normalizeGithubApiBase(value: string | undefined, allowLoopbackForTests = false): URL {
   const candidate = value?.trim() || GITHUB_API_ORIGIN;
   const base = parseFixedBase(candidate, allowLoopbackForTests);
@@ -1089,7 +2325,7 @@ function appendBasePath(base: URL, parts: string[]): URL {
   return new URL(`${prefix}/${encoded}`, base.origin);
 }
 
-function credentialHeader(upstream: Upstream, _source: 'github' | 'registry'): string | undefined {
+function credentialHeader(upstream: Upstream, _source: 'github' | 'registry' | 'skills-sh'): string | undefined {
   const name = upstream.credentialEnv;
   if (name === undefined || name === '') return undefined;
   if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {

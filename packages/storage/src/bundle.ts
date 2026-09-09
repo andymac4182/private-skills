@@ -1,4 +1,11 @@
 import type { BundleFile, SkillBundle } from "../../contracts/src/index.js";
+import {
+  isAlias,
+  isMap,
+  isScalar,
+  isSeq,
+  parseDocument,
+} from "yaml";
 
 /** Maximum number of files accepted in one distribution bundle. */
 export const MAX_BUNDLE_FILES = 2_000;
@@ -20,6 +27,15 @@ const WINDOWS_RESERVED_CHARACTER = /[<>"|?*]/u;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const MAX_FILE_BASE64_CHARS = Math.ceil(MAX_FILE_BYTES / 3) * 4;
+/** Bound frontmatter before handing it to the YAML composer. */
+export const MAX_FRONTMATTER_BYTES = 128 * 1024;
+export const MAX_FRONTMATTER_LINES = 4_096;
+export const MAX_FRONTMATTER_FIELDS = 256;
+export const MAX_METADATA_FIELDS = 128;
+export const MAX_METADATA_VALUE_CHARS = 4_096;
+const MAX_FRONTMATTER_VALUE_CHARS = 16_384;
+const MAX_FRONTMATTER_DEPTH = 2;
+const FRONTMATTER_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const RESERVED_AGENT_SEGMENTS = new Set([
   ".agents",
   ".claude-plugin",
@@ -54,9 +70,13 @@ export class BundleValidationError extends Error {
 export interface SkillMetadata {
   skillName: string;
   description: string;
-  /** Parsed, non-executable scalar frontmatter from the root SKILL.md. */
-  frontmatter: Record<string, string | number | boolean>;
+  /** Parsed, non-executable frontmatter from the root SKILL.md. */
+  frontmatter: Record<string, FrontmatterValue>;
 }
+
+export type FrontmatterScalar = string | number | boolean;
+export type FrontmatterMetadata = Record<string, string>;
+export type FrontmatterValue = FrontmatterScalar | FrontmatterMetadata;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -502,90 +522,217 @@ function isDangerousFrontmatterKey(rawKey: string): boolean {
   );
 }
 
-function parseScalar(value: string, key: string): string | number | boolean {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    throw new BundleValidationError(
-      `SKILL.md frontmatter field ${key} cannot be empty`,
-      "invalid_frontmatter",
-      "SKILL.md"
-    );
-  }
-  if (trimmed.startsWith("[") || trimmed.startsWith("{") || trimmed.startsWith("!")) {
-    throw new BundleValidationError(
-      `SKILL.md frontmatter field ${key} must be a scalar`,
-      "unsafe_frontmatter",
-      "SKILL.md"
-    );
-  }
-  if (trimmed.startsWith('"')) {
-    if (!trimmed.endsWith('"') || trimmed.length < 2) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} has an unterminated quote`,
-        "invalid_frontmatter",
-        "SKILL.md"
-      );
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} has an invalid quoted value`,
-        "invalid_frontmatter",
-        "SKILL.md"
-      );
-    }
-    if (typeof parsed !== "string") {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} has an invalid quoted value`,
-        "invalid_frontmatter",
-        "SKILL.md"
-      );
-    }
-    if (CONTROL_CHARACTER.test(parsed) || hasLoneSurrogate(parsed)) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} contains control characters`,
-        "unsafe_frontmatter",
-        "SKILL.md"
-      );
-    }
-    return parsed;
-  }
-  if (trimmed.startsWith("'")) {
-    if (!trimmed.endsWith("'") || trimmed.length < 2) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} has an unterminated quote`,
-        "invalid_frontmatter",
-        "SKILL.md"
-      );
-    }
-    const parsed = trimmed.slice(1, -1).replaceAll("''", "'");
-    if (CONTROL_CHARACTER.test(parsed) || hasLoneSurrogate(parsed)) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} contains control characters`,
-        "unsafe_frontmatter",
-        "SKILL.md"
-      );
-    }
-    return parsed;
-  }
-  if (trimmed === "true" || trimmed === "false") return trimmed === "true";
-  if (/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u.test(trimmed)) {
-    const number = Number(trimmed);
-    if (Number.isSafeInteger(number) || Number.isFinite(number)) return number;
-  }
-  if (CONTROL_CHARACTER.test(trimmed) || hasLoneSurrogate(trimmed)) {
-    throw new BundleValidationError(
-      `SKILL.md frontmatter field ${key} contains control characters`,
-      "unsafe_frontmatter",
-      "SKILL.md"
-    );
-  }
-  return trimmed;
+
+function frontmatterError(
+  message: string,
+  code: "invalid_frontmatter" | "unsafe_frontmatter" = "invalid_frontmatter"
+): never {
+  throw new BundleValidationError(message, code, "SKILL.md");
 }
 
-function parseFrontmatter(text: string): Record<string, string | number | boolean> {
+function assertFrontmatterText(
+  value: string,
+  key: string,
+  maxChars: number,
+  allowEmpty: boolean
+): void {
+  if (!allowEmpty && value.length === 0) {
+    frontmatterError(
+      "SKILL.md frontmatter field " + key + " cannot be empty",
+      "invalid_frontmatter"
+    );
+  }
+  if ([...value].length > maxChars) {
+    frontmatterError(
+      "SKILL.md frontmatter field " + key + " exceeds its size limit",
+      "invalid_frontmatter"
+    );
+  }
+  if (
+    FRONTMATTER_CONTROL_CHARACTER.test(value) ||
+    hasLoneSurrogate(value)
+  ) {
+    frontmatterError(
+      "SKILL.md frontmatter field " + key + " contains control characters",
+      "unsafe_frontmatter"
+    );
+  }
+}
+
+/**
+ * Walk the YAML representation without converting it to JavaScript. This
+ * keeps aliases, tags, and custom object construction out of the metadata
+ * boundary.
+ */
+function assertSafeYamlNode(node: unknown, depth: number): void {
+  if (isAlias(node)) {
+    frontmatterError(
+      "SKILL.md frontmatter aliases are not allowed",
+      "unsafe_frontmatter"
+    );
+  }
+  if (node === null || typeof node !== "object") {
+    frontmatterError("SKILL.md frontmatter contains an invalid YAML node");
+  }
+
+  const candidate = node as { anchor?: unknown; tag?: unknown };
+  if (candidate.anchor !== undefined || candidate.tag !== undefined) {
+    frontmatterError(
+      "SKILL.md frontmatter anchors and tags are not allowed",
+      "unsafe_frontmatter"
+    );
+  }
+
+  if (isScalar(node)) {
+    const value = node.value;
+    if (typeof value === "string") {
+      assertFrontmatterText(
+        value,
+        "scalar",
+        MAX_FRONTMATTER_VALUE_CHARS,
+        true
+      );
+      return;
+    }
+    if (typeof value === "boolean") return;
+    if (typeof value === "number" && Number.isFinite(value)) return;
+    frontmatterError(
+      "SKILL.md frontmatter scalar values must be strings, numbers, or booleans"
+    );
+  }
+
+  if (isSeq(node)) {
+    frontmatterError(
+      "SKILL.md frontmatter sequences are not allowed",
+      "unsafe_frontmatter"
+    );
+  }
+
+  if (isMap(node)) {
+    if (depth >= MAX_FRONTMATTER_DEPTH) {
+      frontmatterError(
+        "SKILL.md frontmatter nesting exceeds the allowed depth",
+        "unsafe_frontmatter"
+      );
+    }
+    for (const pair of node.items) {
+      assertSafeYamlNode(pair.key, depth + 1);
+      assertSafeYamlNode(pair.value, depth + 1);
+    }
+    return;
+  }
+
+  frontmatterError("SKILL.md frontmatter contains an unsupported YAML node");
+}
+
+function yamlMapKey(node: unknown, location: string): string {
+  if (!isScalar(node) || typeof node.value !== "string") {
+    frontmatterError(
+      "SKILL.md frontmatter " + location + " keys must be strings",
+      "invalid_frontmatter"
+    );
+  }
+  const key = node.value;
+  if (
+    key.length === 0 ||
+    key.length > 64 ||
+    !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(key) ||
+    FRONTMATTER_CONTROL_CHARACTER.test(key) ||
+    hasLoneSurrogate(key)
+  ) {
+    frontmatterError(
+      "SKILL.md frontmatter " + location + " contains an invalid field name",
+      "invalid_frontmatter"
+    );
+  }
+  return key;
+}
+
+function parseYamlScalar(
+  node: unknown,
+  key: string,
+  maxChars: number,
+  allowEmpty: boolean
+): FrontmatterScalar {
+  if (!isScalar(node)) {
+    frontmatterError(
+      "SKILL.md frontmatter field " + key + " must be a scalar",
+      "unsafe_frontmatter"
+    );
+  }
+  const value = node.value;
+  if (typeof value === "string") {
+    assertFrontmatterText(value, key, maxChars, allowEmpty);
+    return value;
+  }
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  frontmatterError(
+    "SKILL.md frontmatter field " +
+      key +
+      " must be a string, number, or boolean"
+  );
+}
+
+function parseMetadataMap(node: unknown): FrontmatterMetadata {
+  if (!isMap(node)) {
+    frontmatterError(
+      "SKILL.md frontmatter metadata must be a map of strings",
+      "unsafe_frontmatter"
+    );
+  }
+  if (node.items.length > MAX_METADATA_FIELDS) {
+    frontmatterError(
+      "SKILL.md frontmatter metadata exceeds the " +
+        MAX_METADATA_FIELDS +
+        "-field limit",
+      "invalid_frontmatter"
+    );
+  }
+
+  const metadata: FrontmatterMetadata = Object.create(null) as FrontmatterMetadata;
+  const seen = new Set<string>();
+  for (const pair of node.items) {
+    const key = yamlMapKey(pair.key, "metadata");
+    const normalizedKey = frontmatterKey(key).replaceAll(/[-_]/gu, "");
+    if (isDangerousFrontmatterKey(key)) {
+      frontmatterError(
+        "SKILL.md frontmatter metadata field " +
+          key +
+          " is not allowed to enable plugins or execution",
+        "unsafe_frontmatter"
+      );
+    }
+    if (
+      seen.has(normalizedKey) ||
+      key === "__proto__" ||
+      key === "constructor"
+    ) {
+      frontmatterError(
+        "SKILL.md frontmatter metadata contains a duplicate or reserved field " +
+          key,
+        "invalid_frontmatter"
+      );
+    }
+    seen.add(normalizedKey);
+    const value = parseYamlScalar(
+      pair.value,
+      "metadata." + key,
+      MAX_METADATA_VALUE_CHARS,
+      true
+    );
+    if (typeof value !== "string") {
+      frontmatterError(
+        "SKILL.md frontmatter metadata field " + key + " must be a string",
+        "invalid_frontmatter"
+      );
+    }
+    metadata[key] = value;
+  }
+  return metadata;
+}
+
+function parseFrontmatter(text: string): Record<string, FrontmatterValue> {
   const lines = text.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
   if (lines[0] !== "---") {
     throw new BundleValidationError(
@@ -602,44 +749,108 @@ function parseFrontmatter(text: string): Record<string, string | number | boolea
       "SKILL.md"
     );
   }
+  if (end + 1 > MAX_FRONTMATTER_LINES) {
+    frontmatterError(
+      "SKILL.md frontmatter exceeds the " +
+        MAX_FRONTMATTER_LINES +
+        "-line limit",
+      "invalid_frontmatter"
+    );
+  }
+  const frontmatterBytes = textEncoder.encode(
+    lines.slice(0, end + 1).join("\n")
+  ).byteLength;
+  if (frontmatterBytes > MAX_FRONTMATTER_BYTES) {
+    frontmatterError(
+      "SKILL.md frontmatter exceeds the " +
+        MAX_FRONTMATTER_BYTES +
+        "-byte limit",
+      "invalid_frontmatter"
+    );
+  }
 
-  const result: Record<string, string | number | boolean> = {};
+  const source = lines.slice(1, end).join("\n");
+  let document: ReturnType<typeof parseDocument>;
+  try {
+    document = parseDocument(source, {
+      customTags: [],
+      merge: false,
+      prettyErrors: false,
+      resolveKnownTags: false,
+      schema: "core",
+      strict: true,
+      stringKeys: true,
+      uniqueKeys: true,
+      version: "1.2",
+    });
+  } catch {
+    frontmatterError("SKILL.md frontmatter is not valid YAML");
+  }
+  const directives = document.directives;
+  if (
+    !directives ||
+    document.errors.length > 0 ||
+    document.warnings.length > 0 ||
+    directives.docStart !== null ||
+    directives.docEnd ||
+    directives.yaml.explicit ||
+    Object.keys(directives.tags).some((tag) => tag !== "!!")
+  ) {
+    frontmatterError("SKILL.md frontmatter is not valid safe YAML");
+  }
+  if (!isMap(document.contents)) {
+    frontmatterError(
+      "SKILL.md frontmatter must be a mapping",
+      "invalid_frontmatter"
+    );
+  }
+  if (document.contents.items.length > MAX_FRONTMATTER_FIELDS) {
+    frontmatterError(
+      "SKILL.md frontmatter exceeds the " +
+        MAX_FRONTMATTER_FIELDS +
+        "-field limit",
+      "invalid_frontmatter"
+    );
+  }
+
+  assertSafeYamlNode(document.contents, 0);
+  const result: Record<string, FrontmatterValue> = Object.create(null) as Record<
+    string,
+    FrontmatterValue
+  >;
   const seen = new Set<string>();
-  for (const [lineIndex, line] of lines.slice(1, end).entries()) {
-    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
-    if (/^[ \t]/u.test(line)) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter cannot contain indented or nested data (line ${lineIndex + 2})`,
-        "unsafe_frontmatter",
-        "SKILL.md"
-      );
-    }
-    const match = /^(?<key>[A-Za-z][A-Za-z0-9_-]{0,63}):[ \t]*(?<value>.*)$/u.exec(line);
-    if (!match?.groups) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter has an invalid field (line ${lineIndex + 2})`,
-        "invalid_frontmatter",
-        "SKILL.md"
-      );
-    }
-    const key = match.groups.key;
+  for (const pair of document.contents.items) {
+    const key = yamlMapKey(pair.key, "frontmatter");
     const normalizedKey = frontmatterKey(key).replaceAll(/[-_]/gu, "");
     if (isDangerousFrontmatterKey(key)) {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter field ${key} is not allowed to enable plugins or execution`,
-        "unsafe_frontmatter",
-        "SKILL.md"
+      frontmatterError(
+        "SKILL.md frontmatter field " +
+          key +
+          " is not allowed to enable plugins or execution",
+        "unsafe_frontmatter"
       );
     }
-    if (seen.has(normalizedKey) || key === "__proto__" || key === "constructor") {
-      throw new BundleValidationError(
-        `SKILL.md frontmatter contains a duplicate or reserved field ${key}`,
-        "invalid_frontmatter",
-        "SKILL.md"
+    if (
+      seen.has(normalizedKey) ||
+      key === "__proto__" ||
+      key === "constructor"
+    ) {
+      frontmatterError(
+        "SKILL.md frontmatter contains a duplicate or reserved field " + key,
+        "invalid_frontmatter"
       );
     }
     seen.add(normalizedKey);
-    result[key] = parseScalar(match.groups.value, key);
+    if (frontmatterKey(key) === "metadata") {
+      result[key] = parseMetadataMap(pair.value);
+    } else {
+      result[key] = parseYamlScalar(
+        pair.value,
+        key,
+        MAX_FRONTMATTER_VALUE_CHARS,
+        false
+      );
+    }
   }
   return result;
 }

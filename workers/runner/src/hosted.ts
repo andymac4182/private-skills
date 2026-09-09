@@ -5,6 +5,7 @@ import {
   validateSandboxImageMap,
 } from '../../../packages/scanners/src/index.js';
 import type { CommandExecutor, ScannerAdapter } from '../../../packages/scanners/src/index.js';
+import { createSandboxProviderLoader } from '../../../packages/sandbox-provider/src/index.js';
 import type { WorkerAcquisitionOptions } from './acquisition.js';
 import {
   WorkerRunner,
@@ -22,7 +23,9 @@ import {
  * Required environment names when using createHostedWorkerHandlerFromEnv:
  * PSKILLS_API_URL, PSKILLS_WORKER_TOKEN, CRON_SECRET, and any configured
  * scanner image references in PSKILLS_IMAGE_CISCO, PSKILLS_IMAGE_NVIDIA, and
- * PSKILLS_IMAGE_SKILLSGUARD. Image values must be immutable @sha256 refs, or
+ * PSKILLS_IMAGE_SKILLSGUARD. PSKILLS_SANDBOX_DRIVER defaults to computesdk;
+ * set it to native only for an explicit regression fallback. The provider
+ * defaults to Vercel and is selected with PSKILLS_SANDBOX_PROVIDER. Image values must be immutable @sha256 refs, or
  * trusted source-built snapshot refs of the form
  * snapshot:<id>|revision:<source-revision>|source:sha256:<artifact-digest>.
  */
@@ -31,6 +34,10 @@ export interface HostedWorkerOptions {
   workerToken: string;
   cronSecret: string;
   scannerImages: SandboxImageMap;
+  /** ComputeSDK is the production driver; native is an explicit regression fallback. */
+  sandboxDriver?: HostedSandboxDriver;
+  /** Provider selected by PSKILLS_SANDBOX_PROVIDER; currently Vercel is supported. */
+  sandboxProvider?: string;
   executor?: CommandExecutor;
   sandbox?: SandboxExecutorOptions;
   fetch?: typeof fetch;
@@ -43,6 +50,8 @@ export interface HostedWorkerOptions {
   /** Allows route tests or deployment wrappers to decorate WorkerRunner. */
   createRunner?: (options: WorkerRunnerOptions) => WorkerRunner;
 }
+
+export type HostedSandboxDriver = 'computesdk' | 'native';
 
 export interface HostedWorkerResponse {
   ok: boolean;
@@ -62,8 +71,9 @@ export interface HostedWorkerResponse {
  */
 export function createHostedWorkerHandler(options: HostedWorkerOptions): (request: Request) => Promise<Response> {
   validateHostedOptions(options);
+  validateSandboxDriverOptions(options);
   const scannerImages = validateSandboxImageMap(options.scannerImages, options.sandbox?.trustedSnapshots);
-  const executor = options.executor ?? new SandboxExecutor(options.sandbox);
+  const executor = options.executor ?? new SandboxExecutor(sandboxExecutorOptions(options));
 
   return async (request: Request): Promise<Response> => {
     if (request.method.toUpperCase() !== 'GET') {
@@ -116,6 +126,8 @@ export function hostedWorkerOptionsFromEnv(
     workerToken: requiredEnv(env, 'PSKILLS_WORKER_TOKEN'),
     cronSecret: requiredEnv(env, 'CRON_SECRET'),
     scannerImages: { ...baseImages, ...(overrides.scannerImages ?? {}) },
+    sandboxDriver: resolveSandboxDriver(overrides.sandboxDriver ?? env.PSKILLS_SANDBOX_DRIVER),
+    sandboxProvider: overrides.sandboxProvider ?? env.PSKILLS_SANDBOX_PROVIDER ?? 'vercel',
   };
 }
 
@@ -136,6 +148,32 @@ function validateHostedOptions(options: HostedWorkerOptions): void {
   if (!options.cronSecret || options.cronSecret.length < 16 || options.cronSecret.length > 4096 || /[\u0000\r\n]/.test(options.cronSecret)) {
     throw new Error('CRON_SECRET must be 16-4096 characters without control characters');
   }
+}
+
+function sandboxExecutorOptions(options: HostedWorkerOptions): SandboxExecutorOptions | undefined {
+  const sandbox = options.sandbox;
+  const { driver, provider } = validateSandboxDriverOptions(options);
+  if (sandbox?.sdk || sandbox?.loadSdk || driver === 'native') return sandbox;
+  if (driver !== 'computesdk') return sandbox;
+  return {
+    ...sandbox,
+    loadSdk: createSandboxProviderLoader({ provider }),
+  };
+}
+
+function validateSandboxDriverOptions(options: HostedWorkerOptions): { driver: HostedSandboxDriver; provider: string } {
+  const driver = resolveSandboxDriver(options.sandboxDriver);
+  const provider = options.sandboxProvider ?? 'vercel';
+  if (driver === 'computesdk' && provider !== 'vercel') {
+    throw new Error(`Unsupported PSKILLS_SANDBOX_PROVIDER: ${provider}`);
+  }
+  return { driver, provider };
+}
+
+function resolveSandboxDriver(value: string | undefined): HostedSandboxDriver {
+  const driver = value ?? 'computesdk';
+  if (driver === 'computesdk' || driver === 'native') return driver;
+  throw new Error(`PSKILLS_SANDBOX_DRIVER must be computesdk or native; found ${driver}`);
 }
 
 function isHttpOrigin(value: string): boolean {

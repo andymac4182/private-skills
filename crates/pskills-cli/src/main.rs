@@ -70,6 +70,11 @@ enum Command {
     Search {
         query: String,
     },
+    /// Discover registry-approved entries from the directory index.
+    Directory {
+        #[command(subcommand)]
+        command: DirectoryCommand,
+    },
     Show {
         reference: String,
     },
@@ -156,6 +161,62 @@ enum PackCommand {
     Remove { reference: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum DirectoryCommand {
+    /// List one bounded leaderboard page.
+    List(DirectoryListArgs),
+    /// Search the registry's directory index.
+    Search(DirectorySearchArgs),
+    /// Show bounded metadata for one directory identifier.
+    Show { id: String },
+    /// Show the registry's first-party directory grouping.
+    Official,
+    /// Show external audit evidence for one directory identifier.
+    Audits { id: String },
+    /// Request a registry-managed import for one directory identifier.
+    Import(DirectoryImportArgs),
+}
+
+#[derive(Debug, Args)]
+struct DirectoryListArgs {
+    /// Directory leaderboard view.
+    #[arg(long, default_value = "all-time")]
+    view: String,
+    /// Zero-indexed page number.
+    #[arg(long, default_value_t = 0)]
+    page: u32,
+    /// Number of records to request, bounded to 1..500.
+    #[arg(long = "per-page", default_value_t = 100)]
+    per_page: u32,
+}
+
+#[derive(Debug, Args)]
+struct DirectorySearchArgs {
+    /// At least two non-whitespace characters.
+    query: String,
+    /// Optional GitHub owner filter.
+    #[arg(long)]
+    owner: Option<String>,
+    /// Number of records to request, bounded to 1..200.
+    #[arg(long, default_value_t = 50)]
+    limit: u32,
+}
+
+#[derive(Debug, Args)]
+struct DirectoryImportArgs {
+    /// Directory identifier returned by the registry directory endpoints.
+    id: String,
+    /// Private skill name to use for the imported entry.
+    #[arg(long)]
+    name: String,
+    /// Exact SemVer for the private skill.
+    #[arg(long)]
+    version: String,
+    /// Optional registry-configured upstream identifier.
+    #[arg(long = "upstream-id")]
+    upstream_id: Option<String>,
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("{0}")]
@@ -218,6 +279,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
             &cli.command,
             Command::Publish(_)
                 | Command::Proxy(_)
+                | Command::Directory {
+                    command: DirectoryCommand::Import(_),
+                }
                 | Command::Pack {
                     command: PackCommand::Publish { .. }
                 }
@@ -246,6 +310,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Logout => logout(&context),
         Command::Whoami => whoami(&context),
         Command::Search { query } => search(&context, &query),
+        Command::Directory { command } => directory(&context, command),
         Command::Show { reference } => show(&context, &reference),
         Command::Versions { reference } => versions(&context, &reference),
         Command::Publish(args) => publish(&context, &args),
@@ -334,6 +399,140 @@ fn search(context: &Context, query: &str) -> Result<(), CliError> {
         serde_json::to_value(client.search(query)?)
             .map_err(|e| CliError::Message(e.to_string()))?,
     )
+}
+
+fn directory(context: &Context, command: DirectoryCommand) -> Result<(), CliError> {
+    match command {
+        DirectoryCommand::List(args) => {
+            let view = directory_view(&args.view)?;
+            if args.per_page == 0 || args.per_page > 500 {
+                return Err(CliError::Message(
+                    "directory --per-page must be between 1 and 500".into(),
+                ));
+            }
+            emit(
+                context.json,
+                client(context)?.directory_list(view, args.page, args.per_page)?,
+            )
+        }
+        DirectoryCommand::Search(args) => {
+            let query = directory_query(&args.query)?;
+            if args.limit == 0 || args.limit > 200 {
+                return Err(CliError::Message(
+                    "directory search --limit must be between 1 and 200".into(),
+                ));
+            }
+            let owner = args.owner.as_deref().map(directory_owner).transpose()?;
+            emit(
+                context.json,
+                client(context)?.directory_search(&query, owner.as_deref(), args.limit)?,
+            )
+        }
+        DirectoryCommand::Show { id } => emit(
+            context.json,
+            client(context)?.directory_detail(directory_identifier(&id)?)?,
+        ),
+        DirectoryCommand::Official => emit(context.json, client(context)?.directory_official()?),
+        DirectoryCommand::Audits { id } => emit(
+            context.json,
+            client(context)?.directory_audits(directory_identifier(&id)?)?,
+        ),
+        DirectoryCommand::Import(args) => directory_import(context, &args),
+    }
+}
+
+fn directory_import(context: &Context, args: &DirectoryImportArgs) -> Result<(), CliError> {
+    let id = directory_identifier(&args.id)?.to_string();
+    let (name, embedded_version) = split_reference(&args.name)?;
+    if embedded_version.is_some() {
+        return Err(CliError::Message(
+            "directory import --name must not include a version; use --version".into(),
+        ));
+    }
+    semver::Version::parse(&args.version)
+        .map_err(|_| CliError::Message(format!("invalid SemVer `{}`", args.version)))?;
+    let request = DirectoryImportRequest {
+        id,
+        name,
+        version: args.version.clone(),
+        upstream_id: args
+            .upstream_id
+            .as_deref()
+            .map(directory_identifier)
+            .transpose()?
+            .map(str::to_string),
+    };
+    if context.dry_run {
+        return emit(
+            context.json,
+            json!({
+                "dryRun": true,
+                "endpoint": "/v1/directory/import",
+                "request": serde_json::to_value(&request)
+                    .map_err(|error| CliError::Message(error.to_string()))?,
+            }),
+        );
+    }
+    // The registry owns import approval and any asynchronous operation.  The
+    // directory command reports that response; installation remains the
+    // existing explicit install/proxy flow after an approved resolution.
+    emit(context.json, client(context)?.directory_import(&request)?)
+}
+
+fn directory_view(value: &str) -> Result<&str, CliError> {
+    match value.trim() {
+        "all-time" => Ok("all-time"),
+        "trending" => Ok("trending"),
+        "hot" => Ok("hot"),
+        other => Err(CliError::Message(format!(
+            "invalid directory view `{other}`; expected all-time, trending, or hot"
+        ))),
+    }
+}
+
+fn directory_query(value: &str) -> Result<String, CliError> {
+    let value = value.trim();
+    if value.chars().count() < 2 {
+        return Err(CliError::Message(
+            "directory search query must contain at least two characters".into(),
+        ));
+    }
+    if value.len() > 16 * 1024 {
+        return Err(CliError::Message(
+            "directory search query is too large".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn directory_owner(value: &str) -> Result<String, CliError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CliError::Message(
+            "directory search --owner must not be empty".into(),
+        ));
+    }
+    if value.len() > 512 {
+        return Err(CliError::Message(
+            "directory search --owner is too large".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn directory_identifier(value: &str) -> Result<&str, CliError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CliError::Message(
+            "directory identifier must not be empty".into(),
+        ));
+    }
+    if value.len() > 2 * 1024 || value.chars().any(char::is_control) {
+        return Err(CliError::Message(
+            "directory identifier is invalid or too large".into(),
+        ));
+    }
+    Ok(value)
 }
 
 fn show(context: &Context, reference: &str) -> Result<(), CliError> {
@@ -1545,5 +1744,45 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn directory_subcommands_parse_with_global_json_and_import_options() {
+        let cli = Cli::try_parse_from([
+            "pskills",
+            "--json",
+            "directory",
+            "import",
+            "vercel-labs/skills/find-skills",
+            "--name",
+            "@team/find-skills",
+            "--version",
+            "1.0.0",
+            "--upstream-id",
+            "skills-sh",
+        ])
+        .expect("directory import arguments");
+        assert!(cli.json);
+        match cli.command {
+            Command::Directory {
+                command: DirectoryCommand::Import(args),
+            } => {
+                assert_eq!(args.id, "vercel-labs/skills/find-skills");
+                assert_eq!(args.name, "@team/find-skills");
+                assert_eq!(args.version, "1.0.0");
+                assert_eq!(args.upstream_id.as_deref(), Some("skills-sh"));
+            }
+            _ => panic!("expected directory import"),
+        }
+    }
+
+    #[test]
+    fn directory_input_validation_matches_directory_limits() {
+        assert_eq!(directory_view("hot").expect("hot view"), "hot");
+        assert!(directory_view("recent").is_err());
+        assert_eq!(directory_query("  ab  ").expect("query"), "ab");
+        assert!(directory_query("a").is_err());
+        assert!(directory_owner("   ").is_err());
+        assert!(directory_identifier(" \n ").is_err());
     }
 }

@@ -9,7 +9,7 @@ The baseline is implemented as of 9 September 2026. Native Windows, macOS, and L
 | Area | Current status | Boundary |
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
-| Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | The API does not fetch upstreams or execute uploaded content in the request process |
+| Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | Directory lookups are bounded; workers acquire and scan release artifacts, and uploaded content is never executed |
 | Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | OIDC, device flow, and interactive browser identity providers are not part of this baseline |
 | Artifacts | Implemented bounded canonical `pskills-bundle-v1` JSON, digest checks, private sealed-object storage, and transfer grants | Bundle content is data; the registry never runs skill scripts or install hooks |
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
@@ -19,17 +19,24 @@ The baseline is implemented as of 9 September 2026. Native Windows, macOS, and L
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
+| skills.sh directory | Catalog, search, Official, Topics, external Audits, pack preview, and governed individual imports | Server-side authentication is opt-in; live catalog acceptance for v0.3.0 is pending |
+| Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The separate Eve reviewer is currently deployed at
-[`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app):
-its public `/eve/v1/health` probe returned `200`, and an unauthenticated
-session request returned `401`. Its authored schedule is `0 22 * * *` UTC.
-This is reviewer evidence only. The main registry project is provisioned as
-`private-skills-theta.vercel.app` but has not been claimed as deployed or
-authenticated; its database terms/user setup remains an external deployment
-prerequisite.
+The v0.2.0 registry is deployed at
+[`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
+with Neon PostgreSQL/pgvector, private Blob storage, and required SkillsGuard
+scanning. Authenticated production publishing, search, CLI pack installation,
+analytics, and Eve review were verified. The separate reviewer runs at
+[`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
+with a registered daily `0 22 * * *` UTC schedule. Git-triggered deployment
+verification remains pending. See [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md).
+
+The v0.3.0 checkout adds the external directory and ComputeSDK integration.
+See [`docs/skills-sh.md`](docs/skills-sh.md) and
+[`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
+compatibility, and the distinction between implementation and live verification.
 
 ## Quickstart
 
@@ -72,6 +79,7 @@ The web surface calls the same-origin API and exposes the implemented registry a
 - catalog, skill detail, scan reports, publish, rescan, and revoke under `/v1/skills`, `/v1/scans`, and `/v1/publish`;
 - operations under `/v1/operations`;
 - exact-member packs under `/v1/packs`;
+- external catalog browsing, official collections, audits, individual imports, and unlisted pack preview under `/v1/directory`;
 - scanner policy under `/v1/policy`;
 - approved upstream mappings and queued imports under `/v1/upstreams` and `/v1/imports`;
 - audit records under `/v1/audit`;
@@ -136,7 +144,8 @@ The request handler owns authorization, resolution, policy state, and audit reco
 - [`docs/semantic-search.md`](docs/semantic-search.md) documents the authorization-aware index and PostgreSQL/state adapter boundary.
 - [`docs/eve-reviewer.md`](docs/eve-reviewer.md) documents the separate Eve app, fixed tools, schedule, and human-only decision boundary.
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
-- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the current v0.2.0 release checkpoint and pending production gates.
+- [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the deployed v0.2.0 release evidence.
+- [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md) records the directory and sandbox implementation checkpoint and remaining acceptance gates.
 - [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
 - [`docs/completion-criteria.md`](docs/completion-criteria.md) turns the roadmap into measurable, non-blocking future milestones.
 - [`docs/architecture.md`](docs/architecture.md) is the original architecture and portability design intent. Its planning language remains useful context; this README and the implementation status document describe what exists in the repository now.
