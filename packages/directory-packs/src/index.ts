@@ -1,9 +1,10 @@
 /**
  * The discovery schema used by the official skills CLI for a well-known
  * skills host.  A skills.sh pack is a scoped well-known host at
- * `https://skills.sh/p/<pack-id>`; it is not an /api/v1 catalog resource.
+ * `https://skills.sh/p/<pack-id>` (canonicalized to the www host); it is not
+ * an /api/v1 catalog resource.
  */
-export const SKILLS_SH_PACK_ORIGIN = 'https://skills.sh' as const;
+export const SKILLS_SH_PACK_ORIGIN = 'https://www.skills.sh' as const;
 export const SKILLS_DISCOVERY_SCHEMA_V2 =
   'https://schemas.agentskills.io/discovery/0.2.0/schema.json' as const;
 
@@ -519,8 +520,8 @@ function normalizePackUrl(input: string | URL): URL {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
     throw new SkillsPackError('invalid_input', 'Pack URL must be an HTTPS URL without credentials');
   }
-  const host = parsed.hostname.toLowerCase().replace(/^www\./u, '');
-  if (host !== 'skills.sh' || parsed.port) {
+  const host = parsed.hostname.toLowerCase();
+  if ((host !== 'skills.sh' && host !== 'www.skills.sh') || parsed.port) {
     throw new SkillsPackError('invalid_input', 'Pack URL must use the skills.sh origin');
   }
   if (parsed.search || parsed.hash) {
