@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "registries": {
+    "company": {
+      "url": "https://skills.example.com",
+      "organization": "example-team"
+    }
+  },
+  "namespaces": {
+    "@team": "company",
+    "@vendor": "company"
+  },
+  "scope": "project",
+  "agents": ["codex"],
+  "skills": [{ "ref": "@team/review", "version": "^1.2.0" }],
+  "packs": [{ "ref": "@team/web", "version": "1.0.0" }]
+}

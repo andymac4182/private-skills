@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "pack",
+  "name": "@team/web",
+  "version": "1.0.0",
+  "description": "Private team practices and approved upstream accessibility guidance",
+  "skills": [
+    { "ref": "@team/review", "version": "^1.2.0" },
+    { "ref": "@vendor/accessibility", "version": "2.0.1" }
+  ]
+}

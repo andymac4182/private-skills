@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "policyRevision": "example-policy-1",
+  "baselineValidation": "required",
+  "requiredScannerFailure": "block",
+  "evidenceMaxAgeSeconds": 604800,
+  "scanners": {
+    "cisco-skill-scanner": {
+      "mode": "required",
+      "profile": "local-static-and-behavioral",
+      "blockSeverities": ["high", "critical"],
+      "timeoutSeconds": 600,
+      "network": "deny",
+      "llmEnabled": false,
+      "cloudEnabled": false
+    },
+    "nvidia-skillspector": {
+      "mode": "advisory",
+      "profile": "static",
+      "blockSeverities": ["high", "critical"],
+      "timeoutSeconds": 600,
+      "network": "deny",
+      "llmEnabled": false,
+      "osvMetadataEgressEnabled": false,
+      "acceptedRequiredCoverageLimitations": []
+    },
+    "skillsguard": {
+      "mode": "advisory",
+      "profile": "local-rules",
+      "blockSeverities": ["high", "critical"],
+      "timeoutSeconds": 120,
+      "network": "deny",
+      "artifactConfigurationAllowed": false
+    }
+  },
+  "hooks": [
+    { "event": "ingest.validate", "adapter": "builtin-license-policy", "mode": "required" },
+    { "event": "artifact.quarantined", "adapter": "admin-webhook", "mode": "disabled" }
+  ]
+}

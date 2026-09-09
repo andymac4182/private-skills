@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Private Skills normalized scan evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "organizationId", "jobId", "invocationId", "artifactDigest", "policyRevision", "adapter", "status", "durationMs", "coverage", "findings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "organizationId": { "$ref": "#/$defs/id" },
+    "jobId": { "$ref": "#/$defs/id" },
+    "invocationId": { "$ref": "#/$defs/id" },
+    "artifactDigest": { "$ref": "#/$defs/digest" },
+    "policyRevision": { "$ref": "#/$defs/id" },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "engineVersion", "rulesRevision", "configurationHash"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/id" },
+        "engineVersion": { "$ref": "#/$defs/id" },
+        "rulesRevision": { "$ref": "#/$defs/id" },
+        "configurationHash": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "status": { "enum": ["completed", "degraded", "error", "timeout", "unsupported"] },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "error": { "type": "string", "maxLength": 2048 },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesEnumerated", "filesAnalyzed", "filesSkipped", "filesUnsupported", "limitations", "externalDestinations"],
+      "properties": {
+        "filesEnumerated": { "$ref": "#/$defs/count" },
+        "filesAnalyzed": { "$ref": "#/$defs/count" },
+        "filesSkipped": { "$ref": "#/$defs/count" },
+        "filesUnsupported": { "$ref": "#/$defs/count" },
+        "limitations": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "externalDestinations": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100,
+          "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "fingerprint", "severity", "category", "message"],
+        "properties": {
+          "ruleId": { "$ref": "#/$defs/id" },
+          "fingerprint": { "$ref": "#/$defs/digest" },
+          "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+          "category": { "$ref": "#/$defs/id" },
+          "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "file": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "line": { "type": "integer", "minimum": 1 },
+          "redactedEvidence": { "type": "string", "maxLength": 2048 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "count": { "type": "integer", "minimum": 0 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "lockVersion": 1,
+  "registries": {
+    "company": { "url": "https://skills.example.com", "organization": "example-team" }
+  },
+  "targets": [{ "agent": "codex", "adapterVersion": "1", "scope": "project" }],
+  "packs": [
+    {
+      "registry": "company",
+      "ref": "@team/web",
+      "version": "1.0.0",
+      "manifestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "members": ["company:@team/review@1.2.3", "company:@vendor/accessibility@2.0.1"]
+    }
+  ],
+  "skills": [
+    {
+      "key": "company:@team/review@1.2.3",
+      "registry": "company",
+      "ref": "@team/review",
+      "version": "1.2.3",
+      "skillName": "review",
+      "artifactDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "treeDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "owners": ["direct:@team/review", "pack:company:@team/web@1.0.0"],
+      "provenance": { "kind": "native" }
+    },
+    {
+      "key": "company:@vendor/accessibility@2.0.1",
+      "registry": "company",
+      "ref": "@vendor/accessibility",
+      "version": "2.0.1",
+      "skillName": "accessibility",
+      "artifactDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "treeDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "owners": ["pack:company:@team/web@1.0.0"],
+      "provenance": {
+        "kind": "github",
+        "upstreamId": "approved-github-source",
+        "repository": "example-vendor/example-skills",
+        "subdirectory": "skills/accessibility",
+        "commit": "1111111111111111111111111111111111111111"
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "organizationId": "example-team",
+  "jobId": "example-job-1",
+  "invocationId": "example-invocation-1",
+  "artifactDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "policyRevision": "example-policy-1",
+  "adapter": {
+    "id": "cisco-skill-scanner",
+    "version": "example-adapter-revision",
+    "engineVersion": "example-tested-engine-revision",
+    "rulesRevision": "example-tested-rules-revision",
+    "configurationHash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "status": "completed",
+  "durationMs": 1250,
+  "coverage": {
+    "filesEnumerated": 3,
+    "filesAnalyzed": 3,
+    "filesSkipped": 0,
+    "filesUnsupported": 0,
+    "limitations": [],
+    "externalDestinations": []
+  },
+  "findings": [
+    {
+      "ruleId": "EXAMPLE-ONLY-001",
+      "fingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "severity": "medium",
+      "category": "dependency-fetch",
+      "message": "Illustrative finding: a runtime dependency is outside the bundled artifact.",
+      "file": "SKILL.md",
+      "line": 12
+    }
+  ]
+}
