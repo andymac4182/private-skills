@@ -355,7 +355,11 @@ function pathSegments(pathname: string): string[] {
 }
 
 function safeIdentityParts(value: string): string[] {
-  const parts = value.split('/');
+  // The live topic markup presents repository owners with visual spacing
+  // around the slash (for example, `owner / repo`) while hrefs keep the
+  // canonical path. Normalize only that presentation whitespace; all path
+  // segments still need to match the href exactly below.
+  const parts = value.split('/').map((part) => part.trim());
   if (parts.length === 0 || parts.some((part) => part.length === 0 || part === '.' || part === '..' || /[\u0000-\u001f\u007f%\\]/u.test(part))) {
     throw new SkillsTopicParseError('skills.identity');
   }

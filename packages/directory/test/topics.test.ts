@@ -131,6 +131,25 @@ describe('skills.sh topic metadata parser', () => {
     });
   });
 
+  it('normalizes presentation spacing around the source slash', () => {
+    const html = topicHtml({
+      slug: 'react',
+      title: 'React skills',
+      description: 'Description',
+      capability: 'Capability',
+      skillName: 'skill',
+      skillSource: 'vercel-labs/agent-skills',
+      skillSlug: 'skill',
+      skillDescription: 'Description',
+      agents: 'Compatible agents',
+      relatedSlug: 'nextjs',
+      relatedName: 'Next.js',
+    }).replace('<p>vercel-labs/agent-skills</p>', '<p>vercel-labs / agent-skills</p>');
+
+    const topic = parseSkillsTopicPage(html, { slug: 'react', sourceUrl: 'https://www.skills.sh/topic/react' });
+    expect(topic.skills[0]).toMatchObject({ source: 'vercel-labs/agent-skills', slug: 'skill' });
+  });
+
   it('rejects changed page structure instead of inventing topic membership', () => {
     expect(() => parseSkillsTopicPage('<main><header><h1>Marketing skills</h1><p>Description</p></header></main>', {
       slug: 'marketing',
