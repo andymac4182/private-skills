@@ -48,9 +48,16 @@ implemented and its mandatory-fence relaxation remains separately
 approval-pending.
 
 The separate Eve route and registered `0 22 * * *` UTC schedule (22:00 UTC,
-subject to the hosting execution window) were verified earlier. A last observed
-22:02 check was not a confirmed calendar invocation, so scheduled review
-execution is not counted as completed evidence here.
+subject to the hosting execution window) now have a sanitized production
+[cron evidence record](../work/reviewer-cron-completion-evidence.json) for
+deployment `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e`. The cron path was observed at
+2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary
+`workflowEntry` and `turnWorkflow` runs completed, while
+`sessionTimeoutWorkflow` was cancelled. Creation followed the observation by
+2.067 seconds and completion by 14.353 seconds. This supports scheduled
+execution within the deployment, but no explicit opaque scheduler/session
+correlation was retained, and no proposal/prompt/report/event payload was
+retained; it is not evidence of a new reviewer proposal.
 
 No P1, P2, or P3 criterion below is a prerequisite for G0.
 

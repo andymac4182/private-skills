@@ -161,10 +161,32 @@ verified below; current browser proof is still pending.
   Vercel output verification resolves all four sandbox SDKs from an isolated
   directory and validates 29 relocated output links. Hosted backup restoration
   remains unverified and is excluded from this checkpoint.
+- **Local portability runtime evidence (sanitized):** A compiled Nitro
+  `node-server` run (Node 24.20.0, Nitro 3.0.260903-beta) passed the smoke
+  protocol with File state and the real Files SDK filesystem adapter: health and
+  authentication, publish (202), worker claim/complete, CAS, resolve,
+  authorization, digest-checked transfer, and a successful revoke followed by
+  denied transfer (409). A local
+  Wrangler `workerd` run (Wrangler 4.130.0) passed the edge smoke through an
+  authenticated loopback gateway backed by memory state and the Files SDK:
+  health/identity/capabilities/resolve (200), authorization (201), grant and
+  transfer (200), including a 243-byte digest-checked transfer. Both runs used
+  the explicit disposable development policy `allowUnscanned=true` with all
+  scanners `disabled`; no scanner verdict or synthetic scan success is claimed.
+  Docker runtime is unverified because Docker daemon access was unavailable and
+  no container or infrastructure was started. The reviewed sanitized record is
+  [`runtime-portability-evidence.json`](../work/runtime-portability-evidence.json).
 - The Eve route and registered `0 22 * * *` UTC schedule (22:00 UTC, subject to
-  the hosting execution window) were verified earlier. A last observed 22:02
-  check was not a confirmed calendar invocation; this record therefore does not
-  claim a completed scheduled review run.
+  the hosting execution window) have a sanitized [production cron evidence
+  record](../work/reviewer-cron-completion-evidence.json) for deployment
+  `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e`. The cron path was observed at
+  2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary `workflowEntry` and
+  `turnWorkflow` runs completed, while `sessionTimeoutWorkflow` was cancelled.
+  Creation followed the observation by 2.067 seconds and completion by 14.353
+  seconds. This supports scheduled execution within the deployment, but no
+  explicit opaque scheduler/session correlation was retained, and no
+  proposal/prompt/report/event payload was retained; it is not evidence of a
+  new reviewer proposal.
 
 ## Remaining acceptance gates
 
