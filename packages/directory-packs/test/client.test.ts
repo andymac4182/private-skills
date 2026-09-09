@@ -60,10 +60,10 @@ describe('SkillsPackClient', () => {
     const [candidate] = await client.fetchMembers(manifest, ['safe-skill']);
 
     expect(manifest.schema).toBe('0.2.0');
-    expect(manifest.packUrl).toBe('https://skills.sh/p/demo');
+    expect(manifest.packUrl).toBe('https://www.skills.sh/p/demo');
     expect(candidate?.source.kind).toBe('skill-md');
     expect(candidate && 'bytes' in candidate.source && candidate.source.bytes).toEqual(skillBytes);
-    expect(calls[0]?.url).toBe('https://skills.sh/p/demo/.well-known/agent-skills/index.json');
+    expect(calls[0]?.url).toBe('https://www.skills.sh/p/demo/.well-known/agent-skills/index.json');
     expect(calls[1]?.init?.redirect).toBe('manual');
     expect((calls[1]?.init?.headers as Record<string, string>).authorization).toBeUndefined();
   });
@@ -92,8 +92,8 @@ describe('SkillsPackClient', () => {
       'SKILL.md',
       'docs/readme.txt',
     ]);
-    expect(calls).not.toContain('https://skills.sh/.well-known/agent-skills/index.json');
-    expect(calls).not.toContain('https://skills.sh/.well-known/skills/index.json');
+    expect(calls).not.toContain('https://www.skills.sh/.well-known/agent-skills/index.json');
+    expect(calls).not.toContain('https://www.skills.sh/.well-known/skills/index.json');
   });
 
   it('rejects unlisted pack URLs that can widen scope or carry credentials', async () => {
@@ -103,6 +103,25 @@ describe('SkillsPackClient', () => {
     await expect(client.inspect('https://skills.sh/p/demo?token=secret')).rejects.toMatchObject({ code: 'invalid_input' });
     await expect(client.inspect('https://user:pass@skills.sh/p/demo')).rejects.toMatchObject({ code: 'invalid_input' });
     await expect(client.inspect('https://skills.sh/p/a%2Fb')).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+
+  it('canonicalizes bare and www pack URLs to the www host', async () => {
+    const calls: string[] = [];
+    const fetch = vi.fn(async (input: string | URL) => {
+      calls.push(String(input));
+      return jsonResponse({ skills: [{ name: 'legacy', description: 'Legacy', files: ['SKILL.md'] }] });
+    });
+    const client = new SkillsPackClient({ fetch });
+
+    const bare = await client.inspect('https://skills.sh/p/canonical');
+    const www = await client.inspect('https://www.skills.sh/p/canonical/');
+
+    expect(bare.packUrl).toBe('https://www.skills.sh/p/canonical');
+    expect(www.packUrl).toBe('https://www.skills.sh/p/canonical');
+    expect(calls).toEqual([
+      'https://www.skills.sh/p/canonical/.well-known/agent-skills/index.json',
+      'https://www.skills.sh/p/canonical/.well-known/agent-skills/index.json',
+    ]);
   });
 
   it('does not fall back from a missing scoped pack index to a host-wide index', async () => {
@@ -115,8 +134,8 @@ describe('SkillsPackClient', () => {
     const client = new SkillsPackClient({ fetch });
     await expect(client.inspect('https://skills.sh/p/demo')).rejects.toMatchObject({ code: 'not_found' });
     expect(calls).toEqual([
-      'https://skills.sh/p/demo/.well-known/agent-skills/index.json',
-      'https://skills.sh/p/demo/.well-known/skills/index.json',
+      'https://www.skills.sh/p/demo/.well-known/agent-skills/index.json',
+      'https://www.skills.sh/p/demo/.well-known/skills/index.json',
     ]);
   });
 
@@ -204,8 +223,11 @@ describe('SkillsPackClient', () => {
     const unsafePathFetch = vi.fn(async () => jsonResponse({ skills: [{ name: 'legacy', description: 'legacy', files: ['../SKILL.md'] }] }));
     await expect(new SkillsPackClient({ fetch: unsafePathFetch }).inspect('https://skills.sh/p/path')).rejects.toMatchObject({ code: 'unsafe_path' });
 
-    const redirectFetch = vi.fn(async () => new Response('', { status: 302, headers: { location: 'https://evil.invalid' } }));
+    const redirectFetch = vi.fn(async (_input: string | URL, _init?: RequestInit) => new Response('', { status: 302, headers: { location: 'https://evil.invalid' } }));
     await expect(new SkillsPackClient({ fetch: redirectFetch }).inspect('https://skills.sh/p/redirect')).rejects.toMatchObject({ code: 'redirect_denied' });
+    expect(redirectFetch).toHaveBeenCalledTimes(1);
+    expect(redirectFetch.mock.calls[0]?.[0]).toBe('https://www.skills.sh/p/redirect/.well-known/agent-skills/index.json');
+    expect(redirectFetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ redirect: 'manual' }));
 
     const oversizedFetch = vi.fn(async () => bytesResponse(new Uint8Array([1, 2, 3, 4]), 200, { 'content-length': '4' }));
     await expect(new SkillsPackClient({ fetch: oversizedFetch, limits: { maxManifestBytes: 3 } }).inspect('https://skills.sh/p/large')).rejects.toMatchObject({ code: 'size_limit' });
