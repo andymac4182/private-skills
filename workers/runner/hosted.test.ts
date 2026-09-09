@@ -77,4 +77,25 @@ describe('hosted worker route', () => {
     });
     expect(handler).toBeTypeOf('function');
   });
+
+  it('forwards the request-scoped skills.sh token callback without resolving it at startup', async () => {
+    const tokenProvider = async (_signal?: AbortSignal): Promise<string> => 'oidc-token-fixture';
+    let forwarded: unknown;
+    const handler = createHostedWorkerHandler({
+      ...options({ claimed: false }),
+      acquisition: {
+        getSkillsShToken: tokenProvider,
+      },
+      createRunner: (runnerOptions) => {
+        forwarded = runnerOptions.acquisition?.getSkillsShToken;
+        return { runOnce: async () => ({ claimed: false }) } as unknown as WorkerRunner;
+      },
+    });
+
+    const response = await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(response.status).toBe(200);
+    expect(forwarded).toBe(tokenProvider);
+  });
 });

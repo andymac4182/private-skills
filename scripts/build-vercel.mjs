@@ -110,6 +110,11 @@ function verifyNodeDependencies(functionDirectory) {
       label: 'Sandbox.create',
     },
     {
+      name: '@vercel/oidc',
+      assertion: "typeof module.getVercelOidcToken !== 'function'",
+      label: 'getVercelOidcToken',
+    },
+    {
       name: '@computesdk/vercel',
       assertion: "typeof module.vercel !== 'function'",
       label: 'vercel provider factory',

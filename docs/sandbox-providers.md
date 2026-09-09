@@ -56,12 +56,23 @@ always throws a `cleanup-failed` error stating that cleanup is unverified. A
 normal native handle never uses generic destroy; native `stop()` is preferred
 and its failure propagates.
 
-Traditional Vercel credentials may be supplied explicitly as `token`,
-`teamId`, and `projectId`. Partial credentials are not accepted. If explicit
-credentials are omitted, the ComputeSDK adapter may resolve the documented
-Vercel environment credentials (`VERCEL_OIDC_TOKEN` or the complete traditional
-set) unless `allowEnvironmentAuth: false` is selected. Credential values are
-never copied into sandbox options or error messages.
+Operators may supply Vercel credentials explicitly as
+`auth: { token, teamId, projectId }`. The complete object is required; partial
+credentials are rejected. For ambient authentication, the adapter calls the
+official `@vercel/oidc` request-scoped helper immediately before each sandbox
+creation and validates the token's tenant claims. The helper token is not
+cached. If the helper cannot obtain a token for the current request, identity
+resolution fails closed with `invalid-auth`; the adapter does not fall back to
+a process-global PAT or to an implicit `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/
+`VERCEL_PROJECT_ID` environment trio. `allowEnvironmentAuth: false` disables
+ambient OIDC and therefore requires the explicit `auth` object. Credential
+values are never copied into sandbox options or error messages.
+
+**Migration note:** older deployment descriptions that called the legacy
+environment trio “environment auth” are obsolete. Ambient Vercel auth now means
+the official request-scoped OIDC helper only. The explicit `auth` option remains
+the operator-controlled path for hosts that cannot provide request context;
+using it does not enable an implicit environment fallback.
 
 ## Provider expansion
 
@@ -118,3 +129,8 @@ and was never executed. This proves the current adapter, snapshot provenance,
 native operations, cleanup path, and scanner roundtrip in the tested runtime.
 It does not qualify other ComputeSDK providers or replace deployment-specific
 credential, quota, and recovery verification.
+
+The current production evidence verifies the separately configured native
+fallback scanner path. The ComputeSDK production path remains pending after a
+pre-analysis request-context authentication failure; the local proof above is
+not a production ComputeSDK acceptance claim.

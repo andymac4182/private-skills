@@ -4,6 +4,7 @@ import {
   COMPUTE_SDK_VERSIONS,
   createComputeSdkVercelSdk,
   createSandboxProvider,
+  SandboxProviderError,
   type ComputeSdkVercelModule,
   type ComputeSdkVercelProvider,
   type SandboxCreateOptions,
@@ -11,6 +12,11 @@ import {
 
 const IMAGE = `registry.example/scanner@sha256:${'a'.repeat(64)}`;
 const SNAPSHOT = 'snapshot-2026-09-10';
+
+function oidcToken(teamId: string, projectId: string): string {
+  const payload = Buffer.from(JSON.stringify({ owner_id: teamId, project_id: projectId })).toString('base64url');
+  return ['header', payload, 'signature'].join('.');
+}
 
 function versionEvidence() {
   return { ...COMPUTE_SDK_VERSIONS };
@@ -104,7 +110,11 @@ function fakeModule(options: {
     },
   };
   return {
-    module: { versions: versionEvidence(), vercel: () => provider },
+    module: {
+      versions: versionEvidence(),
+      vercel: () => provider,
+      oidcTokenResolver: async () => oidcToken('team-test', 'project-test'),
+    },
     harness,
   };
 }
@@ -140,18 +150,37 @@ describe('ComputeSDK Vercel sandbox provider', () => {
       ...module,
       vercel: () => ({ ...module.vercel!({}), name: 'daytona' }),
     };
-    await expect(createComputeSdkVercelSdk({ moduleLoader: async () => wrongIdentity })).rejects.toThrow(
-      'provider factory returned unsupported provider daytona',
+    const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => wrongIdentity });
+    await expect(sdk.Sandbox.create(createOptions())).rejects.toThrow(
+      'provider factory did not identify the Vercel provider',
+    );
+  });
+
+  it('requires an explicit Vercel provider identity', async () => {
+    const { module } = fakeModule();
+    const unnamed = {
+      ...module,
+      vercel: () => {
+        const provider = module.vercel!({});
+        const { name: _name, ...withoutName } = provider;
+        return withoutName;
+      },
+    };
+    const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => unnamed });
+    await expect(sdk.Sandbox.create(createOptions())).rejects.toThrow(
+      'provider factory did not identify the Vercel provider',
     );
   });
 
   it('forwards the complete security create contract and authenticates per provider instance', async () => {
     const { module, harness } = fakeModule();
     const providerFactory = vi.fn(() => module.vercel!({}));
+    const oidcTokenResolver = vi.fn(async () => oidcToken('unused-team', 'unused-project'));
     const sdk = await createComputeSdkVercelSdk({
       auth: { token: 'token-value', teamId: 'team-value', projectId: 'project-value' },
       moduleLoader: async () => module,
       providerFactory,
+      oidcTokenResolver,
       versionEvidence: versionEvidence(),
     });
     const signal = new AbortController().signal;
@@ -172,6 +201,177 @@ describe('ComputeSDK Vercel sandbox provider', () => {
       persistent: false,
       signal,
     });
+    expect(oidcTokenResolver).not.toHaveBeenCalled();
+  });
+
+  it('redacts provider factory failures', async () => {
+    const { module } = fakeModule();
+    const secret = 'Authorization: Bearer factory-secret';
+    const providerFactory = vi.fn(() => {
+      throw new Error(secret);
+    });
+
+    const failure = await createComputeSdkVercelSdk({
+      auth: { token: 'token-value', teamId: 'team-value', projectId: 'project-value' },
+      moduleLoader: async () => module,
+      providerFactory,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SandboxProviderError);
+    expect(failure).toMatchObject({
+      code: 'missing-dependency',
+      message: 'Vercel sandbox provider could not be initialized',
+    });
+    expect((failure as Error).message).not.toContain(secret);
+  });
+
+  it('redacts provider sandbox creation failures', async () => {
+    const { module } = fakeModule();
+    const secret = 'Authorization: Bearer create-secret';
+    const providerFactory = vi.fn(() => {
+      const provider = module.vercel!({});
+      return {
+        ...provider,
+        sandbox: {
+          async create() {
+            throw new Error(secret);
+          },
+        },
+      };
+    });
+    const sdk = await createComputeSdkVercelSdk({
+      auth: { token: 'token-value', teamId: 'team-value', projectId: 'project-value' },
+      moduleLoader: async () => module,
+      providerFactory,
+    });
+
+    const failure = await sdk.Sandbox.create(createOptions()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SandboxProviderError);
+    expect(failure).toMatchObject({
+      code: 'missing-dependency',
+      message: 'Vercel sandbox could not be created',
+    });
+    expect((failure as Error).message).not.toContain(secret);
+  });
+
+  it('redacts provider module import failures', async () => {
+    const secret = 'Authorization: Bearer import-secret';
+    const failure = await createComputeSdkVercelSdk({
+      moduleLoader: async () => {
+        throw new Error(secret);
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SandboxProviderError);
+    expect(failure).toMatchObject({
+      code: 'missing-dependency',
+      message: 'sandbox provider module could not be loaded',
+    });
+    expect((failure as Error).message).not.toContain(secret);
+  });
+
+  it('redacts dynamic import failures', async () => {
+    const secret = 'Authorization: Bearer dynamic-import-secret';
+    class ThrowingFunction {
+      constructor() {
+        throw new Error(secret);
+      }
+    }
+    vi.stubGlobal('Function', ThrowingFunction);
+    let failure: unknown;
+    try {
+      failure = await createComputeSdkVercelSdk().catch((error: unknown) => error);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(failure).toBeInstanceOf(SandboxProviderError);
+    expect(failure).toMatchObject({
+      code: 'missing-dependency',
+      message: 'sandbox provider module could not be loaded',
+    });
+    expect((failure as Error).message).not.toContain(secret);
+  });
+
+  it('resolves independent OIDC credentials for concurrent creates', async () => {
+    const { module } = fakeModule();
+    const tokens = [
+      oidcToken('team-one', 'project-one'),
+      oidcToken('team-two', 'project-two'),
+    ];
+    let nextToken = 0;
+    const oidcTokenResolver = vi.fn(async () => {
+      const token = tokens[nextToken++];
+      await new Promise((resolve) => setTimeout(resolve, token === tokens[0] ? 10 : 0));
+      return token!;
+    });
+    const configs: Array<Record<string, unknown>> = [];
+    const providerFactory = vi.fn((config: Record<string, unknown>) => {
+      configs.push(config);
+      return module.vercel!({ ...config });
+    });
+    const sdk = await createComputeSdkVercelSdk({
+      moduleLoader: async () => module,
+      providerFactory,
+      oidcTokenResolver,
+    });
+
+    await Promise.all([
+      sdk.Sandbox.create(createOptions()),
+      sdk.Sandbox.create(createOptions()),
+    ]);
+
+    expect(oidcTokenResolver).toHaveBeenCalledTimes(2);
+    expect(configs.map((config) => ({
+      token: config.token,
+      teamId: config.teamId,
+      projectId: config.projectId,
+    }))).toEqual(expect.arrayContaining([
+      { token: tokens[0], teamId: 'team-one', projectId: 'project-one' },
+      { token: tokens[1], teamId: 'team-two', projectId: 'project-two' },
+    ]));
+  });
+
+  it('rejects helper tokens without tenant claims before provider creation', async () => {
+    const { module } = fakeModule();
+    const providerFactory = vi.fn(() => module.vercel!({}));
+    const sdk = await createComputeSdkVercelSdk({
+      moduleLoader: async () => module,
+      providerFactory,
+      oidcTokenResolver: async () => oidcToken('team-only', 'project-only').replace(
+        Buffer.from(JSON.stringify({ owner_id: 'team-only', project_id: 'project-only' })).toString('base64url'),
+        Buffer.from(JSON.stringify({ owner_id: 'team-only' })).toString('base64url'),
+      ),
+    });
+
+    await expect(sdk.Sandbox.create(createOptions())).rejects.toThrowError(
+      expect.objectContaining({ code: 'invalid-auth' }),
+    );
+    expect(providerFactory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on missing request credentials even when a global PAT is present', async () => {
+    const { module } = fakeModule();
+    const providerFactory = vi.fn(() => module.vercel!({}));
+    vi.stubEnv('VERCEL_TOKEN', 'legacy-token');
+    vi.stubEnv('VERCEL_TEAM_ID', 'legacy-team');
+    vi.stubEnv('VERCEL_PROJECT_ID', 'legacy-project');
+    try {
+      const sdk = await createComputeSdkVercelSdk({
+        moduleLoader: async () => module,
+        providerFactory,
+        oidcTokenResolver: async () => {
+          throw new Error('request has no OIDC context');
+        },
+      });
+
+      await expect(sdk.Sandbox.create(createOptions())).rejects.toThrowError(
+        expect.objectContaining({ code: 'invalid-auth' }),
+      );
+      expect(providerFactory).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('uses getInstance native argv, byte files, bounded-log handles, and native stop', async () => {
@@ -215,6 +415,30 @@ describe('ComputeSDK Vercel sandbox provider', () => {
     });
   });
 
+  it('preserves a sanitized ENOENT marker for optional output lookups', async () => {
+    const { module, harness } = fakeModule();
+    const nativeFs = harness.native.fs as {
+      lstat: (path: string, options?: { signal?: AbortSignal }) => Promise<unknown>;
+    };
+    nativeFs.lstat = async () => {
+      const failure = new Error('Authorization: Bearer missing-file-secret') as Error & { code: 'ENOENT' };
+      failure.code = 'ENOENT';
+      throw failure;
+    };
+    const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => module });
+    const sandbox = await sdk.Sandbox.create(createOptions());
+
+    const failure = await sandbox.fs.lstat!('/vercel/sandbox/private-skills/output/missing.json')
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: 'ENOENT',
+      message: 'Vercel native filesystem entry was not found',
+    });
+    expect((failure as Error).message).not.toContain('missing-file-secret');
+    expect((failure as Error).message).not.toContain('Authorization');
+    expect(Object.prototype.hasOwnProperty.call(failure, 'cause')).toBe(false);
+  });
+
   it('rejects an unverified network or persistence capability before file transfer', async () => {
     const { module, harness } = fakeModule({ networkPolicy: 'allow-all' });
     const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => module });
@@ -240,13 +464,17 @@ describe('ComputeSDK Vercel sandbox provider', () => {
   it('attempts best-effort generic cleanup when getInstance throws and never returns a sandbox', async () => {
     const { module, harness } = fakeModule({
       getInstance: () => {
-        throw new Error('native unwrap failed');
+        throw new Error('Authorization: Bearer native-unwrap-secret');
       },
     });
     const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => module });
-    await expect(sdk.Sandbox.create(createOptions())).rejects.toThrow(
-      /native unwrap failed.*best-effort generic cleanup completed but cleanup is unverified/,
-    );
+    const failure = await sdk.Sandbox.create(createOptions()).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: 'cleanup-failed',
+      message: 'Vercel native sandbox cleanup completed through an unverified fallback',
+    });
+    expect((failure as Error).message).not.toContain('native-unwrap-secret');
+    expect((failure as Error).message).not.toContain('Authorization');
     expect(harness.genericDestroyCount).toBe(1);
   });
 
@@ -275,10 +503,16 @@ describe('ComputeSDK Vercel sandbox provider', () => {
   });
 
   it('propagates native stop failures instead of using ComputeSDK destroy swallowing', async () => {
-    const { module, harness } = fakeModule({ stop: async () => { throw new Error('native stop failed'); } });
+    const { module, harness } = fakeModule({ stop: async () => { throw new Error('Authorization: Bearer native-stop-secret'); } });
     const sdk = await createComputeSdkVercelSdk({ moduleLoader: async () => module });
     const sandbox = await sdk.Sandbox.create(createOptions());
-    await expect(sandbox.stop()).rejects.toThrow('native stop failed');
+    const failure = await sandbox.stop().catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: 'cleanup-failed',
+      message: 'Vercel native sandbox cleanup failed',
+    });
+    expect((failure as Error).message).not.toContain('native-stop-secret');
+    expect((failure as Error).message).not.toContain('Authorization');
     expect(harness.genericDestroyCount).toBe(0);
   });
 

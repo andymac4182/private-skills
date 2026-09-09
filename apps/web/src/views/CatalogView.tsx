@@ -4,7 +4,7 @@ import { api, ApiError } from '../lib/api'
 import { formatBytes, formatDate, shortDigest } from '../lib/format'
 import type { Policy, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
 import { useAuth } from '../lib/auth'
-import { Badge, Button, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
+import { Badge, Button, DisconnectedState, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
 
 export function CatalogView() {
   const [query, setQuery] = useState('')
@@ -84,6 +84,7 @@ export function CatalogView() {
   }
 
   const semanticActive = mode === 'semantic' && submittedQuery.length > 0
+  const semanticDisconnected = searchStatus?.provider === 'disabled'
 
   return (
     <div className="view-heading">
@@ -96,14 +97,15 @@ export function CatalogView() {
         <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>
       </div>
       <Panel>
-        <div className="search-mode-switch" role="group" aria-label="Search mode"><button className={mode === 'catalog' ? 'search-mode-active' : ''} type="button" onClick={() => setMode('catalog')}>Catalog</button><button className={mode === 'semantic' ? 'search-mode-active' : ''} type="button" onClick={() => setMode('semantic')}>Semantic</button></div>
+        <div className="search-mode-switch" role="group" aria-label="Search mode"><button className={mode === 'catalog' ? 'search-mode-active' : ''} type="button" onClick={() => setMode('catalog')}>Catalog</button><button aria-describedby={semanticDisconnected ? 'semantic-disconnected' : undefined} className={mode === 'semantic' ? 'search-mode-active' : ''} disabled={semanticDisconnected} title={semanticDisconnected ? 'Semantic search is unavailable' : undefined} type="button" onClick={() => setMode('semantic')}>Semantic</button></div>
         <form className="catalog-search" onSubmit={(event) => { event.preventDefault(); setSubmittedQuery(query.trim()) }}>
           <input ref={searchInput} aria-label={`${mode === 'semantic' ? 'Semantic ' : ''}search skills`} onChange={(event) => setQuery(event.target.value)} placeholder={mode === 'semantic' ? 'Describe what you need…' : 'Search @namespace/skill or description'} value={query} />
           <span className="search-shortcut" aria-hidden="true"><kbd>⌘</kbd><kbd>K</kbd></span>
           <Button type="submit">Search</Button>
           {submittedQuery && <Button kind="quiet" type="button" onClick={() => { setQuery(''); setSubmittedQuery('') }}>Clear</Button>}
         </form>
-        <div className="search-meta"><span className={`search-status ${searchStatus?.status === 'ok' ? 'search-status-good' : searchStatus?.status === 'degraded' ? 'search-status-warn' : ''}`}><span className={`health-dot ${searchStatus?.status === 'ok' ? 'health-online' : searchStatus?.status === 'degraded' ? 'health-checking' : 'health-offline'}`} aria-hidden="true" />{searchStatus ? `Semantic index ${searchStatus.status}` : searchStatusError ?? 'Checking semantic index…'}</span>{mode === 'semantic' && <Button kind="quiet" busy={reindexing} type="button" onClick={() => void reindexSearch(reindexCursor ?? undefined)}>{reindexCursor ? 'Continue indexing' : 'Refresh index'}</Button>}</div>
+        <div className="search-meta"><span className={`search-status ${searchStatus?.status === 'ok' ? 'search-status-good' : searchStatus?.provider === 'disabled' ? 'search-status-disconnected' : searchStatus?.status === 'degraded' ? 'search-status-warn' : ''}`}><span className={`health-dot ${searchStatus?.status === 'ok' ? 'health-online' : 'health-checking'}`} aria-hidden="true" />{searchStatus?.provider === 'disabled' ? 'Semantic search disconnected' : searchStatus ? `Semantic index ${searchStatus.status}` : searchStatusError ?? 'Checking semantic index…'}</span>{mode === 'semantic' && !semanticDisconnected && <Button kind="quiet" busy={reindexing} type="button" onClick={() => void reindexSearch(reindexCursor ?? undefined)}>{reindexCursor ? 'Continue indexing' : 'Refresh index'}</Button>}{mode === 'semantic' && semanticDisconnected && <Button kind="quiet" type="button" onClick={() => setMode('catalog')}>Use catalog search</Button>}</div>
+        {semanticDisconnected && <div id="semantic-disconnected"><DisconnectedState title="Semantic search is disconnected" message="The private semantic index is not connected. Standard catalog search remains available while the search service is configured." action={<Button kind="secondary" type="button" onClick={() => setMode('catalog')}>Use catalog search</Button>} /></div>}
       </Panel>
       {searchMessage && <Notice kind="info">{searchMessage}</Notice>}
       {error && <ErrorState message={error} onRetry={() => void load()} />}

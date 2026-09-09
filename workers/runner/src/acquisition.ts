@@ -51,9 +51,40 @@ export async function acquireImportJob(
     job: job as unknown as Job,
     upstream,
     importRequest,
-    ...options,
+    ...safeSkillsShOptions(options),
   });
   return result;
+}
+
+/**
+ * Keep request-scoped directory credential failures out of worker telemetry.
+ * The callback is deployment-owned and can throw an OIDC/provider error that
+ * contains sensitive context; the source adapter only needs a closed/open
+ * credential result, so normalize every callback failure to one safe marker.
+ * This wrapper is intentionally applied at the worker boundary, before the
+ * options reach the upstream adapter, and never stores the returned token.
+ */
+function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisitionOptions {
+  const candidate = (options as WorkerAcquisitionOptions & {
+    getSkillsShToken?: unknown;
+  }).getSkillsShToken;
+  if (candidate === undefined) return options;
+  if (typeof candidate !== 'function') throw new Error('skills.sh credential unavailable');
+
+  return {
+    ...options,
+    getSkillsShToken: async (signal?: AbortSignal): Promise<string> => {
+      try {
+        const token = await (candidate as (signal?: AbortSignal) => Promise<unknown>)(signal);
+        if (typeof token !== 'string' || token.length === 0 || Buffer.byteLength(token, 'utf8') > 4_096 || /[\r\n]/.test(token)) {
+          throw new Error('invalid skills.sh credential');
+        }
+        return token;
+      } catch {
+        throw new Error('skills.sh credential unavailable');
+      }
+    },
+  } as WorkerAcquisitionOptions;
 }
 
 function asUpstream(value: unknown): Upstream {

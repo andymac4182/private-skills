@@ -1,6 +1,6 @@
 # Implementation status
 
-This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
+This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.3.0 checkpoint in [`verification-v0.3.0.md`](verification-v0.3.0.md) and the historical v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
 
 ## Implemented baseline
 
@@ -165,9 +165,12 @@ required scan failure.
 
 GitHub's Vercel app security-key confirmation remains pending, so a
 Git-triggered deployment is not claimed. `skills.sh` discovery and Compute
-SDK features remain under development and are not completed v0.2.0 features.
-OIDC/device authentication, if required, remains a separate feature rather
-than an implied capability of bootstrap-token authentication.
+SDK features were not completed v0.2.0 features; the current v0.3.0 status,
+including the owner's later authorization for skills.sh project-OIDC
+forwarding and its still-pending live proof, is recorded in
+[`verification-v0.3.0.md`](verification-v0.3.0.md). OIDC/device authentication
+for primary user login, if required, remains a separate feature rather than an
+implied capability of bootstrap-token authentication.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence

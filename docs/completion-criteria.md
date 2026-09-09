@@ -5,6 +5,10 @@ future feature is not complete because a route, CLI command, or design mockup
 exists; the listed behavior and evidence must pass. G0 records the original
 shipment gates; C1 records the explicitly requested catalog follow-up. Both
 must be satisfied before the complete current goal can be marked achieved.
+M1–M5, the deferred M6 editor/reviewer milestone, and future M7 OpenClaw feed
+interoperability are later product work;
+they do not become current-release gates unless the roadmap explicitly moves
+one into the current delivery.
 
 ## G0 — v0.2.0 shipment
 
@@ -46,9 +50,12 @@ selected Nitro deployment, a versioned external identity model, and a
 server-side source resolver that can hand complete bytes to the existing
 validation/scanner worker. The C1 deployment may be verified independently of
 the remaining G0 GitHub integration step.
-The Vercel OIDC destination approval is pending auto-review at this checkpoint;
-fixture or gateway tests do not count as live Vercel cloud acceptance until
-that approval is recorded.
+The owner authorized server-side forwarding of the Vercel project OIDC token to
+skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
+directory-agent wiring and infrastructure configuration remain in progress;
+that authorization does not count as live Vercel cloud acceptance. A new
+deployment must still prove authenticated listing, detail, import, and view
+behavior before C1 is complete.
 
 Completion requires all of the following:
 
@@ -78,11 +85,15 @@ Completion requires all of the following:
    `Retry-After`, `503`, timeout, and credential absence become explicit
    retryable/unavailable states with bounded backoff.
 4. **C1-AUTH — portable server-side authentication.** A Vercel deployment uses
-   request-scoped Vercel OIDC as documented. A non-Vercel deployment uses an
-   explicitly configured supported gateway/credential provider. Browser
-   requests never contain the upstream bearer credential. If no supported
-   credential is configured, the cloud view reports unavailable and does not
-   assume anonymous API access.
+   the authorized request-scoped project OIDC token for skills.sh as documented;
+   a non-Vercel deployment uses an explicitly configured supported
+   gateway/credential provider. Browser requests never contain the upstream
+   bearer credential. If no supported credential is configured, the cloud view
+   reports unavailable and does not assume anonymous API access. Acceptance
+   requires sanitized deployment evidence that the token is obtained and
+   accepted by skills.sh, plus a negative check proving it is not exposed to
+   browser responses or logs; source-level wiring or owner authorization alone
+   is insufficient.
 5. **C1-ID — external identity and version separation.** Every row preserves
    provider, complete stable ID, source, slug, name, source type, install URL,
    skills.sh page URL, install count, duplicate flag, and fetch time. Detail
@@ -315,3 +326,299 @@ contract.
 Completion requires an approved threat model, an opt-in pilot, a clean disable
 path, and evidence that disabling the capability removes collection without
 breaking registry distribution.
+
+## M6 — full Diffs editor and upload/edit review (deferred P1/P2)
+
+M6 is the later editor and upload/edit reviewer requested for the Private
+Skills web application. It is not a G0 or C1 prerequisite. The official
+[Diffs home](https://diffs.com/) and [edit page](https://diffs.com/edit)
+confirm an open source `@pierre/diffs` renderer and beta in-place edit mode;
+the [official package source](https://github.com/pierrecomputer/pierre) and
+[documentation](https://diffs.com/docs) do not provide our upload, auth,
+tenant, persistence, release, scanner, or review service. The docs describe
+retained edit state as bounded and in memory. The file tree is a separate
+`@pierre/trees` package ([official README](https://raw.githubusercontent.com/pierrecomputer/pierre/main/packages/trees/README.md)).
+These gates therefore distinguish Diffs UI primitives from orchestration that
+Private Skills must own.
+
+Dependencies: the existing authenticated web/API boundary, canonical bundle
+validator, Files SDK/state repositories, scanner worker and policy; a pinned
+and reviewed Diffs/Trees dependency; and a versioned draft/review result
+contract with an explicit AI Gateway configuration. M6 may reuse M2 review
+fields, but it has its own upload/edit queue and authorization boundary. The
+existing daily common-skill consolidation Eve remains a separate agent and
+workflow.
+
+Completion requires all of the following:
+
+1. **M6-EDITOR — full editor surface.** An authorized publisher/owner can open
+   a private skill draft in the web UI, render a canonical file tree, select a
+   file, edit it with the pinned `@pierre/diffs` edit integration, and switch
+   between file and unified/split diff views. A fixture with at least 100
+   paths, nested directories, and long lines retains correct selection,
+   syntax highlighting, and file/diff identity while scrolling. The UI has a
+   read-only fallback/error state if the beta editor cannot load; a dependency
+   demo alone is not acceptance.
+2. **M6-DRAFT — durable private drafts.** Starting from a new upload or an
+   existing immutable release creates a tenant-scoped draft with a base release
+   ID, monotonic draft revision, canonical content digest, file manifest, and
+   actor/time audit record. Editing at least three files, leaving the page, and
+   reloading restores the same draft revision and bytes. Concurrent edits
+   produce an explicit conflict/rebase choice; last-writer-wins cannot silently
+   discard a draft. Saving a draft never mutates a published release.
+3. **M6-TREE-DIFF — inspectable changes.** The file tree and editor stay in
+   sync by canonical relative path. The diff shows additions, deletions, and
+   changes with stable path/line anchors; line annotations can display a
+   finding or review note without executing its text. Accept/reject controls
+   apply only an explicitly selected draft change and are auditable. Path
+   traversal, duplicate normalized paths, symlinks, and unsupported files are
+   rejected before rendering or persistence.
+4. **M6-RELEASE — immutable new release.** An explicit author action creates
+   a new private release from the accepted draft, computes the server-side
+   canonical bundle digest, and records base release, draft revision, source,
+   actor, and scanner/reviewer provenance. Required scanner evidence and the
+   current policy must pass before the release is installable or publishable.
+   The prior release remains byte- and metadata-identical; every retry is
+   idempotent. No editor save or Eve result automatically publishes, merges,
+   installs, or replaces a release.
+5. **M6-UPLOAD-EVE — separate reviewer identity and queue.** Upload/edit Eve
+   is a distinct agent deployment or service identity from the daily
+   common-skill consolidation Eve, with separate route token, tool allowlist,
+   queue/idempotency key, durable state, and model/reviewer configuration. It
+   may use the configured AI Gateway provider/model and server-side credential
+   boundary but must not share the daily Eve's mutation authority or candidate
+   state. Upload completion and each saved draft revision can enqueue one
+   idempotent review, and the editor can show that review's current status.
+   A queued review receives only an authorized tenant snapshot and records job
+   ID, draft ID/revision, exact content digest, base release, model/reviewer
+   revision, policy revision, timestamps, and bounded status (`pending`,
+   `running`, `passed`, `failed`, or `stale`). It never receives registry
+   credentials or arbitrary network tools.
+6. **M6-REVIEW — exact, asynchronous, actionable findings.** Review results
+   are persisted independently of the browser and are bound to the exact
+   draft/content digest and revision that was reviewed. While the author is
+   editing, the editor side panel exposes pending, running, completed, failed,
+   and stale states plus finding severity, path/line location where available,
+   evidence summary, reviewer/model provenance, and human actions such as
+   acknowledge, dismiss-with-reason, or request-rerun. Each action is
+   tenant-scoped and audited and cannot rewrite the artifact.
+   Changing bytes or draft revision, discarding the draft, revoking the base,
+   changing scanner policy, or changing the reviewer contract marks the old
+   result stale. A stale, missing, failed, or partial review cannot authorize
+   publication or installation.
+7. **M6-POLICY — scanner authority and no autonomous mutation.** The existing
+   scanner policy remains authoritative for release admission. An Eve finding
+   is advisory evidence unless a separately versioned product policy explicitly
+   defines a review gate; even then, Eve cannot override a required scanner,
+   policy revision, authorization check, or digest mismatch. The reviewer and
+   editor have no ability to execute uploaded instructions, scripts, hooks,
+   MCP servers, or package managers, and cannot publish, merge, install, or
+   change policy without an explicitly authorized human/API action.
+8. **M6-AUTH — tenant and role isolation.** Every draft, file read/write,
+   review job/result, finding action, release transition, and audit event is
+   checked against organization, namespace, principal, and role. Publishers
+   can edit only permitted namespaces; readers are read-only; the reviewer
+   service can read only the leased snapshot and write only its result. Guessing
+   another tenant's draft or review ID returns an authorization-safe response
+   and no content, digest, source, finding, or timing oracle. Browser bundles
+   contain no upstream, scanner, storage, or AI Gateway secret.
+9. **M6-SAFETY — hostile content boundary.** Uploads and review text are
+   treated as untrusted data, including prompt-injection instructions and
+   malicious markup. Archive/file/byte limits, safe-path and content-type
+   validation, HTML/script escaping, bounded annotations, and origin/CSRF
+   checks run before storage or display. Review and scanner work uses the
+   existing isolated worker boundary with no candidate execution, source
+   credential forwarding, arbitrary network, or cross-tenant access. Tests
+   cover traversal, symlink, oversized, binary, HTML/script, prompt-injection,
+   malformed, and concurrent-update fixtures.
+10. **M6-A11Y — usable editor and review actions.** Keyboard-only users can
+    open/search the tree, move focus into and out of the editor, select a file,
+    inspect a diff, reach findings, and activate every action without a mouse.
+    Tree rows, editor regions, diff controls, annotations, live review status,
+    errors, and stale states have semantic roles, accessible names, focus
+    visibility, and screen-reader announcements. Contrast, zoom/reflow,
+    reduced-motion, and text alternatives pass at 390px and 1280px widths with
+    no unintended horizontal overflow.
+11. **M6-EVIDENCE — end-to-end proof.** A clean authenticated browser/API
+    fixture proves upload → draft → reload → edit → diff → queued
+    upload/edit review → persisted findings → stale invalidation →
+    human action → required scanner decision → explicit immutable new
+    release. Evidence includes dependency/version provenance, editor-load
+    fallback, file-tree and diff fixtures, conflict/retry/idempotency,
+    tenant isolation, hostile-content rejection, required-scanner failure,
+    and the narrow/desktop accessibility checks. Daily consolidation Eve's
+    existing flow remains a separately evidenced path.
+
+12. **M6-VIEW — read-only release file view.** From skill detail, an authorized
+    reader can select an immutable release/version and see that release's
+    server-returned canonical digest, file manifest/tree, and the full content
+    of every allowed text/supporting file through the pinned `@pierre/diffs`
+    read-only view. Retrieval is authorized per tenant, namespace, principal,
+    and selected release; guessing a file, version, or digest from another
+    tenant returns a safe error and no content. Binary, unsupported, and
+    over-size files are represented by explicit bounded metadata/preview states
+    and are never truncated into misleading text. The view never runs file
+    contents, creates a draft, or changes the immutable release. A fixture
+    proves at least one nested multi-file release, a binary/over-size file, a
+    selected-version change, digest readback, unauthorized file/version access,
+    and no browser exposure of storage or scanner credentials.
+
+13. **M6-EDIT — explicit draft edit workflow.** Editing is a distinct
+    authenticated action and route from the read-only release view. An
+    authorized publisher explicitly starts an editable, tenant-scoped draft
+    based on a selected immutable release/version/digest; opening or viewing a
+    release alone cannot create one. The draft records its base release and
+    monotonic revision, and saving at least three file changes followed by a
+    page reload restores the same revision and bytes. The Diffs view compares
+    the draft against the immutable base with stable path/line identity.
+    Concurrent or stale-base writes produce an explicit conflict/rebase result,
+    never silent last-writer-wins. A separate author action starts the required
+    scanner and publication transition; save, preview, or reviewer output never
+    publishes, merges, installs, or mutates the base release automatically.
+    The route has explicit unauthorized, missing, stale, and rejected states,
+    and its evidence proves the draft digest, base digest, scan decision, and
+    immutable-release preservation end to end.
+
+M6 should be scheduled only after the current G0 and C1 delivery is stable
+enough to supply the storage, policy, and external-source boundaries above.
+Its UI primitives can be prototyped earlier, but a prototype does not satisfy
+the durable draft, exact-review, safety, authorization, or release gates.
+
+## M7 — OpenClaw skills feed interoperability (future P1/P2)
+
+M7 is a future producer/consumer interoperability milestone. It does not block
+G0, C1, or M6, and it must not turn the current release into a public-catalog
+mirror. The pinned target is the official [ClawHub hosted catalog feed
+specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md):
+the skills route is `/v1/feeds/skills`, its feed ID is `clawhub-official`, and
+its current wire contract is `schemaVersion: 1`. The specification defines
+`type: "skill"` entries with `@publisher/slug` IDs, exact install/release
+coordinates, `sha256:` integrity, `official` publisher trust, `available`
+state, `generatedAt`, monotonic `sequence`, and `expiresAt`. It also defines
+eligibility filters, deterministic publication, cache validators, and a
+1,000-entry interim snapshot cap pending upstream pagination or sharding.
+
+The [ClawHub GitHub-backed skills specification](https://github.com/openclaw/clawhub/blob/main/specs/github-backed-skills.md)
+adds the immutable repository/path/commit/content-hash mapping and the
+completed-current-content scan requirement. OpenClaw's [marketplace
+documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/cli/plugins.md) and [official
+catalog consumer source](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts)
+are consumer-safety references: the generic plugin catalog currently accepts
+schema versions 1 and 2, validates identity/timestamps/sequence, bounds
+responses, caches snapshots, and supports DSSE when a trusted profile is
+configured. The checked ClawHub skills-feed specification says its current
+publication is unsigned and that signing still needs a production key and
+trust-root decision. Therefore M7 must not claim that the skills route is v2
+or signed; signing is conditional until the upstream skills contract and a
+Private Skills trust configuration explicitly enable it.
+
+Dependencies: C1's exact source mapping and individual pullthrough, the
+canonical bundle validator, existing required scanner/policy and immutable
+transfer boundary, tenant-scoped auth/storage, a bounded server-side upstream
+gateway, and a dated copy/reference of the upstream contract. A Private Skills
+producer uses a separately assigned feed ID and cannot impersonate
+`clawhub-official`. A private feed is tenant-scoped and authenticated; a public
+feed contains only explicitly public records. No upstream feed credential,
+private bytes, or scanner report is placed in a feed or browser response.
+
+Completion requires all of the following:
+
+1. **M7-SPEC — pinned wire contract.** The implementation documentation and
+   fixtures record the checked source URL, review date, and target
+   `schemaVersion: 1`, `/v1/feeds/skills` route, `clawhub-official` reference
+   identity, required top-level fields (`generatedAt`, `sequence`, `expiresAt`,
+   and `entries`), skill entry type/ID, source profiles, integrity/trust/state,
+   eligibility, ordering, cache behavior, and 1,000-entry limit. An upstream
+   change creates a deliberate contract update and fixture review; the product
+   never invents a v2 skill schema from the generic OpenClaw plugin parser.
+
+2. **M7-PRODUCER — deterministic publication.** A producer can emit a
+   schema-v1-compatible feed snapshot with a documented Private Skills feed ID,
+   stable JSON/key and entry ordering, exact version/install coordinates,
+   `sha256:` integrity, publisher trust/state, generated/sequence/expiry
+   metadata, and no credentials, private bytes, hidden tenant metadata, or
+   unverified entries. Eligible-record filters match the pinned contract. A
+   public route serves unchanged bytes with ETag, Last-Modified, 304 handling,
+   and bounded cache headers; a private route requires explicit tenant auth.
+   The producer either rejects more than 1,000 entries or uses a separately
+   documented upstream sharding contract; it does not silently drop entries.
+
+3. **M7-CONSUMER — bounded safe refresh.** The consumer accepts only an
+   allowlisted HTTPS feed URL without URL credentials, query, or fragment. It
+   enforces a documented response-size, timeout, streaming UTF-8, and JSON
+   depth/entry limit; validates schema version, expected feed ID, required
+   fields, timestamps, nonnegative sequence, duplicate IDs, expiry, and
+   conditional ETag/Last-Modified behavior; and retains a bounded
+   last-known-good snapshot. Wrong-ID, unsupported, malformed, truncated,
+   oversized, expired, replayed/equivocating, or failed snapshots become an
+   explicit unavailable/error state and never write an artifact or grant
+   install authority. A 304 reuses the exact previous bytes and digest.
+
+4. **M7-PROVENANCE — exact source and digest mapping.** A selected hosted
+   entry records its `public-clawhub` package/release identity and declared
+   artifact SHA-256. A GitHub-backed entry records `public-github`, repository,
+   path, immutable commit, and content hash. Pullthrough recomputes the fetched
+   bytes and rejects missing, changed, removed, incomplete, or mismatched
+   sources; it never substitutes a display-name match or infers SemVer from a
+   branch, install count, or first-seen timestamp. The external feed hash is
+   stored separately from the Private Skills canonical artifact digest.
+
+5. **M7-ADMISSION — local gates remain authoritative.** Selecting a feed entry
+   resolves one exact source and sends its complete bundle through canonical
+   path/file validation, the required Cisco/NVIDIA/SkillsGuard and local scanner
+   policy, authorization, and immutable transfer checks. Remote `official`,
+   `available`, publisher, or audit values are advisory evidence and can never
+   satisfy or override a required local scan, policy revision, authorization,
+   or digest check. A stale, missing, failed, or suspicious source is not
+   installable. Ingestion has no automatic execution, install, merge, publish,
+   hook, MCP, or package-manager side effect.
+
+6. **M7-AUTH — identity and tenant isolation.** Feed credentials and upstream
+   source credentials remain server side and are absent from browser payloads,
+   URLs, logs, and audit details. Private feed publication, snapshot/cache
+   keys, candidate/source details, pullthrough operations, scanner evidence,
+   and artifacts are scoped by organization, namespace, principal, and role.
+   Cross-tenant feed/cache/source-ID guesses return an authorization-safe
+   response with no content, digest, metadata, or timing oracle. A non-Vercel
+   deployment uses an explicitly configured gateway/credential provider; no
+   Vercel-only ambient assumption is accepted.
+
+7. **M7-SIGNING — explicit signed/unsigned state.** Current ClawHub skills-feed
+   fixtures and UI state identify the route as unsigned because the checked
+   specification does not declare a deployed signing key/trust root. If the
+   official skills route later declares a DSSE envelope, the consumer verifies
+   the pinned media type, signature, expected feed ID, expiry, and configured
+   trusted keys before a candidate can proceed. The feed cannot bootstrap its
+   own trust keys, and an unavailable/invalid configured trust root fails
+   closed. Unsigned status never bypasses local scanners or approval policy.
+
+8. **M7-INTEROP — reference fixtures.** A checked-in, source-attributed fixture
+   passes producer → consumer round-trip for a valid v1 feed, empty feed,
+   multiple skills, GitHub-backed entry, 1,000-entry boundary, ETag/304, and
+   last-known-good fallback. Negative fixtures cover missing fields, wrong
+   schema/feed ID, invalid time/sequence, duplicate IDs, replay/equivocation,
+   expiry, truncation/size/time limits, wrong artifact digest, changed or
+   removed GitHub source, ineligible/soft-deleted entry, and unauthorized
+   tenant access. DSSE fixtures are added only if the official skills contract
+   enables signing. The compatibility check targets the documented OpenClaw
+   parser/source; a plugin-only CLI command is not treated as a skills-feed
+   test.
+
+9. **M7-PORTABILITY — provider-independent operation.** Feed publication,
+   refresh, cache, source resolution, validation, and scanner admission pass in
+   supported Nitro node/edge modes and the configured provider gateway without
+   relying on a Vercel-only API, global filesystem, ambient token, or local
+   process. Provider-specific limits and credential setup are explicit in the
+   deployment contract.
+
+10. **M7-EVIDENCE — reviewable proof.** The implementation evidence records
+    the pinned source URL/revision, producer payload digest and feed ID,
+    consumer validation and cache result, exact source/commit mapping, local
+    scanner decision, rejection cases, tenant-isolation result, and
+    no-execution result for representative accepted and rejected entries. It
+    records public endpoint availability separately from implementation
+    readiness. Passing M7 does not alter the current G0/C1 release checklist.
+
+M7 must remain a bounded interoperability layer: individual pullthrough is
+on demand, feed metadata is not approval, and complete multi-shard catalog
+coverage waits for an upstream versioned pagination/sharding contract.

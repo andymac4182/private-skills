@@ -102,7 +102,12 @@ export interface SkillDetailResponse {
 }
 
 export type SkillAuditStatus = 'pass' | 'warn' | 'fail';
-export type SkillAuditRiskLevel = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+/**
+ * Risk labels emitted by the documented API and by existing partner feeds.
+ * `SAFE` is retained as a first-class upstream label alongside the newer
+ * normalized labels rather than collapsing partner evidence into local policy.
+ */
+export type SkillAuditRiskLevel = 'SAFE' | 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 /**
  * Evidence from one independent skills.sh audit partner.  A partner `pass`

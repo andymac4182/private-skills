@@ -95,6 +95,13 @@ export interface AcquireSkillOptions {
   registryHop?: number;
   /** Optional cancellation signal supplied by the durable worker. */
   signal?: AbortSignal;
+  /**
+   * Resolve a fresh skills.sh catalog bearer token for this acquisition.
+   * The callback is only consulted for the canonical https://skills.sh
+   * catalog origin and is never used for source, artifact, or redirect
+   * requests.  Callers should honor the supplied signal.
+   */
+  getSkillsShToken?: (signal?: AbortSignal) => Promise<string>;
 }
 
 export interface AcquireSkillInput extends AcquireSkillOptions {
@@ -245,6 +252,7 @@ interface RegistryTransferDescriptor {
 const DEFAULT_FETCH: FetchLike = (input, init) => globalThis.fetch(input, init);
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
+const SKILLS_SH_CANONICAL_ORIGIN = 'https://skills.sh';
 const MAX_TOKEN_BYTES = 4_096;
 const MAX_CHAIN_BYTES = 4_096;
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
@@ -521,6 +529,7 @@ function normalizeInput(
     registryChain,
     registryHop,
     signal,
+    getSkillsShToken,
     options: nestedOptions,
   } = input;
   const mergedOptions: AcquireSkillOptions = {
@@ -532,6 +541,7 @@ function normalizeInput(
     registryChain: registryChain ?? nestedOptions?.registryChain,
     registryHop: registryHop ?? nestedOptions?.registryHop,
     signal: signal ?? nestedOptions?.signal,
+    getSkillsShToken: getSkillsShToken ?? nestedOptions?.getSkillsShToken,
   };
   return {
     job,
@@ -736,7 +746,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     accept: 'application/json',
     'user-agent': 'private-skills/0.1',
   };
-  const credential = credentialHeader(upstream, 'skills-sh');
+  const credential = await skillsShCatalogCredential(upstream, apiBase, options, limits.requestTimeoutMs);
   if (credential) headers.authorization = credential;
 
   const detailURL = appendSkillsShDetailPath(apiBase, externalId);
@@ -2243,14 +2253,32 @@ function appendSkillsShDetailPath(base: URL, externalId: string): URL {
 }
 
 function validateSkillsShId(value: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 1_024 || value.includes('\\') || value.includes('\0') || /[\u0000-\u001f\u007f]/.test(value) || value.startsWith('/') || value.endsWith('/') || value.includes('//')) {
+  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > 2_048 || value.trim() !== value || !isWellFormedUnicode(value) || /[\u0000-\u001f\u007f?#%\\]/u.test(value) || value.startsWith('/') || value.endsWith('/') || value.includes('//')) {
     throw new UpstreamAcquisitionError('invalid_source', 'skills.sh external id is invalid');
   }
   const parts = value.split('/');
-  if (parts.length < 2 || parts.some((part) => part === '.' || part === '..' || !/^[A-Za-z0-9._~:@-]+$/.test(part))) {
+  if (parts.length < 2 || parts.length > 64 || parts.some((part) => !isSafeSkillsShIdSegment(part))) {
     throw new UpstreamAcquisitionError('invalid_source', 'skills.sh external id must be a safe source/slug path');
   }
   return parts.join('/');
+}
+
+function isSafeSkillsShIdSegment(value: string): boolean {
+  return value.length > 0 && value !== '.' && value !== '..' && new TextEncoder().encode(value).byteLength <= 512;
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function requireSkillsShString(value: unknown, context: string, maxLength: number): string {
@@ -2323,6 +2351,96 @@ function appendBasePath(base: URL, parts: string[]): URL {
   const prefix = base.pathname === '/' ? '' : base.pathname.replace(/\/$/, '');
   const encoded = parts.map((part) => encodeURIComponent(part)).join('/');
   return new URL(`${prefix}/${encoded}`, base.origin);
+}
+
+/**
+ * Resolve the catalog credential without allowing a request-scoped provider
+ * token to escape the canonical skills.sh API origin.  An injected callback
+ * takes precedence over the legacy explicit environment reference when it is
+ * applicable; a failed callback is terminal so an expired/stale ambient token
+ * cannot silently replace it.
+ */
+async function skillsShCatalogCredential(
+  upstream: Upstream,
+  apiBase: URL,
+  options: AcquireSkillOptions,
+  timeoutMs: number,
+): Promise<string | undefined> {
+  if (isCanonicalSkillsShCatalogBase(apiBase) && options.getSkillsShToken !== undefined) {
+    const token = await resolveSkillsShToken(options, timeoutMs);
+    return `Bearer ${token}`;
+  }
+  // Keep the existing explicit operator configuration for non-canonical
+  // fixtures/private destinations.  It is intentionally not a fallback for
+  // a request-scoped callback failure above.
+  return credentialHeader(upstream, 'skills-sh');
+}
+
+function isCanonicalSkillsShCatalogBase(apiBase: URL): boolean {
+  return apiBase.origin === SKILLS_SH_CANONICAL_ORIGIN && apiBase.pathname === '/';
+}
+
+async function resolveSkillsShToken(
+  options: AcquireSkillOptions,
+  timeoutMs: number,
+): Promise<string> {
+  const provider = options.getSkillsShToken;
+  if (provider === undefined) {
+    throw new UpstreamAcquisitionError('credential_missing', 'skills.sh catalog authentication is unavailable');
+  }
+  if (options.signal?.aborted) {
+    throw new UpstreamAcquisitionError('cancelled', 'Upstream acquisition cancelled');
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  let callerAborted = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onCallerAbort: (() => void) | undefined;
+
+  const providerPromise = Promise.resolve().then(() => provider(controller.signal));
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error('skills.sh catalog credential timeout'));
+    }, timeoutMs);
+  });
+  const cancellationPromise = options.signal === undefined
+    ? undefined
+    : new Promise<never>((_, reject) => {
+      onCallerAbort = () => {
+        callerAborted = true;
+        controller.abort(options.signal?.reason);
+        reject(new Error('skills.sh catalog credential cancelled'));
+      };
+      options.signal!.addEventListener('abort', onCallerAbort, { once: true });
+    });
+
+  let token: unknown;
+  try {
+    const pending: Array<Promise<unknown>> = [providerPromise, timeoutPromise];
+    if (cancellationPromise !== undefined) pending.push(cancellationPromise);
+    token = await Promise.race(pending);
+  } catch {
+    if (callerAborted || options.signal?.aborted) {
+      throw new UpstreamAcquisitionError('cancelled', 'Upstream acquisition cancelled');
+    }
+    if (timedOut) {
+      throw new UpstreamAcquisitionError('credential_timeout', 'skills.sh catalog authentication timed out');
+    }
+    // Do not include provider exception text: official helpers can include
+    // credential-bearing diagnostics.  The caller receives a stable message.
+    throw new UpstreamAcquisitionError('credential_unavailable', 'skills.sh catalog authentication unavailable');
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onCallerAbort !== undefined) options.signal?.removeEventListener('abort', onCallerAbort);
+  }
+
+  if (typeof token !== 'string' || token.trim().length === 0 || Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES || /[\r\n]/.test(token)) {
+    throw new UpstreamAcquisitionError('invalid_credential', 'skills.sh catalog authentication token is invalid');
+  }
+  return token;
 }
 
 function credentialHeader(upstream: Upstream, _source: 'github' | 'registry' | 'skills-sh'): string | undefined {
