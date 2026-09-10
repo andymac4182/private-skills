@@ -17,6 +17,13 @@ skills.sh URL is accepted by the built-in catalog adapter; it is a discovery
 identity, not a client-side proxy destination. GitLab, Bitbucket, generic HTTP
 archives, and other registries require explicit later adapters.
 
+The publisher-only legacy `POST /v1/directory/import` keeps its optional
+`upstreamId` behavior: when omitted, the registry selects a sole eligible
+`skills-sh` mapping; when several eligible mappings exist, the caller must
+select one explicitly before catalog access. The selected mapping's trusted
+base is bound to its own directory client, and the global browse client is not
+used as a fallback.
+
 ## Transparent skills.sh pullthrough
 
 The skills.sh adapter is a registry acquisition path, not a browser redirect or

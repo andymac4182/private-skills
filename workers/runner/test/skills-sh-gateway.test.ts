@@ -93,6 +93,62 @@ describe('portable worker skills.sh gateway credentials', () => {
     expect(disabledSeen).toEqual(['']);
   });
 
+  it('preserves the explicit legacy credentialEnv path when no gateway profile is configured', async () => {
+    const key = 'PSKILLS_WORKER_LEGACY_DIRECTORY_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'legacy-worker-token';
+    const seen: string[] = [];
+    try {
+      const options = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+      });
+      expect(options).toEqual({});
+      const acquired = await acquireImportJob({
+        ...job(),
+        upstream: { ...job().upstream!, credentialEnv: key },
+      }, {
+        ...options,
+        fetch: detailFetch(seen),
+        allowLoopbackForTests: true,
+      });
+      expect(acquired.provenance.externalSnapshotHash).toBe('worker-gateway-snapshot');
+      expect(seen).toEqual(['Bearer legacy-worker-token']);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
+  it('does not fall through to credentialEnv for an explicit empty gateway profile', async () => {
+    const key = 'PSKILLS_WORKER_EMPTY_GATEWAY_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'ambient-token-must-not-be-used';
+    let fetchCalls = 0;
+    try {
+      const options = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+        PSKILLS_DIRECTORY_GATEWAYS_JSON: '[]',
+      });
+      expect(options.skillsShGatewayCredentials).toEqual([]);
+      const error = await acquireImportJob({
+        ...job(),
+        upstream: { ...job().upstream!, credentialEnv: key },
+      }, {
+        ...options,
+        fetch: async () => {
+          fetchCalls += 1;
+          return jsonResponse({ error: 'unexpected request' }, 500);
+        },
+        allowLoopbackForTests: true,
+      }).catch((value: unknown) => value);
+      expect(error).toMatchObject({ code: 'credential_missing' });
+      expect(fetchCalls).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
   it('fails closed and redacts gateway provider failures at the worker boundary', async () => {
     const secret = 'worker-gateway-provider-secret';
     const seen: string[] = [];
@@ -153,5 +209,133 @@ describe('portable worker skills.sh gateway credentials', () => {
       PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'gateway-token-must-not-be-used',
     });
     expect(canonical.skillsShGatewayCredential).toBeUndefined();
+  });
+
+  it('routes same-ID imports to the matching gateway from the bounded profile', async () => {
+    const options = workerAcquisitionOptionsFromEnv({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+        { baseUrl: `${BASE}/directory/a`, tokenEnv: 'PSKILLS_FEED_A_TOKEN' },
+        { baseUrl: `${BASE}/directory/b/`, tokenEnv: 'PSKILLS_FEED_B_TOKEN' },
+      ]),
+      PSKILLS_FEED_A_TOKEN: 'token-a',
+      PSKILLS_FEED_B_TOKEN: 'token-b',
+    });
+    expect(options.skillsShGatewayCredentials).toHaveLength(2);
+
+    const seen: Array<{ path: string; authorization: string; hash: string }> = [];
+    const fetchImpl: NonNullable<ReturnType<typeof workerAcquisitionOptionsFromEnv>['fetch']> = async (raw, init) => {
+      const url = new URL(raw.toString());
+      const authorization = new Headers(init?.headers).get('authorization') ?? '';
+      const isA = url.pathname.startsWith('/directory/a/');
+      const isB = url.pathname.startsWith('/directory/b/');
+      if (!isA && !isB) return jsonResponse({ error: 'unexpected route' }, 404);
+      const hash = isA ? 'worker-feed-a' : 'worker-feed-b';
+      seen.push({ path: url.pathname, authorization, hash });
+      return jsonResponse({
+        id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github', hash,
+        files: [{ path: 'SKILL.md', contents: '---\nname: demo\ndescription: worker multi-feed\n---\n# demo\n' }],
+      });
+    };
+
+    const first = await acquireImportJob(job(`${BASE}/directory/a`), {
+      ...options,
+      fetch: fetchImpl,
+      allowLoopbackForTests: true,
+    });
+    const second = await acquireImportJob(job(`${BASE}/directory/b`), {
+      ...options,
+      fetch: fetchImpl,
+      allowLoopbackForTests: true,
+    });
+
+    expect(first.provenance.externalSnapshotHash).toBe('worker-feed-a');
+    expect(second.provenance.externalSnapshotHash).toBe('worker-feed-b');
+    expect(seen).toEqual([
+      { path: '/directory/a/api/v1/skills/octo/repo/demo', authorization: 'Bearer token-a', hash: 'worker-feed-a' },
+      { path: '/directory/b/api/v1/skills/octo/repo/demo', authorization: 'Bearer token-b', hash: 'worker-feed-b' },
+    ]);
+  });
+
+  it('keeps malformed or conflicting profiles fail-closed with no ambient fallback', async () => {
+    const ambientKey = 'PSKILLS_MULTI_FEED_AMBIENT_TOKEN';
+    const previous = process.env[ambientKey];
+    process.env[ambientKey] = 'ambient-token-must-not-be-used';
+    try {
+      const malformed = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+        PSKILLS_DIRECTORY_GATEWAYS_JSON: '{not-json',
+      });
+      expect(malformed.skillsShGatewayCredentials).toEqual([]);
+
+      let fetchCalls = 0;
+      const fetchImpl: NonNullable<ReturnType<typeof workerAcquisitionOptionsFromEnv>['fetch']> = async () => {
+        fetchCalls += 1;
+        return jsonResponse({ error: 'unexpected request' }, 500);
+      };
+      const error = await acquireImportJob({
+        ...job(`${BASE}/directory/unconfigured`),
+        upstream: { ...job(`${BASE}/directory/unconfigured`).upstream!, credentialEnv: ambientKey },
+      }, {
+        ...malformed,
+        fetch: fetchImpl,
+        allowLoopbackForTests: true,
+      }).catch((value: unknown) => value);
+      expect(error).toMatchObject({ code: 'credential_missing' });
+      expect(fetchCalls).toBe(0);
+
+      const duplicate = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+        PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+          { baseUrl: `${BASE}/directory/a`, tokenEnv: 'PSKILLS_FEED_A_TOKEN' },
+          { baseUrl: `${BASE}/directory/a/`, tokenEnv: 'PSKILLS_FEED_B_TOKEN' },
+        ]),
+        PSKILLS_FEED_A_TOKEN: 'token-a',
+        PSKILLS_FEED_B_TOKEN: 'token-b',
+      });
+      expect(duplicate.skillsShGatewayCredentials).toEqual([]);
+
+      const conflicting = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+        PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([{ baseUrl: `${BASE}/directory/a`, tokenEnv: 'PSKILLS_FEED_A_TOKEN' }]),
+        PSKILLS_DIRECTORY_GATEWAY_URL: `${BASE}/directory/a`,
+        PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'legacy-token-must-not-win',
+        PSKILLS_FEED_A_TOKEN: 'token-a',
+      });
+      expect(conflicting.skillsShGatewayCredentials).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env[ambientKey];
+      else process.env[ambientKey] = previous;
+    }
+  });
+
+  it('uses canonical OIDC for skills.sh even when plural gateways are configured', async () => {
+    const options = workerAcquisitionOptionsFromEnv({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([{ baseUrl: `${BASE}/directory/a`, tokenEnv: 'PSKILLS_FEED_A_TOKEN' }]),
+      PSKILLS_FEED_A_TOKEN: 'gateway-token-must-not-run',
+    });
+    const authorizations: string[] = [];
+    let oidcCalls = 0;
+    const fetchImpl: NonNullable<ReturnType<typeof workerAcquisitionOptionsFromEnv>['fetch']> = async (_raw, init) => {
+      authorizations.push(new Headers(init?.headers).get('authorization') ?? '');
+      return jsonResponse({
+        id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github', hash: 'canonical-feed',
+        files: [{ path: 'SKILL.md', contents: '---\nname: demo\ndescription: canonical worker\n---\n# demo\n' }],
+      });
+    };
+
+    const acquired = await acquireImportJob(job('https://skills.sh'), {
+      ...options,
+      getSkillsShToken: async () => {
+        oidcCalls += 1;
+        return 'oidc-token';
+      },
+      fetch: fetchImpl,
+      allowLoopbackForTests: true,
+    });
+    expect(acquired.provenance.externalSnapshotHash).toBe('canonical-feed');
+    expect(oidcCalls).toBe(1);
+    expect(authorizations).toEqual(['Bearer oidc-token']);
   });
 });

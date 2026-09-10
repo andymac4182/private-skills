@@ -18,7 +18,7 @@ export function createDirectoryTokenProvider(env: RuntimeEnvironment = {}): Skil
   return createUnavailableSkillsDirectoryTokenProvider();
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; directoryTokenProvider: SkillsTokenProvider; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   for (const name of ['PSKILLS_STATE_ENDPOINT', 'PSKILLS_STATE_TOKEN', 'PSKILLS_STORAGE_ENDPOINT', 'PSKILLS_STORAGE_TOKEN']) {
     if (!env[name]) throw new Error(`Edge runtime requires ${name}`);
   }
@@ -26,6 +26,8 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   return {
     repository,
     directoryTokenProvider: createDirectoryTokenProvider(env),
+    directoryOfficialTokenProvider: createUnavailableSkillsDirectoryTokenProvider(),
+    directoryOfficialAvailable: false,
     createSearchIndex: (profile) => new StateSemanticIndex(repository, { profile }),
     blobs: new HttpBlobStore({ baseUrl: env.PSKILLS_STORAGE_ENDPOINT!, token: env.PSKILLS_STORAGE_TOKEN!, allowLoopback: env.PSKILLS_ENVIRONMENT === 'development' }),
   };

@@ -5,6 +5,8 @@ declare module '#pskills-infrastructure' {
     blobs: import('../../../packages/contracts/src/index').BlobStore;
     hostedWorker?: (request: Request) => Promise<Response>;
     directoryTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
+    directoryOfficialTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
+    directoryOfficialAvailable: boolean;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;
     createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;

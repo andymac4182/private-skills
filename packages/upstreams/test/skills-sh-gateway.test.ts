@@ -56,7 +56,7 @@ function input(fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']>): AcquireS
 function detail(files: unknown = [{
   path: 'SKILL.md',
   contents: '---\nname: demo\ndescription: Gateway fixture\n---\n# demo\n',
-}]): Record<string, unknown> {
+}], hash = 'gateway-snapshot'): Record<string, unknown> {
   return {
     id: 'octo/repo/demo',
     source: 'octo/repo',
@@ -65,7 +65,7 @@ function detail(files: unknown = [{
     sourceType: 'github',
     installUrl: 'https://github.com/octo/repo/tree/main/skills/demo',
     url: '/site/octo/repo/demo',
-    hash: 'gateway-snapshot',
+    hash,
     files,
   };
 }
@@ -370,5 +370,123 @@ describe('skills.sh gateway credentials', () => {
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
     expect(providerSignal?.aborted).toBe(true);
     expect(fetchCalls).toBe(0);
+  });
+
+  it('routes two same-ID catalog feeds by exact origin and full path', async () => {
+    const authorizations: string[] = [];
+    const snapshots: string[] = [];
+    const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
+      const url = new URL(raw.toString());
+      const authorization = init?.headers?.authorization;
+      authorizations.push(authorization ?? '');
+      if (url.pathname.startsWith('/directory/a/')) {
+        snapshots.push('feed-a');
+        return json(detail(undefined, 'snapshot-feed-a'));
+      }
+      if (url.pathname.startsWith('/directory/b/')) {
+        snapshots.push('feed-b');
+        return json(detail(undefined, 'snapshot-feed-b'));
+      }
+      return json({ error: 'unexpected feed' }, 404);
+    };
+    const gateways = [
+      { baseUrl: `${BASE}/directory/a`, getToken: async () => 'token-a' },
+      { baseUrl: `${BASE}/directory/b/`, getToken: async () => 'token-b' },
+    ] as const;
+
+    const first = await acquireSkillsShSkill({
+      ...input(fetchImpl),
+      upstream: { ...input(fetchImpl).upstream!, baseUrl: `${BASE}/directory/a` },
+      skillsShGatewayCredentials: gateways,
+    });
+    const second = await acquireSkillsShSkill({
+      ...input(fetchImpl),
+      upstream: { ...input(fetchImpl).upstream!, baseUrl: `${BASE}/directory/b` },
+      skillsShGatewayCredentials: gateways,
+    });
+
+    expect(first.provenance.externalSnapshotHash).toBe('snapshot-feed-a');
+    expect(second.provenance.externalSnapshotHash).toBe('snapshot-feed-b');
+    expect(snapshots).toEqual(['feed-a', 'feed-b']);
+    expect(authorizations).toEqual(['Bearer token-a', 'Bearer token-b']);
+  });
+
+  it('fails closed for an unmatched multi-feed path without ambient credentials', async () => {
+    const ambientKey = 'PSKILLS_MULTI_FEED_AMBIENT_TOKEN';
+    const previous = process.env[ambientKey];
+    process.env[ambientKey] = 'ambient-token-must-not-be-used';
+    let fetchCalls = 0;
+    try {
+      const request = input(async () => {
+        fetchCalls += 1;
+        return json(detail());
+      });
+      request.upstream = { ...request.upstream!, credentialEnv: ambientKey, baseUrl: `${BASE}/directory/a/child` };
+      request.skillsShGatewayCredentials = [{
+        baseUrl: `${BASE}/directory/a`,
+        getToken: async () => 'token-a',
+      }];
+
+      await expect(acquireSkillsShSkill(request)).rejects.toMatchObject({
+        code: 'credential_missing',
+        message: 'skills.sh gateway credential is unavailable for this catalog base',
+      });
+      expect(fetchCalls).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env[ambientKey];
+      else process.env[ambientKey] = previous;
+    }
+  });
+
+  it('rejects invalid and duplicate multi-feed profiles before catalog I/O', async () => {
+    let fetchCalls = 0;
+    const request = input(async () => {
+      fetchCalls += 1;
+      return json(detail());
+    });
+    request.skillsShGatewayCredentials = [
+      { baseUrl: `${BASE}/directory/a`, getToken: async () => 'token-a' },
+      { baseUrl: `${BASE}/directory/a/`, getToken: async () => 'token-other' },
+    ];
+    await expect(acquireSkillsShSkill(request)).rejects.toMatchObject({ code: 'invalid_credential_ref' });
+
+    const malformed = input(async () => {
+      fetchCalls += 1;
+      return json(detail());
+    });
+    malformed.skillsShGatewayCredentials = { invalid: true } as never;
+    await expect(acquireSkillsShSkill(malformed)).rejects.toMatchObject({ code: 'invalid_credential_ref' });
+    expect(fetchCalls).toBe(0);
+  });
+
+  it('uses canonical OIDC with a plural gateway profile and strips it on redirects', async () => {
+    const authorizations: Array<string | undefined> = [];
+    let oidcCalls = 0;
+    const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
+      const url = new URL(raw.toString());
+      authorizations.push(init?.headers?.authorization);
+      if (url.pathname === '/api/v1/skills/octo/repo/demo') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://skills.sh/api/v1/skills/octo/repo/demo-redirect' },
+        });
+      }
+      if (url.pathname === '/api/v1/skills/octo/repo/demo-redirect') return json(detail());
+      return json({ error: 'unexpected source' }, 404);
+    };
+    const request = input(fetchImpl);
+    request.upstream = { ...request.upstream!, baseUrl: 'https://skills.sh' };
+    request.skillsShGatewayCredentials = [{
+      baseUrl: `${BASE}/directory/a`,
+      getToken: async () => 'gateway-must-not-run',
+    }];
+    request.getSkillsShToken = async () => {
+      oidcCalls += 1;
+      return 'oidc-token';
+    };
+
+    await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
+    expect(oidcCalls).toBe(1);
+    expect(authorizations).toEqual(['Bearer oidc-token', undefined]);
   });
 });

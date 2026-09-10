@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createSkillsShGatewayCredential,
   createUnavailableSkillsDirectoryTokenProvider,
+  MAX_SKILLS_DIRECTORY_GATEWAYS,
+  MAX_SKILLS_DIRECTORY_GATEWAYS_JSON_BYTES,
   normalizeDirectoryBaseURL,
+  resolveSkillsDirectoryGateways,
   resolveSkillsDirectoryConnection,
   SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
 } from '../src/index.js';
@@ -36,6 +39,93 @@ describe('portable skills.sh gateway configuration', () => {
     expect(connection.gateway.baseUrl).toBe('https://gateway.example.test/catalog');
     await expect(connection.gateway.getToken()).resolves.toBe('gateway-secret');
     expect('token' in connection.gateway).toBe(false);
+  });
+
+  it('resolves multiple JSON profiles with exact normalized bases and callback-only tokens', async () => {
+    const resolution = resolveSkillsDirectoryGateways({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+        { baseUrl: 'https://catalog-a.example.test/api///', tokenEnv: 'PSKILLS_GATEWAY_A' },
+        { baseUrl: 'https://catalog-b.example.test/catalog', tokenEnv: 'PSKILLS_GATEWAY_B' },
+      ]),
+      PSKILLS_GATEWAY_A: 'token-a',
+      PSKILLS_GATEWAY_B: 'token-b',
+    });
+
+    expect(resolution.kind).toBe('ready');
+    if (resolution.kind !== 'ready') throw new Error('expected ready gateway profiles');
+    expect(resolution.gateways.map((gateway) => gateway.baseUrl)).toEqual([
+      'https://catalog-a.example.test/api',
+      'https://catalog-b.example.test/catalog',
+    ]);
+    await expect(resolution.gateways[0]!.getToken()).resolves.toBe('token-a');
+    await expect(resolution.gateways[1]!.getToken()).resolves.toBe('token-b');
+    expect(JSON.stringify(resolution)).not.toContain('token-a');
+    expect(JSON.stringify(resolution)).not.toContain('token-b');
+  });
+
+  it('keeps the legacy gateway profile and rejects duplicate normalized bases', () => {
+    const duplicate = resolveSkillsDirectoryGateways({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://catalog.example.test/api/',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'legacy-token',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+        { baseUrl: 'https://catalog.example.test/api///', tokenEnv: 'PSKILLS_GATEWAY_DUPLICATE' },
+      ]),
+      PSKILLS_GATEWAY_DUPLICATE: 'profile-token',
+    });
+    expect(duplicate).toEqual({ kind: 'unavailable', reason: 'duplicate_gateway_base' });
+  });
+
+  it('uses a JSON profile for the backwards-compatible configured UI base', async () => {
+    const connection = resolveSkillsDirectoryConnection({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_SKILLS_SH_BASE_URL: 'https://catalog.example.test/api/',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+        { baseUrl: 'https://catalog.example.test/api', tokenEnv: 'PSKILLS_GATEWAY_PROFILE' },
+      ]),
+      PSKILLS_GATEWAY_PROFILE: 'profile-token',
+    });
+
+    expect(connection.kind).toBe('gateway');
+    if (connection.kind !== 'gateway') throw new Error('expected JSON gateway profile');
+    expect(connection.gateway.baseUrl).toBe('https://catalog.example.test/api');
+    await expect(connection.gateway.getToken()).resolves.toBe('profile-token');
+  });
+
+  it.each([
+    ['invalid JSON', '{'],
+    ['non-object profile', JSON.stringify(['profile'])],
+    ['extra profile field', JSON.stringify([{ baseUrl: 'https://catalog.example.test', tokenEnv: 'PSKILLS_GATEWAY', extra: true }])],
+    ['invalid token environment name', JSON.stringify([{ baseUrl: 'https://catalog.example.test', tokenEnv: 'gateway_token' }])],
+    ['missing token environment value', JSON.stringify([{ baseUrl: 'https://catalog.example.test', tokenEnv: 'PSKILLS_GATEWAY_MISSING' }])],
+    ['official gateway host', JSON.stringify([{ baseUrl: 'https://www.skills.sh/catalog', tokenEnv: 'PSKILLS_GATEWAY' }])],
+  ])('fails closed for %s gateway profiles', (_label, encoded) => {
+    const resolution = resolveSkillsDirectoryGateways({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: encoded,
+      PSKILLS_GATEWAY: 'should-not-be-used',
+    });
+    expect(resolution.kind).toBe('unavailable');
+    expect(JSON.stringify(resolution)).not.toContain('should-not-be-used');
+  });
+
+  it('enforces profile count and UTF-8 JSON byte bounds', () => {
+    const profiles = Array.from({ length: MAX_SKILLS_DIRECTORY_GATEWAYS + 1 }, (_, index) => ({
+      baseUrl: `https://catalog-${index}.example.test`,
+      tokenEnv: `PSKILLS_GATEWAY_${index}`,
+    }));
+    const env: Record<string, string> = {
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify(profiles),
+    };
+    for (const profile of profiles) env[profile.tokenEnv] = 'token';
+    expect(resolveSkillsDirectoryGateways(env)).toEqual({ kind: 'unavailable', reason: 'gateway_profile_limit' });
+
+    expect(resolveSkillsDirectoryGateways({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: '🛡️'.repeat(Math.ceil(MAX_SKILLS_DIRECTORY_GATEWAYS_JSON_BYTES / 4)),
+    })).toEqual({ kind: 'unavailable', reason: 'gateway_profiles_too_large' });
   });
 
   it.each([

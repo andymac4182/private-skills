@@ -103,6 +103,37 @@ describe('hosted worker route', () => {
     expect(response.status).toBe(200);
   });
 
+  it('wires the bounded multi-feed profile through the hosted runner', async () => {
+    const handler = createHostedWorkerHandlerFromEnv({
+      PSKILLS_API_URL: 'https://registry.example.test',
+      PSKILLS_WORKER_TOKEN: 'worker-token-fixture',
+      CRON_SECRET: SECRET,
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: JSON.stringify([
+        { baseUrl: 'https://directory-gateway.example.test/tenant-a', tokenEnv: 'PSKILLS_HOSTED_FEED_A' },
+        { baseUrl: 'https://directory-gateway.example.test/tenant-b', tokenEnv: 'PSKILLS_HOSTED_FEED_B' },
+      ]),
+      PSKILLS_HOSTED_FEED_A: 'hosted-token-a',
+      PSKILLS_HOSTED_FEED_B: 'hosted-token-b',
+      PSKILLS_IMAGE_SKILLSGUARD: IMAGE,
+    }, {
+      executor: { run: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '', durationMs: 1, timedOut: false, outputTruncated: false }) },
+      createRunner: (runnerOptions) => {
+        const gateways = runnerOptions.acquisition?.skillsShGatewayCredentials;
+        expect(gateways?.map((gateway) => gateway.baseUrl)).toEqual([
+          'https://directory-gateway.example.test/tenant-a',
+          'https://directory-gateway.example.test/tenant-b',
+        ]);
+        expect(gateways?.every((gateway) => !('token' in gateway))).toBe(true);
+        return { runOnce: async () => ({ claimed: false }) } as unknown as WorkerRunner;
+      },
+    });
+    const response = await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(response.status).toBe(200);
+  });
+
   it('does not wire gateway settings while directory access is disabled', async () => {
     let acquisition: WorkerRunnerOptions['acquisition'] | undefined;
     const handler = createHostedWorkerHandlerFromEnv({

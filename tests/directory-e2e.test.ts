@@ -40,7 +40,12 @@ describe('directory admission across core, worker, and Files SDK', () => {
     const detail = vi.fn(async () => structuredClone(snapshot));
     const unavailable = async (): Promise<never> => { throw new Error('Unexpected metadata request'); };
     const directory: RegistryDirectoryClient = { detail, list: unavailable, search: unavailable, curated: unavailable, audit: unavailable };
-    harness = await createLocalRegistryHarness({ policy, directory, allowLoopbackUpstreams: true });
+    harness = await createLocalRegistryHarness({
+      policy,
+      directory,
+      directoryBaseUrl: 'http://127.0.0.1:5419',
+      allowLoopbackUpstreams: true,
+    });
     const { handler, origin, token, workerToken } = harness;
     const call = (path: string, json?: unknown) => request(handler, origin, path, {
       headers: bearer(token), ...(json === undefined ? {} : { method: 'POST', json }),

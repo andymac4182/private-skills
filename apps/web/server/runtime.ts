@@ -6,35 +6,57 @@ import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastr
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
-import { createSkillsDirectoryClient, resolveSkillsDirectoryConnection } from '../../../packages/directory/src/index';
+import {
+  createSkillsDirectoryClient,
+  createSkillsDirectoryClientResolver,
+  resolveSkillsDirectoryConnection,
+  resolveSkillsDirectoryGateways,
+  SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
+} from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
+  const directoryGateways = resolveSkillsDirectoryGateways(env);
   const configuredDirectoryBaseURL = directoryConnection.kind === 'official'
     ? directoryConnection.baseURL
     : directoryConnection.kind === 'gateway'
       ? directoryConnection.gateway.baseUrl
       : undefined;
+  const configuredGatewayBases = directoryGateways.kind === 'ready'
+    ? directoryGateways.gateways.map((gateway) => gateway.baseUrl)
+    : [];
+  const trustedDirectoryBaseURL = configuredDirectoryBaseURL !== undefined &&
+    (directoryConnection.kind === 'gateway' ||
+      (directoryConnection.kind === 'official' && configuredDirectoryBaseURL === SKILLS_DIRECTORY_OFFICIAL_BASE_URL))
+    ? configuredDirectoryBaseURL
+    : undefined;
   const config = {
     organizationId: env.PSKILLS_ORGANIZATION_ID ?? 'default',
     publicOrigin: env.PSKILLS_PUBLIC_ORIGIN ?? 'http://localhost:5173',
     maxBodyBytes: Number(env.PSKILLS_MAX_BODY_BYTES ?? 3_000_000),
     leaseSeconds: Number(env.PSKILLS_LEASE_SECONDS ?? 300),
     allowLoopbackUpstreams: env.PSKILLS_ENVIRONMENT === 'test',
-    trustedSkillsShBaseUrls: [
+    trustedSkillsShBaseUrls: [...new Set([
       'https://skills.sh',
-      ...(configuredDirectoryBaseURL === undefined ? [] : [configuredDirectoryBaseURL]),
-    ],
+      ...(trustedDirectoryBaseURL === undefined ? [] : [trustedDirectoryBaseURL]),
+      ...configuredGatewayBases,
+    ])],
   };
   const infrastructure = await createInfrastructure(env);
+  const directoryForBase = createSkillsDirectoryClientResolver({
+    gateways: directoryGateways,
+    officialAvailable: infrastructure.directoryOfficialAvailable,
+    officialTokenProvider: infrastructure.directoryOfficialTokenProvider,
+  });
   const auth = await createAuthenticatorFromEnv(env);
   // Directory access is an explicit server-side opt-in. The selected
   // infrastructure profile owns the credential callback: Node resolves the
   // official Vercel OIDC helper per request for skills.sh, while edge keeps
   // custom gateway authentication disconnected until separately configured.
   // The callback is never exposed to browser code.
-  const directory = configuredDirectoryBaseURL !== undefined
+  const directory = configuredDirectoryBaseURL !== undefined &&
+    (directoryConnection.kind === 'gateway' || infrastructure.directoryOfficialAvailable)
     ? createSkillsDirectoryClient({
       baseURL: configuredDirectoryBaseURL,
       getToken: infrastructure.directoryTokenProvider,
@@ -43,7 +65,15 @@ async function createRuntime(env: RuntimeEnvironment) {
   // Unlisted pack discovery is public and never uses a directory bearer token.
   const directoryPacks = env.PSKILLS_PACK_DIRECTORY_ENABLED === 'true' || env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsPackClient() : undefined;
-  const registry = createRegistryHandler({ ...infrastructure, auth, config, directory, directoryPacks });
+  const registryDependencies = {
+    ...infrastructure,
+    auth,
+    config,
+    directory,
+    directoryPacks,
+    directoryForBase,
+  };
+  const registry = createRegistryHandler(registryDependencies);
   const embeddingProvider = createEmbeddingProvider(env);
   const intelligence = createIntelligenceHandler({
     repository: infrastructure.repository, blobs: infrastructure.blobs,

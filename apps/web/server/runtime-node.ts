@@ -14,9 +14,9 @@ import { createHostedWorkerHandlerFromEnv } from '../../../workers/runner/src/ho
 import {
   createSkillsDirectoryGatewayTokenProvider,
   createUnavailableSkillsDirectoryTokenProvider,
+  resolveSkillsDirectoryGateways,
   resolveSkillsDirectoryConnection,
   SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
-  SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
   type SkillsTokenProvider,
 } from '../../../packages/directory/src/index';
 
@@ -35,6 +35,14 @@ export function createDirectoryTokenProvider(env: RuntimeEnvironment): SkillsTok
   const connection = resolveSkillsDirectoryConnection(env);
   if (connection.kind === 'gateway') return createSkillsDirectoryGatewayTokenProvider(connection.gateway);
   if (connection.kind !== 'official') return createUnavailableSkillsDirectoryTokenProvider();
+
+  return createOfficialDirectoryTokenProvider(env);
+}
+
+/** Resolve a fresh OIDC token for the fixed canonical catalog feed. */
+export function createOfficialDirectoryTokenProvider(env: RuntimeEnvironment): SkillsTokenProvider {
+  const gateways = resolveSkillsDirectoryGateways(env);
+  if (gateways.kind !== 'ready') return createUnavailableSkillsDirectoryTokenProvider();
 
   return async (signal) => {
     throwIfAborted(signal);
@@ -57,7 +65,7 @@ function required(env: RuntimeEnvironment, name: string): string {
   return value;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = () => defaultRegistryState({ production, allowUnscanned: env.PSKILLS_ALLOW_UNSCANNED === 'true' });
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -104,7 +112,6 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
-  const directoryConnection = resolveSkillsDirectoryConnection(env);
   // The official skills.sh token provider is request-scoped. Keep the
   // resolver function in the long-lived runtime, never its token, and pass it
   // into hosted import jobs so each canonical catalog request obtains a fresh
@@ -113,8 +120,11 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   // explicitly configured gateway through its separate, base-bound credential
   // seam; this callback remains the root official-origin OIDC path only.
   const directoryTokenProvider = createDirectoryTokenProvider(env);
+  const directoryOfficialTokenProvider = createOfficialDirectoryTokenProvider(env);
+  const directoryGateways = resolveSkillsDirectoryGateways(env);
+  const directoryOfficialAvailable = directoryGateways.kind === 'ready';
   const hostedSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
-    const token = await directoryTokenProvider(signal);
+    const token = await directoryOfficialTokenProvider(signal);
     if (typeof token !== 'string' || token.trim().length === 0) {
       throw new Error(SKILLS_DIRECTORY_AUTH_UNAVAILABLE);
     }
@@ -123,12 +133,12 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
     ? createHostedWorkerHandlerFromEnv(
       { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
-      directoryConnection.kind === 'official' && directoryConnection.baseURL === SKILLS_DIRECTORY_OFFICIAL_BASE_URL
+      directoryOfficialAvailable
         ? { acquisition: { getSkillsShToken: hostedSkillsShToken } }
         : {},
     )
     : undefined;
-  return { repository, blobs, hostedWorker, directoryTokenProvider, createSearchIndex: (profile) => {
+  return { repository, blobs, hostedWorker, directoryTokenProvider, directoryOfficialTokenProvider, directoryOfficialAvailable, createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {
       if (!postgresPool) throw new Error('pgvector search requires PostgreSQL metadata');

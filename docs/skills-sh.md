@@ -100,6 +100,18 @@ behavior. Legacy ambient directory-token settings, including `DIRECTORY_TOKEN`
 and `PSKILLS_DIRECTORY_TOKEN`, are ignored; use the explicit URL/token pair.
 Deployment enablement and runtime evidence are tracked separately.
 
+Multiple operator gateways may be supplied through
+`PSKILLS_DIRECTORY_GATEWAYS_JSON`, a JSON array of strict `{ "baseUrl": "...",
+"tokenEnv": "PSKILLS_DIRECTORY_GATEWAY_A" }` entries. Only the `tokenEnv` names
+are stored in this setting; values are read from the server environment and
+never appear in logs or serialized directory state. The combined legacy and
+profile configuration is bounded to 16 custom gateway bindings, and the JSON
+setting is bounded to 32 KiB of UTF-8. The default UI client keeps its legacy
+base selection behavior, while transparent feed resolution accepts only the
+exact selected feed base and fails closed for unknown bases. Node may use fresh
+request-scoped OIDC for the canonical root `https://skills.sh`; edge hosts keep
+that root unavailable and can use only explicitly configured custom profiles.
+
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
 artifacts. Pack preview runs through Web APIs on both Node and edge profiles.

@@ -31,6 +31,7 @@ const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION_ID = 'org-transparent';
 const EXTERNAL_ID = 'acme/repo/my-skill';
 const SOURCE = 'acme/repo';
+const CUSTOM_BASE = 'https://gateway.example.test/catalog';
 
 const OWNER: Principal & { scopes: string[] } = {
   organizationId: ORGANIZATION_ID,
@@ -196,6 +197,8 @@ function setup(options: {
   slug?: string;
   sourceType?: 'github' | 'well-known';
   allowLoopbackUpstreams?: boolean;
+  trustedSkillsShBaseUrls?: readonly string[];
+  directoryBindings?: ReadonlyMap<string, RegistryDirectoryClient>;
 } = {}) {
   const repository = createMemoryStateRepository({
     stateFactory: () => defaultRegistryState({ production: false, allowUnscanned: true }),
@@ -218,9 +221,18 @@ function setup(options: {
     organizationId: ORGANIZATION_ID,
     leaseSeconds: 60,
     ...(options.allowLoopbackUpstreams === undefined ? {} : { allowLoopbackUpstreams: options.allowLoopbackUpstreams }),
+    ...(options.trustedSkillsShBaseUrls === undefined ? {} : { trustedSkillsShBaseUrls: options.trustedSkillsShBaseUrls }),
   };
-  const handler = createRegistryHandler({ repository, blobs, auth, directory, config });
-  return { repository, blobs, directory, auth, config, handler };
+  const directoryForBaseCalls: string[] = [];
+  const directoryForBase = (baseUrl: string): RegistryDirectoryClient | undefined => {
+    directoryForBaseCalls.push(baseUrl);
+    if (options.directoryBindings?.has(baseUrl)) return options.directoryBindings.get(baseUrl);
+    if (baseUrl === 'https://skills.sh') return directory;
+    if (options.allowLoopbackUpstreams && baseUrl === 'http://127.0.0.1:4317/catalog') return directory;
+    return undefined;
+  };
+  const handler = createRegistryHandler({ repository, blobs, auth, directory, directoryForBase, config });
+  return { repository, blobs, directory, directoryForBaseCalls, auth, config, handler };
 }
 
 async function createFeed(
@@ -389,6 +401,17 @@ describe('transparent directory pull-through', () => {
     expect(unknown.status).toBe(404);
     expect(await responseJson<{ error: { code: string } }>(unknown)).toHaveProperty('error.code', 'FEED_NOT_FOUND');
     expect(test.directory.detailCalls).toBe(0);
+    expect(test.directoryForBaseCalls).toEqual([]);
+
+    await createFeed(test, { name: 'private', namespace: '@other' });
+    const crossFeed = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'private', externalId: EXTERNAL_ID }),
+    }));
+    expect(crossFeed.status).toBe(403);
+    expect(await responseJson<{ error: { code: string } }>(crossFeed)).toHaveProperty('error.code', 'FORBIDDEN');
+    expect(test.directoryForBaseCalls).toEqual([]);
   });
 
   it('coalesces cold requests and serves a warm snapshot without a directory call', async () => {
@@ -416,7 +439,134 @@ describe('transparent directory pull-through', () => {
     }));
     expect(warm.status).toBe(200);
     expect(test.directory.detailCalls).toBe(0);
+    expect(test.directoryForBaseCalls).toHaveLength(2);
     expect(await warm.json()).toHaveProperty('resolution.digest');
+  });
+
+  it('binds cold and refresh metadata to the selected feed origin', async () => {
+    const custom = new DirectoryFixture();
+    custom.hash = 'custom-snapshot';
+    custom.files = [{
+      path: 'SKILL.md',
+      contents: '---\nname: my-skill\ndescription: custom catalog\n---\n',
+    }];
+    const test = setup({
+      trustedSkillsShBaseUrls: ['https://skills.sh', CUSTOM_BASE],
+      directoryBindings: new Map([[CUSTOM_BASE, custom]]),
+    });
+    await createFeed(test, { name: 'canonical' });
+    await createFeed(test, { name: 'custom', baseUrl: CUSTOM_BASE });
+
+    const cold = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'custom', externalId: EXTERNAL_ID }),
+    }));
+    expect(cold.status).toBe(202);
+    expect(custom.detailCalls).toBe(1);
+    expect(test.directory.detailCalls).toBe(0);
+    expect(test.directoryForBaseCalls).toEqual([CUSTOM_BASE]);
+    expect((await test.repository.read(ORGANIZATION_ID)).jobs[0]?.import).toMatchObject({
+      feedName: 'custom',
+      externalSnapshotHash: 'custom-snapshot',
+    });
+
+    const canonical = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'canonical', externalId: EXTERNAL_ID }),
+    }));
+    expect(canonical.status).toBe(202);
+    expect(test.directory.detailCalls).toBe(1);
+    expect(test.directoryForBaseCalls).toEqual([CUSTOM_BASE, 'https://skills.sh']);
+    expect((await test.repository.read(ORGANIZATION_ID)).jobs[1]?.import).toMatchObject({
+      feedName: 'canonical',
+      externalSnapshotHash: 'snapshot-1',
+    });
+
+    const refreshed = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'custom', externalId: EXTERNAL_ID, refresh: true }),
+    }));
+    expect(refreshed.status).toBe(202);
+    expect(custom.detailCalls).toBe(2);
+    expect(test.directory.detailCalls).toBe(1);
+    expect(test.directoryForBaseCalls).toEqual([CUSTOM_BASE, 'https://skills.sh', CUSTOM_BASE]);
+  });
+
+  it('uses the selected feed for null-snapshot search hydration', async () => {
+    const custom = new DirectoryFixture({ sourceType: 'well-known' });
+    custom.hash = null;
+    custom.files = null;
+    const test = setup({
+      trustedSkillsShBaseUrls: ['https://skills.sh', CUSTOM_BASE],
+      directoryBindings: new Map([[CUSTOM_BASE, custom]]),
+    });
+    await createFeed(test, { name: 'canonical' });
+    await createFeed(test, { name: 'custom', baseUrl: CUSTOM_BASE });
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'custom', externalId: EXTERNAL_ID }),
+    }));
+    expect(response.status).toBe(202);
+    expect(custom.detailCalls).toBe(1);
+    expect(custom.searchCalls).toBe(1);
+    expect(custom.listCalls).toBe(0);
+    expect(test.directory.detailCalls).toBe(0);
+    expect(test.directory.searchCalls).toBe(0);
+    expect((await test.repository.read(ORGANIZATION_ID)).jobs[0]?.import).toMatchObject({
+      externalSnapshotHash: null,
+      externalSourceType: 'well-known',
+    });
+  });
+
+  it('uses the selected feed for one-character null-snapshot list hydration', async () => {
+    const custom = new DirectoryFixture({ slug: 'x', sourceType: 'well-known' });
+    custom.hash = null;
+    custom.files = null;
+    const test = setup({
+      trustedSkillsShBaseUrls: ['https://skills.sh', CUSTOM_BASE],
+      directoryBindings: new Map([[CUSTOM_BASE, custom]]),
+    });
+    await createFeed(test, { name: 'canonical' });
+    await createFeed(test, { name: 'custom', baseUrl: CUSTOM_BASE });
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'custom', externalId: custom.externalId }),
+    }));
+    expect(response.status).toBe(202);
+    expect(custom.detailCalls).toBe(1);
+    expect(custom.searchCalls).toBe(0);
+    expect(custom.listCalls).toBe(1);
+    expect(test.directory.detailCalls).toBe(0);
+    expect(test.directory.listCalls).toBe(0);
+    expect((await test.repository.read(ORGANIZATION_ID)).jobs[0]?.import).toMatchObject({
+      externalSnapshotHash: null,
+      externalSourceType: 'well-known',
+    });
+  });
+
+  it('fails closed when the selected feed has no exact directory binding', async () => {
+    const test = setup({
+      trustedSkillsShBaseUrls: ['https://skills.sh', CUSTOM_BASE],
+    });
+    await createFeed(test, { name: 'canonical' });
+    await createFeed(test, { name: 'custom', baseUrl: CUSTOM_BASE });
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ feed: 'custom', externalId: EXTERNAL_ID }),
+    }));
+    expect(response.status).toBe(503);
+    expect(await responseJson<{ error: { code: string } }>(response)).toHaveProperty('error.code', 'DIRECTORY_NOT_CONFIGURED');
+    expect(test.directory.detailCalls).toBe(0);
+    expect(test.directoryForBaseCalls).toEqual([CUSTOM_BASE]);
   });
 
   it('forces a new import for an explicit refresh when the catalog hash is null', async () => {
