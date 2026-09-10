@@ -106,7 +106,14 @@ function directoryClient(): RegistryDirectoryClient {
 }
 
 describe('skills.sh directory routes', () => {
-  function setup(directoryPacks?: RegistryDirectoryPackClient, directory: RegistryDirectoryClient | null = directoryClient()) {
+  function setup(
+    directoryPacks?: RegistryDirectoryPackClient,
+    directory: RegistryDirectoryClient | null = directoryClient(),
+    options: {
+      trustedSkillsShBaseUrls?: readonly string[];
+      directoryBindings?: ReadonlyMap<string, RegistryDirectoryClient>;
+    } = {},
+  ) {
     const repository = new MemoryRepository();
     const blobs = new MemoryBlobs();
     let current: Principal | null = user();
@@ -114,15 +121,34 @@ describe('skills.sh directory routes', () => {
       if (request.headers.get('authorization') === 'Bearer worker') return worker();
       return current;
     } };
+    const directoryForBaseCalls: string[] = [];
+    const directoryForBase = (baseUrl: string): RegistryDirectoryClient | undefined => {
+      directoryForBaseCalls.push(baseUrl);
+      if (options.directoryBindings?.has(baseUrl)) return options.directoryBindings.get(baseUrl);
+      if (baseUrl === 'https://skills.sh') return directory ?? undefined;
+      return undefined;
+    };
     const handler = createRegistryHandler({
       repository,
       blobs,
       auth,
       directory: directory ?? undefined,
+      directoryForBase,
       directoryPacks,
-      config: { publicOrigin: ORIGIN, maxBodyBytes: 2 * 1024 * 1024, organizationId: 'org-directory', leaseSeconds: 30 },
+      config: {
+        publicOrigin: ORIGIN,
+        maxBodyBytes: 2 * 1024 * 1024,
+        organizationId: 'org-directory',
+        leaseSeconds: 30,
+        ...(options.trustedSkillsShBaseUrls === undefined ? {} : { trustedSkillsShBaseUrls: options.trustedSkillsShBaseUrls }),
+      },
     });
-    return { repository, handler, setPrincipal: (principal: Principal | null) => { current = principal; } };
+    return {
+      repository,
+      handler,
+      directoryForBaseCalls,
+      setPrincipal: (principal: Principal | null) => { current = principal; },
+    };
   }
 
   it('distinguishes an intentionally disconnected directory from a retryable outage', async () => {
@@ -361,6 +387,7 @@ describe('skills.sh directory routes', () => {
     expect(queued.status).toBe(202);
     const operation = (await queued.json() as { operation: { id: string; import: Record<string, unknown> } }).operation;
     expect(operation.import).toMatchObject({ path: 'acme/repo/my-skill', externalId: 'acme/repo/my-skill', externalSnapshotHash: 'snapshot-1' });
+    expect(test.directoryForBaseCalls).toEqual(['https://skills.sh']);
 
     test.setPrincipal(worker());
     const claim = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST', headers: { authorization: 'Bearer worker' } }));
@@ -387,7 +414,166 @@ describe('skills.sh directory routes', () => {
       method: 'POST', headers, body: JSON.stringify(requestBody),
     }));
     expect(warm.status).toBe(200);
+    expect(test.directoryForBaseCalls).toEqual(['https://skills.sh']);
     expect(await warm.json()).toHaveProperty('resolution.digest', artifactDigest);
+  });
+
+  it('binds a legacy import to the selected upstream catalog for the same external ID', async () => {
+    const canonical = directoryClient();
+    let canonicalDetailCalls = 0;
+    canonical.detail = async (id) => {
+      canonicalDetailCalls += 1;
+      return {
+        id,
+        source: 'acme/repo',
+        slug: 'my-skill',
+        installs: 1,
+        hash: 'canonical-snapshot',
+        files: [{ path: 'SKILL.md', contents: '---\nname: my-skill\ndescription: canonical catalog\n---\n' }],
+      };
+    };
+    let customDetailCalls = 0;
+    const custom: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async (id) => {
+        customDetailCalls += 1;
+        return {
+          id,
+          source: 'acme/repo',
+          slug: 'my-skill',
+          installs: 1,
+          hash: 'custom-snapshot',
+          files: [{ path: 'SKILL.md', contents: '---\nname: my-skill\ndescription: custom catalog\n---\n' }],
+        };
+      },
+    };
+    const customBase = 'https://gateway.example.test/catalog';
+    const test = setup(undefined, canonical, {
+      trustedSkillsShBaseUrls: ['https://skills.sh', customBase],
+      directoryBindings: new Map([[customBase, custom]]),
+    });
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const createUpstream = async (body: Record<string, unknown>) => {
+      const response = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }));
+      expect(response.status).toBe(201);
+      return (await response.json() as { upstream: { id: string } }).upstream.id;
+    };
+    const canonicalId = await createUpstream({
+      name: 'canonical-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'],
+    });
+    const customId = await createUpstream({
+      name: 'custom-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: customBase,
+    });
+
+    const customImport = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: 'acme/repo/my-skill', name: '@team/custom-my-skill', version: '1.0.0', upstreamId: customId }),
+    }));
+    expect(customImport.status).toBe(202);
+    expect(customDetailCalls).toBe(1);
+    expect(canonicalDetailCalls).toBe(0);
+    expect(test.directoryForBaseCalls).toEqual([customBase]);
+    expect(await customImport.json()).toMatchObject({ operation: { import: {
+      upstreamId: customId,
+      externalSnapshotHash: 'custom-snapshot',
+    } } });
+
+    const canonicalImport = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: 'acme/repo/my-skill', name: '@team/canonical-my-skill', version: '1.0.0', upstreamId: canonicalId }),
+    }));
+    expect(canonicalImport.status).toBe(202);
+    expect(customDetailCalls).toBe(1);
+    expect(canonicalDetailCalls).toBe(1);
+    expect(test.directoryForBaseCalls).toEqual([customBase, 'https://skills.sh']);
+    expect(await canonicalImport.json()).toMatchObject({ operation: { import: {
+      upstreamId: canonicalId,
+      externalSnapshotHash: 'canonical-snapshot',
+    } } });
+  });
+
+  it('validates legacy upstream authorization and trust before resolving a directory binding', async () => {
+    const customBase = 'https://gateway.example.test/catalog';
+    let canonicalDetailCalls = 0;
+    const canonical: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async (id) => {
+        canonicalDetailCalls += 1;
+        return {
+          id,
+          source: 'acme/repo',
+          slug: 'my-skill',
+          installs: 1,
+          hash: 'canonical-snapshot',
+          files: [{ path: 'SKILL.md', contents: '---\nname: my-skill\ndescription: canonical catalog\n---\n' }],
+        };
+      },
+    };
+    const test = setup(undefined, canonical, {
+      trustedSkillsShBaseUrls: ['https://skills.sh', customBase],
+    });
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const createUpstream = async (body: Record<string, unknown>) => {
+      const response = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }));
+      expect(response.status).toBe(201);
+      return (await response.json() as { upstream: { id: string } }).upstream.id;
+    };
+    const customId = await createUpstream({
+      name: 'custom-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: customBase,
+    });
+    const disabledId = await createUpstream({
+      name: 'disabled-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: customBase, enabled: false,
+    });
+    const registryId = await createUpstream({
+      name: 'private-registry', kind: 'registry', namespace: '@team', baseUrl: customBase,
+    });
+    const untrustedId = await createUpstream({
+      name: 'untrusted-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: 'https://untrusted.example/catalog',
+    });
+    const bodyFor = (upstreamId: string) => JSON.stringify({ id: 'acme/repo/my-skill', name: '@team/my-skill', version: '1.0.0', upstreamId });
+
+    test.setPrincipal(null);
+    const unauthenticated = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: bodyFor(customId),
+    }));
+    expect(unauthenticated.status).toBe(401);
+    expect(test.directoryForBaseCalls).toEqual([]);
+
+    test.setPrincipal(user());
+    for (const upstreamId of ['missing', disabledId, registryId]) {
+      const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+        method: 'POST', headers, body: bodyFor(upstreamId),
+      }));
+      expect(response.status, upstreamId).toBe(404);
+      expect(await response.json()).toHaveProperty('error.code', 'NOT_AVAILABLE');
+    }
+    const untrusted = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST', headers, body: bodyFor(untrustedId),
+    }));
+    expect(untrusted.status).toBe(503);
+    expect(await untrusted.json()).toHaveProperty('error.code', 'DIRECTORY_NOT_CONFIGURED');
+    expect(test.directoryForBaseCalls).toEqual([]);
+    expect(canonicalDetailCalls).toBe(0);
+
+    const missingBinding = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST', headers, body: bodyFor(customId),
+    }));
+    expect(missingBinding.status).toBe(503);
+    expect(await missingBinding.json()).toHaveProperty('error.code', 'DIRECTORY_NOT_CONFIGURED');
+    expect(test.directoryForBaseCalls).toEqual([customBase]);
+    expect(canonicalDetailCalls).toBe(0);
   });
 
   it('accepts nested catalog slugs but rejects unsafe identity segments', async () => {

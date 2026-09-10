@@ -999,6 +999,16 @@ async function handleDirectoryRoute(
     return jsonResponse(result);
   }
 
+  if (segments.length === 3 && segments[2] === 'import') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    // Browser callers use the same cookie mutation protections as session and
+    // receipt routes; bearer CLI callers remain usable without an Origin.
+    assertSessionRequestSafe(request, config, method);
+    requirePublisher(principal);
+    const body = await readJson(request, config.maxBodyBytes);
+    return await createDirectoryImport(body, principal, deps, config, requestId, request.signal);
+  }
+
   if (!directory) throw directoryUnavailable();
 
   if (segments.length === 3 && segments[2] === 'skills') {
@@ -1060,16 +1070,6 @@ async function handleDirectoryRoute(
     return jsonResponse(result);
   }
 
-  if (segments.length === 3 && segments[2] === 'import') {
-    if (method !== 'POST') return methodNotAllowed(['POST']);
-    // Browser callers use the same cookie mutation protections as session and
-    // receipt routes; bearer CLI callers remain usable without an Origin.
-    assertSessionRequestSafe(request, config, method);
-    requirePublisher(principal);
-    const body = await readJson(request, config.maxBodyBytes);
-    return await createDirectoryImport(body, principal, directory, deps, config, requestId, request.signal);
-  }
-
   throw new RegistryApiError('NOT_FOUND', 'Route not found', 404);
 }
 
@@ -1092,7 +1092,6 @@ function toDirectoryDetailMetadata(detail: SkillDetailResponse): SkillDetailMeta
 async function createDirectoryImport(
   body: JsonObject,
   principal: Principal,
-  directory: RegistryDirectoryClient,
   deps: RegistryHandlerDependencies,
   config: Required<RegistryConfiguration>,
   requestId: string,
@@ -1107,28 +1106,19 @@ async function createDirectoryImport(
 
   const requestedUpstreamId = optionalImportField(body.upstreamId, 'upstreamId');
   const stateBeforeDetail = await readState(deps.repository, config.organizationId);
-  if (requestedUpstreamId !== undefined) {
-    const requestedMapping = stateBeforeDetail.upstreams.find((upstream) => upstream.id === requestedUpstreamId);
-    if (
-      !requestedMapping ||
-      requestedMapping.organizationId !== config.organizationId ||
-      requestedMapping.kind !== 'skills-sh' ||
-      !requestedMapping.enabled ||
-      !canReadNamespace(principal, requestedMapping.namespace)
-    ) {
-      throw unavailable();
-    }
-  } else if (!stateBeforeDetail.upstreams.some((upstream) =>
-    upstream.organizationId === config.organizationId &&
-    upstream.kind === 'skills-sh' &&
-    upstream.enabled &&
-    canReadNamespace(principal, upstream.namespace),
-  )) {
-    // Do not contact the public catalog when this principal has no eligible
-    // source mapping at all.  The source-specific allowlist still gets
-    // checked after the exact detail row is known.
-    throw unavailable();
-  }
+  const eligibleMappings = stateBeforeDetail.upstreams
+    .filter((upstream) =>
+      upstream.organizationId === config.organizationId &&
+      upstream.kind === 'skills-sh' &&
+      upstream.enabled &&
+      canReadNamespace(principal, upstream.namespace),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  let selected = requestedUpstreamId === undefined
+    ? eligibleMappings.length === 1 ? eligibleMappings[0] : undefined
+    : eligibleMappings.find((upstream) => upstream.id === requestedUpstreamId);
+  if (requestedUpstreamId !== undefined && !selected) throw unavailable();
+
   // A completed/active import already contains the server-validated external
   // identity and mapping.  Reuse it directly so an approved warm hit never
   // calls the directory detail endpoint or observes a mutable catalog row.
@@ -1141,8 +1131,26 @@ async function createDirectoryImport(
     requestedUpstreamId,
   );
   if (cachedRequest) {
+    selected ??= eligibleMappings.find((upstream) => upstream.id === cachedRequest.upstreamId);
+    if (!selected || !isTrustedSkillsShBaseUrl(selected, config)) throw directoryUnavailable();
     return await createImportJob({ ...cachedRequest }, principal, deps, config, requestId);
   }
+
+  if (!selected) {
+    if (eligibleMappings.length === 0) throw unavailable();
+    // An administrator can deliberately configure multiple source mappings;
+    // do not silently choose an origin when the UI has not selected one.
+    throw new RegistryApiError('UPSTREAM_MAPPING_REQUIRED', 'Select an authorized skills.sh upstream mapping', 409, {
+      details: {
+        upstreams: eligibleMappings.map((upstream) => ({ id: upstream.id, name: upstream.name, namespace: upstream.namespace })),
+      },
+    });
+  }
+
+  if (!isTrustedSkillsShBaseUrl(selected, config)) throw directoryUnavailable();
+  const directoryBaseUrl = skillsShDirectoryBaseUrl(selected);
+  const directory = deps.directoryForBase?.(directoryBaseUrl);
+  if (!directory) throw directoryUnavailable();
 
   // Fetch exactly the selected catalog row.  A bounded metadata lookup is
   // performed only when this row has no immutable snapshot hash, and the
@@ -1158,32 +1166,10 @@ async function createDirectoryImport(
   ) {
     throw new RegistryApiError('DIRECTORY_INTEGRITY', 'Directory detail identity is inconsistent', 502, { retryable: true });
   }
-  // Check the administrator's source allowlist before any additional catalog
-  // metadata lookup. A denied or ambiguous mapping must not cause a search or
-  // list request against the public catalog.
-  const candidates = stateBeforeDetail.upstreams
-    .filter((upstream) =>
-      upstream.organizationId === config.organizationId &&
-      upstream.kind === 'skills-sh' &&
-      upstream.enabled &&
-      canReadNamespace(principal, upstream.namespace) &&
-      upstreamAllowsImport(upstream, detail.source),
-    )
-    .sort((left, right) => left.id.localeCompare(right.id));
-  const selected = requestedUpstreamId
-    ? candidates.find((upstream) => upstream.id === requestedUpstreamId)
-    : candidates.length === 1 ? candidates[0] : undefined;
-  if (requestedUpstreamId && !selected) throw unavailable();
-  if (!selected) {
-    if (candidates.length === 0) throw unavailable();
-    // An administrator can deliberately configure multiple source mappings;
-    // do not silently choose an origin when the UI has not selected one.
-    throw new RegistryApiError('UPSTREAM_MAPPING_REQUIRED', 'Select an authorized skills.sh upstream mapping', 409, {
-      details: {
-        upstreams: candidates.map((upstream) => ({ id: upstream.id, name: upstream.name, namespace: upstream.namespace })),
-      },
-    });
-  }
+  // Check the selected administrator mapping before any additional catalog
+  // metadata lookup. A denied source must not cause a search or list request
+  // against the selected public catalog.
+  if (!upstreamAllowsImport(selected, detail.source)) throw unavailable();
 
   // A null catalog snapshot cannot by itself tell the worker whether the
   // public source is GitHub or a well-known host. Resolve that one row from
@@ -3399,6 +3385,24 @@ function isTrustedFeedBaseUrl(value: string | undefined, config: Required<Regist
   const normalized = parsed.toString().replace(/\/$/u, '');
   const loopbackTest = config.allowLoopbackUpstreams === true && parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname);
   return config.trustedSkillsShBaseUrls.includes(normalized) || loopbackTest;
+}
+
+/**
+ * Legacy skills.sh upstreams predate feed records and may omit baseUrl. Keep
+ * that documented canonical default while normalizing the exact path handed
+ * to the directory-client factory.
+ */
+function skillsShDirectoryBaseUrl(upstream: Upstream): string {
+  const raw = upstream.baseUrl?.trim() || 'https://skills.sh';
+  try {
+    return new URL(raw).toString().replace(/\/$/u, '');
+  } catch {
+    return raw;
+  }
+}
+
+function isTrustedSkillsShBaseUrl(upstream: Upstream, config: Required<RegistryConfiguration>): boolean {
+  return isTrustedFeedBaseUrl(skillsShDirectoryBaseUrl(upstream), config);
 }
 
 type TransparentCachedResult =
