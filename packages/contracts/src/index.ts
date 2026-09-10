@@ -36,6 +36,15 @@ export interface Provenance {
   externalId?: string;
   externalSourceType?: 'github' | 'well-known';
   externalSnapshotHash?: string | null;
+  feedId?: string;
+  feedName?: string;
+  feedConfigRevision?: string;
+  /** Server-derived public source identity; never accepted from install input. */
+  sourceReference?: string;
+  /** Verified origin emitted by the acquisition adapter, not a catalog URL hint. */
+  sourceProviderOrigin?: string;
+  /** How the worker established the source identity. */
+  sourceResolutionKind?: 'snapshot' | 'github' | 'well-known';
   /** Digest advertised by a well-known source, kept distinct from the local artifact digest. */
   externalDigest?: Digest;
   /** Optional source-resolution evidence returned by the skills.sh worker. */
@@ -47,6 +56,8 @@ export interface Provenance {
   resolvedCommit?: string;
   resolvedTree?: string;
   wellKnownIndexUrl?: string;
+  /** Exact entry selected from the authenticated well-known index. */
+  wellKnownEntryName?: string;
   frontmatterName?: string;
   frontmatterDescription?: string;
   external?: ExternalProvenance;
@@ -58,6 +69,8 @@ export interface ExternalProvenance {
   slug: string;
   sourceType: 'github' | 'well-known';
   sourceUrl: string;
+  sourceProviderOrigin?: string;
+  sourceResolutionKind?: 'snapshot' | 'github' | 'well-known';
   pageUrl?: string;
   externalSnapshotHash: string | null;
   externalDigest?: Digest;
@@ -67,6 +80,7 @@ export interface ExternalProvenance {
   resolvedCommit?: string;
   resolvedTree?: string;
   wellKnownIndexUrl?: string;
+  wellKnownEntryName?: string;
   artifactUrl?: string;
   frontmatterName?: string;
   frontmatterDescription?: string;
@@ -161,7 +175,27 @@ export interface InstallAnalytics {
 }
 export interface TransferGrant { id: string; organizationId: string; subject: string; resourceId: string; authorizationId: string; digest: Digest; expiresAt: string; }
 export interface TransferDescriptor { mode: 'gateway' | 'signed-url'; url: string; method: 'GET'; headers: Record<string, string>; expiresAt: string; size: number; digest: Digest; rangeSupported: boolean; }
-export interface Upstream { id: string; organizationId: string; name: string; kind: 'github' | 'registry' | 'skills-sh'; enabled: boolean; repositories?: string[]; baseUrl?: string; credentialEnv?: string; namespace: string; }
+export interface Upstream { id: string; organizationId: string; name: string; kind: 'github' | 'registry' | 'skills-sh'; enabled: boolean; repositories?: string[]; baseUrl?: string; credentialEnv?: string; namespace: string; /** Server-owned configuration revision for transparent feed snapshots. */ configRevision?: string; }
+/**
+ * A tenant-owned catalog feed used by transparent pull-through installs.
+ * `repositories` is intentionally tri-state: omitted means every source
+ * approved by the catalog, while an explicit empty array denies all sources.
+ * Credentials are referenced by environment name and never stored here.
+ */
+export interface Feed {
+  id: string;
+  organizationId: string;
+  name: string;
+  kind: 'skills-sh';
+  enabled: boolean;
+  repositories?: string[];
+  baseUrl: string;
+  /** Namespace used for internal authorization; independent from discovery name. */
+  namespace?: string;
+  credentialEnv?: string;
+  /** Changes whenever any source restriction or trusted endpoint changes. */
+  configRevision: string;
+}
 /**
  * Optional external identity fields are server-derived for directory imports.
  * `path` remains the full external identifier for skills.sh rows so workers
@@ -177,6 +211,12 @@ export interface ImportRequest {
   externalId?: string;
   externalSourceType?: 'github' | 'well-known';
   externalSnapshotHash?: string | null;
+  /** Server-owned transparent feed identity; never caller-selected for legacy imports. */
+  feedId?: string;
+  feedName?: string;
+  feedConfigRevision?: string;
+  /** Server-derived canonical source reference for reader-triggered pull-through jobs. */
+  sourceReference?: string;
 }
 export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
@@ -189,6 +229,8 @@ export interface RegistryState {
   scans: ScanResult[];
   policy: Policy;
   upstreams: Upstream[];
+  /** Optional for state documents written before transparent feeds existed. */
+  feeds?: Feed[];
   authorizations: InstallAuthorization[];
   /** Optional so states written before analytics can still be loaded. */
   installReceiptTickets?: InstallReceiptTicket[];
@@ -199,6 +241,14 @@ export interface RegistryState {
 }
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
-export interface RegistryConfiguration { publicOrigin: string; maxBodyBytes: number; organizationId: string; leaseSeconds: number; allowLoopbackUpstreams?: boolean; }
+export interface RegistryConfiguration {
+  publicOrigin: string;
+  maxBodyBytes: number;
+  organizationId: string;
+  leaseSeconds: number;
+  allowLoopbackUpstreams?: boolean;
+  /** Server-operator allowlist for skills.sh feeds; defaults to https://skills.sh. */
+  trustedSkillsShBaseUrls?: readonly string[];
+}
 export interface RegistryDependencies { repository: StateRepository; blobs: BlobStore; auth: Authenticator; config: RegistryConfiguration; }
 export interface WorkerCompletion { leaseToken: string; bundle?: SkillBundle; provenance?: Provenance; scanResults?: ScanResult[]; error?: string; }

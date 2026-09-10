@@ -5,6 +5,7 @@ import {
   type Digest,
   type DistributionState,
   type ExternalProvenance,
+  type Feed,
   type Finding,
   type ImportRequest,
   type InstallAuthorization,
@@ -195,6 +196,7 @@ export function createEmptyRegistryState(policy: Policy = defaultPolicy()): Regi
     scans: [],
     policy,
     upstreams: [],
+    feeds: [],
     authorizations: [],
     installReceiptTickets: [],
     installReceipts: [],
@@ -465,6 +467,18 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
         return jsonResponse({ scans });
       }
 
+      if (segments[0] === 'v1' && segments[1] === 'feeds') {
+        return await handleFeedsRoute(
+          method,
+          segments,
+          request,
+          principal,
+          deps,
+          config,
+          requestId,
+        );
+      }
+
       if (segments[0] === 'v1' && segments[1] === 'upstreams') {
         if (method === 'GET') {
           requireReader(principal);
@@ -488,13 +502,24 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
         return await createImportJob(body, principal, deps, config, requestId);
       }
 
-      // Pull-through resolution is deliberately a publisher operation in v1.
-      // A reader may install an already approved release through the ordinary
-      // resolution/authorization flow, but cannot cause a new source fetch.
+      // The explicit upstream/path form remains a publisher operation.  The
+      // transparent skills.sh form is an install request: a reader with the
+      // proxy capability may populate the governed cache, while the server
+      // derives the private release identity and source mapping.
       if (segments[0] === 'v1' && segments[1] === 'proxy' && segments[2] === 'resolve' && segments.length === 3) {
         if (method !== 'POST') return methodNotAllowed(['POST']);
-        requirePublisher(principal);
+        requireReader(principal);
         const body = await readJson(request, config.maxBodyBytes);
+        if (body.reference !== undefined) {
+          requireRouteScopes(principal, ['proxy:resolve']);
+          return await resolveSourceReferenceRequest(body, principal, deps, config, requestId);
+        }
+        if (isTransparentProxyRequest(body)) {
+          requireRouteScopes(principal, ['proxy:resolve']);
+          return await resolveTransparentProxyRequest(body, principal, deps, config, requestId, request.signal);
+        }
+        requireRouteScopes(principal, ['imports:create', 'skills:publish', 'proxy:resolve']);
+        requirePublisher(principal);
         return await resolveProxyRequest(body, principal, deps, config, requestId);
       }
 
@@ -537,7 +562,28 @@ function normalizeConfiguration(config: RegistryConfiguration): Required<Registr
         ? Math.floor(config.leaseSeconds)
         : DEFAULT_LEASE_SECONDS,
     allowLoopbackUpstreams: config.allowLoopbackUpstreams ?? false,
+    trustedSkillsShBaseUrls: normalizeTrustedSkillsShBaseUrls(config.trustedSkillsShBaseUrls),
   };
+}
+
+function normalizeTrustedSkillsShBaseUrls(value: readonly string[] | undefined): readonly string[] {
+  const values = value === undefined ? ['https://skills.sh'] : value;
+  if (!Array.isArray(values)) throw new RegistryApiError('INVALID_CONFIGURATION', 'trustedSkillsShBaseUrls must be an array', 500);
+  return values.map((candidate) => {
+    if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > 2_048) {
+      throw new RegistryApiError('INVALID_CONFIGURATION', 'trustedSkillsShBaseUrls contains an invalid URL', 500);
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new RegistryApiError('INVALID_CONFIGURATION', 'trustedSkillsShBaseUrls contains an invalid URL', 500);
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new RegistryApiError('INVALID_CONFIGURATION', 'trustedSkillsShBaseUrls must contain HTTPS URLs without credentials or query data', 500);
+    }
+    return parsed.toString().replace(/\/$/u, '');
+  });
 }
 
 function assertSessionRequestSafe(
@@ -722,9 +768,13 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (segments[0] === 'v1' && segments[1] === 'packs') return method === 'GET' ? ['packs:read', 'registry:read'] : ['packs:publish', 'packs:write'];
   if (segments[0] === 'v1' && segments[1] === 'policy') return method === 'GET' ? ['policy:read', 'registry:read'] : ['policy:write', 'policy:admin'];
   if (segments[0] === 'v1' && segments[1] === 'scans') return ['scans:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'feeds') return method === 'GET' ? ['registry:read'] : ['upstreams:write', 'upstreams:admin'];
   if (segments[0] === 'v1' && segments[1] === 'upstreams') return method === 'GET' ? ['upstreams:read', 'registry:read'] : ['upstreams:write', 'upstreams:admin'];
   if (segments[0] === 'v1' && segments[1] === 'imports') return ['imports:create', 'upstreams:write', 'skills:publish', 'proxy:resolve'];
-  if (segments[0] === 'v1' && segments[1] === 'proxy' && segments[2] === 'resolve') return ['imports:create', 'skills:publish', 'proxy:resolve'];
+  // The request body determines whether this is a reader cache-fill or the
+  // legacy publisher form.  Enforce the capability after parsing the body so
+  // registry:read alone can never authorize a pull-through side effect.
+  if (segments[0] === 'v1' && segments[1] === 'proxy' && segments[2] === 'resolve') return [];
   if (segments[0] === 'v1' && segments[1] === 'audit') return ['audit:read', 'registry:admin'];
   if (segments[0] === 'internal' && segments[1] === 'jobs') {
     if (segments.length === 3 && segments[2] === 'claim') return ['jobs:claim'];
@@ -1551,7 +1601,9 @@ function jobVisibleToPrincipal(job: Job, state: RegistryState, principal: Princi
     const skill = state.skills.find((candidate) => candidate.id === job.resourceId);
     return !!skill && canReadNamespace(principal, skill.name);
   }
-  return !!job.import && canPublishName(principal, job.import.name);
+  if (!job.import) return false;
+  if (job.import.externalId || job.import.sourceReference) return canReadNamespace(principal, job.import.name);
+  return canPublishName(principal, job.import.name);
 }
 
 async function resolveRoute(
@@ -2436,6 +2488,202 @@ async function revokeSkill(
   return jsonResponse({ skill: result });
 }
 
+interface PublicFeed {
+  id: string;
+  name: string;
+  kind: Feed['kind'];
+  enabled: boolean;
+  configRevision: string;
+  repositories?: string[];
+  baseUrl: string;
+  namespace: string;
+}
+
+async function handleFeedsRoute(
+  method: HttpMethod,
+  segments: string[],
+  request: Request,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  if (segments.length === 2) {
+    if (method === 'GET') {
+      requireReader(principal);
+      const state = await readState(deps.repository, config.organizationId);
+      return jsonResponse({ feeds: (state.feeds ?? [])
+        .filter((feed) => canReadNamespace(principal, feedNamespace(feed)))
+        .map(publicFeed) });
+    }
+    if (method === 'POST') {
+      requireAdmin(principal);
+      const body = await readJson(request, config.maxBodyBytes);
+      const candidate = parseFeed(body, config);
+      const feed = await deps.repository.transaction(config.organizationId, (mutableState) => {
+        const mutable = ensureState(mutableState, defaultPolicy());
+        assertFeedNameAvailable(mutable, candidate.name);
+        if (mutable.feeds!.some((existing) => existing.name === candidate.name)) {
+          throw new RegistryApiError('VERSION_CONFLICT', 'That feed already exists', 409);
+        }
+        const created: Feed = {
+          ...candidate,
+          id: randomId('feed'),
+          organizationId: config.organizationId,
+          configRevision: randomId('feed-config'),
+        };
+        mutable.feeds!.push(created);
+        appendAudit(mutable, audit(principal, 'feed.create', created.id, {
+          feed: created.name,
+          kind: created.kind,
+          requestId,
+        }, config.organizationId));
+        return created;
+      });
+      return jsonResponse({ feed: publicFeed(feed) }, 201);
+    }
+    return methodNotAllowed(['GET', 'POST']);
+  }
+
+  if (segments.length === 3) {
+    const id = decodePathPart(segments[2]!);
+    const state = await readState(deps.repository, config.organizationId);
+    const existing = (state.feeds ?? []).find((feed) => feed.id === id);
+    if (!existing) throw unavailable();
+    if (method === 'GET') {
+      requireReader(principal);
+      if (!canReadNamespace(principal, feedNamespace(existing))) throw new RegistryApiError('FORBIDDEN', 'Feed namespace denied', 403);
+      return jsonResponse({ feed: publicFeed(existing) });
+    }
+    if (method === 'PATCH') {
+      requireAdmin(principal);
+      const body = await readJson(request, config.maxBodyBytes);
+      const patch = parseFeedPatch(body, config);
+      const updated = await deps.repository.transaction(config.organizationId, (mutableState) => {
+        const mutable = ensureState(mutableState, defaultPolicy());
+        const current = mutable.feeds!.find((feed) => feed.id === id);
+        if (!current) throw unavailable();
+        const next: Feed = { ...current, ...patch };
+        assertFeedNameAvailable(mutable, next.name, current.id);
+        mutable.feeds![mutable.feeds!.indexOf(current)] = {
+          ...next,
+          configRevision: randomId('feed-config'),
+        };
+        appendAudit(mutable, audit(principal, 'feed.update', current.id, {
+          feed: current.name,
+          enabled: next.enabled,
+          requestId,
+        }, config.organizationId));
+        return mutable.feeds![mutable.feeds!.indexOf(current)]!;
+      });
+      return jsonResponse({ feed: publicFeed(updated) });
+    }
+    return methodNotAllowed(['GET', 'PATCH']);
+  }
+
+  throw new RegistryApiError('NOT_FOUND', 'Feed route not found', 404);
+}
+
+function publicFeed(feed: Feed): PublicFeed {
+  return {
+    id: feed.id,
+    name: feed.name,
+    kind: feed.kind,
+    enabled: feed.enabled,
+    configRevision: feed.configRevision,
+    ...(feed.repositories === undefined ? {} : { repositories: [...feed.repositories] }),
+    baseUrl: feed.baseUrl,
+    namespace: feedNamespace(feed),
+  };
+}
+
+function parseFeed(body: JsonObject, config: Required<RegistryConfiguration>): Omit<Feed, 'id' | 'organizationId' | 'configRevision'> {
+  const allowed = new Set(['name', 'kind', 'enabled', 'repositories', 'baseUrl', 'namespace']);
+  if (Object.keys(body).some((key) => !allowed.has(key))) throw new RegistryApiError('INVALID_FEED', 'Feed contains an unsupported field', 400);
+  const name = requireFeedName(body.name);
+  if (body.kind !== 'skills-sh') throw new RegistryApiError('INVALID_FEED', 'Only skills.sh feeds are supported', 400);
+  const enabled = body.enabled === undefined ? true : body.enabled;
+  if (typeof enabled !== 'boolean') throw new RegistryApiError('INVALID_FEED', 'enabled must be a boolean', 400);
+  const repositories = parseFeedRepositories(body.repositories);
+  const baseUrl = parseFeedBaseUrl(body.baseUrl, config);
+  const namespace = parseFeedNamespace(body.namespace === undefined ? `@${name}` : body.namespace);
+  return {
+    name,
+    kind: 'skills-sh',
+    enabled,
+    ...(repositories === undefined ? {} : { repositories }),
+    baseUrl,
+    namespace,
+  };
+}
+
+function parseFeedPatch(body: JsonObject, config: Required<RegistryConfiguration>): Partial<Omit<Feed, 'id' | 'organizationId' | 'name' | 'kind' | 'configRevision'>> {
+  const allowed = new Set(['enabled', 'repositories', 'baseUrl', 'namespace']);
+  if (Object.keys(body).some((key) => !allowed.has(key))) throw new RegistryApiError('INVALID_FEED', 'Feed update contains an unsupported field', 400);
+  const patch: Partial<Omit<Feed, 'id' | 'organizationId' | 'name' | 'kind' | 'configRevision'>> = {};
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== 'boolean') throw new RegistryApiError('INVALID_FEED', 'enabled must be a boolean', 400);
+    patch.enabled = body.enabled;
+  }
+  if (body.repositories !== undefined) patch.repositories = parseFeedRepositories(body.repositories);
+  if (body.baseUrl !== undefined) patch.baseUrl = parseFeedBaseUrl(body.baseUrl, config);
+  if (body.namespace !== undefined) patch.namespace = parseFeedNamespace(body.namespace);
+  return patch;
+}
+
+function requireFeedName(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value)) {
+    throw new RegistryApiError('INVALID_FEED', 'Feed name must be a lowercase identifier', 400);
+  }
+  return value;
+}
+
+function parseFeedRepositories(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((candidate) => typeof candidate !== 'string')) {
+    throw new RegistryApiError('INVALID_FEED', 'repositories must be an array of strings', 400);
+  }
+  const repositories = value as string[];
+  if (repositories.some((repository) => repository.length === 0 || repository.length > 2_048 || !isWellFormedUnicodeString(repository) || /[\u0000-\u001f\u007f]/u.test(repository))) {
+    throw new RegistryApiError('INVALID_FEED', 'repositories contains an invalid source identity', 400);
+  }
+  return repositories.map((repository) => normalizeSkillsDirectorySource(repository));
+}
+
+function parseFeedBaseUrl(value: unknown, config: Required<RegistryConfiguration>): string {
+  const raw = value === undefined ? 'https://skills.sh' : value;
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2_048) throw new RegistryApiError('INVALID_FEED', 'baseUrl is invalid', 400);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new RegistryApiError('INVALID_FEED', 'baseUrl is invalid', 400);
+  }
+  if (parsed.protocol !== 'https:' && !(config.allowLoopbackUpstreams && parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname))) {
+    throw new RegistryApiError('INVALID_FEED', 'baseUrl must use HTTPS', 400);
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new RegistryApiError('INVALID_FEED', 'baseUrl must not contain credentials or query data', 400);
+  if (isLoopbackHost(parsed.hostname) && !config.allowLoopbackUpstreams) throw new RegistryApiError('INVALID_FEED', 'loopback feeds are disabled', 400);
+  const normalized = parsed.toString().replace(/\/$/u, '');
+  const trusted = config.trustedSkillsShBaseUrls.includes(normalized);
+  const loopbackTest = config.allowLoopbackUpstreams && parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname);
+  if (!trusted && !loopbackTest) throw new RegistryApiError('INVALID_FEED', 'baseUrl is not an operator-trusted skills.sh endpoint', 400);
+  return normalized;
+}
+
+function parseFeedNamespace(value: unknown): string {
+  if (typeof value !== 'string' || !/^@[a-z0-9][a-z0-9._-]{0,63}$/u.test(value)) {
+    throw new RegistryApiError('INVALID_FEED', 'namespace must use @namespace syntax', 400);
+  }
+  return value;
+}
+
+function assertFeedNameAvailable(state: RegistryState, name: string, exceptFeedId?: string): void {
+  if ((state.feeds ?? []).some((feed) => feed.id !== exceptFeedId && feed.name === name)) {
+    throw new RegistryApiError('VERSION_CONFLICT', 'That feed name is already configured', 409);
+  }
+}
+
 async function createUpstream(
   body: JsonObject,
   principal: Principal,
@@ -2546,6 +2794,759 @@ async function resolveProxyRequest(
     return jsonResponse({ resolution: result.resolution }, 200);
   }
   return jsonResponse({ operation: result.job }, 202);
+}
+
+interface TransparentProxyRequest {
+  feed?: string;
+  externalId: string;
+  refresh: boolean;
+}
+
+/** A canonical source identity is derived from verified worker provenance. */
+interface CanonicalSourceIdentity {
+  provider: 'github' | 'well-known' | 'snapshot';
+  host: string;
+  repository: string;
+  path: string;
+  revision?: string;
+  digest?: Digest;
+}
+
+interface SourceReferenceRequest {
+  reference: string;
+  revision?: string;
+  refresh: boolean;
+}
+
+interface TransparentImportTemplate extends Omit<ImportRequest, 'version'> {
+  externalId: string;
+  path: string;
+}
+
+/**
+ * Return true only for the additive, catalog-identity form.  A request that
+ * includes a legacy import field is handled by the old publisher-only path so
+ * callers cannot smuggle a caller-selected name into transparent resolution.
+ */
+function isTransparentProxyRequest(body: JsonObject): boolean {
+  return (body.externalId !== undefined || body.feed !== undefined) && body.path === undefined;
+}
+
+function parseSourceReferenceRequest(body: JsonObject): SourceReferenceRequest {
+  const allowed = new Set(['reference', 'revision', 'refresh']);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'Source requests accept only reference, revision, and refresh', 400);
+  }
+  const reference = stringValue(body.reference);
+  if (!reference) throw new RegistryApiError('INVALID_PROXY_REQUEST', 'reference is required', 400);
+  parseCanonicalSourceReference(reference);
+  const revision = body.revision === undefined ? undefined : stringValue(body.revision);
+  if (body.revision !== undefined && (!revision || !/^[0-9a-f]{40}$/iu.test(revision))) {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'revision must be a 40-hex immutable source revision', 400);
+  }
+  if (body.refresh !== undefined && typeof body.refresh !== 'boolean') {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'refresh must be a boolean', 400);
+  }
+  return { reference, ...(revision ? { revision } : {}), refresh: body.refresh === true };
+}
+
+function parseCanonicalSourceReference(reference: string): CanonicalSourceIdentity {
+  if (reference.length > 2_048 || !isWellFormedUnicodeString(reference) || /[\u0000-\u001f\u007f\\?#%]/u.test(reference) || !reference.startsWith('@')) {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'reference is invalid', 400);
+  }
+  const parts = reference.slice(1).split('/');
+  if (parts.length < 3 || parts.some((part) => !part || part === '.' || part === '..' || part.length > 512 || !/^[A-Za-z0-9._~-]+$/u.test(part))) {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'reference is invalid', 400);
+  }
+  if (parts[0] !== 'github') throw new RegistryApiError('INVALID_PROXY_REQUEST', 'Only GitHub source references are supported', 400);
+  const repository = `${parts[1]}/${parts[2]}`;
+  const path = parts.slice(3).join('/');
+  return {
+    provider: 'github',
+    host: 'github.com',
+    repository,
+    path,
+  };
+}
+
+function parseTransparentProxyRequest(body: JsonObject): TransparentProxyRequest {
+  const allowed = new Set(['feed', 'externalId', 'refresh']);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    throw new RegistryApiError(
+      'INVALID_PROXY_REQUEST',
+      'Transparent proxy requests accept only externalId and refresh',
+      400,
+    );
+  }
+  const feed = body.feed === undefined ? undefined : requireFeedName(body.feed);
+  const externalId = requireDirectoryId(body.externalId);
+  if (body.refresh !== undefined && typeof body.refresh !== 'boolean') {
+    throw new RegistryApiError('INVALID_PROXY_REQUEST', 'refresh must be a boolean', 400);
+  }
+  return { ...(feed === undefined ? {} : { feed }), externalId, refresh: body.refresh === true };
+}
+
+async function resolveTransparentProxyRequest(
+  body: JsonObject,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+  requestSignal?: AbortSignal,
+): Promise<Response> {
+  const request = parseTransparentProxyRequest(body);
+  const state = await readState(deps.repository, config.organizationId);
+  const feed = findTransparentFeed(state, request.feed, principal, config);
+  const upstream = feedAsUpstream(feed);
+
+  // Cache-first is deliberate.  A normal install must not contact the public
+  // catalog when this organization already has a matching pending or approved
+  // release.  An explicit refresh is the only way to revalidate the catalog.
+  if (!request.refresh) {
+    const cached = findTransparentCachedResult(state, request.externalId, upstream, principal, config);
+    if (cached) return transparentProxyResponse(cached, feed, request.externalId);
+  }
+
+  const directory = deps.directory;
+  if (!directory) throw directoryUnavailable();
+  const detail = await directoryRequest(() => directory.detail(request.externalId, { signal: requestSignal }));
+  if (
+    detail.id !== request.externalId ||
+    detail.id !== `${detail.source}/${detail.slug}` ||
+    !detail.source ||
+    !detail.slug ||
+    !isSafeDirectoryExternalValue(detail.source) ||
+    !isSafeDirectoryExternalValue(detail.slug)
+  ) {
+    throw new RegistryApiError('DIRECTORY_INTEGRITY', 'Directory detail identity is inconsistent', 502, { retryable: true });
+  }
+  if (!upstreamAllowsImport(upstream, detail.source)) throw unavailable();
+
+  // The source type is presentation metadata, not a caller hint.  Rehydrate
+  // only the exact trusted row when the detail snapshot is incomplete; the
+  // worker performs its own authenticated source resolution before bytes are
+  // admitted.
+  const trustedRow = detail.hash === null || detail.files === null
+    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
+    : undefined;
+  const managedName = await transparentManagedName(upstream.namespace, request.externalId);
+  const template: TransparentImportTemplate = {
+    upstreamId: upstream.id,
+    repository: detail.source,
+    path: request.externalId,
+    name: managedName,
+    externalId: request.externalId,
+    feedId: feed.id,
+    feedName: feed.name,
+    feedConfigRevision: feed.configRevision,
+    externalSnapshotHash: detail.hash,
+    ...(trustedRow ? { externalSourceType: trustedRow.sourceType } : {}),
+  };
+  const result = await queueTransparentImport(
+    template,
+    feed,
+    request.refresh,
+    principal,
+    deps,
+    config,
+    requestId,
+  );
+  return transparentProxyResponse(result, feed, request.externalId);
+}
+
+/**
+ * Resolve a previously verified source reference directly.  Cold source
+ * acquisition still requires an administrator-configured GitHub upstream; a
+ * caller cannot turn this route into an arbitrary URL fetch.  The source
+ * reference is derived again from completion provenance before a warm result
+ * is returned.
+ */
+async function resolveSourceReferenceRequest(
+  body: JsonObject,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  const request = parseSourceReferenceRequest(body);
+  const source = parseCanonicalSourceReference(request.reference);
+  const state = await readState(deps.repository, config.organizationId);
+  const upstream = findSourceReferenceUpstream(state, source, principal);
+  const managedName = await sourceManagedName(upstream, source);
+  if (!request.refresh) {
+    const cached = findSourceCachedResult(state, source, request.revision, upstream, managedName, principal);
+    if (cached) return sourceReferenceResponse(cached, source, request.revision);
+  }
+  const result = await queueSourceReferenceImport(
+    source,
+    request.revision,
+    request.refresh,
+    managedName,
+    upstream,
+    principal,
+    deps,
+    config,
+    requestId,
+  );
+  return sourceReferenceResponse(result, source, request.revision);
+}
+
+function findSourceReferenceUpstream(
+  state: RegistryState,
+  source: CanonicalSourceIdentity,
+  principal: Principal,
+): Upstream {
+  const candidates = state.upstreams
+    .filter((upstream) =>
+      upstream.organizationId === principal.organizationId &&
+      upstream.kind === source.provider &&
+      upstream.enabled &&
+      canReadNamespace(principal, upstream.namespace) &&
+      upstreamAllowsImport(upstream, source.repository) &&
+      sourceHostMatchesUpstream(source.host, upstream),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (candidates.length === 0) throw unavailable();
+  if (candidates.length > 1) {
+    throw new RegistryApiError('UPSTREAM_MAPPING_REQUIRED', 'Multiple authorized source mappings match this reference', 409, {
+      details: { upstreams: candidates.map((candidate) => ({ id: candidate.id, name: candidate.name, namespace: candidate.namespace })) },
+    });
+  }
+  return candidates[0]!;
+}
+
+function sourceHostMatchesUpstream(host: string, upstream: Upstream): boolean {
+  if (!upstream.baseUrl) return host === 'github.com';
+  try {
+    return new URL(upstream.baseUrl).hostname.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+type SourceCachedResult =
+  | { status: 202; job: Job }
+  | { status: 200; job: Job; resolution: Resolution; source: CanonicalSourceIdentity };
+
+function findSourceCachedResult(
+  state: RegistryState,
+  source: CanonicalSourceIdentity,
+  requestedRevision: string | undefined,
+  upstream: Upstream,
+  managedName: string,
+  principal: Principal,
+): SourceCachedResult | undefined {
+  const candidates = state.jobs
+    .filter((job) => {
+      const request = job.import;
+      return job.organizationId === principal.organizationId &&
+        job.kind === 'import' &&
+        request?.upstreamId === upstream.id &&
+        request.repository === source.repository &&
+        request.path === source.path &&
+        request.name === managedName &&
+        !!job.upstream &&
+        sameUpstreamOrigin(job.upstream, upstream);
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  for (const job of candidates) {
+    if (job.state === 'queued' || job.state === 'running') return { status: 202, job };
+    if (job.state !== 'completed' || !job.resourceId) continue;
+    const skill = state.skills.find((candidate) => candidate.id === job.resourceId);
+    if (!skill || !canReadNamespace(principal, skill.name) || !skillCurrentlyApproved(state, skill)) continue;
+    const canonical = canonicalSourceFromSkill(skill);
+    if (!canonical || !sourceIdentityMatches(canonical, source, requestedRevision)) continue;
+    return { status: 200, job, resolution: skillResolution(skill), source: canonical };
+  }
+  return undefined;
+}
+
+function sourceReferenceResponse(
+  result: SourceCachedResult,
+  requested: CanonicalSourceIdentity,
+  requestedRevision?: string,
+): Response {
+  const canonical = result.status === 200 ? result.source : undefined;
+  const reference = canonical ? sourceReferenceFromCanonical(canonical) : sourceReferenceFromCanonical({ ...requested, ...(requestedRevision ? { revision: requestedRevision } : {}) });
+  const source = canonical
+    ? canonicalSourceDto(canonical)
+    : requestedRevision
+      ? canonicalSourceDto({ ...requested, revision: requestedRevision })
+      : undefined;
+  if (result.status === 200) return jsonResponse({ reference, ...(source ? { source } : {}), resolution: result.resolution }, 200);
+  return jsonResponse({ reference, ...(source ? { source } : {}), operation: result.job }, 202);
+}
+
+async function sourceManagedName(upstream: Upstream, source: CanonicalSourceIdentity): Promise<string> {
+  const digest = await digestBytes(new TextEncoder().encode(`source:${source.provider}:${source.host}:${source.repository}:${source.path}`));
+  const namespace = upstream.namespace.replace(/^@/u, '');
+  return `@${namespace}/source-${digest.slice('sha256:'.length, 'sha256:'.length + 48)}`;
+}
+
+async function queueSourceReferenceImport(
+  source: CanonicalSourceIdentity,
+  requestedRevision: string | undefined,
+  refresh: boolean,
+  managedName: string,
+  upstream: Upstream,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<SourceCachedResult> {
+  const state = await readState(deps.repository, config.organizationId);
+  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+    const mutable = ensureState(mutableState, state.policy);
+    const current = mutable.upstreams.find((candidate) => candidate.id === upstream.id);
+    if (!current || !current.enabled || !sameUpstreamOrigin(current, upstream) || !canReadNamespace(principal, current.namespace)) {
+      throw new RegistryApiError('PROVENANCE_CONFLICT', 'The source mapping changed while this import was being resolved', 409);
+    }
+    const candidates = mutable.jobs
+      .filter((job) => {
+        const request = job.import;
+        return job.organizationId === config.organizationId &&
+          job.kind === 'import' &&
+          request?.upstreamId === upstream.id &&
+          request.repository === source.repository &&
+          request.path === source.path &&
+          request.name === managedName &&
+          !!job.upstream &&
+          sameUpstreamOrigin(job.upstream, current);
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    const active = candidates.find((candidate) => candidate.state === 'queued' || candidate.state === 'running');
+    if (active) return { status: 202 as const, job: active };
+    for (const candidate of candidates) {
+      if (candidate.state !== 'completed' || !candidate.resourceId) continue;
+      const skill = mutable.skills.find((value) => value.id === candidate.resourceId);
+      if (!skill || !skillCurrentlyApproved(mutable, skill)) continue;
+      const canonical = canonicalSourceFromSkill(skill);
+      if (canonical && sourceIdentityMatches(canonical, source, requestedRevision) && !refresh) {
+        return { status: 200 as const, job: candidate, resolution: skillResolution(skill), source: canonical };
+      }
+    }
+    const version = generatedTransparentVersion();
+    const importRequest: ImportRequest = {
+      upstreamId: upstream.id,
+      repository: source.repository,
+      path: source.path,
+      ...(requestedRevision ? { ref: requestedRevision } : {}),
+      name: managedName,
+      version,
+      sourceReference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
+    };
+    const job: Job = {
+      id: randomId('job'),
+      organizationId: config.organizationId,
+      kind: 'import',
+      state: 'queued',
+      policyRevision: mutable.policy.revision,
+      policy: clonePolicy(mutable.policy),
+      import: importRequest,
+      upstream: current,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      attempts: 0,
+    };
+    mutable.jobs.push(job);
+    appendAudit(mutable, audit(principal, 'source.proxy.queued', job.id, {
+      reference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
+      upstreamId: upstream.id,
+      refresh,
+      requestId,
+    }, config.organizationId));
+    return { status: 202 as const, job };
+  });
+}
+
+function canonicalSourceFromSkill(skill: SkillVersion): CanonicalSourceIdentity | undefined {
+  const provenance = skill.provenance;
+  const origin = verifiedSourceOrigin(provenance.sourceProviderOrigin);
+  if (provenance.sourceResolutionKind === 'snapshot' && provenance.kind === 'skills-sh' && provenance.externalId) {
+    if (!isSafeDirectoryExternalValue(provenance.externalId)) return undefined;
+    if (provenance.path !== provenance.externalId) return undefined;
+    return {
+      provider: 'snapshot',
+      host: 'skills.sh',
+      repository: 'skills.sh',
+      path: provenance.externalId,
+      digest: skill.artifact.digest,
+    };
+  }
+
+  if (provenance.sourceResolutionKind === 'github' && origin === 'github.com' && provenance.repository && isCommit(provenance.resolvedCommit)) {
+    const path = provenance.kind === 'skills-sh' ? provenance.skillPath : provenance.path;
+    if (path === undefined || !isSafeSourcePath(path)) return undefined;
+    if (!isSafeRepository(provenance.repository)) return undefined;
+    return {
+      provider: 'github',
+      host: origin,
+      repository: provenance.repository,
+      path,
+      revision: provenance.resolvedCommit,
+      digest: skill.artifact.digest,
+    };
+  }
+
+  if (provenance.sourceResolutionKind === 'well-known' && origin && provenance.repository && provenance.wellKnownEntryName && provenance.wellKnownIndexUrl) {
+    const canonical = wellKnownCanonicalFromProvenance(provenance);
+    if (canonical && (isCommit(provenance.resolvedCommit) || isDigest(provenance.externalDigest ?? ''))) {
+      return { ...canonical, digest: skill.artifact.digest };
+    }
+  }
+
+  // A v1 well-known index can prove the captured bundle and selected entry
+  // without advertising an immutable upstream digest. Keep that result under
+  // a truthful local snapshot identity instead of inventing a web revision.
+  if (provenance.kind === 'skills-sh' && provenance.sourceResolutionKind === 'well-known' && provenance.externalId && provenance.path === provenance.externalId && isSafeDirectoryExternalValue(provenance.externalId)) {
+    return {
+      provider: 'snapshot',
+      host: 'skills.sh',
+      repository: 'skills.sh',
+      path: provenance.externalId,
+      digest: skill.artifact.digest,
+    };
+  }
+
+  return undefined;
+}
+
+function sourceReferenceFromProvenance(provenance: Provenance): string | undefined {
+  if (provenance.sourceResolutionKind === 'snapshot' && provenance.kind === 'skills-sh' && provenance.externalId && provenance.path === provenance.externalId && isSafeDirectoryExternalValue(provenance.externalId)) {
+    return `@snapshot/skills-sh/${provenance.externalId}`;
+  }
+  const origin = verifiedSourceOrigin(provenance.sourceProviderOrigin);
+  if (provenance.sourceResolutionKind === 'github' && origin === 'github.com' && provenance.repository && isCommit(provenance.resolvedCommit)) {
+    const path = provenance.kind === 'skills-sh' ? provenance.skillPath : provenance.path;
+    if (path !== undefined && isSafeSourcePath(path) && isSafeRepository(provenance.repository)) {
+      return sourceReferenceFromCanonical({ provider: 'github', host: origin, repository: provenance.repository, path, revision: provenance.resolvedCommit });
+    }
+  }
+  if (provenance.sourceResolutionKind === 'well-known' && (isCommit(provenance.resolvedCommit) || isDigest(provenance.externalDigest ?? ''))) {
+    const canonical = wellKnownCanonicalFromProvenance(provenance);
+    if (canonical) return sourceReferenceFromCanonical(canonical);
+  }
+  if (provenance.kind === 'skills-sh' && provenance.sourceResolutionKind === 'well-known' && provenance.externalId && provenance.path === provenance.externalId && isSafeDirectoryExternalValue(provenance.externalId)) {
+    return `@snapshot/skills-sh/${provenance.externalId}`;
+  }
+  return undefined;
+}
+
+function verifiedSourceOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash) return undefined;
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function verifiedSourceOriginFromUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return undefined;
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function wellKnownCanonicalFromProvenance(provenance: Provenance): CanonicalSourceIdentity | undefined {
+  if (!provenance.sourceProviderOrigin || !provenance.wellKnownIndexUrl || !provenance.wellKnownEntryName) return undefined;
+  const origin = verifiedSourceOrigin(provenance.sourceProviderOrigin);
+  const indexOrigin = verifiedSourceOriginFromUrl(provenance.wellKnownIndexUrl);
+  const scope = wellKnownScopeFromIndexUrl(provenance.wellKnownIndexUrl);
+  if (!origin || !indexOrigin || origin !== indexOrigin || !scope || !isSafeSourcePath(provenance.wellKnownEntryName)) return undefined;
+  return {
+    provider: 'well-known',
+    host: origin,
+    repository: scope,
+    path: provenance.wellKnownEntryName,
+    ...(isCommit(provenance.resolvedCommit) ? { revision: provenance.resolvedCommit } : {}),
+  };
+}
+
+function wellKnownScopeFromIndexUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) return undefined;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length < 3 || parts.at(-1) !== 'index.json' || parts.at(-2) !== 'agent-skills' && parts.at(-2) !== 'skills') return undefined;
+    const scope = parts.slice(0, -1).join('/');
+    return scope && isSafeSourcePath(scope) ? scope : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isCommit(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/iu.test(value);
+}
+
+function isSafeRepository(value: string): boolean {
+  return isWellFormedUnicodeString(value) && value.length > 0 && value.length <= 2_048 && value.split('/').length === 2 && value.split('/').every((part) => /^[A-Za-z0-9._~-]+$/u.test(part));
+}
+
+function isSafeSourcePath(value: string): boolean {
+  return isWellFormedUnicodeString(value) && value.length <= 4_096 && !value.startsWith('/') && value.split('/').every((part) => part === '' || (part !== '.' && part !== '..' && /^[A-Za-z0-9._~-]+$/u.test(part)));
+}
+
+function sourceIdentityMatches(
+  actual: CanonicalSourceIdentity,
+  requested: CanonicalSourceIdentity,
+  requestedRevision?: string,
+): boolean {
+  return actual.provider === requested.provider &&
+    actual.host === requested.host &&
+    actual.repository === requested.repository &&
+    actual.path === requested.path &&
+    (requestedRevision === undefined || actual.revision === requestedRevision);
+}
+
+function sourceReferenceFromCanonical(source: CanonicalSourceIdentity): string {
+  if (source.provider === 'snapshot') return `@snapshot/skills-sh/${source.path}`;
+  if (source.provider === 'github' && source.host === 'github.com' && source.path === '') return `@github/${source.repository}`;
+  if (source.provider === 'github' && source.host === 'github.com') return `@github/${source.repository}/${source.path}`;
+  if (source.provider === 'well-known') return `@web/${source.host}/${source.repository}/${source.path}`;
+  if (source.provider === 'github' && source.path === '') return `@github/${source.host}/${source.repository}`;
+  return `@${source.provider}/${source.host}/${source.repository}/${source.path}`;
+}
+
+function canonicalSourceDto(source: CanonicalSourceIdentity): CanonicalSourceIdentity {
+  return { ...source };
+}
+
+function findTransparentFeed(state: RegistryState, name: string | undefined, principal: Principal, config: Required<RegistryConfiguration>): Feed {
+  const candidates = (state.feeds ?? []).filter((candidate) =>
+    candidate.organizationId === principal.organizationId &&
+    candidate.kind === 'skills-sh' &&
+    (name === undefined || candidate.name === name),
+  );
+  const enabledCandidates = candidates.filter((candidate) => candidate.enabled);
+  if (name === undefined && enabledCandidates.length > 1) {
+    throw new RegistryApiError('FEED_REQUIRED', 'Multiple enabled catalog feeds are configured; specify feed', 409);
+  }
+  const feed = name === undefined ? enabledCandidates[0] : candidates[0];
+  if (!feed) throw new RegistryApiError('FEED_NOT_FOUND', 'The requested feed is not configured', 404);
+  if (!feed.enabled) throw new RegistryApiError('FEED_DISABLED', 'The requested feed is disabled', 409);
+  assertTrustedFeedBaseUrl(feed, config);
+  if (!canReadNamespace(principal, feedNamespace(feed))) throw new RegistryApiError('FORBIDDEN', 'Feed namespace denied', 403);
+  return feed;
+}
+
+function feedNamespace(feed: Feed): string {
+  return feed.namespace ?? `@${feed.name}`;
+}
+
+function feedAsUpstream(feed: Feed): Upstream {
+  return {
+    id: feed.id,
+    organizationId: feed.organizationId,
+    name: feed.name,
+    kind: feed.kind,
+    enabled: feed.enabled,
+    repositories: feed.repositories === undefined ? ['*'] : [...feed.repositories],
+    baseUrl: feed.baseUrl,
+    credentialEnv: feed.credentialEnv,
+    namespace: feedNamespace(feed),
+    configRevision: feed.configRevision,
+  };
+}
+
+function assertTrustedFeedBaseUrl(feed: Feed, config: Required<RegistryConfiguration>): void {
+  if (!isTrustedFeedBaseUrl(feed.baseUrl, config)) {
+    throw new RegistryApiError('FEED_UNTRUSTED', 'The configured catalog feed endpoint is not operator-trusted', 503, { retryable: false });
+  }
+}
+
+function isTrustedFeedBaseUrl(value: string | undefined, config: Required<RegistryConfiguration>): boolean {
+  if (!value) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  const normalized = parsed.toString().replace(/\/$/u, '');
+  const loopbackTest = config.allowLoopbackUpstreams === true && parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname);
+  return config.trustedSkillsShBaseUrls.includes(normalized) || loopbackTest;
+}
+
+type TransparentCachedResult =
+  | { status: 202; job: Job }
+  | { status: 200; job: Job; resolution: Resolution };
+
+function findTransparentCachedResult(
+  state: RegistryState,
+  externalId: string,
+  upstream: Upstream,
+  principal: Principal,
+  config: Required<RegistryConfiguration>,
+): TransparentCachedResult | undefined {
+  if (!isTrustedFeedBaseUrl(upstream.baseUrl, config)) return undefined;
+  const candidates = state.jobs
+    .filter((job) => {
+      if (job.organizationId !== principal.organizationId || job.kind !== 'import') return false;
+      const request = job.import;
+      return !!request &&
+        request.externalId === externalId &&
+        request.path === externalId &&
+        request.upstreamId === upstream.id &&
+        request.feedId === upstream.id &&
+        request.feedName === upstream.name &&
+        request.feedConfigRevision === upstream.configRevision &&
+        !!job.upstream &&
+        sameUpstreamOrigin(job.upstream, upstream) &&
+        upstreamAllowsImport(upstream, request.repository) &&
+        canReadNamespace(principal, request.name);
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+
+  for (const job of candidates) {
+    if (job.state === 'queued' || job.state === 'running') return { status: 202, job };
+    if (job.state !== 'completed' || !job.resourceId || !job.import) continue;
+    const skill = state.skills.find((candidate) => candidate.id === job.resourceId);
+    if (!skill || !canReadNamespace(principal, skill.name)) continue;
+    if (skill.state === 'pending') {
+      const scanJob = state.jobs.find((candidate) =>
+        candidate.organizationId === principal.organizationId &&
+        candidate.kind === 'scan' &&
+        candidate.resourceId === skill.id &&
+        (candidate.state === 'queued' || candidate.state === 'running'),
+      );
+      if (scanJob) return { status: 202, job: scanJob };
+    }
+    if (!skillCurrentlyApproved(state, skill)) continue;
+    if (!importProvenanceMatches(skill, job.import, upstream)) continue;
+    return { status: 200, job, resolution: skillResolution(skill) };
+  }
+  return undefined;
+}
+
+function transparentProxyResponse(result: TransparentCachedResult | ImportResolutionResult, feed: Feed, externalId: string): Response {
+  const skill = result.status === 200 ? result.resolution.members[0] : undefined;
+  const source = skill ? canonicalSourceFromSkill(skill) : undefined;
+  const common = {
+    feed: feed.name,
+    externalId,
+    ...(source ? { reference: sourceReferenceFromCanonical(source), source: canonicalSourceDto(source) } : {}),
+  };
+  if (result.status === 200) return jsonResponse({ ...common, resolution: result.resolution }, 200);
+  return jsonResponse({ ...common, operation: result.job }, 202);
+}
+
+async function transparentManagedName(namespace: string, externalId: string): Promise<string> {
+  const digest = await digestBytes(new TextEncoder().encode(`skills.sh:${externalId}`));
+  // Keep the internal name valid and bounded while retaining the full external
+  // identity in the operation and provenance returned to callers.
+  return `${namespace}/skills-sh-${digest.slice('sha256:'.length, 'sha256:'.length + 48)}`;
+}
+
+async function queueTransparentImport(
+  template: TransparentImportTemplate,
+  feed: Feed,
+  refresh: boolean,
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<TransparentCachedResult> {
+  const state = await readState(deps.repository, config.organizationId);
+  const configuredFeed = (state.feeds ?? []).find((candidate) => candidate.id === feed.id);
+  if (!configuredFeed || configuredFeed.name !== feed.name || !configuredFeed.enabled) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'The feed configuration changed while this import was being resolved', 409);
+  }
+  const upstream = feedAsUpstream(configuredFeed);
+  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+    const mutable = ensureState(mutableState, state.policy);
+    const currentFeed = (mutable.feeds ?? []).find((candidate) => candidate.id === feed.id);
+    if (!currentFeed || currentFeed.name !== feed.name || !currentFeed.enabled || !canReadNamespace(principal, feedNamespace(currentFeed))) {
+      throw new RegistryApiError('PROVENANCE_CONFLICT', 'The feed configuration changed while this import was being resolved', 409);
+    }
+    assertTrustedFeedBaseUrl(currentFeed, config);
+    const currentUpstream = feedAsUpstream(currentFeed);
+    if (!sameUpstreamOrigin(currentUpstream, upstream)) {
+      throw new RegistryApiError('PROVENANCE_CONFLICT', 'The upstream mapping changed while this import was being resolved', 409);
+    }
+    const candidates = mutable.jobs
+      .filter((job) => {
+        if (job.organizationId !== config.organizationId || job.kind !== 'import') return false;
+        const request = job.import;
+        return !!request &&
+          request.externalId === template.externalId &&
+          request.path === template.path &&
+          request.upstreamId === template.upstreamId &&
+          request.feedId === template.feedId &&
+          request.feedName === template.feedName &&
+          request.feedConfigRevision === template.feedConfigRevision &&
+          request.repository === template.repository &&
+          request.externalSourceType === template.externalSourceType &&
+          request.externalSnapshotHash === template.externalSnapshotHash &&
+          !!job.upstream &&
+          sameUpstreamOrigin(job.upstream, currentUpstream);
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+
+    const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
+    if (active) return { status: 202 as const, job: active };
+
+    for (const candidate of candidates) {
+      if (candidate.state !== 'completed' || !candidate.resourceId || !candidate.import) continue;
+      const skill = mutable.skills.find((value) => value.id === candidate.resourceId);
+      if (!skill || !skillCurrentlyApproved(mutable, skill)) {
+        const scanJob = skill && mutable.jobs.find((job) =>
+          job.organizationId === config.organizationId &&
+          job.kind === 'scan' &&
+          job.resourceId === skill.id &&
+          (job.state === 'queued' || job.state === 'running'),
+        );
+        if (scanJob) return { status: 202 as const, job: scanJob };
+        continue;
+      }
+      if (importProvenanceMatches(skill, candidate.import, currentUpstream)) {
+        // A non-null catalog hash is immutable evidence for this revision. A
+        // null hash is deliberately not enough to satisfy an explicit refresh.
+        if (!refresh || template.externalSnapshotHash !== null) {
+          return { status: 200 as const, job: candidate, resolution: skillResolution(skill) };
+        }
+      }
+    }
+
+    const version = generatedTransparentVersion();
+    const importRequest: ImportRequest = { ...template, version };
+    const job: Job = {
+      id: randomId('job'),
+      organizationId: config.organizationId,
+      kind: 'import',
+      state: 'queued',
+      policyRevision: mutable.policy.revision,
+      policy: clonePolicy(mutable.policy),
+      import: importRequest,
+      upstream: currentUpstream,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      attempts: 0,
+    };
+    mutable.jobs.push(job);
+    appendAudit(mutable, audit(principal, 'skill.proxy.queued', job.id, {
+      externalId: template.externalId,
+      feed: template.feedName,
+      feedId: template.feedId,
+      feedConfigRevision: template.feedConfigRevision,
+      upstreamId: template.upstreamId,
+      version,
+      refresh,
+      requestId,
+    }, config.organizationId));
+    return { status: 202 as const, job };
+  });
+}
+
+function generatedTransparentVersion(): string {
+  const suffix = randomId('revision').replace(/[^0-9A-Za-z-]/gu, '').toLowerCase().slice(-40);
+  return `0.0.0+skills-sh.${suffix || 'revision'}`;
 }
 
 type ImportResolutionResult =
@@ -2820,6 +3821,10 @@ function importCacheKey(organizationId: string, request: ImportRequest): string 
     externalId: request.externalId ?? null,
     externalSourceType: request.externalSourceType ?? null,
     externalSnapshotHash: request.externalSnapshotHash ?? null,
+    feedId: request.feedId ?? null,
+    feedName: request.feedName ?? null,
+    feedConfigRevision: request.feedConfigRevision ?? null,
+    sourceReference: request.sourceReference ?? null,
   });
 }
 
@@ -2836,6 +3841,7 @@ function sameUpstreamOrigin(left: Upstream, right: Upstream): boolean {
     baseUrl: left.baseUrl ?? null,
     credentialEnv: left.credentialEnv ?? null,
     repositories: [...(left.repositories ?? [])].sort(),
+    configRevision: left.configRevision ?? null,
     // skills.sh mappings are identity-bearing policy, so a change cannot
     // turn an existing warm resolution into a different origin.
   }) === stableStringify({
@@ -2846,6 +3852,7 @@ function sameUpstreamOrigin(left: Upstream, right: Upstream): boolean {
     baseUrl: right.baseUrl ?? null,
     credentialEnv: right.credentialEnv ?? null,
     repositories: [...(right.repositories ?? [])].sort(),
+    configRevision: right.configRevision ?? null,
   });
 }
 
@@ -2863,6 +3870,10 @@ function importProvenanceMatches(skill: SkillVersion, request: ImportRequest, up
   }
   if (request.repository !== undefined && provenance.repository !== request.repository) return false;
   if (!provenanceRepositoryMatches(upstream, provenance.repository)) return false;
+  if (request.feedId !== undefined && provenance.feedId !== request.feedId) return false;
+  if (request.feedName !== undefined && provenance.feedName !== request.feedName) return false;
+  if (request.feedConfigRevision !== undefined && provenance.feedConfigRevision !== request.feedConfigRevision) return false;
+  if (request.sourceReference !== undefined && provenance.sourceReference !== request.sourceReference) return false;
   if (upstream.kind === 'skills-sh') {
     if (!request.externalId || provenance.externalId !== request.externalId || provenance.path !== request.externalId) return false;
     if (request.externalSourceType !== undefined && provenance.externalSourceType !== request.externalSourceType) return false;
@@ -3409,6 +4420,14 @@ function normalizeProvenance(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is not pinned to a valid immutable revision', 409);
   }
   const suppliedExternalId = stringValue(raw.externalId);
+  const suppliedFeedId = optionalProvenanceString(raw.feedId, 'feedId', 256);
+  const suppliedFeedName = optionalProvenanceString(raw.feedName, 'feedName', 128);
+  const suppliedFeedConfigRevision = optionalProvenanceString(raw.feedConfigRevision, 'feedConfigRevision', 256);
+  const suppliedSourceReference = optionalProvenanceString(raw.sourceReference, 'sourceReference', 2_048);
+  const suppliedSourceProviderOrigin = optionalProvenanceString(raw.sourceProviderOrigin, 'sourceProviderOrigin', 512);
+  const suppliedSourceResolutionKind = raw.sourceResolutionKind === undefined || raw.sourceResolutionKind === null
+    ? undefined
+    : raw.sourceResolutionKind;
   const suppliedExternalSourceType = raw.externalSourceType === undefined || raw.externalSourceType === null
     ? undefined
     : raw.externalSourceType;
@@ -3425,6 +4444,12 @@ function normalizeProvenance(
   if (suppliedExternalSourceType !== undefined && suppliedExternalSourceType !== 'github' && suppliedExternalSourceType !== 'well-known') {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external source type is invalid', 409);
   }
+  if (suppliedSourceResolutionKind !== undefined && suppliedSourceResolutionKind !== 'snapshot' && suppliedSourceResolutionKind !== 'github' && suppliedSourceResolutionKind !== 'well-known') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact source resolution kind is invalid', 409);
+  }
+  if (suppliedSourceReference !== undefined && request.sourceReference !== undefined && suppliedSourceReference !== request.sourceReference) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact source reference is inconsistent', 409);
+  }
   if (upstream.kind === 'skills-sh') {
     if (
       !request.externalId ||
@@ -3437,6 +4462,13 @@ function normalizeProvenance(
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance does not match its skills.sh identity', 409);
     }
   }
+  if (
+    (suppliedFeedId !== undefined && suppliedFeedId !== request.feedId) ||
+    (suppliedFeedName !== undefined && suppliedFeedName !== request.feedName) ||
+    (suppliedFeedConfigRevision !== undefined && suppliedFeedConfigRevision !== request.feedConfigRevision)
+  ) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different transparent feed', 409);
+  }
   const skillsShEvidence = upstream.kind === 'skills-sh'
     ? normalizeSkillsShEvidence(raw, request, suppliedRepository, suppliedExternalId, suppliedExternalSourceType, suppliedExternalSnapshotHash)
     : {};
@@ -3444,7 +4476,7 @@ function normalizeProvenance(
   if (suppliedSourceDigest !== undefined && (!isDigest(suppliedSourceDigest) || suppliedSourceDigest !== digest)) {
     throw new RegistryApiError('DIGEST_MISMATCH', 'Imported artifact provenance digest does not match the canonical bundle', 409);
   }
-  return {
+  const normalized: Provenance = {
     kind,
     upstreamId: suppliedUpstreamId,
     repository: suppliedRepository,
@@ -3453,8 +4485,22 @@ function normalizeProvenance(
     ...(suppliedExternalId ? { externalId: suppliedExternalId } : {}),
     ...(suppliedExternalSourceType ? { externalSourceType: suppliedExternalSourceType as Provenance['externalSourceType'] } : {}),
     ...(raw.externalSnapshotHash !== undefined ? { externalSnapshotHash: suppliedExternalSnapshotHash } : {}),
+    ...(request.feedId ? { feedId: request.feedId } : {}),
+    ...(request.feedName ? { feedName: request.feedName } : {}),
+    ...(request.feedConfigRevision ? { feedConfigRevision: request.feedConfigRevision } : {}),
+    ...(request.sourceReference ? { sourceReference: request.sourceReference } : {}),
+    ...(suppliedSourceProviderOrigin ? { sourceProviderOrigin: suppliedSourceProviderOrigin } : {}),
+    ...(suppliedSourceResolutionKind ? { sourceResolutionKind: suppliedSourceResolutionKind as Provenance['sourceResolutionKind'] } : {}),
     ...skillsShEvidence,
     ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
+  };
+  const derivedSourceReference = normalized.sourceReference ?? sourceReferenceFromProvenance(normalized);
+  if (suppliedSourceReference !== undefined && derivedSourceReference !== suppliedSourceReference) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact source reference is not verified', 409);
+  }
+  return {
+    ...normalized,
+    ...(derivedSourceReference === undefined ? {} : { sourceReference: derivedSourceReference }),
   };
 }
 
@@ -3478,6 +4524,11 @@ function normalizeSkillsShEvidence(
   const nestedSlug = optionalProvenanceString(nested?.slug ?? raw.slug, 'external.slug', 2_048);
   const nestedSourceType = nested?.sourceType ?? raw.sourceType ?? sourceType;
   const nestedSourceUrl = optionalProvenanceString(nested?.sourceUrl ?? raw.sourceUrl, 'external.sourceUrl', 4_096);
+  const sourceProviderOrigin = optionalProvenanceString(nested?.sourceProviderOrigin ?? raw.sourceProviderOrigin, 'sourceProviderOrigin', 512);
+  const sourceResolutionKind = nested?.sourceResolutionKind ?? raw.sourceResolutionKind;
+  if (sourceResolutionKind !== undefined && sourceResolutionKind !== 'snapshot' && sourceResolutionKind !== 'github' && sourceResolutionKind !== 'well-known') {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact source resolution kind is invalid', 409);
+  }
   const nestedPageUrl = optionalProvenanceString(nested?.pageUrl ?? raw.pageUrl, 'external.pageUrl', 4_096);
   const nestedSnapshotHash = nested?.externalSnapshotHash === null
     ? null
@@ -3517,6 +4568,7 @@ function normalizeSkillsShEvidence(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved tree is invalid', 409);
   }
   const wellKnownIndexUrl = optionalProvenanceString(nested?.wellKnownIndexUrl ?? raw.wellKnownIndexUrl, 'wellKnownIndexUrl', 4_096);
+  const wellKnownEntryName = optionalProvenanceString(nested?.wellKnownEntryName ?? raw.wellKnownEntryName, 'wellKnownEntryName', 2_048);
   const artifactUrl = optionalProvenanceString(nested?.artifactUrl ?? raw.artifactUrl, 'artifactUrl', 4_096);
   const sourceUrl = nestedSourceUrl;
   const pageUrl = nestedPageUrl;
@@ -3531,6 +4583,8 @@ function normalizeSkillsShEvidence(
       slug: nestedSlug,
       sourceType: nestedSourceType,
       sourceUrl,
+      ...(sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin }),
+      ...(sourceResolutionKind === undefined ? {} : { sourceResolutionKind: sourceResolutionKind as ExternalProvenance['sourceResolutionKind'] }),
       ...(pageUrl === undefined ? {} : { pageUrl }),
       externalSnapshotHash: effectiveSnapshotHash ?? null,
       ...(externalDigest === undefined ? {} : { externalDigest }),
@@ -3539,6 +4593,7 @@ function normalizeSkillsShEvidence(
       ...(resolvedCommit === undefined ? {} : { resolvedCommit }),
       ...(resolvedTree === undefined ? {} : { resolvedTree }),
       ...(wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl }),
+      ...(wellKnownEntryName === undefined ? {} : { wellKnownEntryName }),
       ...(artifactUrl === undefined ? {} : { artifactUrl }),
       ...(frontmatterName === undefined ? {} : { frontmatterName }),
       ...(frontmatterDescription === undefined ? {} : { frontmatterDescription }),
@@ -3547,6 +4602,8 @@ function normalizeSkillsShEvidence(
 
   return {
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    ...(sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin }),
+    ...(sourceResolutionKind === undefined ? {} : { sourceResolutionKind: sourceResolutionKind as Provenance['sourceResolutionKind'] }),
     ...(pageUrl === undefined ? {} : { pageUrl }),
     ...(artifactUrl === undefined ? {} : { artifactUrl }),
     ...(skillPath === undefined ? {} : { skillPath }),
@@ -3554,6 +4611,7 @@ function normalizeSkillsShEvidence(
     ...(resolvedCommit === undefined ? {} : { resolvedCommit }),
     ...(resolvedTree === undefined ? {} : { resolvedTree }),
     ...(wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl }),
+    ...(wellKnownEntryName === undefined ? {} : { wellKnownEntryName }),
     ...(frontmatterName === undefined ? {} : { frontmatterName }),
     ...(frontmatterDescription === undefined ? {} : { frontmatterDescription }),
     ...(externalDigest === undefined ? {} : { externalDigest }),
@@ -3707,6 +4765,13 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (!SCAN_STATUSES.has(scan.status)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Scan result status is invalid', 500);
   }
   for (const upstream of state.upstreams) assertOrganization(upstream.organizationId, organizationId);
+  const feedNames = new Set<string>();
+  for (const feed of state.feeds ?? []) {
+    assertOrganization(feed.organizationId, organizationId);
+    validateFeedState(feed);
+    if (feedNames.has(feed.name)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Duplicate feed prefix is configured', 500);
+    feedNames.add(feed.name);
+  }
   for (const authorization of state.authorizations) {
     assertOrganization(authorization.organizationId, organizationId);
     if (authorization.resolution.organizationId !== organizationId) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Authorization resolution organization is invalid', 500);
@@ -3749,6 +4814,52 @@ function validatePolicyRuntime(policy: Policy): void {
   }
 }
 
+function validateFeedState(feed: Feed): void {
+  if (
+    !feed ||
+    typeof feed.id !== 'string' ||
+    feed.id.length === 0 ||
+    typeof feed.organizationId !== 'string' ||
+    typeof feed.name !== 'string' ||
+    !/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(feed.name) ||
+    feed.kind !== 'skills-sh' ||
+    typeof feed.enabled !== 'boolean' ||
+    typeof feed.baseUrl !== 'string' ||
+    feed.baseUrl.length === 0 ||
+    typeof feed.configRevision !== 'string' ||
+    feed.configRevision.length === 0
+  ) {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed state is invalid', 500);
+  }
+  if (feed.namespace !== undefined && (typeof feed.namespace !== 'string' || !/^@[a-z0-9][a-z0-9._-]{0,63}$/u.test(feed.namespace))) {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed namespace is invalid', 500);
+  }
+  let base: URL;
+  try {
+    base = new URL(feed.baseUrl);
+  } catch {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed base URL is invalid', 500);
+  }
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed base URL is invalid', 500);
+  }
+  if (
+    feed.repositories !== undefined &&
+    (!Array.isArray(feed.repositories) || feed.repositories.some((repository) =>
+      typeof repository !== 'string' ||
+      repository.length === 0 ||
+      repository.length > 2_048 ||
+      !isWellFormedUnicodeString(repository) ||
+      /[\u0000-\u001f\u007f]/u.test(repository),
+    ))
+  ) {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed source restrictions are invalid', 500);
+  }
+  if (feed.credentialEnv !== undefined && !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(feed.credentialEnv)) {
+    throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed credential reference is invalid', 500);
+  }
+}
+
 function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): RegistryState {
   const target = state || createEmptyRegistryState(fallbackPolicy);
   if (target.schemaVersion !== 1) throw new RegistryApiError('CLIENT_UPGRADE_REQUIRED', 'Registry state schema is unsupported', 500);
@@ -3757,6 +4868,7 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
   target.jobs ||= [];
   target.scans ||= [];
   target.upstreams ||= [];
+  target.feeds ||= [];
   target.authorizations ||= [];
   target.installReceiptTickets ||= [];
   target.installReceipts ||= [];
