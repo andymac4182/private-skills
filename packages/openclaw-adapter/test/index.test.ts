@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createOpenClawFeedAdvertisement,
+  createOpenClawTenantFeedRoute,
   OPENCLAW_RESERVED_OFFICIAL_FEED_ID,
-  OPENCLAW_RESERVED_SKILLS_FEED_ID,
+  MemoryOpenClawPublicationStore,
+  OpenClawAdapterError,
+  OpenClawPublicationManager,
   createOpenClawSkillsFeedHandler,
   previewOpenClawFeed,
+  selectOpenClawEligibleRecords,
   type OpenClawEligibleRecord,
   type OpenClawFeedPublicationSnapshot,
 } from '../src/index.ts';
@@ -188,18 +193,6 @@ describe('private OpenClaw producer route', () => {
     });
     expect((await mismatch(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
 
-    const reservedSkills = createOpenClawSkillsFeedHandler({
-      authenticate: async () => PRINCIPAL,
-      publicationForTenant: async () => ({
-        id: OPENCLAW_RESERVED_SKILLS_FEED_ID,
-        generatedAt: '2030-01-01T00:00:00.000Z',
-        sequence: 1,
-        expiresAt: '2030-01-02T00:00:00.000Z',
-        records: [],
-      }),
-    });
-    expect((await reservedSkills(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
-
     const alternateCandidate = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
       publicationForTenant: async () => ({
@@ -256,6 +249,150 @@ describe('private OpenClaw producer route', () => {
     };
     clock = Date.parse('2030-01-03T00:00:00.000Z');
     expect((await handler(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(200);
+  });
+
+  it('serves the durable tenant snapshot bytes unchanged and isolates tenants', async () => {
+    const store = new MemoryOpenClawPublicationStore();
+    const manager = new OpenClawPublicationManager(store);
+    await manager.publish({
+      tenantId: 'tenant-a',
+      publication: {
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [record()],
+      },
+    });
+    await manager.publish({
+      tenantId: 'tenant-b',
+      publication: {
+        id: 'private/opaque-b',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [],
+      },
+    });
+    const first = await manager.get('tenant-a');
+    expect(first?.body).toBeTruthy();
+    const originalBody = first!.body;
+    first!.bytes[0] = first!.bytes[0]! ^ 1;
+    expect((await manager.get('tenant-a'))?.body).toBe(originalBody);
+
+    let clock = Date.parse('2030-01-01T01:00:00.000Z');
+    const route = createOpenClawTenantFeedRoute({
+      manager,
+      authenticate: async () => PRINCIPAL,
+      now: () => clock,
+    });
+    const response = await route(new Request('https://registry.example/v1/feeds/skills'));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('etag')).toBe(first!.etag);
+    expect(await response.text()).toBe(originalBody);
+    clock = Date.parse('2030-01-01T23:00:00.000Z');
+    const notModified = await route(new Request('https://registry.example/v1/feeds/skills', {
+      headers: { 'if-none-match': first!.etag },
+    }));
+    expect(notModified.status).toBe(304);
+    expect(await notModified.text()).toBe('');
+    expect((await manager.get('tenant-b'))?.id).toBe('private/opaque-b');
+  });
+
+  it('keeps publication sequence monotonic under concurrent publication attempts', async () => {
+    const store = new MemoryOpenClawPublicationStore();
+    const manager = new OpenClawPublicationManager(store);
+    const publication = (sequence: number): OpenClawFeedPublicationSnapshot => ({
+      id: 'private/opaque-a',
+      generatedAt: '2030-01-01T00:00:00.000Z',
+      sequence,
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      records: [record()],
+    });
+    const results = await Promise.allSettled([
+      manager.publish({ tenantId: 'tenant-a', publication: publication(1) }),
+      manager.publish({ tenantId: 'tenant-a', publication: publication(2) }),
+    ]);
+    expect(results.some((result) => result.status === 'fulfilled')).toBe(true);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected?.status === 'rejected') {
+      expect(rejected.reason).toBeInstanceOf(OpenClawAdapterError);
+    }
+    expect((await manager.get('tenant-a'))?.sequence).toBe(2);
+    await expect(manager.publish({ tenantId: 'tenant-a', publication: publication(2) })).resolves.toMatchObject({ sequence: 2 });
+    await expect(manager.publish({
+      tenantId: 'tenant-a',
+      publication: {
+        ...publication(2),
+        records: [record({ title: 'changed at the same sequence' })],
+      },
+    })).rejects.toMatchObject({ code: 'stale_publication' });
+  });
+
+  it('rejects future or overlong publication timestamps before serving them', async () => {
+    const future = createOpenClawSkillsFeedHandler({
+      authenticate: async () => PRINCIPAL,
+      publicationForTenant: async () => ({
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-02T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T01:00:00.000Z',
+        records: [],
+      }),
+      now: () => Date.parse('2030-01-01T00:00:00.000Z'),
+    });
+    expect((await future(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
+
+    const tooLong = createOpenClawSkillsFeedHandler({
+      authenticate: async () => PRINCIPAL,
+      publicationForTenant: async () => ({
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-03T00:00:00.000Z',
+        records: [],
+      }),
+      now: () => Date.parse('2030-01-01T00:00:00.000Z'),
+    });
+    expect((await tooLong(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
+  });
+});
+
+describe('OpenClaw approved-source projection and advertisement', () => {
+  it('keeps only current approved records with bound public source proofs', () => {
+    const approved = {
+      state: 'approved' as const,
+      version: '1.0.0',
+      policyRevision: 'policy-1',
+      artifact: { key: 'blob/a', digest: REGISTRY_DIGEST as `sha256:${string}`, size: 10 },
+    };
+    const selected = selectOpenClawEligibleRecords([
+      { skill: approved, entry: record().entry, sourceArtifact: record().sourceArtifact },
+      { skill: { ...approved, state: 'pending' }, entry: record({ id: '@team/pending' }).entry, sourceArtifact: record().sourceArtifact },
+      { skill: { ...approved, state: 'revoked' }, entry: record({ id: '@team/revoked' }).entry, sourceArtifact: record().sourceArtifact },
+      { skill: { ...approved, policyRevision: 'policy-2' }, entry: record({ id: '@team/stale' }).entry, sourceArtifact: record().sourceArtifact },
+      { skill: approved, entry: record({ id: '@team/native' }).entry, sourceArtifact: undefined as never },
+    ], (skill) => skill.policyRevision === 'policy-1' && skill.state === 'approved');
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.registryArtifactDigest).toBe(REGISTRY_DIGEST);
+    expect(selected[0]?.sourceArtifact.digest).toBe(DIGEST);
+  });
+
+  it('creates a private link descriptor without inventing an OpenClaw discovery endpoint', () => {
+    expect(createOpenClawFeedAdvertisement({
+      feedId: 'private/opaque-a',
+      feedUrl: 'https://registry.example/v1/feeds/skills',
+    })).toEqual({
+      schemaVersion: 1,
+      feedId: 'private/opaque-a',
+      feedUrl: 'https://registry.example/v1/feeds/skills',
+      visibility: 'private',
+      authentication: 'tenant-reader',
+    });
+    expect(() => createOpenClawFeedAdvertisement({
+      feedId: 'private/opaque-a',
+      feedUrl: 'https://registry.example/v1/feeds/skills?token=secret',
+    })).toThrow();
   });
 });
 

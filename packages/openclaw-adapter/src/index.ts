@@ -1,14 +1,14 @@
-import type { Principal } from '../../contracts/src/index.ts';
+import type { Principal, SkillVersion } from '../../contracts/src/index.ts';
 import {
   createOpenClawTenantFeedPreview,
   normalizeOpenClawEntry,
+  parseOpenClawFeed,
   OpenClawValidationError,
   OpenClawFeedCache,
   OpenClawRequestError,
   validateOpenClawFeedUrl,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
-  OPENCLAW_SKILLS_FEED_ID,
   type OpenClawCacheSnapshot,
   type OpenClawFeed,
   type OpenClawFeedEntry,
@@ -23,11 +23,10 @@ export const OPENCLAW_SKILLS_FEED_ROUTE = '/v1/feeds/skills';
 
 /** The producer must never impersonate the ClawHub-owned feed identity. */
 export const OPENCLAW_RESERVED_OFFICIAL_FEED_ID = 'clawhub-official';
-/** A second ClawHub-owned identity defined by the pinned producer package. */
-export const OPENCLAW_RESERVED_SKILLS_FEED_ID = OPENCLAW_SKILLS_FEED_ID;
 
 const MAX_FEED_ID_BYTES = 512;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
+const MAX_PUBLICATION_TTL_MS = 24 * 60 * 60 * 1_000;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
 const SAFE_FEED_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const READER_ROLES = new Set(['reader', 'publisher', 'admin', 'owner']);
@@ -74,6 +73,91 @@ export interface OpenClawFeedPublicationSnapshot {
   records: readonly OpenClawEligibleRecord[];
 }
 
+/**
+ * The immutable representation persisted by a publication store.  `body`,
+ * `bytes`, and the validators are produced together and are returned directly
+ * by the authenticated route, so a request cannot reserialize a different
+ * view of the same sequence.
+ */
+export interface OpenClawStoredPublication {
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  expiresAt: string;
+  body: string;
+  bytes: Uint8Array;
+  sha256: OpenClawSha256;
+  etag: string;
+  lastModified: string;
+}
+
+/**
+ * Host persistence seam for tenant publications.  A database-backed
+ * implementation must make `putIfNewer` an atomic compare-and-swap on the
+ * tenant key.  The adapter never uses a process-global publication or cache.
+ */
+export interface OpenClawPublicationStore {
+  read(tenantId: string): Promise<OpenClawStoredPublication | undefined>;
+  putIfNewer(tenantId: string, publication: OpenClawStoredPublication): Promise<boolean>;
+}
+
+/** A bounded in-memory store for tests and single-process development only. */
+export class MemoryOpenClawPublicationStore implements OpenClawPublicationStore {
+  private readonly publications = new Map<string, OpenClawStoredPublication>();
+
+  constructor(private readonly options: { maxTenants?: number } = {}) {
+    const maxTenants = options.maxTenants ?? 128;
+    if (!Number.isSafeInteger(maxTenants) || maxTenants < 1 || maxTenants > 10_000) {
+      throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw publication storage bounds are invalid');
+    }
+  }
+
+  async read(tenantId: string): Promise<OpenClawStoredPublication | undefined> {
+    const publication = this.publications.get(safeTenantId(tenantId));
+    return publication === undefined ? undefined : cloneStoredPublication(publication);
+  }
+
+  async putIfNewer(tenantId: string, publication: OpenClawStoredPublication): Promise<boolean> {
+    const key = safeTenantId(tenantId);
+    const validated = validateStoredPublication(publication);
+    const current = this.publications.get(key);
+    if (current !== undefined && validated.sequence < current.sequence) return false;
+    if (current !== undefined && validated.sequence === current.sequence) {
+      return sameStoredPublication(current, validated);
+    }
+    if (current === undefined && this.publications.size >= (this.options.maxTenants ?? 128)) {
+      throw new OpenClawAdapterError('unavailable', 'OpenClaw publication storage is full');
+    }
+    this.publications.set(key, cloneStoredPublication(validated));
+    return true;
+  }
+}
+
+export interface OpenClawPublicationReader {
+  get(tenantId: string): Promise<OpenClawStoredPublication | undefined>;
+}
+
+/** Input accepted from the registry's approved/current-policy projection. */
+export interface OpenClawApprovedSkillCandidate {
+  skill: Pick<SkillVersion, 'state' | 'version' | 'artifact' | 'policyRevision'>;
+  entry: OpenClawFeedEntry;
+  sourceArtifact: OpenClawSourceArtifactProof;
+}
+
+/** The caller supplies the canonical policy predicate from the registry. */
+export type OpenClawCurrentPolicyCheck = (
+  skill: Pick<SkillVersion, 'state' | 'version' | 'artifact' | 'policyRevision'>,
+) => boolean;
+
+/** Host-facing metadata for advertising a private feed link. */
+export interface OpenClawFeedAdvertisement {
+  schemaVersion: 1;
+  feedId: string;
+  feedUrl: string;
+  visibility: 'private';
+  authentication: 'tenant-reader';
+}
+
 export interface OpenClawFeedHandlerOptions {
   /** Host authentication remains injected so this package is Node/edge safe. */
   authenticate(request: Request): Promise<Principal | null>;
@@ -82,7 +166,7 @@ export interface OpenClawFeedHandlerOptions {
     tenantId: string;
     principal: Principal;
     signal: AbortSignal;
-  }): Promise<OpenClawFeedPublicationSnapshot>;
+  }): Promise<OpenClawStoredPublication | OpenClawFeedPublicationSnapshot>;
   /** Optional stricter ACL for a feed or namespace. */
   authorize?(principal: Principal): boolean | Promise<boolean>;
   now?: () => number;
@@ -94,7 +178,7 @@ export interface OpenClawFeedHandler {
 
 /** A safe, non-secret error returned by the adapter boundary. */
 export class OpenClawAdapterError extends Error {
-  readonly code: 'invalid_configuration' | 'invalid_record' | 'unavailable';
+  readonly code: 'invalid_configuration' | 'invalid_record' | 'stale_publication' | 'unavailable';
 
   constructor(
     code: OpenClawAdapterError['code'],
@@ -103,6 +187,57 @@ export class OpenClawAdapterError extends Error {
     super(message);
     this.name = 'OpenClawAdapterError';
     this.code = code;
+  }
+}
+
+/**
+ * Construct the manager used by the host's publication job.  The manager is
+ * the only adapter operation that turns eligible metadata into feed bytes;
+ * route reads remain side-effect free and consume the stored result.
+ */
+export class OpenClawPublicationManager {
+  constructor(private readonly store: OpenClawPublicationStore) {
+    if (!store || typeof store.read !== 'function' || typeof store.putIfNewer !== 'function') {
+      throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw publication storage is invalid');
+    }
+  }
+
+  async publish(input: {
+    tenantId: string;
+    publication: OpenClawFeedPublicationSnapshot;
+  }): Promise<OpenClawStoredPublication> {
+    const tenantId = safeTenantId(input.tenantId);
+    const snapshot = validatePublicationSnapshot(input.publication);
+    const entries = normalizeEligibleRecords(snapshot.records);
+    const produced = await createOpenClawTenantFeedPreview({
+      id: snapshot.id,
+      generatedAt: snapshot.generatedAt,
+      sequence: snapshot.sequence,
+      expiresAt: snapshot.expiresAt,
+      entries,
+      authenticatedTenantId: tenantId,
+    });
+    const stored = toStoredPublication(produced);
+    let accepted: boolean;
+    try {
+      accepted = await this.store.putIfNewer(tenantId, stored);
+    } catch {
+      throw new OpenClawAdapterError('unavailable', 'OpenClaw publication storage is unavailable');
+    }
+    if (!accepted) {
+      throw new OpenClawAdapterError('stale_publication', 'The OpenClaw publication is older than the stored snapshot');
+    }
+    return cloneStoredPublication(stored);
+  }
+
+  async get(tenantId: string): Promise<OpenClawStoredPublication | undefined> {
+    try {
+      const publication = await this.store.read(safeTenantId(tenantId));
+      return publication === undefined ? undefined : validateStoredPublication(publication);
+    } catch (error) {
+      if (error instanceof OpenClawAdapterError) throw error;
+      throw new OpenClawAdapterError('unavailable', 'OpenClaw publication storage is unavailable');
+    }
   }
 }
 
@@ -161,22 +296,35 @@ export function createOpenClawSkillsFeedHandler(
         signal: request.signal,
       });
       const nowMs = safeNow(now());
-      const feedId = safeFeedId(publication.id);
-      const sequence = safeSequence(publication.sequence);
-      const generatedAt = safeIsoTimestamp(publication.generatedAt, 'generatedAt');
-      const expiresAt = safeIsoTimestamp(publication.expiresAt, 'expiresAt');
-      if (expiresAt <= generatedAt) {
-        throw new OpenClawAdapterError('invalid_record', 'The publication expiry is invalid');
+      if (isStoredPublication(publication)) {
+        const stored = validateStoredPublication(publication);
+        const storedGeneratedAt = safeIsoTimestamp(stored.generatedAt, 'generatedAt');
+        const storedExpiresAt = safeIsoTimestamp(stored.expiresAt, 'expiresAt');
+        if (storedGeneratedAt > nowMs || storedExpiresAt - storedGeneratedAt > MAX_PUBLICATION_TTL_MS) {
+          throw new OpenClawAdapterError('invalid_record', 'The publication timestamps are invalid');
+        }
+        if (storedExpiresAt <= nowMs) {
+          return errorResponse(503, 'OPENCLAW_FEED_EXPIRED', 'The OpenClaw feed snapshot is unavailable', true);
+        }
+        return feedResponse(request, stored.body, stored.bytes.byteLength, stored.etag, stored.lastModified);
+      }
+      const validated = validatePublicationSnapshot(publication);
+      const feedId = safeFeedId(validated.id);
+      const sequence = safeSequence(validated.sequence);
+      const generatedAt = safeIsoTimestamp(validated.generatedAt, 'generatedAt');
+      const expiresAt = safeIsoTimestamp(validated.expiresAt, 'expiresAt');
+      if (generatedAt > nowMs || expiresAt - generatedAt > MAX_PUBLICATION_TTL_MS) {
+        throw new OpenClawAdapterError('invalid_record', 'The publication timestamps are invalid');
       }
       if (expiresAt <= nowMs) {
         return errorResponse(503, 'OPENCLAW_FEED_EXPIRED', 'The OpenClaw feed snapshot is unavailable', true);
       }
-      const entries = normalizeEligibleRecords(publication.records);
+      const entries = normalizeEligibleRecords(validated.records);
       const produced = await createOpenClawTenantFeedPreview({
         id: feedId,
-        generatedAt: publication.generatedAt,
+        generatedAt: validated.generatedAt,
         sequence,
-        expiresAt: publication.expiresAt,
+        expiresAt: validated.expiresAt,
         entries,
         authenticatedTenantId: tenantId,
       });
@@ -197,6 +345,233 @@ export function createOpenClawSkillsFeedHandler(
       return errorResponse(503, 'OPENCLAW_FEED_UNAVAILABLE', 'The OpenClaw feed is temporarily unavailable', true);
     }
   };
+}
+
+/** Route composition for a host using the durable tenant publication manager. */
+export function createOpenClawTenantFeedRoute(options: {
+  manager: OpenClawPublicationReader;
+  authenticate(request: Request): Promise<Principal | null>;
+  authorize?(principal: Principal): boolean | Promise<boolean>;
+  now?: () => number;
+}): OpenClawFeedHandler {
+  if (!options || !options.manager || typeof options.manager.get !== 'function') {
+    throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw publication manager is invalid');
+  }
+  return createOpenClawSkillsFeedHandler({
+    authenticate: options.authenticate,
+    authorize: options.authorize,
+    now: options.now,
+    publicationForTenant: async ({ tenantId }) => {
+      const publication = await options.manager.get(tenantId);
+      if (publication === undefined) {
+        throw new OpenClawAdapterError('unavailable', 'OpenClaw publication is unavailable');
+      }
+      return publication;
+    },
+  });
+}
+
+/**
+ * Create the metadata-only link a host may expose from its own authenticated
+ * well-known document.  OpenClaw's pinned v1 feed contract does not define a
+ * public discovery endpoint, so this helper does not claim one or fetch data.
+ */
+export function createOpenClawFeedAdvertisement(input: {
+  feedUrl: string | URL;
+  feedId: string;
+}): OpenClawFeedAdvertisement {
+  const feedId = safeFeedId(input.feedId);
+  let feedUrl: URL;
+  try {
+    feedUrl = new URL(input.feedUrl);
+  } catch {
+    throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw feed URL is invalid');
+  }
+  if (feedUrl.protocol !== 'https:' || feedUrl.username || feedUrl.password || feedUrl.search || feedUrl.hash) {
+    throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw feed URL is invalid');
+  }
+  if (feedUrl.pathname !== OPENCLAW_SKILLS_FEED_ROUTE) {
+    throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw feed URL is invalid');
+  }
+  return {
+    schemaVersion: 1,
+    feedId,
+    feedUrl: feedUrl.href,
+    visibility: 'private',
+    authentication: 'tenant-reader',
+  };
+}
+
+/**
+ * Project only records that the registry has already approved under its
+ * current scanner/policy revision.  Source coordinates and source digests are
+ * supplied by the acquisition verifier; native private artifacts and rows
+ * without a bound public proof are intentionally skipped.
+ */
+export function selectOpenClawEligibleRecords(
+  candidates: readonly OpenClawApprovedSkillCandidate[],
+  isCurrentPolicyApproved: OpenClawCurrentPolicyCheck,
+): OpenClawEligibleRecord[] {
+  if (!Array.isArray(candidates) || candidates.length > 1_000) {
+    throw new OpenClawAdapterError('invalid_record', 'The approved skill set is outside the feed limit');
+  }
+  if (typeof isCurrentPolicyApproved !== 'function') {
+    throw new OpenClawAdapterError('invalid_configuration', 'The current policy predicate is invalid');
+  }
+  const selected: OpenClawEligibleRecord[] = [];
+  const seenIds = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || !candidate.skill || !candidate.entry || !candidate.sourceArtifact) {
+      continue;
+    }
+    if (candidate.skill.state !== 'approved' || candidate.entry.version !== candidate.skill.version) continue;
+    let current = false;
+    try {
+      current = isCurrentPolicyApproved(candidate.skill);
+    } catch {
+      current = false;
+    }
+    if (!current || seenIds.has(candidate.entry.id)) continue;
+    const record: OpenClawEligibleRecord = {
+      entry: candidate.entry,
+      registryArtifactDigest: candidate.skill.artifact.digest,
+      sourceArtifact: candidate.sourceArtifact,
+    };
+    try {
+      normalizeEligibleRecords([record]);
+    } catch {
+      // Unsupported source formats, missing proofs, and malformed candidate
+      // coordinates are excluded from the feed rather than being rewritten.
+      continue;
+    }
+    seenIds.add(candidate.entry.id);
+    selected.push(record);
+  }
+  return selected;
+}
+
+function validatePublicationSnapshot(value: OpenClawFeedPublicationSnapshot): OpenClawFeedPublicationSnapshot {
+  if (!value || typeof value !== 'object') {
+    throw new OpenClawAdapterError('invalid_record', 'The OpenClaw publication is malformed');
+  }
+  const id = safeFeedId(value.id);
+  const sequence = safeSequence(value.sequence);
+  const generatedAt = safeIsoTimestamp(value.generatedAt, 'generatedAt');
+  const expiresAt = safeIsoTimestamp(value.expiresAt, 'expiresAt');
+  if (expiresAt <= generatedAt || expiresAt - generatedAt > MAX_PUBLICATION_TTL_MS) {
+    throw new OpenClawAdapterError('invalid_record', 'The publication expiry is invalid');
+  }
+  if (!Array.isArray(value.records)) {
+    throw new OpenClawAdapterError('invalid_record', 'The publication records are invalid');
+  }
+  return {
+    id,
+    sequence,
+    generatedAt: new Date(generatedAt).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
+    records: value.records,
+  };
+}
+
+function isStoredPublication(value: unknown): value is OpenClawStoredPublication {
+  return Boolean(value && typeof value === 'object' && 'body' in value && 'bytes' in value && 'sha256' in value && 'etag' in value);
+}
+
+function validateStoredPublication(value: OpenClawStoredPublication): OpenClawStoredPublication {
+  const snapshot = validatePublicationSnapshot({
+    id: value.id,
+    generatedAt: value.generatedAt,
+    sequence: value.sequence,
+    expiresAt: value.expiresAt,
+    records: [],
+  });
+  if (
+    typeof value.body !== 'string' ||
+    value.body.length === 0 ||
+    !(value.bytes instanceof Uint8Array) ||
+    value.bytes.byteLength > 4 * 1024 * 1024 ||
+    !SHA256_RE.test(value.sha256) ||
+    value.etag !== `"${value.sha256}"` ||
+    typeof value.lastModified !== 'string' ||
+    value.lastModified.length > 128 ||
+    /[\u0000-\u001f\u007f]/u.test(value.lastModified)
+  ) {
+    throw new OpenClawAdapterError('invalid_record', 'The stored publication is malformed');
+  }
+  const bodyBytes = new TextEncoder().encode(value.body);
+  if (!bytesEqual(bodyBytes, value.bytes)) {
+    throw new OpenClawAdapterError('invalid_record', 'The stored publication bytes do not match its body');
+  }
+  try {
+    const parsed = parseOpenClawFeed(value.body, {
+      expectedFeedId: snapshot.id,
+      checkExpiry: false,
+      maxBytes: 4 * 1024 * 1024,
+    });
+    if (
+      parsed.generatedAt !== snapshot.generatedAt ||
+      parsed.expiresAt !== snapshot.expiresAt ||
+      parsed.sequence !== snapshot.sequence
+    ) {
+      throw new Error('stored feed metadata does not match its publication');
+    }
+  } catch {
+    throw new OpenClawAdapterError('invalid_record', 'The stored publication body is invalid');
+  }
+  return {
+    ...snapshot,
+    body: value.body,
+    bytes: value.bytes.slice(),
+    sha256: value.sha256,
+    etag: value.etag,
+    lastModified: value.lastModified,
+  };
+}
+
+function toStoredPublication(produced: {
+  feed: OpenClawFeed;
+  body: string;
+  bytes: Uint8Array;
+  sha256: OpenClawSha256;
+  etag: string;
+  lastModified: string;
+}): OpenClawStoredPublication {
+  return validateStoredPublication({
+    id: produced.feed.id,
+    generatedAt: produced.feed.generatedAt,
+    sequence: produced.feed.sequence,
+    expiresAt: produced.feed.expiresAt,
+    body: produced.body,
+    bytes: produced.bytes,
+    sha256: produced.sha256,
+    etag: produced.etag,
+    lastModified: produced.lastModified,
+  });
+}
+
+function cloneStoredPublication(publication: OpenClawStoredPublication): OpenClawStoredPublication {
+  return {
+    ...publication,
+    bytes: publication.bytes.slice(),
+  };
+}
+
+function sameStoredPublication(left: OpenClawStoredPublication, right: OpenClawStoredPublication): boolean {
+  return left.id === right.id &&
+    left.generatedAt === right.generatedAt &&
+    left.expiresAt === right.expiresAt &&
+    left.body === right.body &&
+    left.sha256 === right.sha256 &&
+    left.etag === right.etag &&
+    left.lastModified === right.lastModified;
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 export interface OpenClawTrustedFeedProfile {
@@ -507,7 +882,6 @@ function safeFeedId(value: string): string {
   if (
     typeof value !== 'string' ||
     value === OPENCLAW_RESERVED_OFFICIAL_FEED_ID ||
-    value === OPENCLAW_RESERVED_SKILLS_FEED_ID ||
     value.length === 0 ||
     new TextEncoder().encode(value).byteLength > MAX_FEED_ID_BYTES ||
     !SAFE_FEED_ID_RE.test(value)
