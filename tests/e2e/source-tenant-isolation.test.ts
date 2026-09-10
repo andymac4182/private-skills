@@ -168,13 +168,35 @@ function sourceRow(): V1Skill {
   };
 }
 
+interface SourceSnapshot {
+  commit: string;
+  tree: string;
+  skill: string;
+  readme: string;
+}
+
 function sourceFetchFixture(): {
   fetch: FetchLike;
   calls: Array<{ origin: string; path: string; authorization?: string }>;
+  counters: {
+    catalogDetail: number;
+    githubMetadata: number;
+    githubBlobs: number;
+  };
+  setSnapshot: (snapshot: SourceSnapshot) => void;
 } {
-  const skillSha = blobSha(SKILL);
-  const readmeSha = blobSha(README);
+  let snapshot: SourceSnapshot = {
+    commit: COMMIT,
+    tree: TREE,
+    skill: SKILL,
+    readme: README,
+  };
   const calls: Array<{ origin: string; path: string; authorization?: string }> = [];
+  const counters = {
+    catalogDetail: 0,
+    githubMetadata: 0,
+    githubBlobs: 0,
+  };
   const fetch = vi.fn(async (input: string | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const authorization = new Headers(init?.headers).get('authorization') ?? undefined;
@@ -182,6 +204,7 @@ function sourceFetchFixture(): {
 
     const catalogBase = url.pathname.startsWith('/catalog/a/') ? CATALOG_A : url.pathname.startsWith('/catalog/b/') ? CATALOG_B : undefined;
     if (catalogBase && url.pathname === `${new URL(catalogBase).pathname}/api/v1/skills/${EXTERNAL_ID.split('/').map(encodeURIComponent).join('/')}`) {
+      counters.catalogDetail += 1;
       const expected = catalogBase === CATALOG_A ? `Bearer ${CATALOG_TOKEN_A}` : `Bearer ${CATALOG_TOKEN_B}`;
       expect(authorization).toBe(expected);
       return jsonResponse({ ...catalogDetail(), ...sourceRow() });
@@ -191,27 +214,49 @@ function sourceFetchFixture(): {
       // A catalog credential is scoped to the catalog API. It must not reach
       // the physical public GitHub source or any of its blob requests.
       expect(authorization).toBeUndefined();
-      if (url.pathname === `/repos/${SOURCE}`) return jsonResponse({ default_branch: 'main' });
-      if (url.pathname === `/repos/${SOURCE}/commits/main`) return jsonResponse({ sha: COMMIT });
-      if (url.pathname === `/repos/${SOURCE}/git/trees/${COMMIT}` && url.searchParams.get('recursive') === '1') {
+      if (url.pathname === `/repos/${SOURCE}`) {
+        counters.githubMetadata += 1;
+        return jsonResponse({ default_branch: 'main' });
+      }
+      if (url.pathname === `/repos/${SOURCE}/commits/main`) {
+        counters.githubMetadata += 1;
+        return jsonResponse({ sha: snapshot.commit });
+      }
+      if (url.pathname === `/repos/${SOURCE}/git/trees/${snapshot.commit}` && url.searchParams.get('recursive') === '1') {
+        counters.githubMetadata += 1;
+        const skillSha = blobSha(snapshot.skill);
+        const readmeSha = blobSha(snapshot.readme);
         return jsonResponse({
-          sha: COMMIT,
+          sha: snapshot.commit,
           truncated: false,
           tree: [
-            { path: 'skills/shared-skill', type: 'tree', mode: '040000', sha: TREE },
-            { path: 'skills/shared-skill/SKILL.md', type: 'blob', mode: '100644', sha: skillSha, size: Buffer.byteLength(SKILL) },
-            { path: 'skills/shared-skill/README.md', type: 'blob', mode: '100644', sha: readmeSha, size: Buffer.byteLength(README) },
+            { path: 'skills/shared-skill', type: 'tree', mode: '040000', sha: snapshot.tree },
+            { path: 'skills/shared-skill/SKILL.md', type: 'blob', mode: '100644', sha: skillSha, size: Buffer.byteLength(snapshot.skill) },
+            { path: 'skills/shared-skill/README.md', type: 'blob', mode: '100644', sha: readmeSha, size: Buffer.byteLength(snapshot.readme) },
           ],
         });
       }
       const blobPrefix = `/repos/${SOURCE}/git/blobs/`;
-      if (url.pathname === `${blobPrefix}${skillSha}`) return jsonResponse({ content: Buffer.from(SKILL).toString('base64'), encoding: 'base64', size: Buffer.byteLength(SKILL), sha: skillSha });
-      if (url.pathname === `${blobPrefix}${readmeSha}`) return jsonResponse({ content: Buffer.from(README).toString('base64'), encoding: 'base64', size: Buffer.byteLength(README), sha: readmeSha });
+      const skillSha = blobSha(snapshot.skill);
+      const readmeSha = blobSha(snapshot.readme);
+      if (url.pathname === `${blobPrefix}${skillSha}`) {
+        counters.githubBlobs += 1;
+        return jsonResponse({ content: Buffer.from(snapshot.skill).toString('base64'), encoding: 'base64', size: Buffer.byteLength(snapshot.skill), sha: skillSha });
+      }
+      if (url.pathname === `${blobPrefix}${readmeSha}`) {
+        counters.githubBlobs += 1;
+        return jsonResponse({ content: Buffer.from(snapshot.readme).toString('base64'), encoding: 'base64', size: Buffer.byteLength(snapshot.readme), sha: readmeSha });
+      }
     }
 
     throw new Error(`unexpected source fixture request ${init?.method ?? 'GET'} ${url.origin}${url.pathname}${url.search}`);
   });
-  return { fetch: fetch as unknown as FetchLike, calls };
+  return {
+    fetch: fetch as unknown as FetchLike,
+    calls,
+    counters,
+    setSnapshot: (next) => { snapshot = next; },
+  };
 }
 
 describe('tenant-scoped transparent source acquisition', () => {
@@ -251,6 +296,8 @@ describe('tenant-scoped transparent source acquisition', () => {
     await auth.ready();
 
     const directoryCalls = new Map<string, number>([[CATALOG_A, 0], [CATALOG_B, 0]]);
+    const directoryDetailCalls = new Map<string, number>([[CATALOG_A, 0], [CATALOG_B, 0]]);
+    const directorySearchCalls = new Map<string, number>([[CATALOG_A, 0], [CATALOG_B, 0]]);
     const directory: RegistryDirectoryClient = {
       detail: async () => catalogDetail(),
       search: async (options) => {
@@ -267,10 +314,12 @@ describe('tenant-scoped transparent source acquisition', () => {
         ...directory,
         detail: async () => {
           directoryCalls.set(base, (directoryCalls.get(base) ?? 0) + 1);
+          directoryDetailCalls.set(base, (directoryDetailCalls.get(base) ?? 0) + 1);
           return catalogDetail();
         },
         search: async (options) => {
           directoryCalls.set(base, (directoryCalls.get(base) ?? 0) + 1);
+          directorySearchCalls.set(base, (directorySearchCalls.get(base) ?? 0) + 1);
           return { data: [sourceRow()], query: options.q, searchType: 'fuzzy', count: 1, durationMs: 1 };
         },
       };
@@ -316,9 +365,9 @@ describe('tenant-scoped transparent source acquisition', () => {
     expect(spoofedPrincipal.status).toBe(403);
     expect(source.calls.length).toBe(beforeForeign);
 
-    const resolve = (handler: RegistryHandler, token: string, feed: Feed) => call(handler, '/v1/proxy/resolve', token, {
+    const resolve = (handler: RegistryHandler, token: string, feed: Feed, refresh = false) => call(handler, '/v1/proxy/resolve', token, {
       method: 'POST',
-      json: { feed: feed.name, externalId: EXTERNAL_ID },
+      json: { feed: feed.name, externalId: EXTERNAL_ID, ...(refresh ? { refresh: true } : {}) },
     });
     const [coldA1, coldA2, coldB1, coldB2] = await Promise.all([
       resolve(handlerA, USER_A_TOKEN, feedA),
@@ -365,6 +414,7 @@ describe('tenant-scoped transparent source acquisition', () => {
 
     const catalogCalls = source.calls.filter((entry) => entry.path.includes('/api/v1/skills/'));
     expect(catalogCalls).toHaveLength(2);
+    expect(source.counters.catalogDetail).toBe(2);
     expect(catalogCalls.map((entry) => entry.authorization).sort()).toEqual([
       `Bearer ${CATALOG_TOKEN_A}`,
       `Bearer ${CATALOG_TOKEN_B}`,
@@ -372,6 +422,10 @@ describe('tenant-scoped transparent source acquisition', () => {
     const githubCalls = source.calls.filter((entry) => entry.origin === 'https://api.github.com');
     expect(githubCalls.length).toBeGreaterThan(0);
     expect(githubCalls.every((entry) => entry.authorization === undefined)).toBe(true);
+    expect(source.counters.githubMetadata).toBeGreaterThan(0);
+    expect(source.counters.githubBlobs).toBeGreaterThan(0);
+    expect(directoryDetailCalls).toEqual(new Map([[CATALOG_A, 2], [CATALOG_B, 2]]));
+    expect(directorySearchCalls).toEqual(new Map([[CATALOG_A, 2], [CATALOG_B, 2]]));
 
     const stateA = await repository.read(TENANT_A);
     const stateB = await repository.read(TENANT_B);
@@ -392,6 +446,9 @@ describe('tenant-scoped transparent source acquisition', () => {
 
     const callsAfterApproval = source.calls.length;
     const directoryCallsAfterApproval = new Map(directoryCalls);
+    const directoryDetailCallsAfterApproval = new Map(directoryDetailCalls);
+    const directorySearchCallsAfterApproval = new Map(directorySearchCalls);
+    const sourceBoundaryAfterApproval = { ...source.counters };
     const warmAResponse = await resolve(handlerA, USER_A_TOKEN, feedA);
     const warmBResponse = await resolve(handlerB, USER_B_TOKEN, feedB);
     expect(warmAResponse.status).toBe(200);
@@ -402,6 +459,67 @@ describe('tenant-scoped transparent source acquisition', () => {
     expect(warmB.resourceId).toBe(skillB!.id);
     expect(source.calls.length).toBe(callsAfterApproval);
     expect(directoryCalls).toEqual(directoryCallsAfterApproval);
+    expect(directoryDetailCalls).toEqual(directoryDetailCallsAfterApproval);
+    expect(directorySearchCalls).toEqual(directorySearchCallsAfterApproval);
+    expect(source.counters).toEqual(sourceBoundaryAfterApproval);
+
+    // Explicit refresh is the only operation allowed to revalidate a cached
+    // null-snapshot catalog row. The worker must fetch a new immutable source
+    // revision and scan it before the refreshed release becomes warm.
+    const refreshedCommit = 'e'.repeat(40);
+    const refreshedTree = 'f'.repeat(40);
+    const refreshedSkill = `---\nname: ${SLUG}\ndescription: Refreshed tenant fixture.\n---\n\nNever execute this fixture.\n`;
+    source.setSnapshot({
+      commit: refreshedCommit,
+      tree: refreshedTree,
+      skill: refreshedSkill,
+      readme: README,
+    });
+    const beforeRefresh = {
+      sourceCalls: source.calls.length,
+      counters: { ...source.counters },
+      directoryDetailCalls: new Map(directoryDetailCalls),
+      directorySearchCalls: new Map(directorySearchCalls),
+    };
+    const refreshResponse = await resolve(handlerA, USER_A_TOKEN, feedA, true);
+    expect(refreshResponse.status).toBe(202);
+    const refreshOperation = (await body<{ operation: Job }>(refreshResponse)).operation;
+    expect(refreshOperation.id).not.toBe(operationA.id);
+    const refreshRun = await runnerA.runOnce();
+    expect(refreshRun.error).toBeUndefined();
+    expect(refreshRun.allow).toBe(true);
+    expect(refreshRun.scannerResults).toEqual([expect.objectContaining({ scannerId: 'skillsguard', status: 'completed' })]);
+    expect(source.calls.length).toBeGreaterThan(beforeRefresh.sourceCalls);
+    expect(source.counters.catalogDetail).toBeGreaterThan(beforeRefresh.counters.catalogDetail);
+    expect(source.counters.githubMetadata).toBeGreaterThan(beforeRefresh.counters.githubMetadata);
+    expect(source.counters.githubBlobs).toBeGreaterThan(beforeRefresh.counters.githubBlobs);
+    expect(directoryDetailCalls.get(CATALOG_A)).toBe((beforeRefresh.directoryDetailCalls.get(CATALOG_A) ?? 0) + 1);
+    expect(directorySearchCalls.get(CATALOG_A)).toBe((beforeRefresh.directorySearchCalls.get(CATALOG_A) ?? 0) + 1);
+    const refreshedWarmResponse = await resolve(handlerA, USER_A_TOKEN, feedA);
+    expect(refreshedWarmResponse.status).toBe(200);
+    const refreshedWarm = (await body<{ resolution: Resolution }>(refreshedWarmResponse)).resolution;
+    expect(refreshedWarm.resourceId).not.toBe(warmA.resourceId);
+    const refreshedStateA = await repository.read(TENANT_A);
+    const refreshedSkillRecord = refreshedStateA.skills.find((skill) => skill.id === refreshedWarm.resourceId);
+    expect(refreshedSkillRecord).toBeDefined();
+    expect(refreshedSkillRecord!.provenance).toMatchObject({
+      sourceResolutionKind: 'github',
+      resolvedCommit: refreshedCommit,
+      resolvedTree: refreshedCommit,
+    });
+    expect(refreshedSkillRecord!.artifact.digest).not.toBe(skillA!.artifact.digest);
+    const afterRefreshWarm = {
+      sourceCalls: source.calls.length,
+      counters: { ...source.counters },
+      directoryDetailCalls: new Map(directoryDetailCalls),
+      directorySearchCalls: new Map(directorySearchCalls),
+    };
+    const refreshWarmAgain = await resolve(handlerA, USER_A_TOKEN, feedA);
+    expect(refreshWarmAgain.status).toBe(200);
+    expect(source.calls.length).toBe(afterRefreshWarm.sourceCalls);
+    expect(source.counters).toEqual(afterRefreshWarm.counters);
+    expect(directoryDetailCalls).toEqual(afterRefreshWarm.directoryDetailCalls);
+    expect(directorySearchCalls).toEqual(afterRefreshWarm.directorySearchCalls);
 
     // A same-tenant capability can read the Files SDK object. A tenant-B
     // handler cannot mint a grant from tenant-A's resolution or resource, and
