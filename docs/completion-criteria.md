@@ -12,15 +12,20 @@ their own criteria and evidence pass. They do not silently expand the current
 release checklist.
 
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). PR31 is merged on
-`origin/main` at `9caf2c178e92821cb9f3176a91a8ff5dafe2942f`, with Git-triggered
-READY registry and upload-reviewer deployments
-`dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
-The sanitized [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
-records upload-review enablement/configuration, the credential-rotation
-boundary, 12 read-only registry checks, zero registry writes, and no scanner
-policy change; it records no secret values and no live model session. The
-earlier [production M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+[`verification-current.md`](verification-current.md). The latest verified
+deployment checkpoint is PR32 source SHA
+`fa13c5689380ab2e71784f72a36b7cac7296bbc8`, captured at
+`2026-09-10T13:59:48Z`, with Git-triggered READY registry, builder, and
+upload-reviewer deployments `dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`,
+`dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and `dpl_5towM6j191dG7rPGzefwhh68uYm6`.
+The sanitized [activation readback](evidence/production-activation-readback-fa13c568.json)
+records seven bounded GET checks, the fail-closed callback method boundary,
+zero registry writes, and no model session. The sanitized [builder callback
+preflight](evidence/builder-callback-auth-preflight-fa13c568.json) records an
+enabled service, its non-worker `skills:builder` principal, and no mutating
+request or draft context. These records are an as-of/source-scoped checkpoint;
+a later source commit needs a new deployment readback. The earlier [production
+M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
 retains its own source/deployment provenance. The editor API and authoring
 source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
 passes the bounded desktop/mobile draft checks, but it does not prove hosted UI,
@@ -31,7 +36,8 @@ source-specific evidence. Physical GitHub/well-known resolution, direct
 zero-upstream instrumentation, and complete C1 remain open. A bounded hosted
 Neon/object-storage logical restore is verified for source revision 114 and five
 referenced objects; native CI remains open. M7 OpenClaw backend code is shipped
-but the feed remains disabled, with no live interoperability evidence.
+but the feed remains disabled pending review and explicit activation, with no
+live interoperability evidence.
 
 ## G0 — v0.2.0 shipment
 
@@ -403,6 +409,48 @@ policy. Completion requires all of the following:
 Evidence: contract vectors, tenant-isolation tests, clean-consumer CLI tests,
 real-agent discovery checks, and an authenticated browser/CLI flow.
 
+### FUTURE M1-MCP-DISTRIBUTION — bidirectional authenticated MCP distribution
+
+This is a future requirement inside M1. It is not an active implementation
+milestone, a new bundle count, or a G0/C1/M6/M7 release gate. Completion
+requires both directions of the contract:
+
+1. A configured source adapter consumes skills from an explicitly registered and
+   allowlisted MCP server using only approved discovery and resource-read
+   operations. It preserves the MCP server/resource identity, upstream
+   revision, and upstream digest; it never invents versions or executes an
+   arbitrary tool, hook, server, or skill code.
+2. Source reads are bounded, on demand, and authorization checked. Changed or
+   missing bytes, digest mismatches, revoked or unauthorized resources,
+   cross-tenant requests, transport errors, and stale cache entries fail closed
+   before pullthrough can write or refresh a candidate. Warm-cache behavior is
+   tested against the exact source revision and digest.
+3. Every accepted MCP source result passes the existing canonical bundle
+   validator, required scanner policy, quarantine behavior, immutable artifact
+   provenance, and tenant authorization. MCP source status or publisher claims
+   cannot bypass local admission or revocation.
+4. A separate authenticated MCP distribution surface discovers and searches
+   approved skills and packs, and retrieves immutable version manifests,
+   canonical file/artifact bytes, digests, and provenance. It exposes no
+   unapproved candidate contents, source credentials, raw transfer grants, or
+   another tenant's metadata.
+5. Client-controlled install, update, and restore integrate with the existing
+   Rust CLI and distribution contracts. Mutations require explicit client
+   consent and scoped short-lived transfer grants; the MCP server never writes
+   arbitrary client files or chooses placement. The client/CLI owns placement,
+   restore, and execution boundaries, and skill content is never executed by
+   the MCP service.
+6. Server-side MCP source credentials remain deployment-owned and never appear
+   in browser/agent responses or leak across configured feeds or tenants.
+   Install receipts and bounded analytics identify the client-controlled
+   operation without retaining secrets or source content.
+7. Real MCP client/server compatibility fixtures pass in both directions for
+   valid discovery/resource reads, immutable distribution, changed
+   source/digest, revoked, unauthorized, cross-tenant, warm-cache, and
+   transport-error cases. The evidence records exact source identity,
+   revision, digest, scanner/quarantine result, transfer authorization, and
+   no-execution behavior.
+
 ## M2 — quality review and behavioral evaluation (P2)
 
 Dependencies: M1 package identity and an explicitly isolated evaluation
@@ -516,7 +564,8 @@ breaking registry distribution.
 ## M6 — full Diffs editor and upload/edit review (active implementation, incomplete; VIEW slice evidence delivered)
 
 M6 is the editor and upload/edit reviewer requested for the Private Skills web
-application. The editor and authoring API/source are shipped in current main,
+application. The editor and authoring API/source are shipped in the verified
+source checkpoint,
 and upload-review configuration is enabled in the current deployment. The local
 synthetic editor/browser fixture passes its bounded desktop/mobile checks, while
 hosted UI acceptance, live Eve/model execution, and screenreader, contrast, and

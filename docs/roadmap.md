@@ -36,14 +36,16 @@ amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
 - **Now: close v0.2.0 and the remaining C1 evidence.** Finish the remaining
-  physical-source and source-revision checks. The GitHub Vercel project
-  connection and PR31 Git-triggered READY registry/upload-reviewer deployments
-  are recorded on current main
-  `9caf2c178e92821cb9f3176a91a8ff5dafe2942f`; the Neon production integration,
-  storage, secrets, authenticated production flow, released CLI evidence, and
-  bounded hosted logical restore are recorded as complete. Native CI remains
-  provider-blocked before any job step. The latest verification record
-  identifies the remaining gates.
+  physical-source and source-revision checks. The latest verified deployment
+  checkpoint is PR32 source SHA
+  `fa13c5689380ab2e71784f72a36b7cac7296bbc8`, captured at
+  `2026-09-10T13:59:48Z`, with READY registry, builder, and upload-reviewer
+  deployments recorded in the [activation readback](evidence/production-activation-readback-fa13c568.json)
+  and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json).
+  The Neon production integration, storage, secrets, authenticated production
+  flow, released CLI evidence, and bounded hosted logical restore are recorded
+  as complete. Native CI remains provider-blocked before any job step. The
+  latest verification record identifies the remaining gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
   on-demand skills.sh catalog adapter, identity-preserving automatic source
   pullthrough and approved-cache behavior, and the Packs, Topics, Official, and
@@ -56,12 +58,11 @@ new content and execution boundaries.
   owner has authorized the Vercel project OIDC destination. Source `0f9da75`
   implements the directory, Topics parser, bounded cache, enumeration, and
   security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
-  API evidence. The current main deployment
-  `9caf2c178e92821cb9f3176a91a8ff5dafe2942f` and deployment
-  `dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` record upload-review activation and
-  preserve the earlier verified read-only release manifest and selected-file
-  GET evidence; physical source acceptance, selected imports, nested detail,
-  Packs preview, and tenant/secrecy remain open. The required install
+  API evidence. The latest verified PR32 deployment checkpoint records
+  upload-review and builder activation while preserving the earlier verified
+  read-only release manifest and selected-file GET evidence; physical source
+  acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
+  remain open. The required install
   path supports multiple tenant feeds, with one origin/restriction configuration
   per feed and feed membership kept separate from the catalog's source identity.
   A complete skills.sh identity is enough to start a cold pullthrough, which
@@ -71,11 +72,12 @@ new content and execution boundaries.
   instead of presenting an older cache as fresh. Optional source restrictions
   are an administrator policy, not a prerequisite for a public catalog row.
 - **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
-  Current main `9caf2c178e92821cb9f3176a91a8ff5dafe2942f` has Git-triggered READY
-  registry and upload-reviewer deployments
-  `dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
-  The [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
-  records upload-review enablement/configuration without a live model session.
+  The latest verified PR32 deployment checkpoint has READY registry, builder,
+  and upload-reviewer services. The [activation readback](evidence/production-activation-readback-fa13c568.json)
+  records bounded service checks without a live model session, and the [builder
+  callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json)
+  records the non-worker builder principal without a mutating request or draft
+  context.
   The [local synthetic editor/browser evidence](evidence/m6-editor-browser-local-29f7.json)
   passes bounded desktop/mobile draft checks; hosted UI, live Eve/model, and
   screenreader/contrast/reduced-motion acceptance remain pending. Complete M6
@@ -103,6 +105,29 @@ new content and execution boundaries.
   dependency sync, an agent-facing MCP/context bridge, and the first native
   integrations. Add workspace membership and lifecycle controls where the
   one-organization baseline becomes a team-hosted service.
+- **FUTURE M1-MCP-DISTRIBUTION — bidirectional authenticated MCP distribution.**
+  Support consuming skills from an explicitly registered and allowlisted MCP
+  server as a source, preserving server/resource identity, revision, and
+  upstream digest. Reads are bounded and on demand; changed or missing source
+  bytes, invented versions, transport errors, and stale cache entries fail
+  closed before existing bundle validation, required scans, quarantine,
+  provenance, and tenant authorization. The source adapter permits only the
+  approved discovery/resource-read operations and never executes arbitrary MCP
+  tools, hooks, or skill code. In the other direction, provide a narrow
+  authenticated MCP distribution surface for approved immutable versions,
+  manifests, files, and packs with canonical digest and provenance. Integrate
+  client-controlled install, update, and restore through the existing Rust CLI
+  and distribution contracts; require explicit mutation consent and use only
+  scoped, short-lived transfer grants without raw secrets. Server-side source
+  credentials and authorization remain private to the configured source and
+  never leak across feeds or tenants. Required scanner evidence, revocation,
+  tenant authorization, and install-receipt analytics remain authoritative.
+  Acceptance requires real MCP-client/server fixtures in both directions,
+  including changed-source/digest, revoked, unauthorized, cross-tenant,
+  warm-cache, and transport-error cases. The MCP server never writes arbitrary
+  client files or executes skill content; placement and execution boundaries
+  remain with the client and CLI. This is a future requirement inside M1, not
+  an active implementation milestone or a new bundle count.
 - **P2: measure context quality.** Add deterministic skill linting and
   explainable quality review, then scenario evaluations that compare agent
   behavior with and without a package. These depend on an explicitly isolated
