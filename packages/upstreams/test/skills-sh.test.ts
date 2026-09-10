@@ -178,6 +178,36 @@ describe('skills.sh source acquisition', () => {
     }
   });
 
+  it('rejects a detail source type that conflicts with the import hint', async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === '/catalog/api/v1/skills/octo/repo/demo') {
+        return json({
+          id: 'octo/repo/demo',
+          source: 'octo/repo',
+          slug: 'demo',
+          name: 'demo',
+          sourceType: 'github',
+          installUrl: null,
+          hash: null,
+          files: [{ path: 'SKILL.md', contents: '# demo\n' }],
+        });
+      }
+      return json({ error: 'source acquisition must not run' }, 500);
+    };
+    const input = request('octo/repo/demo', fetchImpl);
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId: 'octo/repo/demo',
+      externalSourceType: 'well-known',
+    };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'identity_mismatch' });
+    expect(calls).toEqual(['/catalog/api/v1/skills/octo/repo/demo']);
+  });
+
   it('gets a fresh request-scoped token for each canonical catalog acquisition', async () => {
     const skill = Buffer.from('---\nname: demo\ndescription: Fresh token demo\n---\n# demo\n', 'utf8');
     const seen: Array<{ path: string; authorization: string | undefined }> = [];

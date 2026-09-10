@@ -1906,10 +1906,17 @@ function parseSkillsShDetail(
   const name = value.name === undefined || value.name === null
     ? slug
     : requireSkillsShString(value.name, 'skills.sh detail name', 512);
-  const sourceType = value.sourceType ?? sourceTypeHint;
-  if (sourceType !== undefined && sourceType !== 'github' && sourceType !== 'well-known') {
+  const explicitSourceType = value.sourceType;
+  if (explicitSourceType !== undefined && explicitSourceType !== null && explicitSourceType !== 'github' && explicitSourceType !== 'well-known') {
     throw new UpstreamAcquisitionError('unsupported_source', 'skills.sh detail has an unsupported sourceType');
   }
+  if (explicitSourceType !== undefined && explicitSourceType !== null && sourceTypeHint !== undefined && explicitSourceType !== sourceTypeHint) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh detail sourceType does not match the import request',
+    );
+  }
+  const sourceType = explicitSourceType ?? sourceTypeHint;
   const files = value.files;
   if (files === undefined) {
     throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail omitted files');
