@@ -997,6 +997,10 @@ function createAuthoringHandlerDependencies(
       releasePrincipal.organizationId === config.organizationId &&
       canReadNamespace(releasePrincipal, release.name) &&
       skillCurrentlyApproved(state, release),
+    releaseAdmissionAtCommit: (state, release, releasePrincipal) =>
+      releasePrincipal.organizationId === config.organizationId &&
+      canReadNamespace(releasePrincipal, release.name) &&
+      skillCurrentlyApproved(state, release),
   };
 }
 
