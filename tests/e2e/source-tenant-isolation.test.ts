@@ -495,8 +495,18 @@ describe('tenant-scoped transparent source acquisition', () => {
     expect(source.counters.githubBlobs).toBeGreaterThan(beforeRefresh.counters.githubBlobs);
     expect(directoryDetailCalls.get(CATALOG_A)).toBe((beforeRefresh.directoryDetailCalls.get(CATALOG_A) ?? 0) + 1);
     expect(directorySearchCalls.get(CATALOG_A)).toBe((beforeRefresh.directorySearchCalls.get(CATALOG_A) ?? 0) + 1);
+    const afterRefreshRun = {
+      sourceCalls: source.calls.length,
+      counters: { ...source.counters },
+      directoryDetailCalls: new Map(directoryDetailCalls),
+      directorySearchCalls: new Map(directorySearchCalls),
+    };
     const refreshedWarmResponse = await resolve(handlerA, USER_A_TOKEN, feedA);
     expect(refreshedWarmResponse.status).toBe(200);
+    expect(source.calls.length).toBe(afterRefreshRun.sourceCalls);
+    expect(source.counters).toEqual(afterRefreshRun.counters);
+    expect(directoryDetailCalls).toEqual(afterRefreshRun.directoryDetailCalls);
+    expect(directorySearchCalls).toEqual(afterRefreshRun.directorySearchCalls);
     const refreshedWarm = (await body<{ resolution: Resolution }>(refreshedWarmResponse)).resolution;
     expect(refreshedWarm.resourceId).not.toBe(warmA.resourceId);
     const refreshedStateA = await repository.read(TENANT_A);
