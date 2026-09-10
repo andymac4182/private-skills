@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BundleValidationError,
   FilesSdkBlobStore,
+  MAX_FILE_BYTES,
   decodeBundle,
   digestBytes,
   encodeBundle,
@@ -42,6 +43,18 @@ const toBase64 = (value: string): string => {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+const zeroBytesToBase64 = (byteLength: number): string => {
+  const bytes = new Uint8Array(byteLength);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize)
+    );
+  }
   return btoa(binary);
 };
 
@@ -91,6 +104,43 @@ describe("canonical skill bundles", () => {
         files: [{ path: "asset.bin", content: "Zh==" }],
       })
     ).toThrow(/base64/u);
+  });
+
+  it("validates a 3.5 MiB base64 file linearly and rejects bad padding", () => {
+    const content = zeroBytesToBase64(3.5 * 1024 * 1024);
+    expect(content.length).toBe(4_893_356);
+    expect(
+      validateBundle({
+        format: "pskills-bundle-v1",
+        files: [{ path: "asset.bin", content }],
+      }).files[0]?.content
+    ).toBe(content);
+
+    // The final quartet for an all-zero file is AA==. These variants retain
+    // the large input size while exercising padding placement and pad bits.
+    expect(() =>
+      validateBundle({
+        format: "pskills-bundle-v1",
+        files: [{ path: "asset.bin", content: `${content.slice(0, -2)}=A` }],
+      })
+    ).toThrow(/base64/u);
+    expect(() =>
+      validateBundle({
+        format: "pskills-bundle-v1",
+        files: [{ path: "asset.bin", content: `${content.slice(0, -3)}B==` }],
+      })
+    ).toThrow(/base64/u);
+  });
+
+  it("accepts a file at the supported 10 MiB decoded limit", () => {
+    const content = zeroBytesToBase64(MAX_FILE_BYTES);
+    expect(content.length).toBe(13_981_016);
+    expect(() =>
+      validateBundle({
+        format: "pskills-bundle-v1",
+        files: [{ path: "asset.bin", content }],
+      })
+    ).not.toThrow();
   });
 
   it("matches the frozen base64 protocol vector", async () => {
