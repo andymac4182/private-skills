@@ -110,11 +110,28 @@ describe('upload/edit review persistence', () => {
       '2026-01-02T03:05:05.000Z',
     );
     expect(acknowledged.findings[0]?.decision).toBe('acknowledged');
+    await expect(service.updateFindingDecision(
+      'org-a',
+      result.id,
+      findingId,
+      'dismissed',
+      'publisher-1',
+      '2026-01-02T03:05:06.000Z',
+    )).rejects.toMatchObject({ code: 'INVALID_UPLOAD_REVIEW_INPUT' });
+    const dismissed = await service.updateFindingDecision(
+      'org-a',
+      result.id,
+      findingId,
+      'dismissed',
+      'publisher-1',
+      { reason: 'Reviewed and accepted as an intentional design choice.', now: '2026-01-02T03:05:07.000Z' },
+    );
+    expect(dismissed.findings[0]).toMatchObject({ decision: 'dismissed', decisionReason: 'Reviewed and accepted as an intentional design choice.' });
     expect((await repository.read('org-a')).audit.at(-1)).toMatchObject({
       action: 'upload-review.finding.decision',
       subject: 'publisher-1',
       resourceId: result.id,
-      details: { findingId, decision: 'acknowledged' },
+      details: { findingId, decision: 'dismissed', reason: 'Reviewed and accepted as an intentional design choice.' },
     });
     expect((await service.listJobs('org-a'))[0]?.eveSessionId).toBe('eve-session-1');
   });

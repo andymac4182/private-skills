@@ -75,6 +75,7 @@ export interface UploadReviewFinding {
   path?: string;
   line?: number;
   decision: UploadReviewFindingDecision;
+  decisionReason?: string;
 }
 
 export type UploadReviewFindingDecision = 'open' | 'acknowledged' | 'dismissed';
@@ -192,14 +193,14 @@ export interface UploadReviewPersistenceService {
     now?: ReviewNow,
   ): Promise<UploadReviewResult>;
   markStale(organizationId: string, input: MarkUploadReviewStaleInput): Promise<UploadReviewJob[]>;
-  requeue(organizationId: string, jobId: string, now?: ReviewNow): Promise<UploadReviewJob>;
+  requeue(organizationId: string, jobId: string, now?: ReviewNow, actor?: string): Promise<UploadReviewJob>;
   updateFindingDecision(
     organizationId: string,
     resultId: string,
     findingId: string,
     decision: UploadReviewFindingDecision,
     actor: string,
-    now?: ReviewNow,
+    nowOrOptions?: ReviewNow | { now?: ReviewNow; reason?: string },
   ): Promise<UploadReviewResult>;
   listJobs(organizationId: string, options?: UploadReviewListOptions): Promise<UploadReviewJob[]>;
   listResults(organizationId: string, options?: UploadReviewListOptions): Promise<UploadReviewResult[]>;
@@ -836,8 +837,9 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     });
   }
 
-  async requeue(organizationId: string, jobId: string, now?: ReviewNow): Promise<UploadReviewJob> {
+  async requeue(organizationId: string, jobId: string, now?: ReviewNow, actor?: string): Promise<UploadReviewJob> {
     assertOrganizationId(organizationId);
+    const cleanActor = actor === undefined ? undefined : boundedString(actor, 'actor', MAX_ID_LENGTH);
     const clock = parseClock(now);
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs, results } = writableCollections(rawState);
@@ -853,6 +855,16 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       delete job.resultId;
       delete job.eveSessionId;
       clearLease(job);
+      if (cleanActor !== undefined) {
+        rawState.audit.push({
+          id: randomId('audit'),
+          organizationId,
+          subject: cleanActor,
+          action: 'upload-review.rerun.requested',
+          resourceId: job.id,
+          createdAt: clock.iso,
+        });
+      }
       pruneCollections(jobs, results);
       return clone(job);
     });
@@ -864,7 +876,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     findingId: string,
     decision: UploadReviewFindingDecision,
     actor: string,
-    now?: ReviewNow,
+    nowOrOptions?: ReviewNow | { now?: ReviewNow; reason?: string },
   ): Promise<UploadReviewResult> {
     assertOrganizationId(organizationId);
     const cleanResultId = boundedString(resultId, 'resultId', MAX_ID_LENGTH);
@@ -873,7 +885,14 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     if (decision !== 'open' && decision !== 'acknowledged' && decision !== 'dismissed') {
       throw new UploadReviewValidationError('decision is invalid');
     }
-    const clock = parseClock(now);
+    const options = nowOrOptions !== undefined && typeof nowOrOptions === 'object' && !(nowOrOptions instanceof Date)
+      ? nowOrOptions
+      : { now: nowOrOptions as ReviewNow | undefined };
+    const reason = options.reason === undefined ? undefined : boundedString(options.reason, 'reason', MAX_REASON_LENGTH);
+    if (decision === 'dismissed' && reason === undefined) {
+      throw new UploadReviewValidationError('dismissed findings require a reason');
+    }
+    const clock = parseClock(options.now);
     return this.repository.transaction(organizationId, (rawState) => {
       const { results } = writableCollections(rawState);
       const result = results.find((candidate) => candidate.organizationId === organizationId && candidate.id === cleanResultId);
@@ -881,6 +900,8 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       const finding = result.findings.find((candidate) => candidate.id === cleanFindingId);
       if (!finding) throw new UploadReviewNotFoundError('upload review finding was not found');
       finding.decision = decision;
+      if (reason === undefined) delete finding.decisionReason;
+      else finding.decisionReason = reason;
       rawState.audit.push({
         id: randomId('audit'),
         organizationId,
@@ -888,7 +909,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
         action: 'upload-review.finding.decision',
         resourceId: cleanResultId,
         createdAt: clock.iso,
-        details: { findingId: cleanFindingId, decision },
+        details: { findingId: cleanFindingId, decision, ...(reason === undefined ? {} : { reason }) },
       });
       return clone(result);
     });
