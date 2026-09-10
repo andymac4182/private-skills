@@ -35,11 +35,12 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close v0.2.0.** Finish the remaining GitHub Vercel integration,
-  Git-triggered deployment evidence, final source-revision checks, and restore
-  rehearsal. The Neon production integration, storage, secrets, authenticated
-  production flow, and released CLI evidence are recorded as complete; the
-  latest verification record identifies the remaining gates.
+- **Now: close v0.2.0.** Finish the remaining final source-revision checks and
+  restore rehearsal. The GitHub Vercel project connection and Git-triggered
+  production deployment are now evidenced by PR26 and its READY deployment;
+  the Neon production integration, storage, secrets, authenticated production
+  flow, and released CLI evidence are recorded as complete. The latest
+  verification record identifies the remaining gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
   on-demand skills.sh catalog adapter, identity-preserving automatic source
   pullthrough and approved-cache behavior, and the Packs, Topics, Official, and
@@ -51,10 +52,12 @@ new content and execution boundaries.
   the v0.2.0 launch gate or require a bulk mirror of the public catalog. The
   owner has authorized the Vercel project OIDC destination. Source `0f9da75`
   implements the directory, Topics parser, bounded cache, enumeration, and
-  security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY.
-  The current read-only API evidence is verified for directory/auth/list/search
-  and fresh canonical Topics; browser acceptance, selected imports, nested
-  detail, Packs preview, and tenant/secrecy remain open. The required install
+  security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
+  API evidence. The latest PR26 Git deployment
+  `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` adds verified read-only release manifest
+  and selected-file GETs with an unauthenticated 401 boundary; browser
+  acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
+  remain open. The required install
   path supports multiple tenant feeds, with one origin/restriction configuration
   per feed and feed membership kept separate from the catalog's source identity.
   A complete skills.sh identity is enough to start a cold pullthrough, which
@@ -63,7 +66,14 @@ new content and execution boundaries.
   cold requests deduplicate, and an explicit refresh reports source failure
   instead of presenting an older cache as fresh. Optional source restrictions
   are an administrator policy, not a prerequisite for a public catalog row.
-- **Active implementation, incomplete: M6 full browser editor and upload/edit review.** Integrate the
+- **M6 read-only release view slice delivered; full editor/review remains active and incomplete.** The
+  production Git deployment `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` now proves the
+  authenticated release manifest, selected text-file read, and unauthenticated
+  401 boundary in the [sanitized read-only evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json).
+  This is production GET evidence; the earlier browser Pack fixture remains
+  separately attributed and is not promoted to this deployment. Complete M6
+  still requires the editor, durable drafts, upload/edit reviewer, builder, and
+  their end-to-end evidence. Integrate the
   Diffs editor primitives with a Private Skills file tree, durable private
   drafts, immutable new releases, and a separate upload/edit Eve reviewer.
   The Diffs integration, persistence, identity, review jobs, UI findings,
@@ -162,10 +172,10 @@ The proposed delivery order is:
 
 | Slice | Later acceptance target | Dependencies and rationale |
 | --- | --- | --- |
-| M6-VIEW | An authorized reader can open a selected immutable release/version from skill detail, browse its canonical file tree, and view the full content of every allowed file through the Diffs read-only surface. The selected version and canonical digest stay visible; binary and oversize files have explicit bounded states, and unauthorized retrieval or candidate execution is impossible. | Existing release authorization, Files SDK retrieval, canonical manifest, and `@pierre/diffs`; this makes inspection useful without creating an editable copy. |
+| M6-VIEW | **Delivered slice:** the production read-only route proves an authenticated release manifest, selected text-file retrieval with digest verification, and an unauthenticated 401 boundary in [sanitized evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json). The full gate still requires an authorized reader to browse the complete canonical tree and every allowed file through Diffs, including binary/oversize bounded states, selected-version changes, and no candidate execution. | Existing release authorization, Files SDK retrieval, canonical manifest, and `@pierre/diffs`; the delivered slice makes inspection useful without creating an editable copy, while the remaining fixtures complete the gate. |
 | M6-EDIT | An authorized publisher takes an explicit edit action from an immutable release, creating a tenant-scoped draft route with base release/version/digest. Saving and reloading restores draft revisions and bytes; a Diffs comparison shows changes against the base, and a separate author action starts the scanner/publication transition. | Depends on M6-VIEW, draft persistence, canonical digesting, and the existing scanner/publish boundary; an editor save is never a release. |
 | M6-UI | Authenticated publishers can open a private draft, browse a canonical file tree, edit files, switch file/diff views, and see line/path annotations. | Existing web auth, bundle validator, `@pierre/diffs`, and `@pierre/trees`; the UI value arrives before release automation. |
-| M6-RELEASE | Save creates a new immutable release with a server-computed canonical digest, base/draft provenance, and explicit scan/publish transition; previous releases remain byte-identical. | Existing Files SDK, state, worker, and scanner policy; avoids treating an editor save as publication. |
+| M6-RELEASE | An explicit **Queue release scan** action creates a new immutable release candidate with a server-computed canonical digest, base/draft provenance, and explicit scan/publish transition; saving a draft only persists a new draft revision and never creates a release. Previous releases remain byte-identical. | Existing Files SDK, state, worker, and scanner policy; keeps draft save separate from publication. |
 | M6-REVIEW | Upload/edit Eve runs asynchronously against the exact draft digest/revision, persists findings and status, marks results stale when content or policy changes, and exposes human actions. | Existing AI Gateway/Eve patterns plus a separate queue and review-result schema; daily consolidation remains independent. |
 | M6-SAFE | Malicious or untrusted uploaded content is treated as data, validated and scanned in the existing isolated worker; no script, hook, MCP, or candidate instruction executes or escapes tenant boundaries. | Existing canonical bundle and scanner controls are authoritative; Diffs annotations/rendering cannot weaken them. |
 | M6-A11Y | File tree, editor, diff, findings, and actions pass keyboard/focus/screen-reader/contrast/reduced-motion checks at 390px and desktop widths. | Requires browser evidence for the complete route, including narrow layouts; current production catalog mobile overflow is a known separate verification gap. |
@@ -184,11 +194,11 @@ the explicit stale/CAS rules are recorded in
 
 | Slice | Active implementation target | Owner and boundary |
 | --- | --- | --- |
-| M6-BUILDER-0 | Persist an organization-scoped conversation bound to `draftId`, base release/digest, current draft revision/digest, Gateway/model, builder/tool revision, bounded-context limits, and an auditable state. | `delivery_audit` owns the `packages/skill-builder` types plus app route/persistence integration; use existing draft authorization and no secret-bearing browser state. |
-| M6-BUILDER-1 | Provide a bounded chat context from the exact draft manifest and allowed text files, with proposal-only tools for add/edit/rename/delete. Persist generation/job provenance and idempotency without exposing credentials or arbitrary network/content execution. | Builder/Eve service owner owns the separate tool allowlist and configurable AI Gateway/model; daily consolidation and upload-review queues remain separate. |
-| M6-BUILDER-2 | Render each proposal as a reviewable Diffs/file-tree change with canonical paths, per-file preconditions, rationale, and deterministic proposal/diff digest. No proposal mutates draft bytes. | `web_ui` owns the editor chat/proposal panel and loading/error/stale states; `@pierre/diffs` remains a renderer, not the persistence or policy layer. |
-| M6-BUILDER-3 | Apply or reject only after an explicit author action. Apply requires proposal ID, expected revision, and idempotency key; server-side CAS creates one new draft revision or returns an explicit stale/conflict result. | `delivery_audit` integrates proposal apply/reject with draft CAS; no silent rebase, partial apply, base-release mutation, autopublish, or scanner-policy change. |
-| M6-BUILDER-4 | Prove browser chat → proposal → view diff → explicit apply → saved reload → upload/edit review → required scanner decision → explicit immutable release, including a changed-revision stale proposal and cross-tenant denial. | `e2e_tests` / completion audit owns evidence; existing scanner and publication gates remain authoritative and builder output remains advisory. |
+| M6-BUILDER-0 | Persist an organization-scoped conversation bound to `draftId`, base release/digest, current draft revision/digest, Gateway/model, builder/tool revision, bounded-context limits, and an auditable state. | The skill-builder service and app persistence own the types and route integration; use existing draft authorization and no secret-bearing browser state. |
+| M6-BUILDER-1 | Provide a bounded chat context from the exact draft manifest and allowed text files, with proposal-only tools for add/edit/rename/delete. Persist generation/job provenance and idempotency without exposing credentials or arbitrary network/content execution. | The builder/Eve workflow owns its separate tool allowlist and configurable AI Gateway/model; daily consolidation and upload-review queues remain separate. |
+| M6-BUILDER-2 | Render each proposal as a reviewable Diffs/file-tree change with canonical paths, per-file preconditions, rationale, and deterministic proposal/diff digest. No proposal mutates draft bytes. | The web editor owns the chat/proposal panel and loading/error/stale states; `@pierre/diffs` remains a renderer, not the persistence or policy layer. |
+| M6-BUILDER-3 | Apply or reject only after an explicit author action. Apply requires proposal ID, expected revision, and idempotency key; server-side CAS creates one new draft revision or returns an explicit stale/conflict result. | Draft/CAS integration owns proposal apply/reject; no silent rebase, partial apply, base-release mutation, autopublish, or scanner-policy change. |
+| M6-BUILDER-4 | Prove browser chat → proposal → view diff → explicit apply → saved reload → upload/edit review → required scanner decision → explicit immutable release, including a changed-revision stale proposal and cross-tenant denial. | The authenticated end-to-end evidence workflow owns proof; existing scanner and publication gates remain authoritative and builder output remains advisory. |
 
 The initial useful slice is authoring a new skill and refining an existing one;
 it must preserve exact file context and draft provenance in both cases. A

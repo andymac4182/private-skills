@@ -2,24 +2,36 @@
 
 **Date:** 2026-09-10
 
-**Status:** PR23 is merged on `origin/main` at
-`7c7a33ec57ead2365cddcf83c93b2992bd92f201`. The earlier PR22 guarded prebuilt
-production rollout is READY as `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`; the current read-only
-API and metadata-only Pack checks are recorded below. A subsequent push of
-that main commit produced READY Git-triggered deployment
-`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH` at its unique URL
-`https://private-skills-m5eqoug51-andrewmcclenaghan-6046s-projects.vercel.app`,
-as recorded in the sanitized [Git-main
-deployment evidence](evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json).
-The browser UI proof is complete; its Pack-preview window crossed a stable-alias
-deployment cutover, so the exact deployment attribution is recorded as unknown.
-A later source-specific production record now proves one snapshot-only
-candidate admission, required-scan approval, isolated CLI install/repeat, and
-install analytics. It does not prove physical GitHub or well-known source
-resolution, direct upstream-zero instrumentation, or hosted recovery. M6
-Diffs/editor plus upload-review Eve and M7 OpenClaw are active implementation
-milestones with incomplete evidence; they remain outside the current C1 release
-gate.
+**Status:** PR26 is merged on `origin/main` at
+`79088eaafa8cca279648004a0266e634b0caade6`. Its Git-triggered production
+deployment is READY as `dpl_GRTEufeDWquQReZmoJatk8rdRdHk`; the current
+read-only release-file proof is recorded below. Earlier prebuilt, Git-main,
+and browser records remain linked with their own source/deployment provenance.
+The browser Pack-preview window crossed a stable-alias deployment cutover, so
+its exact deployment attribution remains unknown. A later source-specific
+production record proves one snapshot-only candidate admission, required-scan
+approval, isolated CLI install/repeat, and install analytics. It does not prove
+physical GitHub or well-known source resolution, direct upstream-zero
+instrumentation, or hosted recovery. M6's read-only VIEW slice has delivered
+production API evidence, while the full Diffs editor, durable drafts,
+upload/edit Eve, and interactive builder remain active and incomplete. M7
+OpenClaw remains active and incomplete; these milestones stay outside the
+current C1 release gate.
+
+## Current Git-triggered read-only release-file checkpoint
+
+The READY deployment `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` was built from PR26
+main commit `79088eaafa8cca279648004a0266e634b0caade6`. The sanitized
+[production read-only evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
+made seven bounded GET checks: health, authenticated principal, policy,
+approved-release metadata, a paths-only release manifest, a selected `SKILL.md`
+read, and an unauthenticated release-files request. The authenticated checks
+returned 200; the unauthenticated request returned 401. The selected file's
+server-reported digest matched its transiently read contents, response bodies
+and credentials were not retained, and the pass recorded zero private-registry
+writes. This is production HTTP/API evidence for the read-only release-file
+slice; it is separate from the earlier browser Pack-preview fixture and does
+not claim the full M6 editor/reviewer/builder workflow.
 
 ## Earlier prebuilt rollout checkpoint
 
