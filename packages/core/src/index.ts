@@ -3415,7 +3415,6 @@ async function authorizeOpenClawPublication(
     if (trustedMetadata !== undefined && !openClawCandidateMatchesMetadata(entry, trustedMetadata, true)) return false;
     const matches = state.skills.filter((skill) =>
       skill.organizationId === config.organizationId &&
-      skill.version === entry.version &&
       canReadNamespace(input.principal, skill.name) &&
       skillCurrentlyApproved(state, skill, openClaw.now?.() ?? Date.now()) &&
       openClawProvenanceMatches(skill, normalized),
@@ -3457,6 +3456,7 @@ function openClawProvenanceMatches(
   }
   return provenance.kind === 'github' &&
     provenance.sourceResolutionKind === 'github' &&
+    provenance.externalId === normalized.candidate.package &&
     provenance.repository === normalized.source.repo &&
     provenance.path === normalized.source.path &&
     provenance.resolvedCommit === normalized.source.commit &&
@@ -3523,6 +3523,7 @@ function openClawCompletionProof(
       source.contentHash !== normalized.source.contentHash ||
       provenance.kind !== 'github' ||
       provenance.sourceResolutionKind !== 'github' ||
+      provenance.externalId !== normalized.candidate.package ||
       provenance.repository !== normalized.source.repo ||
       provenance.path !== normalized.source.path ||
       provenance.resolvedCommit !== normalized.source.commit ||
@@ -5517,6 +5518,19 @@ function normalizeProvenance(
   if (suppliedExternalDigest !== undefined && !isDigest(suppliedExternalDigest)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external digest is invalid', 409);
   }
+  // OpenClaw GitHub imports carry the immutable commit resolved by the worker.
+  // Preserve that verified claim through completion so source-proof recording
+  // and publication can bind the public commit version without conflating it
+  // with the registry's private SemVer release version.
+  const suppliedResolvedCommit = upstream.kind === 'github'
+    ? optionalProvenanceString(raw.resolvedCommit, 'resolvedCommit', 128)
+    : undefined;
+  if (suppliedResolvedCommit !== undefined && !isCommit(suppliedResolvedCommit)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved commit is invalid', 409);
+  }
+  if (suppliedResolvedCommit !== undefined && suppliedResolvedCommit !== suppliedRevision) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved commit does not match its revision', 409);
+  }
   const suppliedSourceResolutionKind = raw.sourceResolutionKind === undefined || raw.sourceResolutionKind === null
     ? undefined
     : raw.sourceResolutionKind;
@@ -5585,6 +5599,7 @@ function normalizeProvenance(
     ...(suppliedFetchedAt === undefined ? {} : { fetchedAt: suppliedFetchedAt }),
     ...(suppliedSourceResolutionKind ? { sourceResolutionKind: suppliedSourceResolutionKind as Provenance['sourceResolutionKind'] } : {}),
     ...(suppliedExternalDigest === undefined ? {} : { externalDigest: suppliedExternalDigest }),
+    ...(suppliedResolvedCommit === undefined ? {} : { resolvedCommit: suppliedResolvedCommit }),
     ...skillsShEvidence,
     ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
   };

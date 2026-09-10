@@ -593,7 +593,12 @@ export function selectOpenClawEligibleRecords(
     if (!candidate || typeof candidate !== 'object' || !candidate.skill || !candidate.entry || !candidate.sourceArtifact) {
       continue;
     }
-    if (candidate.skill.state !== 'approved' || candidate.entry.version !== candidate.skill.version) continue;
+    // OpenClaw's public version is source-defined: GitHub candidates expose
+    // the full immutable commit, while the registry stores a private
+    // SemVer-compatible release version.  The candidate provider has already
+    // bound this entry to a verified source proof, so comparing these two
+    // version namespaces would silently discard valid records.
+    if (candidate.skill.state !== 'approved') continue;
     let current = false;
     try {
       current = isCurrentPolicyApproved(candidate.skill);

@@ -565,6 +565,7 @@ function sourceProofMatchesProvenance(
     : safeHostname(provenance.sourceProviderOrigin);
   return provenance.repository === normalized.source.repo &&
     provenancePath === normalized.source.path &&
+    provenance.externalId === normalized.candidate.package &&
     provenance.resolvedCommit === normalized.source.commit &&
     provenance.sourceResolutionKind === 'github' &&
     provenanceOrigin === 'github.com' &&
