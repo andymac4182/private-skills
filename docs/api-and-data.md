@@ -4,7 +4,7 @@ This is a proposed v1 contract inventory. Implementation milestone M1 produces a
 
 ## Conventions
 
-API base `/v1`; JSON metadata only. Authorization binds every request to an organization and allowed namespaces. IDs are opaque; display names like `@team/review` are resolved through explicit namespace mappings. Object IDs and hashes are never credentials. Resource lookups return a uniform unavailable response when revealing existence would violate permissions.
+API base `/v1`; JSON metadata only. Authorization binds every request to an organization and allowed namespaces. IDs are opaque; display names like `@team/review` are resolved through explicit namespace mappings. A feed is a tenant-scoped discovery list plus adapter/policy configuration, not a source namespace. A configured feed selects the catalog adapter and retains the complete skills.sh external ID (`source/slug`) as source identity. After verification, a canonical reference may be derived from the source provider/origin, repository and exact skill path, or a well-known scoped identity; snapshot-only metadata cannot invent those components. Any configured feed prefix is readable metadata and never renames a skill or becomes a mandatory alias; source identity remains source-derived. Object IDs and hashes are never credentials. Resource lookups return a uniform unavailable response when revealing existence would violate permissions.
 
 Use `Idempotency-Key` for publish completion, imports, pack releases, rescans, and other retryable mutations; bind it to actor, organization, operation, and a request-body hash. Reuse with a different payload returns `409`. Use ETags/`If-Match` for mutable pack drafts, policies, and upstreams. Pagination uses bounded cursor-based pages. All serialized hashes use `sha256:<64 lowercase hex characters>`.
 
@@ -15,12 +15,14 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 | Endpoint | Purpose / response |
 | --- | --- |
 | `GET /v1/capabilities` | Authenticated protocol, effective host/storage transfer limits, transfer modes/range support, schema versions, supported targets/scanners |
+| `GET /v1/feeds` | Readable organization feed metadata: id, unique name, kind, enabled state, configured prefix metadata, trusted-origin summary, and configuration revision |
 | `POST /auth/device` and `POST /auth/token` | Standards-based browser/device login; expiring codes and prescribed polling |
 | `POST /auth/revoke` | Revoke the caller's CLI session/token |
 | `GET /v1/skills?q=...` | Search accessible skills, cursor pagination |
 | `GET /v1/skills/{id}/versions` | Authorized version/provenance metadata |
 | `POST /v1/resolve` | Resolve `{kind, ref, version?, sourceRevision?}` to pinned resource/member records; `200` resolved or `202` ingestion operation |
 | `POST /v1/imports` | Import approved upstream/source/subdirectory/revision; `202` operation |
+| `POST /v1/proxy/resolve` | Transparent feed resolution for `{feed?, externalId, refresh?}`; response `{feed, externalId, reference, operation \| resolution}`; a `202` operation may omit `reference`, while a `200` resolution includes the verified source reference; both echo the original external ID; server owns internal ID/revision |
 | `POST /v1/uploads` | Reserve a fresh private quarantine attempt object and intended release; `201` scoped signed-upload or authenticated-gateway descriptor |
 | `POST /v1/uploads/{id}/complete` | Revalidate actual stored bytes; `202` ingestion operation; server computes digests |
 | `GET /v1/operations/{id}` | Authorized status, stage, retry timing, redacted failure detail |
@@ -34,13 +36,51 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 | `POST /v1/artifacts/{digest}/rescan` | Explicit authorized rescan, idempotent job |
 | `POST /v1/versions/{id}/revoke` | Audited revocation, immediate denial of future grants |
 | `GET/PUT /v1/policies/{id}` | Read/change revisioned scanner and hook policy; administrator only |
-| `GET/POST/PATCH /v1/upstreams` | Manage source mappings and credential references; administrator only |
+| `GET/POST/PATCH /v1/upstreams` | Manage generic explicit proxy mappings and credential references; administrator only; feed restrictions are configured on `/v1/feeds` and are not required for the built-in `skills-sh` path |
 | `GET /v1/audit-events` | Administrative paginated audit access |
 | `POST /internal/scan-results` | Service-authenticated, job-scoped result ingestion; unavailable to ordinary clients |
 
 API paths above containing `{digest}` URL-encode the digest as a single component. Every digest-based client endpoint also requires an authorized resource context: immutable release ID or source-revision ID, and pack version/manifest identity when a pack is involved. Identical bytes do not imply identical namespace ACLs, source permissions, or distribution policies. Native publish, imported source, and pack references resolve through the same current-policy evaluator. A pack resolution returns no installable result until every member is accessible and approved; a failed member is reported without leaking another namespace's metadata.
 
-Installation authorization binds the caller, organization, full desired member set and owners, release/source identities, pack versions/manifests, target scope, effective policy revisions, and digests. It is required even when every archive is already cached locally. A fresh authorization may be obtained after a long download, but the server must repeat every check. The CLI validates it immediately before the first activation write. Revocation after that last check cannot atomically stop local filesystem operations; document the bounded authorization window and report revocation on the next check. Do not promise remote recall of installed files.
+Feed resolution validates the selected feed name, enabled state, tenant ACL,
+and feed source policy before reading the catalog or opening an outbound
+connection. Unknown or disabled feeds therefore fail before fetch. The current
+feed kind is `skills-sh`; future kinds must register their own bounded adapter
+and provenance contract rather than widening this path implicitly. A source
+provider/origin or repository/path is recorded only after the resolver verifies
+the exact scoped identity; snapshot-only metadata never invents a
+physical source path. Sharing a canonical source identity does not share a
+tenant/feed ACL grant.
+
+The feed base URL must be the canonical skills.sh origin or an operator-trusted
+gateway listed in `trustedSkillsShBaseUrls`. A caller-supplied `credentialEnv`
+value is rejected; server-managed credentials are never returned to browsers or
+forwarded to source, artifact, or redirect requests. When `feed` is omitted,
+the server auto-selects only when exactly one enabled feed exists; with multiple
+enabled feeds the caller must select one explicitly.
+
+Installation authorization binds the caller, organization, selected feed and
+primary references, full desired member set and owners, release/source
+identities, pack versions/manifests, target scope, effective policy revisions,
+and digests. It is required even when every archive is already cached locally.
+A fresh authorization may be obtained after a long download, but the server
+must repeat every check. The CLI validates it immediately before the first
+activation write. Revocation after that last check cannot atomically stop local
+filesystem operations; document the bounded authorization window and report
+revocation on the next check. Do not promise remote recall of installed files.
+
+For the transparent skills.sh path, a reader with install permission and
+explicit `proxy:resolve` may start a bounded cold pullthrough or consume an
+approved warm cache entry. The default reader/publisher grant for
+`proxy:resolve` remains pending explicit product approval and production
+verification; owner/admin grants may exercise the route. The cold job
+does not grant permission to alter source restrictions, scanner policy,
+publication state, or aliases. Browsing and listing are metadata-only; file
+bytes become transferable only after source provenance, required scanner
+evidence, current policy, and actor-bound install authorization pass. A warm
+request must not perform an upstream lookup by default, while explicit refresh
+or update must recheck the source and surface failure instead of treating an
+older cache as fresh.
 
 For a project spanning registries, the CLI partitions the desired plan by registry origin and organization. Each service sees and authorizes only its own resources; the CLI completes final validation with every participating registry before activation and aborts on any failure. Never share another registry's credentials or private member metadata. A published v1 pack belongs to one registry/organization; its proxied members are locally mirrored resources in that same registry.
 
@@ -52,9 +92,9 @@ Transfer descriptors specify `mode: signed-url | gateway`, approved URL, method,
 | --- | --- |
 | `organizations`, `memberships`, `namespace_grants` | Stable GitHub user identity, roles, scoped permissions; every owned record carries organization ID |
 | `cli_sessions`, `service_tokens` | Hashed token material, scopes, organization, expiry, revocation; no raw tokens stored |
-| `upstreams`, `namespace_routes` | Provider, repository allowlist, canonical config, secret reference, revision, mirror-access policy |
+| `feeds`, `upstreams`, `namespace_routes` | Feed id/name/kind/enabled/configured-prefix metadata/configuration revision and trusted-origin/restriction policy; the canonical source reference remains source-derived; generic mappings remain separate optional proxy routes |
 | `skills`, `skill_versions` | Namespaced identity; unique `(organization, skill, version)`; immutable artifact binding |
-| `source_revisions` | Upstream/repository/subdirectory/immutable revision, original and canonical digest, provenance and license data |
+| `source_revisions` | Tenant/feed identity, original external ID/source type, verified upstream/repository/subdirectory/immutable revision when available, external hash/digest (including null), local canonical digest, resolver provenance, ACL/policy revision, and license data; never an invented path from snapshot-only metadata |
 | `artifacts`, `artifact_files` | Organization-scoped digest, logical store ID and sealed object key/version, byte limits, file manifest, creation/retention state; no provider URL as permanent identity |
 | `packs`, `pack_drafts`, `pack_versions`, `pack_members` | Immutable published manifest/member graph; exact skills/releases/digests; no nested packs in v1 |
 | `policy_revisions`, `policy_exceptions` | Immutable normalized config/hash; scoped reasoned exceptions with expiry |

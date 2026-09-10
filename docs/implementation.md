@@ -13,7 +13,7 @@ This document describes the code that exists in the repository now. The earlier 
 | Authentication | `packages/auth/src/index.ts` | Hashed bootstrap tokens, scoped user/worker principals, signed short-lived sessions, `HttpOnly` cookie, same-origin mutation check | No OIDC, device flow, or interactive identity provider |
 | Metadata | `packages/database/src` | Memory, atomic file, PostgreSQL JSONB transaction, and authenticated HTTP CAS repositories | The production registry is connected to Neon PostgreSQL; file and authenticated HTTP remain the other deployment profiles |
 | Artifacts | `packages/storage/src` | Canonical bundle encoding/validation, SHA-256 digesting, random sealed object keys, read-back integrity, and transfer gateway | Provider credentials and backend conformance remain deployment work |
-| Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | External upstream access needs approved mappings and credentials |
+| Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | Existing generic sources use approved mappings; the transparent `skills-sh` feed adapter and representative cold/warm pullthrough are follow-up acceptance work. An optional per-feed source policy may restrict the built-in adapter but is not its prerequisite |
 | Scanners | `packages/scanners/src` | Cisco, NVIDIA, and SkillsGuard adapter contracts, normalized reports, coverage, policy modes, and executors | Installed scanner images and live findings are environment-specific |
 | Worker | `workers/runner/src` | Claims scan/import jobs, verifies artifact digests, materializes a bounded bundle, executes scanners, and completes with fencing data | Run as a separate worker with a worker token |
 | Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
@@ -53,6 +53,7 @@ The implemented public surface is:
 | `GET /health` | Minimal unauthenticated liveness response |
 | `POST /auth/session`, `DELETE /auth/session` | Token-to-session exchange and cookie clearing |
 | `GET /v1/me`, `GET /v1/capabilities` | Principal and protocol/capability discovery |
+| **Follow-up** `GET /v1/feeds` | Planned readable tenant feed metadata: id, name, kind, enabled state, configured prefix metadata (not a canonical skill namespace), and configuration revision |
 | `GET /v1/skills`, `GET /v1/skills/:id` | Authorized catalog and detail metadata |
 | `POST /v1/publish` | Validate and queue a native bundle for scan/policy processing |
 | `GET /v1/scans` | Authorized scan evidence for accessible artifacts |
@@ -60,7 +61,7 @@ The implemented public surface is:
 | `GET /v1/operations`, `GET /v1/operations/:id` | Job status and progress records |
 | `GET /v1/packs`, `POST /v1/packs`, `GET /v1/packs/:id` | List and create exact-member immutable packs |
 | `GET /v1/policy`, `PUT /v1/policy` | Read and revision the scanner policy |
-| `GET /v1/upstreams`, `POST /v1/upstreams`, `POST /v1/imports` | Manage approved source mappings and queue imports |
+| `GET /v1/upstreams`, `POST /v1/upstreams`, `POST /v1/imports` | Manage optional source restrictions/explicit proxy mappings and queue generic imports |
 | `GET /v1/audit` | Read the organization audit trail |
 | `GET /v1/search`, `GET /v1/search/status`, `POST /v1/search/reindex` | Query, inspect, and rebuild the authorization-aware semantic index |
 | `POST /v1/install-authorizations`, `POST /v1/install-receipts`, `GET /v1/analytics` | Authorize transfers, record client-confirmed install telemetry, and read admin aggregates |
@@ -71,6 +72,34 @@ The implemented public surface is:
 | `/internal/jobs/*` | Worker claim, artifact download, and fenced completion |
 
 Publishing accepts a `SkillBundle` record in the canonical JSON format. A publish response is a queued operation; approval occurs only after a worker returns valid evidence and the core re-evaluates the saved policy and digest. Pack creation resolves members and records their exact resource IDs, versions, and digests; a revoked or policy-stale member prevents a new approved pack.
+
+The follow-up transparent skills.sh contract is additive and remains separate
+from the implemented-surface table above until its live acceptance evidence is
+recorded. `POST /v1/proxy/resolve` accepts `{ feed?, externalId, refresh? }`,
+where `externalId` is the complete source ID or an exact supported skills.sh
+URL. Omitted `feed` auto-selects only when exactly one enabled feed exists; with
+multiple enabled feeds the caller must select one explicitly. A bare ID/URL is
+a convenience input. The response contains
+`{ feed, externalId, reference, operation | resolution }`; a 202 operation may
+omit `reference`, while a 200 resolution includes the verified source reference,
+and both echo the original external ID. The caller does not invent a mandatory alias, `name`,
+`version`, or `upstreamId`; the server owns a collision-resistant internal
+record and immutable resolved revision, including when source files or hash are
+null. A cold first install fetches, validates, scans, and seals the candidate
+before it can enter the approved artifact cache. The cache key uses verified
+canonical origin/repository/exact-path or well-known scoped identity plus
+revision/digest; feed membership remains an access/provenance context and is
+not itself a canonical alias. A warm install uses an authorized cache entry
+without upstream lookup; concurrent cold requests deduplicate per tenant/feed/source
+revision. `refresh: true` or update
+rechecks the selected feed and surfaces failure rather than labeling an older
+cache entry fresh. One configuration exists per feed; explicit mappings and
+source restrictions remain optional administrator controls. Unknown or disabled
+feeds fail before catalog access or outbound fetch.
+The feed base must be canonical skills.sh or an operator-trusted gateway listed
+in `trustedSkillsShBaseUrls`; a caller-supplied `credentialEnv` is rejected.
+An omitted feed auto-selects only when exactly one enabled feed exists; with
+multiple enabled feeds the caller must select one explicitly.
 
 ## Authentication boundary
 
@@ -108,6 +137,19 @@ The runner handles two job paths:
 
 - an import resolves an approved GitHub or registry upstream, fetches the complete bounded source, validates immutable identity and provenance, then scans the resulting canonical bundle;
 - a scan downloads the sealed artifact, verifies the expected digest, materializes it into a temporary workspace, and scans that exact content.
+
+The target skills.sh pullthrough path uses the same worker boundary: its first
+install resolves the original catalog identity, acquires complete bytes into
+quarantine, validates provenance, runs every required scanner and policy gate,
+and stores only an approved immutable release. A reader with install and
+explicit `proxy:resolve` permission may start that bounded cold operation or
+install an approved warm release; the default reader/publisher grant remains
+pending product approval and production verification. Readers cannot change feed
+configuration, source policy, publish state, or scanner settings. A required scanner failure,
+incomplete coverage, blocked finding, or stale evidence denies installation;
+there is no direct-upstream fallback. This is a contract and acceptance target,
+not a claim that the current source has completed representative live import
+verification.
 
 `WorkerRunner` defaults to `DockerExecutor`, which uses a disposable container with no network, read-only input, a separate output directory, dropped capabilities, a non-root UID, bounded memory/CPU/PIDs, and bounded output. `TrustedLocalExecutor` exists for adapter tests and is not the production default. The worker logs metadata-only events and sanitizes errors; it does not print artifact bytes, lease tokens, source credentials, or scanner stderr.
 

@@ -10,12 +10,17 @@ import { createSkillsDirectoryClient } from '../../../packages/directory/src/ind
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
+  const configuredDirectoryBaseURL = env.PSKILLS_DIRECTORY_GATEWAY_URL ?? env.PSKILLS_SKILLS_SH_BASE_URL;
   const config = {
     organizationId: env.PSKILLS_ORGANIZATION_ID ?? 'default',
     publicOrigin: env.PSKILLS_PUBLIC_ORIGIN ?? 'http://localhost:5173',
     maxBodyBytes: Number(env.PSKILLS_MAX_BODY_BYTES ?? 3_000_000),
     leaseSeconds: Number(env.PSKILLS_LEASE_SECONDS ?? 300),
     allowLoopbackUpstreams: env.PSKILLS_ENVIRONMENT === 'test',
+    trustedSkillsShBaseUrls: [
+      'https://skills.sh',
+      ...(configuredDirectoryBaseURL === undefined ? [] : [configuredDirectoryBaseURL]),
+    ],
   };
   const infrastructure = await createInfrastructure(env);
   const auth = await createAuthenticatorFromEnv(env);
@@ -26,7 +31,7 @@ async function createRuntime(env: RuntimeEnvironment) {
   // The callback is never exposed to browser code.
   const directory = env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsDirectoryClient({
-      baseURL: env.PSKILLS_DIRECTORY_GATEWAY_URL ?? env.PSKILLS_SKILLS_SH_BASE_URL,
+      baseURL: configuredDirectoryBaseURL,
       getToken: infrastructure.directoryTokenProvider,
     })
     : undefined;
@@ -65,7 +70,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     const intelligenceResponse = await intelligence(request);
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
-    if (infrastructure.hostedWorker && env.CRON_SECRET && response.ok && request.method === 'POST' &&
+    if (infrastructure.hostedWorker && env.CRON_SECRET && (response.status === 201 || response.status === 202) && request.method === 'POST' &&
         (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.

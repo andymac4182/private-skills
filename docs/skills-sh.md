@@ -1,15 +1,20 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
-**Status:** v0.3.0 implementation is at source head `0f9da75`. The current READY
+**Status:** recorded v0.3.0 production evidence is from source `0f9da75` and
+earlier deployments. The current feed contract is represented by source
+commits `e00d48f` (core), `4ecb850` (runtime), `6d38a64` (proof), `4f94541`
+(tests), and feed-aware web work at `80c41f5`; these are local/source evidence
+only and are not claimed as a new hosted deployment. The current READY
 production deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with output
 fingerprint
 `613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; the
 corresponding Cloudflare build has fingerprint
 `a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` and 35
-server files with no executable SDK references. The current source review reports 286 tests passed and two
+server files with no executable SDK references. The E7 source review reports 286 tests passed and two
 environment-dependent skips, TypeScript, five SDK probes, Files SDK checks,
-and two independent review approvals. The earlier
+and two independent review approvals. Feed-aware resolve, job pinning, and
+CLI/UI follow-ups remain pending production verification. The earlier
 `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` deployment (fingerprint
 `b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) verifies
 metadata-only full pagination. Earlier deployment evidence verifies the
@@ -52,8 +57,19 @@ disconnected capture; the current production deployment has the enabled,
 authenticated directory path. Full metadata pagination is verified for one
 earlier bounded run; the current read-only API probe verifies list/search,
 fail-closed auth, and fresh canonical Topics. Selected-row import, nested detail
-availability, current browser proof, and external Packs preview remain separate
-acceptance gates.
+availability, feed-aware resolve/job pinning, current browser proof, and external
+Packs preview remain separate acceptance gates. The later feed contract commits
+have local test/design evidence only until a deployment and authenticated
+end-to-end probe record them.
+
+The feed contract accepts only a canonical skills.sh base URL or an operator
+trusted gateway configured through `trustedSkillsShBaseUrls`; a caller-supplied
+`credentialEnv` is rejected. When `feed` is omitted, the server auto-selects
+only when exactly one enabled feed exists; with multiple enabled feeds the
+caller must select one explicitly. Explicit feed selection remains
+tenant-scoped and must pass the feed's enabled/trust/ACL checks before catalog
+access. These source-contract rules are not asserted as new hosted behavior
+here.
 
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
@@ -75,7 +91,7 @@ releases. Automatic external pack migration is a future feature.
   Topics is 401. The artifact is `verified:true`; browser proof for the current
   deployment remains pending, and the previous stale-canonical result remains
   preserved as regression evidence.
-- The current source review at `0f9da75` reports 286 tests passed and two
+- The E7 source review at `0f9da75` reports 286 tests passed and two
   environment-dependent skips, with TypeScript, five SDK probes, the Files SDK,
   and Cloudflare checks passing and two independent reviews approving. The
   Topics parser, bounded cache, conflict/drift-aware enumeration, and
@@ -123,11 +139,64 @@ checks, and current browser proof is still pending. The results do not by themse
 prove representative GitHub/well-known imports, upstream nested detail
 availability, or metadata-only Packs preview.
 
-An administrator can configure a `skills-sh` upstream with `repositories: ["*"]`
-to admit any public catalog source into an authorized namespace, or list exact
-sources. This wildcard does not apply to generic GitHub upstreams. Importing a
-skill still requires an explicit private name/version and current scan approval;
-official status and partner audits do not grant approval.
+The transparent skills.sh path uses a built-in catalog adapter: a selected
+catalog `id` is sufficient to request pullthrough, and the server keeps that
+original `source/slug` identity as the external primary key. It must not require
+the reader to create a per-source mapping, invent a private alias, or provide a
+private name/version before the first install. A reader also needs install and
+explicit `proxy:resolve` permission to start the pullthrough; the default
+reader/publisher grant remains pending explicit product approval and production
+verification, while owner/admin grants may exercise the route. The server may derive its release
+reference only after the source origin/repository/exact path or
+well-known scoped identity is verified; a snapshot hash alone is insufficient.
+That internal reference must never replace or rewrite the skills.sh identity.
+
+Each tenant can configure multiple named feeds. A persisted feed has a unique
+name, readable ID, `kind` (currently `skills-sh`), enabled state, a configured
+prefix field, configuration revision, trusted origin, and optional source
+restrictions. Feed membership/configuration is separate from source identity:
+in the current design a feed is a tenant-scoped discovery list plus adapter and
+policy configuration, not a namespace or a physical source path.
+The full upstream source ID remains unchanged in provenance. The server-owned
+source reference is provenance metadata, not an assumed CLI input, and is
+derived only after verification: a GitHub source
+may use `@github/owner/repo/<exact-skill-directory>`, a well-known source may
+use `@web/<authority>/<scope>/<entry>`, and a catalog snapshot without physical
+source proof remains `@snapshot/skills-sh/<externalId>`. The local artifact
+digest and resolved revision are separate fields. A feed never renames a skill
+or supplies a canonical namespace by itself; managed namespace/ACL policy is
+independent from feed membership.
+
+Administrators may add an optional skills.sh source policy per feed for
+exact-source allowlists, custom well-known bases, credentials, or other
+restrictions. Such a policy tightens that feed and denies rows outside it; a
+per-repository mapping or manual alias is not a prerequisite for an otherwise
+valid public catalog row. An unknown or disabled feed fails before any outbound
+fetch and reveals no source credentials or cross-tenant metadata. A remote
+Official label or partner audit never grants approval. The current feed kind is
+`skills-sh`; additional feed adapter types are a future extension, and the
+OpenClaw feed remains the separate future M7 interoperability milestone.
+
+The frozen install-resolution contract is additive `POST /v1/proxy/resolve`
+with `{ feed?: string, externalId, refresh? }` and a response containing
+`{ feed, externalId, reference, operation | resolution }`. `feed` selects the
+configured tenant feed; when omitted, the server auto-selects only when exactly
+one enabled feed exists. With multiple enabled feeds, the caller must select
+one explicitly. A bare full source ID or exact supported skills.sh URL is a
+convenience input, while the CLI may pass the original URL with `--feed`; the
+server reference is output metadata and direct canonical-reference input is not
+assumed. A `202` operation may omit `reference`; a `200` resolution includes
+the server-owned source-derived reference. The registry echoes the original ID
+and selected feed; it does not invent a mandatory private alias, `name`,
+`version`, or `upstreamId`. The server owns a collision-resistant internal
+record and immutable resolved revision, including when the catalog reports
+`files: null` or a missing hash. Default installation uses an approved cache
+only after matching verified source/revision/digest and current feed/tenant
+policy checks; it does not perform an upstream lookup. An explicit
+`refresh: true` or update rechecks that feed and reports failure if the recheck
+fails; it does not silently present an older cache entry as freshly verified.
+One tenant-level configuration exists for each feed; explicit
+mapping/proxy mode remains an advanced administrator restriction.
 
 ## Decision summary
 
@@ -135,13 +204,24 @@ Private Skills should add a server-side `skills.sh` catalog adapter with four
 separate responsibilities:
 
 1. **Metadata discovery:** call the versioned skills.sh API only when a user
-   browses or searches. Use bounded leaderboard-page traversal for complete
-   catalog coverage when needed; deduplicate by the stable skills.sh `id`.
+   browses or searches a selected configured feed. Use bounded leaderboard-page
+   traversal for complete catalog coverage when needed; deduplicate catalog
+   rows by `(tenant, feed, externalId)` for metadata. Artifact reuse is
+   determined later by verified source identity/revision/digest and policy, not
+   by feed membership or external ID alone.
    The product need not expose a user-triggered bulk-refresh operation.
-2. **Detail pullthrough:** fetch a selected skill's file snapshot from the
-   detail endpoint. If `files` is `null`, resolve the public source according
-   to its `sourceType` and fetch the selected source with the same bounded,
-   non-executing acquisition rules already used for upstreams.
+2. **Transparent pullthrough:** a first install of a selected row automatically
+   fetches the detail snapshot or resolves its public GitHub/well-known source,
+   stores the complete candidate in isolated quarantine, and starts the normal
+   validation/scanner/policy job. Provenance records tenant, feed membership,
+   and external identity; the artifact cache key is derived only after verified
+   canonical source identity, revision/digest, and current policy. A reader
+   never receives upstream bytes or credentials. An approved warm install
+   reuses a matching registry cache entry after a fresh reader authorization
+   and current-policy/scan check; it does not contact the upstream again. A
+   cold resolve also requires the caller's explicit `proxy:resolve` permission;
+   the default reader/publisher grant remains pending product approval and
+   production verification.
 3. **Private admission:** convert the selected files to a canonical bundle,
    preserve the external identity, run the existing required scanners and
    policy, then publish only an approved private release. A skills.sh audit is
@@ -286,8 +366,8 @@ well-known support.
 | Private catalog | `packages/core` serves authorized `/v1/skills`; `apps/web` renders approved private releases and semantic search. The directory adapter and `/v1/directory` cloud routes are implemented separately. | **Partial integration.** Current production evidence proves the metadata directory path and complete bounded pagination; it does not prove private admission for every source row. |
 | Enumeration/cache/security | `packages/directory` provides conflict/drift-aware enumeration, auth-before-hit bounded metadata caching, and negative credential/security coverage. | **Implemented in source; API proof verified.** These paths are present at `0f9da75` and included in the current test review; the current API artifact proves credential-negative/list/search behavior and fresh-canonical Topics, while browser proof remains pending. |
 | Provenance | `packages/contracts` carries skills.sh provider, complete external ID, source/slug/type, source/page URLs, snapshot hash, source resolution fields, and the separate local `sourceDigest`. | **Implemented with live limits.** Current-head tests preserve bounded nested IDs and exact identity checks; the live upstream route returned invalid or wrong-identity responses for the nested probe, so no detail/import success is claimed. |
-| Acquisition | `packages/upstreams` implements skills.sh snapshot parsing plus GitHub and well-known source resolution with bounded files, archives, paths, and local canonical digesting. | **Implemented, import evidence pending.** The safe worker primitive and identity resolver are present, but representative production pullthrough awaits the separately requested restricted-source approval and scanner-admission readback. |
-| Imports/proxy | `packages/core` exposes governed `/v1/directory/import` and carries external ID/type/hash through the import job and provenance checks; existing `/v1/imports` and `/v1/proxy/resolve` remain authorization and scanner bounded. | **Partial.** A selected cloud row can enter the private import gate, but no representative GitHub/well-known import is accepted as complete yet. Do not derive a SemVer from installs, first-seen date, or a Git branch. |
+| Acquisition | `packages/upstreams` implements skills.sh snapshot parsing plus GitHub and well-known source resolution with bounded files, archives, paths, and local canonical digesting. | **Implemented as a worker primitive; transparent install evidence pending.** The target feed adapter resolves a selected catalog identity without a per-source mapping; each tenant feed has its own origin/restriction/membership/provenance/ACL context. Artifact reuse waits for verified origin/repository/exact-path or well-known scoped identity plus revision/digest and current policy. No representative production pullthrough is claimed here. |
+| Imports/proxy | `packages/core` exposes governed `/v1/directory/import` and carries external ID/type/hash through the import job and provenance checks; existing `/v1/imports` and `/v1/proxy/resolve` remain authorization and scanner bounded. | **Partial.** The target contract makes a configured feed plus skills.sh external ID sufficient to start a cold pullthrough, deduplicates concurrent operations per tenant/feed/source revision, and serves later approved cache hits only after canonical source/ACL checks. The current code/evidence has not yet accepted a representative GitHub/well-known import. Do not derive a SemVer from installs, first-seen date, or a Git branch. |
 | Packs | `PackVersion` is an immutable private org pack with approved private skill members and a manifest digest. `PacksView` creates/lists private packs and has a remote unlisted-pack preview route. | **Partial verification.** The current code keeps external previews metadata-only and separate from private packs; production evidence still lacks an operator-supplied preview URL, and no public enumeration or automatic member migration is claimed. |
 | Audit | `AuditView` remains the Private Skills administrative change log; scanner reports are tenant-scoped, and `/v1/directory/audits` supplies external evidence. | **Partial.** External audit view is implemented and earlier production evidence returned five partner entries; negative-credential and tenant/secrecy proof remain open. |
 | UI navigation | `RegistryShell` exposes Cloud directory, Official makers, Topics, external Audits, and Packs alongside private registry views. | **Partial verification.** Earlier CSS deployment captures prove the recorded browser surfaces; the latest directory deployment is a metadata probe, and no current deployment claim is made for every view. |
@@ -362,11 +442,12 @@ Rules:
   URL, schema version, relative/absolute artifact URL, supplied digest when
   present, and computed local digest. It must prefer `agent-skills` and only
   fall back to legacy `skills` when the preferred index is unavailable.
-- A skills.sh row has no upstream SemVer. Import requires an explicit private
-  registry SemVer chosen by the publisher, while the external revision/hash
-  remains the immutable source identity. A future ephemeral pullthrough mode
-  may use an explicitly named revision identifier; it must not label it as an
-  upstream release version.
+- A skills.sh row has no upstream SemVer. Automatic pullthrough may use a
+  server-owned internal release reference or immutable source revision, but
+  the reader does not supply an alias merely to start installation. The
+  external ID and source revision/hash remain the immutable source identity;
+  installs, first-seen time, display name, and mutable branch names never become
+  an upstream release version.
 
 ## Discovery and paging design
 
@@ -394,9 +475,14 @@ Rules:
    text, despite the upstream's recommended five-minute detail window. Metadata
    traversal does not fetch or store `files` for every row.
 5. A user selecting a row fetches detail on demand. The adapter stores no file
-   bytes in the catalog metadata cache. If the user requests import, a durable
-   operation retains the selected external identity and fetch evidence while the
-   worker validates and scans the complete bundle.
+   bytes in the catalog metadata cache. A first install of the selected row
+   automatically creates or joins a durable pullthrough operation; the worker
+   retains the selected external identity and fetch evidence while it validates,
+   scans, and caches the complete bundle. A later install resolves the approved
+   cached release without an upstream fetch, subject to a fresh install
+   authorization and current policy/scan checks. Only an explicit refresh or
+   update rechecks the source, and a failed recheck is reported rather than
+   silently serving the old cache as current.
 6. `401`, `429`, `503`, timeout, malformed response, and rate-limit exhaustion
    become explicit retryable/unavailable states. No stale detail is silently
    presented as current source bytes, and no browser call contains a bearer
@@ -460,9 +546,10 @@ The catalog bearer is sent only to skills.sh catalog requests. On the canonical
 `https://skills.sh` origin, a request-scoped `getSkillsShToken` credential (the
 Vercel project OIDC path) takes precedence over an ambient environment token;
 callback failure is terminal and does not fall back to a stale token. An
-explicit operator `credentialEnv` remains the legacy route when no callback is
-provided, including for non-canonical/private configured catalog destinations;
-it is never a fallback after callback failure. Neither form is forwarded to
+explicit operator-managed `credentialEnv` may remain a legacy server
+configuration for a trusted non-canonical/private catalog destination when no
+callback is provided; it is not a caller input and is never a fallback after
+callback failure. Neither form is forwarded to
 source, artifact, or redirect requests.
 
 The worker metadata lookup has a 30-second aggregate cap, parent cancellation,
@@ -502,9 +589,11 @@ official CLI's tree path:
 
 The existing GitHub upstream worker and the skills.sh identity resolver now
 resolve commits and recursive trees, enforce path/size/redirect/SSRF limits,
-validate bundles, and emit a local source digest. The remaining work is live
-representative pullthrough and admission evidence; an administrator must still
-authorize the source policy rather than allowing an arbitrary direct fetch.
+validate bundles, and emit a local source digest. A configured skills.sh feed
+may resolve any catalog row through this bounded server-side path; an
+administrator can optionally narrow that feed's policy or select an explicit
+proxy mapping. Unknown or disabled feeds fail before acquisition. Neither mode
+permits a direct client fetch or bypasses the registry scanner gate.
 
 ### Well-known fallback
 
@@ -523,9 +612,11 @@ For `sourceType: well-known`, use the official provider's compatibility rules:
   the official CLI's limits are larger. Unknown discovery schemas and invalid
   entries are visible as unsupported, never silently skipped.
 
-This path must use no upstream credentials. It is public source acquisition
-with the same SSRF, redirect, timeout, and bundle validation boundary as other
-upstreams.
+This path must use no skills.sh catalog bearer or unrelated upstream
+credential. It is public source acquisition with the same SSRF, redirect,
+timeout, and bundle validation boundary as other upstreams. An optional
+administrator-configured source credential is scoped to the exact configured
+origin and never changes the original catalog identity.
 
 ## Cloud views and semantics
 
@@ -543,12 +634,14 @@ current private sections:
 Pack preview accepts an HTTPS `skills.sh` or `www.skills.sh` `/p/<pack-id>` input and returns the canonical `https://www.skills.sh/p/<pack-id>` in manifest metadata and resolved relative member URLs. It requests the scoped `/.well-known/agent-skills/index.json` first, then the same pack's `/.well-known/skills/index.json` legacy index when the preferred index is missing or malformed; redirects remain denied and the lookup never widens to a host-wide path. The publicly published [`smixs/visual-skills` pack](https://github.com/smixs/visual-skills/blob/main/README.md) validated this adapter path as a metadata-only v0.1 manifest with three members; this is upstream fixture evidence, not authenticated production-preview success.
 
 An external skill card should link to the skills.sh page and source repository,
-show the source resolution state, and expose “Request private import” only when
-the source can be resolved or the user can provide an approved fallback. Import
-must return an operation ID and show pending/quarantined/scan-error outcomes;
-it must never redirect a reader directly to upstream bytes as a substitute for
-registry approval. A Pack card only previews its manifest and external link in
-the current delivery; batch migration is a later milestone.
+show the source resolution state, and expose an install action that uses the
+complete external ID. The action must not require a per-source mapping or a
+manual alias. On a cold path it returns an operation ID and shows pending,
+quarantined, or scan-error outcomes; on a warm path it uses the approved cache
+after reader authorization. It must never redirect a reader directly to
+upstream bytes as a substitute for registry approval. A Pack card only previews
+its manifest and external link in the current delivery; batch migration is a
+later milestone.
 
 ## Acceptance criteria
 
@@ -591,8 +684,25 @@ contract. They do not add a requirement to the current v0.2.0 shipment.
   with a bounded human-readable reason. The UI never calls a row installable
   merely because it is listed.
 
-### SOURCE — exact pullthrough mapping
+### SOURCE — feed-aware exact pullthrough
 
+- **SRC-0 feed identity and isolation:** a tenant can configure at least two
+  named feeds using the current `skills.sh` adapter, with one origin,
+  credential/restriction set, and membership/provenance/ACL context per feed.
+  The selected feed and full source ID are retained separately; the same
+  external ID under two feeds never grants cross-feed access. An artifact cache
+  may be reused only after verified canonical source identity, revision/digest,
+  and current tenant policy checks; the external ID alone is not a cache key.
+  Unknown or disabled feeds fail before catalog access or any outbound request.
+  No
+  per-repository mapping or manual alias is needed for a valid configured feed.
+  The server-owned source reference is derived only after verification:
+  `@github/owner/repo/<exact-skill-directory>` for GitHub,
+  `@web/<authority>/<scope>/<entry>` for a well-known source, or
+  `@snapshot/skills-sh/<externalId>` when physical source proof is absent.
+  Feed membership never renames a skill, and managed namespace/ACL policy stays
+  independent. Additional feed adapter types are future work; this criterion
+  covers the current skills.sh adapter only.
 - **SRC-1 skills.sh snapshot:** a fixture with non-null `files` validates all
   paths/frontmatter, computes a local canonical digest, retains the external
   hash separately, and queues a scan. A malformed file list, missing
@@ -608,16 +718,39 @@ contract. They do not add a requirement to the current v0.2.0 shipment.
   digest verification, unsafe file paths, unknown schemas, scoped paths, and a
   missing index. A scoped request never installs the host root catalog. Limits
   and same-origin/redirect/SSRF rules are enforced before bytes are retained.
-- **SRC-4 private admission:** an explicit import preserves external ID,
-  provider, source URL, source path/index, source revision/hash, local artifact
-  digest, fetch time, and scanner IDs. The operation is idempotent for the same
-  external identity and local version; a changed source cannot replace an
-  existing immutable private release. Required scanner failure, incomplete
-  coverage, or stale evidence remains fail-closed.
-- **SRC-5 version separation:** import UI/API requires a private SemVer or an
-  explicitly designed future revision identifier. Tests prove that installs,
-  first-seen time, display name, and mutable branch names cannot become a
-  claimed upstream SemVer.
+- **SRC-4 automatic private admission:** `POST /v1/proxy/resolve` accepts an
+  optional configured `feed`, complete external ID (or an exact supported
+  skills.sh URL), and optional `refresh`; omitted feed selects the configured
+  default. It needs no per-source mapping, manual alias, caller-supplied
+  private name/version, or `upstreamId`. A cold request creates or joins one
+  durable pullthrough operation, fetches and validates complete bytes, runs the
+  required scanner policy, and caches only an approved immutable release. A
+  warm request uses that approved cache without an upstream lookup after a fresh
+  reader install authorization and explicit `proxy:resolve` permission.
+  Concurrent cold requests for the same tenant,
+  feed, external identity, and resolved revision join one operation and produce one
+  source fetch, scan set, and sealed artifact for that feed/source revision. A
+  required scanner error,
+  incomplete coverage, blocked finding, policy denial, or stale evidence never
+  yields an installable result.
+- **SRC-5 exact provenance and identity:** the `202` operation and `200`
+  resolution echo the original external ID and selected feed. A `202` may omit
+  `reference`; a `200` carries the verified server-owned source reference.
+  Server-owned internal IDs and immutable revisions may be collision-resistant,
+  but never replace or rewrite the skills.sh source identity. The record retains tenant, feed, source type,
+  source/page/index URLs, external snapshot hash/digest (including null),
+  resolved commit/tree or well-known digest when available, local canonical
+  artifact digest, fetch time, scanner IDs/revisions, policy revision, feed
+  restriction revision, ACL context, and cache status. When verified, the
+  reference records the provider/origin, repository/exact path, or well-known
+  scope; when the catalog snapshot lacks physical proof it uses the
+  `@snapshot/skills-sh/<externalId>` status/reference and does not invent a
+  path. If the catalog snapshot
+  omits files or a verified source path, provenance records that absence/status
+  and never invents a repository path or physical file location. `refresh: true` or update
+  must report source failure and must not relabel an older cache entry as
+  freshly verified; no install count, display name, branch, or first-seen date
+  becomes an upstream SemVer.
 
 ### VIEW — cloud product surfaces
 
@@ -666,10 +799,14 @@ because its manifest could be previewed.
 - **OPS-2 rate/error behavior:** tests honor `Retry-After`, back off boundedly,
   cap concurrent page/detail requests, expose response status/request
   correlation, and never retry a malformed or unauthorized request forever.
-- **OPS-3 no mass mirror:** a complete metadata enumeration of a fixture with
-  at least 1,000 rows causes zero artifact writes and only bounded metadata
-  storage. Selecting one row causes one detail/source fetch and at most one
-  private import operation, with repeat selection joining the same operation.
+- **OPS-3 no mass mirror and cache behavior:** a complete metadata enumeration
+  of a fixture with at least 1,000 rows causes zero artifact writes and only
+  bounded metadata storage. `POST /v1/proxy/resolve` for one selected row
+  causes one cold detail/source fetch and at most one private pullthrough
+  operation; concurrent repeats join it. After approval, a default install
+  performs no upstream lookup and uses the approved cache. Only explicit
+  `refresh: true` or update rechecks upstream, and a failed recheck is surfaced
+  without marking the old cache fresh.
 - **AGENT-1 target matrix:** the adapter records source catalog coverage
   independently from install-agent coverage. A future agent milestone derives
   an explicit table from the pinned upstream `AgentType` union and tests each
@@ -692,7 +829,7 @@ enumeration conflict handling, and credential-negative tests. The current API
 artifact verifies safe list/search, fail-closed auth, and fresh canonical Topics;
 browser proof for those paths is still pending. Remaining C1
 dependencies are representative GitHub/well-known source resolution and import
-readback (subject to the separately requested restricted-source approval),
+readback,
 upstream nested-detail availability, current browser proof for Topics/cache/
 enumeration, an operator-supplied
 Packs preview, browser/log credential-negative evidence, error/rate handling,
@@ -764,8 +901,10 @@ Relevant implementation files are
 [`crates/pskills-core/src/bundle.rs`](../crates/pskills-core/src/bundle.rs),
 and [`crates/pskills-core/src/model.rs`](../crates/pskills-core/src/model.rs).
 The existing `proxy` command deliberately requires an administrator-approved
-upstream, path, registry name, and version. That rule remains in force for
-cloud imports.
+upstream, path, registry name, and version for generic/private proxy imports.
+The transparent skills.sh catalog path is separate: a complete external ID or
+exact supported skills.sh URL uses the built-in adapter without that mapping or
+manual alias prerequisite.
 
 ### Confirmed upstream CLI capabilities and future mapping
 

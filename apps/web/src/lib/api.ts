@@ -2,10 +2,10 @@ import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../.
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
-  ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
+  ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
-  SkillsPackManifest,
+  SkillsPackManifest, FeedListResponse, ProxyResolveResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -61,6 +61,7 @@ export const api = {
   signOut() { return request<void>('/auth/session', { method: 'DELETE' }) },
   skills(query?: string) { return request<SkillListResponse>('/v1/skills', { query: { q: query } }).then(unwrap) },
   skill(id: string) { return request<SkillResponse>(`/v1/skills/${encodeURIComponent(id)}`).then(unwrap) },
+  resolve(input: { kind: 'skill' | 'pack'; ref: string; version?: string }) { return request<ResolveResponse>('/v1/resolve', { method: 'POST', body: input }).then(unwrap) },
   scans(artifactDigest?: string) { return request<ScanListResponse>('/v1/scans', { query: { artifactDigest } }).then(unwrap) },
   publish(input: { name: string; version: string; description: string; bundle: SkillBundle }) { return request<PublishResponse>('/v1/publish', { method: 'POST', body: input }).then(unwrap) },
   rescan(skillId: string) { return request<ScanActionResponse>(`/v1/skills/${encodeURIComponent(skillId)}/rescan`, { method: 'POST' }).then(unwrap) },
@@ -103,8 +104,12 @@ export const api = {
   directoryTopic(slug: string) { return request<SkillsTopicResponse>('/v1/directory/topic', { query: { slug } }) },
   directoryDetail(id: string) { return request<SkillDetailResponse>('/v1/directory/detail', { query: { id } }) },
   directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
+  feeds() { return request<FeedListResponse>('/v1/feeds') },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {
     return request<OperationResponse>('/v1/directory/import', { method: 'POST', body: input })
+  },
+  proxyResolve(input: { feed: string; externalId: string; refresh?: boolean }) {
+    return request<ProxyResolveResponse>('/v1/proxy/resolve', { method: 'POST', body: input })
   },
   directoryPackPreview(input: { url: string }) {
     return request<SkillsPackManifest>('/v1/directory/packs/preview', { method: 'POST', body: input })

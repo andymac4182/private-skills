@@ -5,6 +5,7 @@ import type {
   PackVersion,
   Policy,
   Principal,
+  Resolution,
   ScanResult,
   SkillBundle,
   SkillVersion,
@@ -85,11 +86,29 @@ export interface UpstreamListResponse { upstreams: Upstream[] }
 export interface AuditListResponse { events: AuditEvent[] }
 export interface HealthResponse { ok: boolean; service: string; version: string }
 export interface OperationResponse { operation: Job }
+export interface ResolveResponse { operation?: Job; resolution?: Resolution }
 export interface PublishResponse { operation?: Job; skill?: SkillVersion }
 export interface ScanActionResponse { operation?: Job; skill?: SkillVersion }
 export interface PackCreateResponse { pack: PackVersion }
 export interface UpstreamResponse { upstream: Upstream }
 export interface ImportResponse { operation: Job }
+export interface DirectoryFeed {
+  id: string
+  name: string
+  kind: 'skills-sh'
+  enabled: boolean
+  configRevision: string
+  repositories?: string[]
+  baseUrl: string
+}
+export interface FeedListResponse { feeds: DirectoryFeed[] }
+export interface ProxyResolveResponse {
+  feed: string
+  externalId: string
+  reference?: string
+  operation?: Job
+  resolution?: Resolution
+}
 export interface SessionResponse { principal?: Principal }
 export interface ReviewsResponse { runs: ReviewRunView[]; suggestions: ReviewSuggestionView[] }
 export interface ReviewRunResponse { sessionId: string; status: 'started' }

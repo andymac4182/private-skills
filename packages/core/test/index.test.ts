@@ -92,7 +92,10 @@ function setup(options: { allowUnscanned?: boolean; principal?: Principal | null
     createSession: async (token) => token === 'session-token'
       ? {
           cookie: 'pskills_session=session; HttpOnly; SameSite=Lax',
-          principal: principalFor('session-user', ['reader'], ['@team']),
+          principal: {
+            ...principalFor('session-user', ['reader'], ['@team']),
+            scopes: ['registry:read'],
+          },
         }
       : null,
     clearSessionCookie: () => 'pskills_session=; Max-Age=0; HttpOnly; SameSite=Lax',
@@ -175,6 +178,34 @@ describe('registry core handler', () => {
     test.setPrincipal(principalFor('role-only', ['publisher'], ['@team']));
     const roleOnlyList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
     expect(roleOnlyList.status).toBe(200);
+  });
+
+  it('exposes only the authenticated principal scopes through me and session metadata', async () => {
+    const test = setup();
+    test.setPrincipal({
+      ...principalFor('reader', ['reader'], ['@team']),
+      scopes: ['registry:read', 'proxy:resolve'],
+    } as Principal);
+    const me = await test.handler(new Request(`${ORIGIN}/v1/me`));
+    expect(me.status).toBe(200);
+    expect((await json(me)).scopes).toEqual(['registry:read', 'proxy:resolve']);
+
+    test.setPrincipal({
+      ...principalFor('read-only', ['reader'], ['@team']),
+      scopes: ['registry:read'],
+    } as Principal);
+    const readOnly = await test.handler(new Request(`${ORIGIN}/v1/me`));
+    expect(readOnly.status).toBe(200);
+    const readOnlyBody = await json(readOnly);
+    expect(readOnlyBody.scopes).toEqual(['registry:read']);
+    expect(readOnlyBody.scopes).not.toContain('proxy:resolve');
+
+    const session = await test.handler(new Request(`${ORIGIN}/auth/session`, {
+      method: 'POST',
+      body: JSON.stringify({ token: 'session-token' }),
+    }));
+    expect(session.status).toBe(200);
+    expect((await json(session)).principal.scopes).toEqual(['registry:read']);
   });
 
   it('rejects cross-site login and logout mutations while allowing a CLI token exchange', async () => {

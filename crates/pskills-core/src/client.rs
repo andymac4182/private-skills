@@ -10,6 +10,10 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 use url::Url;
@@ -45,6 +49,18 @@ pub struct ApiClient {
     base: Url,
     token: Option<String>,
     http: Client,
+    #[cfg(test)]
+    mock: Option<Arc<Mutex<VecDeque<MockExchange>>>>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct MockExchange {
+    method: String,
+    path: String,
+    request: Option<Value>,
+    status: u16,
+    response: Vec<u8>,
 }
 
 impl ApiClient {
@@ -84,7 +100,16 @@ impl ApiClient {
             base: url,
             token,
             http,
+            #[cfg(test)]
+            mock: None,
         })
+    }
+
+    #[cfg(test)]
+    fn with_mock_exchanges(base: &str, exchanges: Vec<MockExchange>) -> Result<Self, ApiError> {
+        let mut client = Self::new(base, None)?;
+        client.mock = Some(Arc::new(Mutex::new(exchanges.into_iter().collect())));
+        Ok(client)
     }
 
     pub fn base_url(&self) -> &Url {
@@ -101,6 +126,20 @@ impl ApiClient {
             return Ok(principal);
         }
         extract(value, "principal")
+    }
+
+    /// Discover the feeds available to the authenticated principal. The
+    /// registry remains the only source of feed configuration; the CLI never
+    /// contacts a feed origin directly.
+    pub fn feeds(&self) -> Result<Vec<FeedInfo>, ApiError> {
+        let value: Value = self.get_json(&self.endpoint(&["v1", "feeds"])?, true)?;
+        if let Ok(response) = serde_json::from_value::<FeedList>(value.clone()) {
+            return Ok(response.feeds);
+        }
+        if let Ok(feeds) = serde_json::from_value::<Vec<FeedInfo>>(value.clone()) {
+            return Ok(feeds);
+        }
+        extract(value, "feeds")
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<SkillVersion>, ApiError> {
@@ -243,6 +282,23 @@ impl ApiClient {
         extract(value, "skill")
     }
 
+    /// Fetch one already-imported skill by its registry resource id. This is
+    /// used when a transparent resolve completes on a rescan job, whose
+    /// operation has no import payload to pin the private name and version.
+    pub fn skill_by_id(&self, resource_id: &str) -> Result<SkillVersion, ApiError> {
+        let resource_id = resource_id.trim();
+        if resource_id.is_empty() {
+            return Err(ApiError::Response(
+                "skill resource id must not be empty".into(),
+            ));
+        }
+        let value: Value = self.get_json(&self.endpoint(&["v1", "skills", resource_id])?, true)?;
+        if let Ok(skill) = serde_json::from_value::<SkillVersion>(value.clone()) {
+            return Ok(skill);
+        }
+        extract(value, "skill")
+    }
+
     pub fn publish(&self, request: &PublishRequest) -> Result<Value, ApiError> {
         let value: Value = self.post_json(&self.endpoint(&["v1", "publish"])?, request, true)?;
         Ok(value)
@@ -257,6 +313,54 @@ impl ApiClient {
     /// stay on the registry origin and never contact the upstream locally.
     pub fn proxy_resolve(&self, request: &ImportRequest) -> Result<Resolution, ApiError> {
         self.proxy_resolve_until(request, std::time::Instant::now() + Duration::from_secs(60))
+    }
+
+    /// Resolve a canonical skills.sh identity through the registry.  The
+    /// registry selects the approved mapping and private release identity;
+    /// this client never derives or fetches the external source itself.
+    pub fn resolve_external(
+        &self,
+        feed: Option<&str>,
+        external_id: &str,
+        refresh: bool,
+    ) -> Result<ExternalResolution, ApiError> {
+        let external_id = external_id.trim();
+        if external_id.is_empty() {
+            return Err(ApiError::Response(
+                "external skills.sh identity must not be empty".into(),
+            ));
+        }
+        if let Some(feed_name) = feed {
+            let feed_name = feed_name.trim();
+            let feed = self
+                .feeds()?
+                .into_iter()
+                .find(|candidate| candidate.name == feed_name)
+                .ok_or_else(|| {
+                    ApiError::Response(format!(
+                        "configured feed `{feed_name}` was not returned by the registry"
+                    ))
+                })?;
+            if feed.kind != "skills-sh" {
+                return Err(ApiError::Response(format!(
+                    "configured feed `{feed_name}` is not a skills.sh feed"
+                )));
+            }
+            if !feed.enabled {
+                return Err(ApiError::Response(format!(
+                    "configured feed `{feed_name}` is disabled"
+                )));
+            }
+        }
+        let request = ExternalResolveRequest {
+            feed: feed.map(str::to_owned),
+            external_id: external_id.into(),
+            refresh: refresh.then_some(true),
+        };
+        self.resolve_external_until(
+            &request,
+            std::time::Instant::now() + Duration::from_secs(60),
+        )
     }
 
     fn proxy_resolve_until(
@@ -279,6 +383,29 @@ impl ApiClient {
         }
         ensure_success(&response)?;
         extract_resolution(parse_json(response.body)?)
+    }
+
+    fn resolve_external_until(
+        &self,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<ExternalResolution, ApiError> {
+        let url = self.endpoint(&["v1", "proxy", "resolve"])?;
+        let response = self.send(
+            self.http
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .json(request),
+            true,
+        )?;
+        if response.status == 202 {
+            let operation_value = parse_json(response.body)?;
+            let operation_id = extract_operation_id(&operation_value)?;
+            return self.wait_for_external_resolution(&operation_id, request, deadline);
+        }
+        ensure_success(&response)?;
+        let value = parse_json(response.body)?;
+        parse_external_resolution_response(&value, request)
     }
 
     fn resolve_until(
@@ -538,6 +665,80 @@ impl ApiClient {
         }
     }
 
+    fn wait_for_external_resolution(
+        &self,
+        operation_id: &str,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<ExternalResolution, ApiError> {
+        loop {
+            let value: Value =
+                self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
+            let action = inspect_operation(&value, "external import operation failed")?;
+            let operation_state = value
+                .get("operation")
+                .and_then(|operation| operation.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if matches!(operation_state, "completed" | "succeeded" | "done") {
+                return self.resolve_completed_external_operation(&value, request, deadline);
+            }
+            match action {
+                OperationPollAction::Resolution(_) => {
+                    return parse_external_resolution_response(&value, request);
+                }
+                OperationPollAction::Completed => {
+                    return self.resolve_completed_external_operation(&value, request, deadline);
+                }
+                OperationPollAction::Pending => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ApiError::OperationTimeout(operation_id.into()));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(250)));
+        }
+    }
+
+    fn resolve_completed_external_operation(
+        &self,
+        operation_value: &Value,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<ExternalResolution, ApiError> {
+        let pin = match completed_external_operation(operation_value, request)? {
+            CompletedExternalPin::Import(pin) => pin,
+            CompletedExternalPin::Rescan { resource_id } => {
+                let skill = self.skill_by_id(&resource_id)?;
+                verify_completed_external_skill(&skill, &resource_id, request)?;
+                CompletedExternalOperation {
+                    external_id: request.external_id.clone(),
+                    feed_name: skill.provenance.feed_name.clone(),
+                    name: skill.name,
+                    version: skill.version,
+                    resource_id: skill.id,
+                }
+            }
+        };
+        let resolution = self.resolve_until(
+            &ResolveRequest {
+                kind: "skill".into(),
+                reference: pin.name.clone(),
+                version: Some(pin.version.clone()),
+            },
+            deadline,
+        )?;
+        verify_completed_external_resolution(&resolution, &pin, request)?;
+        let reference = resolution
+            .members
+            .first()
+            .and_then(|member| member.provenance.source_reference.clone());
+        Ok(ExternalResolution {
+            resolution,
+            reference,
+        })
+    }
+
     fn endpoint(&self, segments: &[&str]) -> Result<Url, ApiError> {
         let mut url = self.base.clone();
         let needs_slash = !url.path().ends_with('/') && !url.path().is_empty();
@@ -578,6 +779,50 @@ impl ApiClient {
         } else {
             request.header(USER_AGENT, format!("{SERVICE}/{VERSION}"))
         };
+        #[cfg(test)]
+        if let Some(mock) = &self.mock {
+            let request = request
+                .build()
+                .map_err(|error| ApiError::Transport(error.to_string()))?;
+            let exchange = mock
+                .lock()
+                .expect("mock exchange lock")
+                .pop_front()
+                .ok_or_else(|| {
+                    ApiError::Response(format!(
+                        "mock HTTP request queue exhausted at {} {}",
+                        request.method(),
+                        request.url().path()
+                    ))
+                })?;
+            if exchange.method != request.method().as_str() || exchange.path != request.url().path()
+            {
+                return Err(ApiError::Response(format!(
+                    "mock HTTP request mismatch: expected {} {}, received {} {}",
+                    exchange.method,
+                    exchange.path,
+                    request.method(),
+                    request.url().path()
+                )));
+            }
+            if let Some(expected) = exchange.request {
+                let actual = request
+                    .body()
+                    .and_then(|body| body.as_bytes())
+                    .ok_or_else(|| ApiError::Response("mock request body was missing".into()))?;
+                let actual: Value = serde_json::from_slice(actual)
+                    .map_err(|error| ApiError::Response(error.to_string()))?;
+                if actual != expected {
+                    return Err(ApiError::Response(format!(
+                        "mock request JSON mismatch: expected {expected}, received {actual}"
+                    )));
+                }
+            }
+            return Ok(HttpResponse {
+                status: exchange.status,
+                body: exchange.response,
+            });
+        }
         let response = request
             .send()
             .map_err(|e| ApiError::Transport(e.to_string()))?;
@@ -687,6 +932,106 @@ fn extract_resolution(value: Value) -> Result<Resolution, ApiError> {
     extract(value, "resolution")
 }
 
+fn parse_external_resolution_response(
+    value: &Value,
+    request: &ExternalResolveRequest,
+) -> Result<ExternalResolution, ApiError> {
+    let response_external_id = optional_external_response_string(value, "externalId")?;
+    if let Some(response_external_id) = response_external_id.as_deref() {
+        if response_external_id != request.external_id {
+            return Err(ApiError::OperationFailed(
+                "external resolution response externalId does not match the requested externalId"
+                    .into(),
+            ));
+        }
+    }
+    let response_feed = optional_external_response_string(value, "feed")?;
+    if let (Some(requested_feed), Some(response_feed)) =
+        (request.feed.as_deref(), response_feed.as_deref())
+    {
+        if response_feed != requested_feed {
+            return Err(ApiError::OperationFailed(
+                "external resolution response feed does not match the requested feed".into(),
+            ));
+        }
+    }
+
+    let mut resolution = extract_resolution(value.clone())?;
+    if resolution.kind != "skill" || resolution.members.is_empty() {
+        return Err(ApiError::OperationFailed(
+            "external resolution response did not include a skill member".into(),
+        ));
+    }
+    let mut member_feed_present = false;
+    for member in &resolution.members {
+        if member.provenance.external_id.as_deref() != Some(request.external_id.as_str()) {
+            return Err(ApiError::OperationFailed(
+                "external resolution member externalId does not match the requested externalId"
+                    .into(),
+            ));
+        }
+        if let Some(member_feed) = member.provenance.feed_name.as_deref() {
+            member_feed_present = true;
+            if let Some(response_feed) = response_feed.as_deref() {
+                if member_feed != response_feed {
+                    return Err(ApiError::OperationFailed(
+                        "external resolution member feed does not match the response feed".into(),
+                    ));
+                }
+            }
+            if let Some(requested_feed) = request.feed.as_deref() {
+                if member_feed != requested_feed {
+                    return Err(ApiError::OperationFailed(
+                        "external resolution member feed does not match the requested feed".into(),
+                    ));
+                }
+            }
+        }
+    }
+    if request.feed.is_some() && response_feed.is_none() && !member_feed_present {
+        return Err(ApiError::OperationFailed(
+            "external resolution response did not identify the requested feed".into(),
+        ));
+    }
+    if let Some(response_feed) = response_feed.as_deref() {
+        for member in &mut resolution.members {
+            if member.provenance.feed_name.is_none() {
+                member.provenance.feed_name = Some(response_feed.to_owned());
+            }
+        }
+    }
+    let reference = value
+        .get("reference")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            resolution
+                .members
+                .first()
+                .and_then(|member| member.provenance.source_reference.clone())
+        });
+    Ok(ExternalResolution {
+        resolution,
+        reference,
+    })
+}
+
+fn optional_external_response_string(
+    value: &Value,
+    field: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(format!("external resolution response {field} is invalid"))
+        })?;
+    Ok(Some(value.to_owned()))
+}
+
 fn parse_install_authorization(value: Value) -> Result<InstallAuthorization, ApiError> {
     let mut authorization =
         if let Ok(authorization) = serde_json::from_value::<InstallAuthorization>(value.clone()) {
@@ -758,6 +1103,167 @@ enum OperationPollAction {
     Resolution(Resolution),
     Completed,
     Pending,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedExternalOperation {
+    external_id: String,
+    feed_name: Option<String>,
+    name: String,
+    version: String,
+    resource_id: String,
+}
+
+enum CompletedExternalPin {
+    Import(CompletedExternalOperation),
+    Rescan { resource_id: String },
+}
+
+fn completed_external_operation(
+    value: &Value,
+    request: &ExternalResolveRequest,
+) -> Result<CompletedExternalPin, ApiError> {
+    let operation = value.get("operation").unwrap_or(value);
+    let Some(import) = operation.get("import") else {
+        if operation.get("kind").and_then(Value::as_str) != Some("scan") {
+            return Err(ApiError::OperationFailed(
+                "completed external operation did not include its import identity".into(),
+            ));
+        }
+        let resource_id = operation
+            .get("resourceId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ApiError::OperationFailed(
+                    "completed external operation did not include its resourceId".into(),
+                )
+            })?;
+        return Ok(CompletedExternalPin::Rescan {
+            resource_id: resource_id.into(),
+        });
+    };
+    let external_id = import
+        .get("externalId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include externalId".into(),
+            )
+        })?;
+    if external_id != request.external_id {
+        return Err(ApiError::OperationFailed(
+            "completed external operation identity does not match the requested externalId".into(),
+        ));
+    }
+    let feed_name = import
+        .get("feedName")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if request.feed.as_deref() != feed_name.as_deref() && request.feed.is_some() {
+        return Err(ApiError::OperationFailed(
+            "completed external operation feed does not match the requested feed".into(),
+        ));
+    }
+    let name = import
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its server-owned name".into(),
+            )
+        })?;
+    let version = import
+        .get("version")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its server-owned version".into(),
+            )
+        })?;
+    let resource_id = operation
+        .get("resourceId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its resourceId".into(),
+            )
+        })?;
+    Ok(CompletedExternalPin::Import(CompletedExternalOperation {
+        external_id: external_id.into(),
+        feed_name,
+        name: name.into(),
+        version: version.into(),
+        resource_id: resource_id.into(),
+    }))
+}
+
+fn verify_completed_external_skill(
+    skill: &SkillVersion,
+    resource_id: &str,
+    request: &ExternalResolveRequest,
+) -> Result<(), ApiError> {
+    if skill.id != resource_id || skill.name.is_empty() || skill.version.is_empty() {
+        return Err(ApiError::OperationFailed(
+            "completed external scan metadata did not include the expected skill identity".into(),
+        ));
+    }
+    if skill.provenance.external_id.as_deref() != Some(request.external_id.as_str()) {
+        return Err(ApiError::OperationFailed(
+            "completed external scan metadata externalId does not match the requested externalId"
+                .into(),
+        ));
+    }
+    if let Some(feed_name) = request.feed.as_deref() {
+        if skill.provenance.feed_name.as_deref() != Some(feed_name) {
+            return Err(ApiError::OperationFailed(
+                "completed external scan metadata feed does not match the requested feed".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_completed_external_resolution(
+    resolution: &Resolution,
+    operation: &CompletedExternalOperation,
+    request: &ExternalResolveRequest,
+) -> Result<(), ApiError> {
+    if resolution.resource_id != operation.resource_id
+        || resolution.name != operation.name
+        || resolution.version != operation.version
+    {
+        return Err(ApiError::OperationFailed(
+            "completed external operation resolved a different server-owned resource".into(),
+        ));
+    }
+    let member = resolution.members.first().ok_or_else(|| {
+        ApiError::OperationFailed(
+            "completed external operation resolution did not include its resource member".into(),
+        )
+    })?;
+    if member.id != operation.resource_id
+        || member.provenance.external_id.as_deref() != Some(operation.external_id.as_str())
+        || member.provenance.external_id.as_deref() != Some(request.external_id.as_str())
+    {
+        return Err(ApiError::OperationFailed(
+            "completed external operation resolution provenance does not match its operation"
+                .into(),
+        ));
+    }
+    if let Some(feed_name) = operation.feed_name.as_deref() {
+        if member.provenance.feed_name.as_deref() != Some(feed_name) {
+            return Err(ApiError::OperationFailed(
+                "completed external operation resolution feed does not match its operation".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn inspect_operation(
@@ -891,6 +1397,449 @@ mod tests {
     }
 
     #[test]
+    fn completed_external_operation_rejects_identity_mismatch() {
+        let request = ExternalResolveRequest {
+            feed: Some("community".into()),
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        };
+        let value = serde_json::json!({
+            "operation": {
+                "id": "op-1",
+                "state": "completed",
+                "resourceId": "skill-1",
+                "import": {
+                    "externalId": "other/skills/item",
+                    "feedName": "community",
+                    "name": "@community/skills-sh-1",
+                    "version": "0.0.0+skills-sh.1"
+                }
+            }
+        });
+        assert!(matches!(
+            completed_external_operation(&value, &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("identity does not match")
+        ));
+    }
+
+    #[test]
+    fn completed_import_without_import_identity_remains_rejected() {
+        let request = ExternalResolveRequest {
+            feed: None,
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(false),
+        };
+        let value = serde_json::json!({
+            "operation": {
+                "id": "op-import-1",
+                "kind": "import",
+                "state": "completed",
+                "resourceId": "skill-1"
+            }
+        });
+        assert!(matches!(
+            completed_external_operation(&value, &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("did not include its import identity")
+        ));
+    }
+
+    #[test]
+    fn external_refresh_pins_completed_operation_without_reposting_proxy() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let feed = "community";
+        let private_name = "@community/skills-sh-1";
+        let version = "0.0.0+skills-sh.1";
+        let resource_id = "skill-1";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": resource_id,
+            "organizationId": "org-1",
+            "name": private_name,
+            "version": version,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": resource_id,
+                "organizationId": "org-1",
+                "name": private_name,
+                "skillName": "find-skills",
+                "version": version,
+                "description": "",
+                "artifact": {
+                    "key": "blob-1",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "size": 1
+                },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "skills-sh",
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "sourceReference": "@github/vercel-labs/skills/skills/find-skills"
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let operation = serde_json::json!({
+            "operation": {
+                "id": "op-1",
+                "state": "completed",
+                "resourceId": resource_id,
+                "import": {
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "name": private_name,
+                    "version": version
+                }
+            }
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![
+                mock_exchange(
+                    "POST",
+                    "/v1/proxy/resolve",
+                    Some(serde_json::json!({
+                        "feed": feed,
+                        "externalId": external_id,
+                        "refresh": true
+                    })),
+                    202,
+                    serde_json::json!({ "operation": { "id": "op-1" } }),
+                ),
+                mock_exchange("GET", "/v1/operations/op-1", None, 200, operation),
+                mock_exchange(
+                    "POST",
+                    "/v1/resolve",
+                    Some(serde_json::json!({
+                        "kind": "skill",
+                        "ref": private_name,
+                        "version": version
+                    })),
+                    200,
+                    serde_json::json!({ "resolution": resolution }),
+                ),
+            ],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(feed.into()),
+            external_id: external_id.into(),
+            refresh: Some(true),
+        };
+        let result = client
+            .resolve_external_until(&request, std::time::Instant::now() + Duration::from_secs(5))
+            .expect("pinned external resolution");
+        assert_eq!(result.resolution.name, private_name);
+        assert_eq!(result.resolution.version, version);
+        assert_eq!(
+            result.reference.as_deref(),
+            Some("@github/vercel-labs/skills/skills/find-skills")
+        );
+    }
+
+    #[test]
+    fn external_rescan_pins_completed_skill_without_reposting_proxy() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let feed = "community";
+        let private_name = "@community/skills-sh-1";
+        let version = "0.0.0+skills-sh.1";
+        let resource_id = "skill-1";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": resource_id,
+            "organizationId": "org-1",
+            "name": private_name,
+            "version": version,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": resource_id,
+                "organizationId": "org-1",
+                "name": private_name,
+                "skillName": "find-skills",
+                "version": version,
+                "description": "",
+                "artifact": {
+                    "key": "blob-1",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "size": 1
+                },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "skills-sh",
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "sourceReference": "@github/vercel-labs/skills/skills/find-skills"
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let operation = serde_json::json!({
+            "operation": {
+                "id": "op-rescan-1",
+                "kind": "scan",
+                "state": "completed",
+                "resourceId": resource_id
+            }
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![
+                mock_exchange(
+                    "POST",
+                    "/v1/proxy/resolve",
+                    Some(serde_json::json!({
+                        "feed": feed,
+                        "externalId": external_id,
+                        "refresh": true
+                    })),
+                    202,
+                    serde_json::json!({ "operation": { "id": "op-rescan-1" } }),
+                ),
+                mock_exchange("GET", "/v1/operations/op-rescan-1", None, 200, operation),
+                mock_exchange(
+                    "GET",
+                    "/v1/skills/skill-1",
+                    None,
+                    200,
+                    serde_json::json!({ "skill": resolution["members"][0].clone() }),
+                ),
+                mock_exchange(
+                    "POST",
+                    "/v1/resolve",
+                    Some(serde_json::json!({
+                        "kind": "skill",
+                        "ref": private_name,
+                        "version": version
+                    })),
+                    200,
+                    serde_json::json!({ "resolution": resolution }),
+                ),
+            ],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(feed.into()),
+            external_id: external_id.into(),
+            refresh: Some(true),
+        };
+        let result = client
+            .resolve_external_until(&request, std::time::Instant::now() + Duration::from_secs(5))
+            .expect("pinned rescan resolution");
+        assert_eq!(result.resolution.name, private_name);
+        assert_eq!(result.resolution.version, version);
+        assert_eq!(
+            result.reference.as_deref(),
+            Some("@github/vercel-labs/skills/skills/find-skills")
+        );
+    }
+
+    #[test]
+    fn completed_rescan_skill_rejects_metadata_identity_mismatch() {
+        let skill: SkillVersion = serde_json::from_value(serde_json::json!({
+            "id": "skill-1",
+            "name": "@community/skills-sh-1",
+            "version": "0.0.0+skills-sh.1",
+            "artifact": {
+                "key": "blob-1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size": 1
+            },
+            "state": "approved",
+            "provenance": {
+                "kind": "skills-sh",
+                "externalId": "other/skills/item",
+                "feedName": "community"
+            }
+        }))
+        .expect("skill metadata");
+        let request = ExternalResolveRequest {
+            feed: Some("community".into()),
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        };
+        assert!(matches!(
+            verify_completed_external_skill(&skill, "skill-1", &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("externalId does not match")
+        ));
+    }
+
+    #[test]
+    fn external_warm_resolution_accepts_matching_server_identity() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let feed = "community";
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/proxy/resolve",
+                Some(serde_json::json!({
+                    "feed": feed,
+                    "externalId": external_id
+                })),
+                200,
+                serde_json::json!({
+                    "feed": feed,
+                    "externalId": external_id,
+                    "reference": "@github/vercel-labs/skills/skills/find-skills",
+                    "resolution": external_warm_resolution(external_id, feed)
+                }),
+            )],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(feed.into()),
+            external_id: external_id.into(),
+            refresh: None,
+        };
+        let result = client
+            .resolve_external_until(&request, std::time::Instant::now() + Duration::from_secs(5))
+            .expect("warm external resolution");
+        assert_eq!(result.resolution.name, "@community/skills-sh-1");
+        assert_eq!(
+            result
+                .resolution
+                .members
+                .first()
+                .and_then(|member| member.provenance.feed_name.as_deref()),
+            Some(feed)
+        );
+        assert_eq!(
+            result.reference.as_deref(),
+            Some("@github/vercel-labs/skills/skills/find-skills")
+        );
+    }
+
+    #[test]
+    fn external_warm_resolution_rejects_external_identity_mismatch() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/proxy/resolve",
+                Some(serde_json::json!({ "externalId": external_id })),
+                200,
+                serde_json::json!({
+                    "feed": "community",
+                    "externalId": "other/skills/item",
+                    "resolution": external_warm_resolution(external_id, "community")
+                }),
+            )],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: None,
+            external_id: external_id.into(),
+            refresh: None,
+        };
+        assert!(matches!(
+            client.resolve_external_until(
+                &request,
+                std::time::Instant::now() + Duration::from_secs(5)
+            ),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("response externalId does not match")
+        ));
+    }
+
+    #[test]
+    fn external_warm_resolution_rejects_conflicting_feed_metadata() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let requested_feed = "community";
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/proxy/resolve",
+                Some(serde_json::json!({
+                    "feed": requested_feed,
+                    "externalId": external_id
+                })),
+                200,
+                serde_json::json!({
+                    "feed": requested_feed,
+                    "externalId": external_id,
+                    "resolution": external_warm_resolution(external_id, "other-feed")
+                }),
+            )],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(requested_feed.into()),
+            external_id: external_id.into(),
+            refresh: None,
+        };
+        assert!(matches!(
+            client.resolve_external_until(
+                &request,
+                std::time::Instant::now() + Duration::from_secs(5)
+            ),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("member feed does not match")
+        ));
+    }
+
+    fn mock_exchange(
+        method: &str,
+        path: &str,
+        request: Option<Value>,
+        status: u16,
+        response: Value,
+    ) -> MockExchange {
+        MockExchange {
+            method: method.into(),
+            path: path.into(),
+            request,
+            status,
+            response: serde_json::to_vec(&response).expect("mock response JSON"),
+        }
+    }
+
+    fn external_warm_resolution(external_id: &str, feed: &str) -> Value {
+        serde_json::json!({
+            "kind": "skill",
+            "resourceId": "skill-1",
+            "organizationId": "org-1",
+            "name": "@community/skills-sh-1",
+            "version": "0.0.0+skills-sh.1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": "skill-1",
+                "organizationId": "org-1",
+                "name": "@community/skills-sh-1",
+                "skillName": "find-skills",
+                "version": "0.0.0+skills-sh.1",
+                "description": "",
+                "artifact": {
+                    "key": "blob-1",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "size": 1
+                },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "skills-sh",
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "sourceReference": "@github/vercel-labs/skills/skills/find-skills"
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        })
+    }
+
+    #[test]
     fn directory_list_uses_registry_route_and_query_contract() {
         let client = ApiClient::new("https://registry.example", None).expect("client");
         let url = client
@@ -930,6 +1879,37 @@ mod tests {
     }
 
     #[test]
+    fn external_resolve_serializes_only_registry_owned_identity_fields() {
+        let value = serde_json::to_value(ExternalResolveRequest {
+            feed: Some("community".into()),
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        })
+        .expect("external resolve JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "feed": "community",
+                "externalId": "vercel-labs/skills/find-skills",
+                "refresh": true
+            })
+        );
+        assert!(value.get("name").is_none());
+        assert!(value.get("version").is_none());
+        assert!(value.get("upstreamId").is_none());
+        let cached = serde_json::to_value(ExternalResolveRequest {
+            feed: None,
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: None,
+        })
+        .expect("cached external resolve JSON");
+        assert_eq!(
+            cached,
+            serde_json::json!({ "externalId": "vercel-labs/skills/find-skills" })
+        );
+    }
+
+    #[test]
     fn receipt_request_uses_contract_field_names() {
         let request = InstallReceiptRequest {
             authorization_id: "auth-1".into(),
@@ -957,6 +1937,13 @@ mod tests {
             external_id: Some("vercel-labs/skills/find-skills".into()),
             external_source_type: Some("github".into()),
             external_snapshot_hash: Some("snapshot-1".into()),
+            feed_id: Some("feed-1".into()),
+            feed_name: Some("community".into()),
+            feed_config_revision: Some("feed-config-1".into()),
+            source_reference: Some("@github/vercel-labs/skills/skills/find-skills".into()),
+            source_provider_origin: Some("https://registry.example".into()),
+            source_resolution_kind: Some("github".into()),
+            well_known_entry_name: Some("find-skills".into()),
             external_digest: Some("sha256:external".into()),
             source_url: Some("https://github.com/vercel-labs/skills".into()),
             page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
@@ -1011,6 +1998,18 @@ mod tests {
         );
         assert_eq!(value["provenance"]["externalSourceType"], "github");
         assert_eq!(value["provenance"]["externalSnapshotHash"], "snapshot-1");
+        assert_eq!(value["provenance"]["feedId"], "feed-1");
+        assert_eq!(value["provenance"]["feedName"], "community");
+        assert_eq!(
+            value["provenance"]["sourceReference"],
+            "@github/vercel-labs/skills/skills/find-skills"
+        );
+        assert_eq!(
+            value["provenance"]["sourceProviderOrigin"],
+            "https://registry.example"
+        );
+        assert_eq!(value["provenance"]["sourceResolutionKind"], "github");
+        assert_eq!(value["provenance"]["wellKnownEntryName"], "find-skills");
         assert_eq!(value["provenance"]["externalDigest"], "sha256:external");
         assert_eq!(
             value["provenance"]["resolvedCommit"],
@@ -1029,6 +2028,11 @@ mod tests {
         assert_eq!(legacy.external_id, None);
         assert_eq!(legacy.external_source_type, None);
         assert_eq!(legacy.external_snapshot_hash, None);
+        assert_eq!(legacy.feed_name, None);
+        assert_eq!(legacy.source_reference, None);
+        assert_eq!(legacy.source_provider_origin, None);
+        assert_eq!(legacy.source_resolution_kind, None);
+        assert_eq!(legacy.well_known_entry_name, None);
     }
 
     #[test]

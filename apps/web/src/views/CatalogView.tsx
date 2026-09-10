@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { formatBytes, formatDate, shortDigest } from '../lib/format'
+import { quotePosix, quotePowerShell } from '../lib/shell'
 import type { Policy, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
 import { useAuth } from '../lib/auth'
 import { Badge, Button, DisconnectedState, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
@@ -129,10 +130,27 @@ function needsRescan(skill: SkillVersion, policy: Policy): boolean {
   return skill.state === 'approved' && skill.policyRevision !== policy.revision
 }
 
+function sourceReferenceForSkill(skill: SkillVersion): string | undefined {
+  const value = (skill.provenance as SkillVersion['provenance'] & { sourceReference?: unknown }).sourceReference
+  if (typeof value !== 'string' || value.length < 4 || value.length > 2_048 || !value.startsWith('@') || /[\u0000-\u001f\u007f\\?#%\s]/u.test(value)) return undefined
+  const parts = value.slice(1).split('/')
+  if (parts.length < 2 || !['github', 'web', 'snapshot'].includes(parts[0] ?? '') || parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._~-]+$/u.test(part))) return undefined
+  return value
+}
+
+function displaySkillIdentity(skill: SkillVersion): string {
+  return sourceReferenceForSkill(skill) ?? skill.name
+}
+
+function installTarget(skill: SkillVersion): string {
+  return quotePosix(`${skill.name}@${skill.version}`)
+}
+
 function SkillCard({ skill, needsRescan: releaseNeedsRescan, selected, onSelect }: { skill: SkillVersion; needsRescan: boolean; selected: boolean; onSelect: () => void }) {
-  const initial = skill.name.replace(/^@/, '').split(/[\/_-]/)[0]?.slice(0, 1).toUpperCase() || 'S'
+  const identity = displaySkillIdentity(skill)
+  const initial = identity.replace(/^@/, '').split(/[\/_-]/)[0]?.slice(0, 1).toUpperCase() || 'S'
   const fileLabel = `${skill.fileCount} file${skill.fileCount === 1 ? '' : 's'}`
-  return <article className={`skill-card ${selected ? 'skill-card-selected' : ''}`.trim()}><button aria-label={`Inspect ${skill.name} ${skill.version}`} aria-pressed={selected} className="skill-card-trigger" type="button" onClick={onSelect}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{skill.name}</strong><span>{skill.version}</span></span><span aria-hidden="true" className="skill-card-dots">···</span></div><p className="skill-card-description">{skill.description || 'No description supplied.'}</p><div className="skill-card-tags"><span className="skill-tag">Skill</span><span className="skill-tag">{skill.provenance.kind}</span></div><div className="skill-card-footer"><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /><span>{fileLabel}</span></div></button></article>
+  return <article className={`skill-card ${selected ? 'skill-card-selected' : ''}`.trim()}><button aria-label={`Inspect ${identity} ${skill.version}`} aria-pressed={selected} className="skill-card-trigger" type="button" onClick={onSelect}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{identity}</strong><span>{skill.version}</span></span><span aria-hidden="true" className="skill-card-dots">···</span></div><p className="skill-card-description">{skill.description || 'No description supplied.'}</p><div className="skill-card-tags"><span className="skill-tag">Skill</span><span className="skill-tag">{skill.provenance.kind}</span></div><div className="skill-card-footer"><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /><span>{fileLabel}</span></div></button></article>
 }
 
 function SemanticCard({ result, onOpen }: { result: SemanticSearchResult; onOpen: () => void }) {
@@ -150,7 +168,10 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, onChanged }: { 
   const [copied, setCopied] = useState(false)
   const canRescan = principal?.roles.some((role) => role === 'owner' || role === 'admin' || role === 'publisher') ?? false
   const canRevoke = principal?.roles.some((role) => role === 'owner' || role === 'admin') ?? false
-  const installCommand = `pskills install ${skill.name}@${skill.version} --agent codex`
+  const sourceReference = sourceReferenceForSkill(skill)
+  const identity = sourceReference ?? skill.name
+  const installCommand = `pskills install ${installTarget(skill)} --agent codex`
+  const installPowerShellCommand = `pskills install ${quotePowerShell(`${skill.name}@${skill.version}`)} --agent codex`
 
   async function load() {
     setLoading(true)
@@ -202,6 +223,6 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, onChanged }: { 
   const releaseNeedsRescan = skill.state === 'approved' && currentPolicyRevision !== null && skill.policyRevision !== currentPolicyRevision
   return <Panel title="Release details" description="Release information and security checks for this version." action={(canRescan || canRevoke) && <div className="row-actions">{canRescan && <Button kind="secondary" busy={busy === 'rescan'} onClick={() => void action('rescan')}>Rescan</Button>}{canRevoke && <Button kind="danger" busy={busy === 'revoke'} onClick={() => { if (window.confirm(`Revoke ${skill.name}@${skill.version}?`)) void action('revoke') }}>Revoke</Button>}</div>}>
     {message && <div style={{ padding: '16px 22px 0' }}><Notice kind={message.kind}>{message.text}</Notice></div>}
-    {loading ? <LoadingState label="Loading release details…" /> : <div className="detail-grid"><div><div className="detail-heading"><div><h2>{skill.name}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /></div>{releaseNeedsRescan && <Notice kind="warning">Current review rules changed after this release was approved. It remains stored as approved, but it needs a new security scan before installation.</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div><div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div><div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><pre className="code-block">{installCommand}</pre></div></div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div>}
+    {loading ? <LoadingState label="Loading release details…" /> : <div className="detail-grid"><div><div className="detail-heading"><div><h2>{identity}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /></div>{releaseNeedsRescan && <Notice kind="warning">Current review rules changed after this release was approved. It remains stored as approved, but it needs a new security scan before installation.</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div>{sourceReference && <div className="meta-row"><span>Canonical source</span><code>{sourceReference}</code></div>}<div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div><div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><span className="helper">POSIX (bash/zsh)</span><pre className="code-block">{installCommand}</pre><span className="helper">PowerShell</span><pre className="code-block">{installPowerShellCommand}</pre></div></div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div>}
   </Panel>
 }
