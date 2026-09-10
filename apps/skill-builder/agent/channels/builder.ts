@@ -10,6 +10,9 @@ import { builderServiceToken, builderStatus } from "../lib/config.js";
 
 const MAX_REQUEST_BYTES = 96 * 1024;
 const MAX_MESSAGE_BYTES = 64 * 1024;
+const MAX_REQUEST_ID_LENGTH = 256;
+const MAX_SELECTED_PATH_LENGTH = 4096;
+const UNSUPPORTED_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 
 export interface BuilderChannelState {
   readonly sessionKey: string | null;
@@ -123,21 +126,53 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-function parseSessionRequest(value: Record<string, unknown>): {
+export interface BuilderSessionRequest {
   sessionKey: string;
   draftId: string;
   revision: number;
   digest: BuilderDigest;
   message: string;
-} {
+  requestId: string;
+  requestDigest: BuilderDigest;
+  selectedPath?: string;
+}
+
+export function parseSessionRequest(value: Record<string, unknown>): BuilderSessionRequest {
   const sessionKey = safeSessionKey(value.sessionKey);
   const draftId = safeString(value.draftId, "draftId", MAX_DRAFT_ID_LENGTH);
   const revision = boundedRevision(value.revision);
   assertBuilderDigest(value.digest);
-  if (typeof value.message !== "string" || value.message.trim().length === 0 || new TextEncoder().encode(value.message).byteLength > MAX_MESSAGE_BYTES) {
+  if (typeof value.message !== "string" || value.message.trim().length === 0 || new TextEncoder().encode(value.message).byteLength > MAX_MESSAGE_BYTES || UNSUPPORTED_CONTROL_CHARACTER.test(value.message)) {
     throw new Error("message must be bounded non-empty text");
   }
-  return { sessionKey, draftId, revision, digest: value.digest, message: value.message };
+  const requestId = safeRequestId(value.requestId);
+  assertBuilderDigest(value.requestDigest, "requestDigest");
+  const requestDigest = value.requestDigest;
+  const selectedPath = value.selectedPath === undefined ? undefined : safeSelectedPath(value.selectedPath);
+  return {
+    sessionKey,
+    draftId,
+    revision,
+    digest: value.digest,
+    message: value.message,
+    requestId,
+    requestDigest,
+    ...(selectedPath === undefined ? {} : { selectedPath }),
+  };
+}
+
+function safeRequestId(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_REQUEST_ID_LENGTH || /\s/u.test(value) || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error("requestId is invalid");
+  }
+  return value;
+}
+
+function safeSelectedPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_SELECTED_PATH_LENGTH || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error("selectedPath is invalid");
+  }
+  return value;
 }
 
 export function channelMetadata(state: BuilderChannelState): Record<string, unknown> {
@@ -198,6 +233,9 @@ export default defineChannel<BuilderChannelState>({
           draftId: input.draftId,
           revision: input.revision,
           digest: input.digest,
+          requestId: input.requestId,
+          requestDigest: input.requestDigest,
+          ...(input.selectedPath === undefined ? {} : { selectedPath: input.selectedPath }),
         }, {
           status: 202,
           headers: { "cache-control": "no-store" },
