@@ -10,6 +10,11 @@ interoperability are later product work;
 they do not become current-release gates unless the roadmap explicitly moves
 one into the current delivery.
 
+The latest source, portability, and deployment status is recorded in
+[`verification-current.md`](verification-current.md). Its local runtime records
+and pending hosted gates qualify the criteria below; they do not mark C1
+complete without the required production evidence.
+
 ## G0 — v0.2.0 shipment
 
 Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):

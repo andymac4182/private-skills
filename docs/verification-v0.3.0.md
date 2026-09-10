@@ -1,5 +1,10 @@
 # v0.3.0 verification checkpoint
 
+**Status note (2026-09-10):** The current deployment and portability pointer is
+[`verification-current.md`](verification-current.md). This document retains
+the earlier v0.3.0 deployment-specific evidence and is superseded for current
+status.
+
 Date: 2026-09-10. Status: current prebuilt production rollout plus historical E7
 directory evidence and a local transparent-feed implementation review. The
 current rollout is READY deployment `dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` at the

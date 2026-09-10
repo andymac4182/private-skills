@@ -1,6 +1,10 @@
 # skills.sh cloud catalog and pullthrough review
 
 **Date:** 2026-09-10
+**Current status pointer:** The latest portable directory-gateway evidence is in
+[`verification-current.md`](verification-current.md). The deployment and API
+details below are retained as historical, deployment-specific evidence unless
+they are explicitly identified as current in that checkpoint.
 **Status:** recorded v0.3.0 production evidence is from source `0f9da75` and
 earlier deployments. The current feed contract is represented by source
 commits `e00d48f` (core), `4ecb850` (runtime), `6d38a64` (proof), `4f94541`
