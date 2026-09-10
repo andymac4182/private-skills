@@ -388,8 +388,10 @@ Rules:
    The `source`, `slug`, `sourceType`, install URL, and direct page URL remain
    visible. Dynamic install counts are display values, not release identity.
 4. Keep only bounded metadata cache entries, keyed by endpoint plus normalized
-   query/page. Respect the documented cache windows (30–60 seconds for list and
-   search; five minutes for detail and curated) and record cache age. Metadata
+   query/page. Respect the documented cache windows for list/search and curated
+   responses and record cache age. Detail snapshots are fetched on demand and
+   intentionally bypass the metadata cache because a response may contain file
+   text, despite the upstream's recommended five-minute detail window. Metadata
    traversal does not fetch or store `files` for every row.
 5. A user selecting a row fetches detail on demand. The adapter stores no file
    bytes in the catalog metadata cache. If the user requests import, a durable

@@ -162,6 +162,9 @@ export class SkillsDirectoryClient {
   /** Return a skill's metadata and bounded text snapshot, when available. */
   async detail(id: string, options: RequestOptions = {}): Promise<SkillDetailResponse> {
     const normalizedId = normalizeSkillId(id);
+    // A detail response can contain source file text. Keep that snapshot
+    // request-scoped instead of retaining it in the shared metadata cache;
+    // imports fetch and validate the selected snapshot independently.
     return this.request(
       `skills/${pathEncodeId(normalizedId)}`,
       undefined,
@@ -171,7 +174,6 @@ export class SkillsDirectoryClient {
         if (detail.id !== normalizedId) throw invalidResponseError('detail.id');
         return detail;
       },
-      'detail',
     );
   }
 
