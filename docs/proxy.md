@@ -32,7 +32,8 @@ access or outbound fetch.
 
 `POST /v1/proxy/resolve` accepts `{ feed?, externalId, refresh? }`, where
 `externalId` is the complete source ID or an exact supported skills.sh URL.
-Omitted `feed` selects the configured default skills.sh feed; a bare ID/URL is
+Omitted `feed` auto-selects only when exactly one enabled feed exists; with
+multiple enabled feeds the caller must select one explicitly. A bare ID/URL is
 a convenience input. Both the `202` operation and `200` resolution contain
 `{ feed, externalId, reference, operation | resolution }`; a 202 may omit
 `reference`, while a 200 includes the verified source reference, and both echo
@@ -53,8 +54,8 @@ rename the upstream skill or grant access outside the selected tenant/feed
 policy, and are not assumed to be direct CLI inputs. The feed base must be the
 canonical skills.sh origin or an operator-trusted gateway listed in
 `trustedSkillsShBaseUrls`; a caller-supplied `credentialEnv` is rejected. When
-`feed` is omitted, the configured default is selected, with a single enabled
-feed eligible to serve as that default.
+`feed` is omitted, the server auto-selects only when exactly one enabled feed
+exists; with multiple enabled feeds, the caller must select one explicitly.
 
 Catalog search, listing, and detail browsing remain metadata-only. The metadata
 cache never stores file bytes and a reader never receives upstream credentials

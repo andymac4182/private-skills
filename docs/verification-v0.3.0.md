@@ -1,20 +1,36 @@
 # v0.3.0 verification checkpoint
 
-Date: 2026-09-10. Status: private-registry production checkpoint. Source head
-`0f9da75` is the current implementation under review, and the current READY
-production deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` at the stable alias.
-The current source review reports 286 tests passed and two
-environment-dependent skips, TypeScript and five SDK/Files SDK checks pass,
-and two independent reviews approve. Earlier deployment-specific artifacts
-remain the source of the detailed OIDC/ComputeSDK, pagination, and browser
-claims; the current API result is verified and current browser proof is still
-pending. Native fallback is also verified; remaining gates are explicit below.
+Date: 2026-09-10. Status: E7 private-registry production checkpoint plus a
+local transparent-feed implementation review. The recorded E7 source/deployment
+pair is source `0f9da75` and READY deployment
+`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` at the stable alias; it is authoritative for
+the deployed directory/API claims below. The later transparent-feed fixture
+run is loopback-only, using runtime source and CLI build
+`8c8e41eb4ad172fc033bc5593f400874095ec656`,
+and is not a production, current-CI, native-release, or hosted-scanner result.
+The E7 source review reports 286 tests passed and two environment-dependent
+skips, TypeScript and five SDK/Files SDK checks pass, and two independent
+reviews approve. Earlier deployment-specific artifacts remain the source of the
+detailed OIDC/ComputeSDK, pagination, and browser claims; the current API result
+is verified and current browser proof is still pending. Native fallback is also
+verified separately; remaining gates are explicit below. Later local CLI rescan
+and UI source-pinning changes in this checkout are not covered by the fixture
+run's verification SHAs.
 
 ## Implemented scope
 
-- Authenticated skills.sh listing, search, Official, detail, external audit, and governed import routes; Rust directory commands and cloud views.
-- Topics link to upstream topic pages and launch clearly labeled internal searches. Unlisted pack links support metadata preview; existing private packs remain installable. Automatic external pack migration is deferred.
-- Import acquisition supports catalog snapshots, immutable GitHub resolution, and bounded well-known discovery. External identity and digests survive private release and CLI lock serialization.
+- Source implementation includes authenticated skills.sh listing, search, Official,
+  detail, external audit, governed import routes, Rust directory commands, and
+  cloud views; the E7 deployment evidence below covers only the explicitly
+  identified hosted paths.
+- Source implementation links Topics to upstream pages and supports clearly
+  labeled internal searches. Unlisted pack links support metadata preview;
+  existing private packs remain installable. Automatic external pack migration is
+  deferred.
+- Source acquisition supports catalog snapshots, immutable GitHub resolution,
+  and bounded well-known discovery. External identity and digests survive
+  private release and CLI lock serialization; representative transparent-feed
+  pullthrough is separately recorded as local fixture evidence below.
 - ComputeSDK abstracts the hosted sandbox boundary. Vercel is the qualified provider; other providers require conformance evidence before enablement.
 
 ## Current deployment pointer
@@ -25,13 +41,15 @@ with output fingerprint
 `613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`.
 The corresponding Cloudflare build fingerprint is
 `a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` with 35
-server files and no executable SDK references. The platform checkpoint reports enabled skills.sh directory and
-request-scoped Vercel OIDC/ComputeSDK paths plus the directory, search, CLI,
-analytics, and Files SDK checks. The current API artifact below records a
-verified result; the detailed older JSON records retain their own deployment
-provenance, and current browser proof is still pending.
+server files and no executable SDK references. The E7 platform checkpoint
+reports the enabled skills.sh directory and request-scoped Vercel
+OIDC/ComputeSDK paths plus the directory, search, CLI, analytics, and Files SDK
+checks. The current API artifact below records a verified E7 result; the
+detailed older JSON records retain their own deployment provenance, and current
+browser proof is still pending. The later transparent-feed implementation has
+not been deployed in this checkpoint.
 
-The current source `0f9da75` adds the canonical Topics page parser, auth-before-
+The E7 source `0f9da75` adds the canonical Topics page parser, auth-before-
 hit metadata cache with bounded TTL/bytes, conflict/drift-aware enumeration,
 and credential-negative security coverage. The current deployment's API probe is
 verified below; current browser proof is still pending.
@@ -136,10 +154,10 @@ verified below; current browser proof is still pending.
   deployment removed the previously observed mobile overflow in those captured
   surfaces. This does not turn the skipped operator-supplied Packs preview or
   undocumented Topics JSON membership into completed C1 behavior.
-- The current source-head review at `0f9da75` reports 286 tests passed and two
+- The E7 source-head review at `0f9da75` reports 286 tests passed and two
   environment-dependent tests skipped. TypeScript, five SDK probes, Files SDK
   checks, and the Cloudflare build pass, and two independent reviews approve.
-  This is source/build evidence for the current deployment pointer above; the
+  This is source/build evidence for the E7 deployment pointer above; the
   current API probe verifies the new Topics, cache, enumeration, and security
   paths; current browser proof remains pending. The browser handoff only
   inventoried CUA browser surfaces; it found no dedicated registry tab,
@@ -148,8 +166,39 @@ verified below; current browser proof is still pending.
   release archive/checksum and clean-consumer checks are complete in the
   historical release record; no v0.3 release tag or published prerelease is
   claimed. Earlier PR10 head `a4ea17c`/229-test evidence remains historical.
-- Rust checks pass: four CLI tests, 25 core tests, and 11 installation safety
+- **Historical native baseline (not current transparent-feed evidence):** Rust
+  checks recorded four CLI tests, 25 core tests, and 11 installation safety
   tests (40 total), including the shared standard-skill metadata fixture.
+- **Current local source/build checks (not hosted):** Source checkpoint
+  `8c8e41eb4ad172fc033bc5593f400874095ec656` reports `CI=true pnpm check`
+  with 317 passed and two environment-dependent skips. The Vercel build passed
+  its 27-link/5-SDK output check; the output manifest contains 2,057 files,
+  27 symlinks, and 19,585,540 bytes, with fingerprint
+  `fd71b9627eb0fd1a3bcd8d17ebbf867992516c14cb5f61327a9a1ff292a1169a`.
+  These are source/build checks for the local checkpoint, not current GitHub
+  CI, native Windows/Linux release, browser, hosted deployment, or production
+  scanner evidence.
+- **Local transparent-feed/CLI acceptance (not production):** The sanitized
+  [fixture evidence](../work/transparent-proxy-cli-final-evidence-1789011005495.json)
+  is `verified:true` for loopback-only ephemeral HTTP fixtures containing a
+  skills.sh-shaped catalog and local well-known v0.2 source. Runtime source and
+  CLI build are both `8c8e41eb4ad172fc033bc5593f400874095ec656`, using binary
+  SHA-256 `6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a`.
+  The run passed feed discovery guards (unknown feed 404, disabled feed 409,
+  and zero upstream requests before either guard), concurrent cold
+  deduplication with required approval, same-slug distinct source identity,
+  null-hash refresh to a new approved revision, frozen reinstall using the
+  original external ID plus `--feed community`, required scanner failure without
+  activation, an authenticated pending rescan that joined the existing
+  operation without a second proxy request and retained the exact resource/
+  version/artifact pin, warm HTTP/CLI cache use after upstream stop, tenant-B
+  descriptor/blob isolation, and no instruction execution. The required
+  scanner was a deterministic `fixture-static-scanner` callback, including its
+  deterministic failure case; this is not Cisco, NVIDIA, SkillsGuard,
+  hosted-worker, production, or external-network scanner evidence. The run
+  exercised explicit feed selection; omitted-feed behavior is not established.
+  With multiple enabled feeds, callers must select one explicitly; only a
+  single enabled feed can be auto-selected.
 - Earlier [CI run 34389979645](https://github.com/andymac4182/private-skills/actions/runs/34389979645)
   passed for `be59ece45ea574a7398974076f34d1c23dce83c6`: web checks/builds,
   native macOS ARM64/Linux x64/Windows x64 Rust checks and binary smoke tests,
@@ -249,7 +298,7 @@ roadmap features into release blockers.
   `allowUnscanned=false`.
 - **Pending:** the account owner's GitHub Vercel app security-key step and a
   Git-triggered deployment for the final source revision.
-- **Current source review:** `0f9da75` reports 286 tests passed and two
+- **E7 source review:** `0f9da75` reports 286 tests passed and two
   environment-dependent skips; TypeScript, five SDK probes, Files SDK checks,
   and the Cloudflare build pass, and two independent reviews approve.
   The private v0.2.0 release archives/checksums and clean-consumer verification
@@ -292,11 +341,16 @@ roadmap features into release blockers.
   [sanitized API artifact](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json).
   The previous `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` stale-canonical result remains
   preserved as regression evidence. Current browser proof is still pending.
-- **Current implementation, awaiting browser proof:** source `0f9da75` includes
-  the canonical Topics parser, auth-before-hit bounded cache, conflict/drift-
-  aware enumeration, and credential-negative tests. The current READY
-  deployment carries this code, and the API acceptance artifact is verified;
-  the current browser acceptance artifact has not yet been captured.
+- **E7 implementation, awaiting browser proof:** source `0f9da75` includes the
+  canonical Topics parser, auth-before-hit bounded cache, conflict/drift-aware
+  enumeration, and credential-negative tests. The current READY deployment
+  carries this code, and the API acceptance artifact is verified; the current
+  browser acceptance artifact has not yet been captured.
+- **Transparent-feed implementation, locally verified only:** the loopback
+  fixture evidence above proves the source/worker/Files SDK/Rust CLI seam for
+  the recorded runtime and CLI SHAs, including cold/warm/refresh, feed guards,
+  tenant isolation, and fail-closed deterministic scanner behavior. It does not
+  prove a hosted deployment, real scanner, current branch, or browser flow.
 - **Pending:** representative GitHub and well-known source pullthrough/import
   (the restricted-source approval is separate; the isolated CLI folder is only
   conditionally approved), upstream nested detail availability, local

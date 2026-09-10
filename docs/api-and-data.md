@@ -56,8 +56,8 @@ The feed base URL must be the canonical skills.sh origin or an operator-trusted
 gateway listed in `trustedSkillsShBaseUrls`. A caller-supplied `credentialEnv`
 value is rejected; server-managed credentials are never returned to browsers or
 forwarded to source, artifact, or redirect requests. When `feed` is omitted,
-the configured default is used, with a single enabled feed eligible to serve as
-that default.
+the server auto-selects only when exactly one enabled feed exists; with multiple
+enabled feeds the caller must select one explicitly.
 
 Installation authorization binds the caller, organization, selected feed and
 primary references, full desired member set and owners, release/source

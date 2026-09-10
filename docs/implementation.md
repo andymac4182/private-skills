@@ -77,8 +77,9 @@ The follow-up transparent skills.sh contract is additive and remains separate
 from the implemented-surface table above until its live acceptance evidence is
 recorded. `POST /v1/proxy/resolve` accepts `{ feed?, externalId, refresh? }`,
 where `externalId` is the complete source ID or an exact supported skills.sh
-URL. Omitted `feed` selects the configured default skills.sh feed; a bare
-ID/URL is a convenience input. The response contains
+URL. Omitted `feed` auto-selects only when exactly one enabled feed exists; with
+multiple enabled feeds the caller must select one explicitly. A bare ID/URL is
+a convenience input. The response contains
 `{ feed, externalId, reference, operation | resolution }`; a 202 operation may
 omit `reference`, while a 200 resolution includes the verified source reference,
 and both echo the original external ID. The caller does not invent a mandatory alias, `name`,
@@ -96,8 +97,9 @@ cache entry fresh. One configuration exists per feed; explicit mappings and
 source restrictions remain optional administrator controls. Unknown or disabled
 feeds fail before catalog access or outbound fetch.
 The feed base must be canonical skills.sh or an operator-trusted gateway listed
-in `trustedSkillsShBaseUrls`; a caller-supplied `credentialEnv` is rejected,
-and an omitted feed uses the configured default.
+in `trustedSkillsShBaseUrls`; a caller-supplied `credentialEnv` is rejected.
+An omitted feed auto-selects only when exactly one enabled feed exists; with
+multiple enabled feeds the caller must select one explicitly.
 
 ## Authentication boundary
 

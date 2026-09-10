@@ -47,8 +47,9 @@ Preserve agent-specific metadata without enabling extra products. Claude reserve
 Default to project scope; user-wide installation requires `--global`. Select adapters explicitly and record them in project intent. Support `--dry-run`, `--json`, `--non-interactive` and documented exit codes. Progress uses stderr; JSON results use stdout. Unresolved choices fail in non-interactive mode. Scan commands inspect server-side work; installing does not require local scanners.
 
 The built-in `skills-sh` path accepts the original complete source ID or exact
-supported skills.sh URL plus an optional `--feed`; if omitted, the configured
-default feed is selected. The CLI does not accept a feed alias as a substitute
+supported skills.sh URL plus an optional `--feed`; if omitted, the server
+auto-selects only when exactly one enabled feed exists. With multiple enabled
+feeds, the caller must select one explicitly. The CLI does not accept a feed alias as a substitute
 for the source ID. The server derives its source reference only after verifying
 origin/repository/exact path or a well-known scoped identity; that reference is
 provenance/lock metadata, not a supported direct CLI input. Install continues

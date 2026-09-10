@@ -26,7 +26,7 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified for the recorded failure check:** the production worker/hosting
   boundary proves required scanner failures are fail-closed and does not expose
   artifact bytes, credentials, or reports;
-- **current source review reported green:** source head `0f9da75` has 286 tests
+- **E7 source review reported green:** source head `0f9da75` has 286 tests
   passed and two environment-dependent skips; TypeScript, five SDK probes,
   Files SDK checks, and the Cloudflare build pass, and two independent reviews
   approve. The private v0.2.0 archives/checksums and clean-consumer verification
@@ -83,9 +83,10 @@ proxy mappings as an optional tightening policy. The C1 deployment may be verifi
 the remaining G0 GitHub integration step.
 The configured feed base must be the canonical skills.sh origin or an
 operator-trusted gateway listed in `trustedSkillsShBaseUrls`; a caller-supplied
-`credentialEnv` is rejected. An omitted feed uses the configured default (and a
-single enabled feed may serve as that default), while explicit feed selection
-still passes tenant, enabled, origin, and policy checks before catalog access.
+`credentialEnv` is rejected. An omitted feed auto-selects only when exactly one
+enabled feed exists; with multiple enabled feeds the caller must select one
+explicitly. Explicit feed selection still passes tenant, enabled, origin, and
+policy checks before catalog access.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
 skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
 directory-agent wiring is present, and earlier deployment evidence proves the
@@ -214,7 +215,8 @@ Completion requires all of the following:
 9. **C1-IMPORT — automatic transparent pullthrough.** The canonical resolve
    request is `POST /v1/proxy/resolve` with `{ feed?, externalId, refresh? }`, where
    `externalId` is the complete source ID or an exact supported skills.sh URL.
-   An omitted `feed` selects the configured default skills.sh feed. A bare
+   An omitted `feed` auto-selects only when exactly one enabled feed exists;
+   with multiple enabled feeds the caller must select one explicitly. A bare
    ID/URL is a convenience input; the CLI passes the original URL with
    `--feed` where needed. The response contains `{ feed, externalId, reference, operation |
    resolution }`; a `202` operation may omit `reference`, while a `200`

@@ -17,7 +17,7 @@ is not represented as a published release.
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
 | Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | Directory lookups are bounded; workers acquire and scan release artifacts, and uploaded content is never executed |
-| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; server-side skills.sh Vercel project OIDC forwarding is verified for the current directory evidence, and device flow/interactive identity providers are not part of this baseline |
+| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; the E7 directory deployment verifies server-side skills.sh Vercel project OIDC for that deployment, while the later transparent-feed fixture is loopback-only; device flow/interactive identity providers are not part of this baseline |
 | Artifacts | Implemented bounded canonical `pskills-bundle-v1` JSON, digest checks, private sealed-object storage, and transfer grants | Bundle content is data; the registry never runs skill scripts or install hooks |
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
@@ -25,8 +25,8 @@ is not represented as a published release.
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| CLI | Implemented Rust package and binary named `pskills`; native OS CI passes | Release targets are Linux x86_64, macOS arm64, and Windows x86_64 |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented at source `0f9da75`; current READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` | The current read-only API probe verifies list/search, fail-closed auth, and fresh-canonical Topics; current browser proof, selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe is retained as stale-canonical regression evidence, and `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` proves metadata-only pagination across 9,738 rows and 20 pages |
+| CLI | Implemented Rust package and binary named `pskills`; historical native checks are recorded | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; the later transparent-feed CLI evidence is a loopback fixture run, not current CI or release evidence |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented at E7 source `0f9da75`; the corresponding READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` | The E7 read-only API probe verifies list/search, fail-closed auth, and fresh-canonical Topics. The later transparent-feed source path has local fixture evidence only; current browser proof, selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe is retained as stale-canonical regression evidence, and `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` proves metadata-only pagination across 9,738 rows and 20 pages |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
@@ -42,9 +42,13 @@ Its Cloudflare build fingerprint is
 35 server files and no executable SDK references. The checked-in all-time
 pagination record is from the earlier `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC`;
 OIDC/ComputeSDK and browser evidence also remains identified by its own
-deployment in the v0.3.0 verification record. The current source review reports
-286 tests passed and two environment-dependent skips, TypeScript and the edge
-bundle checks pass, and two independent review approvals are recorded. The
+deployment in the v0.3.0 verification record. The E7 source review at
+`0f9da75` reports 286 tests passed and two environment-dependent skips,
+TypeScript and the edge bundle checks pass, and two independent review
+approvals are recorded. The later transparent-feed implementation has a
+separate [loopback-only local acceptance record](work/transparent-proxy-cli-final-evidence-1789011005495.json)
+using source/runtime and CLI build `8c8e41eb4ad172fc033bc5593f400874095ec656`; it is not a new deployment or current
+CI/native-release result. The
 previous deployment's [sanitized API probe](work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
 records safe list/search and credential-negative behavior but stale-canonical
 Topics. The [current API probe](work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
@@ -68,11 +72,11 @@ Git-triggered deployment verification, full C1 catalog acceptance, and hosted
 restore remain pending.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
-The v0.3.0 checkout adds the external directory and ComputeSDK integration. The
-current source head `0f9da75` has the Topics canonical-page parser, bounded
-metadata cache, conflict-aware enumeration, and credential-negative tests; its
-review reports 286 tests passed and two environment-dependent skips. The current
-READY deployment carries the enabled directory and ComputeSDK configuration;
+The v0.3.0 E7 checkpoint adds the external directory and ComputeSDK integration.
+Its source `0f9da75` has the Topics canonical-page parser, bounded metadata
+cache, conflict-aware enumeration, and credential-negative tests; its review
+reports 286 tests passed and two environment-dependent skips. The current READY
+deployment carries the enabled directory and ComputeSDK configuration;
 earlier deployment artifacts verify the authenticated directory endpoints, scan,
 pagination, and captured 390px/1280px browser surfaces. Full C1 acceptance
 remains open while current browser proof, selected import, nested detail, Packs
@@ -80,7 +84,11 @@ preview, and tenant/secrecy checks are completed; the earlier deployment's
 stale-canonical Topics result remains preserved as regression evidence, while the
 current API result is verified. The historical
 disconnected deployment and the prior ComputeSDK pre-analysis failure remain
-preserved in the verification record.
+preserved in the verification record. The later transparent-feed source and
+CLI/UI pinning changes are covered by the explicitly identified local fixture
+and source/build evidence only; browser checks, current GitHub CI, native
+release, hosted deployment, and production scanner verification for that later
+work remain open.
 See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.

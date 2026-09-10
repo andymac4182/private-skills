@@ -11,7 +11,7 @@ fingerprint
 `613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; the
 corresponding Cloudflare build has fingerprint
 `a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` and 35
-server files with no executable SDK references. The current source review reports 286 tests passed and two
+server files with no executable SDK references. The E7 source review reports 286 tests passed and two
 environment-dependent skips, TypeScript, five SDK probes, Files SDK checks,
 and two independent review approvals. Feed-aware resolve, job pinning, and
 CLI/UI follow-ups remain pending production verification. The earlier
@@ -64,11 +64,12 @@ end-to-end probe record them.
 
 The feed contract accepts only a canonical skills.sh base URL or an operator
 trusted gateway configured through `trustedSkillsShBaseUrls`; a caller-supplied
-`credentialEnv` is rejected. When `feed` is omitted, the configured default is
-used; a single enabled feed may serve as that default. Explicit feed selection
-remains tenant-scoped and must pass the feed's enabled/trust/ACL checks before
-catalog access. These source-contract rules are not asserted as new hosted
-behavior here.
+`credentialEnv` is rejected. When `feed` is omitted, the server auto-selects
+only when exactly one enabled feed exists; with multiple enabled feeds the
+caller must select one explicitly. Explicit feed selection remains
+tenant-scoped and must pass the feed's enabled/trust/ACL checks before catalog
+access. These source-contract rules are not asserted as new hosted behavior
+here.
 
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
@@ -90,7 +91,7 @@ releases. Automatic external pack migration is a future feature.
   Topics is 401. The artifact is `verified:true`; browser proof for the current
   deployment remains pending, and the previous stale-canonical result remains
   preserved as regression evidence.
-- The current source review at `0f9da75` reports 286 tests passed and two
+- The E7 source review at `0f9da75` reports 286 tests passed and two
   environment-dependent skips, with TypeScript, five SDK probes, the Files SDK,
   and Cloudflare checks passing and two independent reviews approving. The
   Topics parser, bounded cache, conflict/drift-aware enumeration, and
@@ -179,8 +180,9 @@ OpenClaw feed remains the separate future M7 interoperability milestone.
 The frozen install-resolution contract is additive `POST /v1/proxy/resolve`
 with `{ feed?: string, externalId, refresh? }` and a response containing
 `{ feed, externalId, reference, operation | resolution }`. `feed` selects the
-configured tenant feed; when omitted, the configured default `skills-sh` feed
-is used. A bare full source ID or exact supported skills.sh URL is a
+configured tenant feed; when omitted, the server auto-selects only when exactly
+one enabled feed exists. With multiple enabled feeds, the caller must select
+one explicitly. A bare full source ID or exact supported skills.sh URL is a
 convenience input, while the CLI may pass the original URL with `--feed`; the
 server reference is output metadata and direct canonical-reference input is not
 assumed. A `202` operation may omit `reference`; a `200` resolution includes
