@@ -420,6 +420,14 @@ describe('durable skill drafts', () => {
     expect(state.jobs).toHaveLength(0);
   });
 
+  it('rejects semver edge cases that the parser cannot validate', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const response = await test.handler(publishRequest(created.draft.id, 'invalid-prerelease', 1, '1.2.3-'));
+    expect(response.status).toBe(400);
+    expect((await json(response)).error.code).toBe('INVALID_VERSION');
+  });
+
   it('rejects publication when the base release loses admission or the CAS revision is stale', async () => {
     const test = await fixture();
     const created = await create(test);

@@ -18,6 +18,7 @@ import type {
   UploadReviewJob,
   UploadReviewResult,
 } from '../../upload-reviews/src/index.js';
+import { valid as validSemver } from 'semver';
 import {
   AuthoringApiError,
   assertPublisher,
@@ -1023,7 +1024,8 @@ function requireRevision(value: unknown): number {
 }
 
 function requireVersion(value: unknown): string {
-  if (typeof value !== 'string' || !/^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value)) {
+  const version = typeof value === 'string' ? validSemver(value) : null;
+  if (version === null || version !== value) {
     throw new AuthoringApiError('INVALID_VERSION', 'Version must be SemVer', 400);
   }
   return value;
