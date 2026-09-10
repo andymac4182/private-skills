@@ -552,8 +552,13 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
     );
     expect(updatedResponse.status, await updatedResponse.clone().text()).toBe(200);
     const updated = await json<{ draft: { digest: string; files: SkillBundle['files'] } }>(updatedResponse);
-    expect(updated.draft.files).toEqual(reversedFiles);
-    expect(updated.draft.digest).toBe(await digestBytes(encodeBundle({ format: 'pskills-bundle-v1', files: reversedFiles })));
+    const canonicalFiles = [...changedBundle.files].sort((left, right) => {
+      if (left.path < right.path) return -1;
+      if (left.path > right.path) return 1;
+      return 0;
+    });
+    expect(updated.draft.files).toEqual(canonicalFiles);
+    expect(updated.draft.digest).toBe(await digestBytes(encodeBundle({ format: 'pskills-bundle-v1', files: canonicalFiles })));
 
     const reloadedResponse = await call(
       fixture.handler,
