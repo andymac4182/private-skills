@@ -194,12 +194,14 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
       }
       const payload = JSON.parse(body ?? '{}') as {
         sessionKey?: string;
+        registrySessionId?: string;
         draftId?: string;
         revision?: number;
         digest?: string;
         message?: string;
         requestId?: string;
         requestDigest?: string;
+        selectedPath?: string;
       };
       const current = await repository.read(ORGANIZATION);
       const session = current.builderSessions?.find((candidate) => candidate.sessionKey === payload.sessionKey);
@@ -230,12 +232,16 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
         return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
       }
       return Response.json({
+        status: 'accepted',
         sessionId: options.providerSessionId ?? 'eve-session-1',
+        sessionKey: payload.sessionKey,
+        registrySessionId: payload.registrySessionId,
         draftId: payload.draftId,
         revision: payload.revision,
         digest: payload.digest,
         requestId: payload.requestId,
         requestDigest: payload.requestDigest,
+        selectedPath: payload.selectedPath,
       });
     }
 
@@ -593,8 +599,8 @@ describe('builder BFF draft contract', () => {
     const oversizedDraft = await createReleaseDraft(oversized, 'oversized-provider-draft');
     const oversizedSession = await createSession(oversized, oversizedDraft, 'oversized-provider-session');
     const oversizedResponse = await prompt(oversized, oversizedDraft, oversizedSession.id, 'oversized-provider-prompt');
-    expect(oversizedResponse.status).toBe(400);
-    expect((await json(oversizedResponse)).code).toBe('INVALID_REQUEST');
+    expect(oversizedResponse.status).toBe(502);
+    expect((await json(oversizedResponse)).code).toBe('BUILDER_UPSTREAM');
     expect(oversized.streamCalls).toBe(0);
   });
 
