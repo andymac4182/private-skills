@@ -38,6 +38,30 @@ export type {
   StateRepositoryOpenClawConsumerSnapshotStoreOptions,
 } from './consumer-cache.ts';
 
+export {
+  OpenClawConsumerSelectionError,
+  OpenClawSourceProofStoreError,
+  OpenClawTrustedSnapshotImportService,
+  StateRepositoryOpenClawSourceProofStore,
+  createOpenClawCandidateProvider,
+} from './service.ts';
+export type {
+  OpenClawCandidateProvider,
+  OpenClawCandidateProviderInput,
+  OpenClawCandidateProviderOptions,
+  OpenClawConsumerSelectionErrorCode,
+  OpenClawImportOperation,
+  OpenClawImportQueue,
+  OpenClawImportQueueRequest,
+  OpenClawProjectedCandidate,
+  OpenClawSourceProofCompletion,
+  OpenClawSourceProofRecord,
+  OpenClawSourceProofStore,
+  OpenClawSourceProofStoreErrorCode,
+  OpenClawTrustedSnapshotImportServiceOptions,
+  StateRepositoryOpenClawSourceProofStoreOptions,
+} from './service.ts';
+
 const MAX_FEED_ID_BYTES = 512;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 const MAX_PUBLICATION_TTL_MS = 24 * 60 * 60 * 1_000;
