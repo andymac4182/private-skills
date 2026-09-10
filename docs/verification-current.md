@@ -1,6 +1,6 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-10T16:09:00.638Z
+**As of:** 2026-09-10T16:46:37Z
 
 **Latest verified deployment checkpoint:** PR36's docs-only source commit
 `c7a0f03a4c482afa219f4c86339163b40161f944` produced READY Git-triggered
@@ -10,6 +10,16 @@ records the exact source/deployment mapping and no production configuration,
 environment, registry-data, feed, or authenticated application-data change.
 Native CI again stopped before runner execution because of the documented
 account payment/spending admission failure; the Node container job was skipped.
+
+After that deployment capture, seven reviewed nonsecret OpenClaw production
+settings were staged successfully. The sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
+retains names and exit codes only; it contains no setting values. The active c7
+registry deployment `dpl_C4miE1vUTCygLpQUyEwXqttXZ1me` has not consumed them
+because the normal Git-source redeploy was blocked before execution pending the
+exact activation approval. No import, publication, model call, registry-data
+call, or feed activity occurred.
+Subsequent main production deployments are held pending that approval to avoid
+implicitly activating the staged settings.
 
 The corresponding [local Cloudflare build record](evidence/edge-build-c7a0f03.json)
 passes the frozen offline install and Cloudflare-module edge build from source
@@ -47,8 +57,9 @@ capture, and does not prove the M6 model/apply/review/scan workflow,
 screenreader, contrast, or reduced-motion acceptance. The upload-draft resume
 gap remains active because `PublishView` keeps an upload draft in memory while
 the catalog release query is not a compatible upload-draft resume route. The
-OpenClaw feed remains disabled pending review and explicit activation, and
-native CI remains open. This checkpoint does not claim all G0, C1, or M6
+OpenClaw is configured but awaiting activation; the current c7 runtime remains
+inactive pending review and exact activation approval, and native CI remains
+open. This checkpoint does not claim all G0, C1, or M6
 criteria complete.
 
 A separate bounded [M6 Eve session record](evidence/production-m6-eve-session-34e4f56.json)
@@ -383,8 +394,9 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   next 22:00 UTC Eve run still needs an explicit causal scheduler/session
   identifier; the earlier cron record is only deployment-scoped temporal
   correlation.
-- M7 OpenClaw backend code is shipped, but the feed remains disabled. The public
-  metadata probe above is interoperability evidence only; keep the feed disabled
+- M7 OpenClaw backend code is shipped, and its production settings are staged
+  but awaiting activation. The current c7 runtime remains inactive; the public
+  metadata probe above is interoperability evidence only. Keep activation held
   until its explicit feed/trust configuration, bounded producer/consumer
   interoperability, artifact import, and private publication evidence are ready.
 
@@ -398,7 +410,7 @@ context, M5 organization-wide visibility/automation, CLI parity, and external
 pack migration. This feature count is separate from the G0, C1, M6, and M7
 verification gates. M6's local synthetic browser proof passes, but its hosted,
 model, and accessibility gates remain incomplete. M7's source slices are
-current, but its OpenClaw feed remains disabled. The public metadata probe above
+current, but its configured OpenClaw feed remains inactive. The public metadata probe above
 is interoperability evidence only; hosted artifact import, private publication,
 and feed activation remain unproven. Both remain outside the current release
 gates here.

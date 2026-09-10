@@ -42,9 +42,13 @@ fixes are pending approval, not shipped. A bounded hosted Neon/object-storage
 logical restore is recorded in the [sanitized restore evidence](docs/evidence/hosted-restore-20260910.json);
 it verifies an exact target revision and digest-checked objects but does not
 claim a provider lifecycle guarantee or restored-origin health/scanner run.
-OpenClaw remains disabled pending review and explicit activation; its public
-metadata probe is interoperability evidence only and does not prove hosted
-artifact import or private publication. M6 and M7 remain outside the current
+OpenClaw's seven nonsecret production settings are staged in the sanitized
+[settings-stage record](docs/evidence/openclaw-production-settings-staged-20260910.json)
+with names and exit codes only, and await exact activation approval; the current
+c7 runtime remains inactive. Its public metadata probe is interoperability
+evidence only and does not prove hosted artifact import or private publication.
+Subsequent main production deployments are held pending that approval to avoid
+implicitly activating the staged settings. M6 and M7 remain outside the current
 C1 release gate.
 
 The current unfinished product inventory has three areas: builder Eve,

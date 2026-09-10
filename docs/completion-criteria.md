@@ -30,9 +30,13 @@ build record](evidence/edge-build-c7a0f03.json) is source/build evidence only:
 Wrangler was unauthenticated and no hosted Cloudflare deployment was attempted.
 PR35 candidate source `c4cd24a` remains pending approval after 62 tests and
 three Vercel previews passed; native CI remains billing-blocked and two UI fixes
-are pending approval, not shipped. OpenClaw remains disabled pending review and
-explicit activation. The earlier PR32 activation and PR30 release-file records
-retain their own source/deployment provenance.
+are pending approval, not shipped. OpenClaw's seven nonsecret production settings
+are staged in the sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
+with names and exit codes only, and await exact activation approval; the current
+c7 runtime remains inactive. Subsequent main production deployments are held
+pending that approval to avoid implicitly activating the staged settings. The
+earlier PR32 activation and PR30 release-file records retain their own
+source/deployment provenance.
 The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
 metadata-only Pack preview, and snapshot-only candidate admission remain
 source-specific evidence. Physical GitHub/well-known resolution, direct

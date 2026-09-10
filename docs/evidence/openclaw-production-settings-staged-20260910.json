@@ -1,0 +1,70 @@
+{
+  "schema": "private-skills-openclaw-production-settings-stage-v1",
+  "observedAtUtc": "2026-09-10T16:36:30.094Z",
+  "source": {
+    "provider": "Vercel Git",
+    "ref": "main",
+    "commit": "c7a0f03a4c482afa219f4c86339163b40161f944"
+  },
+  "target": "production",
+  "settings": [
+    {
+      "name": "PSKILLS_OPENCLAW_TRUSTED_FEED_URL",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_TRUSTED_FEED_ID",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_TRUSTED_FEED_COMPATIBILITY",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_FEED_ID",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_FEED_URL",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_NAMESPACE",
+      "result": "added",
+      "exitCode": 0
+    },
+    {
+      "name": "PSKILLS_OPENCLAW_SOURCE_ORIGIN",
+      "result": "added",
+      "exitCode": 0
+    }
+  ],
+  "postMutation": {
+    "settingsPresent": true,
+    "valuesRecorded": false,
+    "sourceLocatorPresent": false,
+    "otherEnvironmentVariablesChanged": false
+  },
+  "redeployment": {
+    "started": false,
+    "blockedBeforeExecution": true,
+    "reason": "Normal Git-source production redeploy awaits the exact activation approval; no alternate or prebuilt deployment was used.",
+    "currentRuntime": "c7 deployment remains active without consuming the staged settings"
+  },
+  "scope": {
+    "imports": false,
+    "publicationRefresh": false,
+    "modelCalls": false,
+    "registryDataCalls": false,
+    "feedActivity": false
+  },
+  "safety": {
+    "valuesRetained": false,
+    "credentialsRetained": false
+  }
+}
