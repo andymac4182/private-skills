@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDraftHandler } from '../src/drafts.js';
+import { createDraftHandler, writeDraftRevision } from '../src/drafts.js';
 import type { AuthoringHandlerDependencies } from '../src/index.js';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
@@ -62,6 +62,7 @@ interface Fixture {
   blobs: MemoryBlobs;
   release: SkillVersion;
   bundle: SkillBundle;
+  deps: AuthoringHandlerDependencies;
   handler: ReturnType<typeof createDraftHandler>;
   setPrincipal(value: Principal | null): void;
   setAdmission(value: boolean): void;
@@ -130,6 +131,7 @@ async function fixture(options: { withReview?: boolean } = {}): Promise<Fixture>
     blobs,
     release,
     bundle,
+    deps,
     handler: createDraftHandler(deps),
     setPrincipal(value) {
       current = value;
@@ -343,6 +345,51 @@ describe('durable skill drafts', () => {
     const conflictingReuse = await test.handler(updateRequest(created.draft.id, 'update-1', 1, test.bundle.files));
     expect(conflictingReuse.status).toBe(409);
     expect((await json(conflictingReuse)).error.code).toBe('IDEMPOTENCY_CONFLICT');
+  });
+
+  it('exposes one CAS writer for human builder applies with idempotent replay and stale conflicts', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const human = user('human-editor');
+    const files = test.bundle.files.map((file) => ({
+      ...file,
+      content: base64(`${file.path}\nbuilder edit\n`),
+    }));
+    const input = {
+      draftId: created.draft.id,
+      expectedRevision: 1,
+      files,
+      idempotencyKey: 'builder-apply-1',
+      principal: human,
+      deps: test.deps,
+      kind: 'builder-proposal' as const,
+      proposalId: 'proposal-1',
+    };
+
+    const first = await writeDraftRevision(input);
+    expect(first.idempotent).toBe(false);
+    expect(first.draft.revision).toBe(2);
+    const firstState = await test.repository.read(ORGANIZATION);
+    expect(firstState.audit.at(-1)).toMatchObject({
+      action: 'draft.update',
+      subject: 'human-editor',
+      resourceId: created.draft.id,
+      details: { source: 'builder-proposal', proposalId: 'proposal-1' },
+    });
+
+    const replay = await writeDraftRevision(input);
+    expect(replay.idempotent).toBe(true);
+    expect(replay.draft.digest).toBe(first.draft.digest);
+    expect((await test.repository.read(ORGANIZATION)).drafts![0]!.revision).toBe(2);
+
+    await expect(writeDraftRevision({
+      ...input,
+      files: test.bundle.files,
+    })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    await expect(writeDraftRevision({
+      ...input,
+      idempotencyKey: 'builder-stale',
+    })).rejects.toMatchObject({ code: 'DRAFT_CONFLICT' });
   });
 
   it('rejects unauthorized drafts and unsafe file paths without reading or persisting content', async () => {
