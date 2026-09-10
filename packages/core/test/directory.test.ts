@@ -11,6 +11,7 @@ import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 import type {
   Authenticator,
   BlobStore,
+  Feed,
   Principal,
   RegistryState,
   SkillBundle,
@@ -171,6 +172,190 @@ describe('skills.sh directory routes', () => {
     expect((await test.handler(new Request(`${ORIGIN}/v1/directory/official`))).status).toBe(401);
   });
 
+  it('returns explicit feed context while keeping global discovery unscoped', async () => {
+    const customBase = 'https://catalog.example.test/skills';
+    const foundation = {
+      provider: 'skills.sh',
+      fetchedAt: '2026-09-10T00:00:00.000Z',
+      sourceStatus: 'snapshot-available' as const,
+      sourceReason: 'directory adapter fixture timestamp',
+    };
+    const row = {
+      id: 'acme/repo/my-skill',
+      slug: 'my-skill',
+      name: 'my-skill',
+      source: 'acme/repo',
+      installs: 1,
+      sourceType: 'github',
+      installUrl: null,
+      url: 'https://skills.sh/acme/repo/my-skill',
+      ...foundation,
+      feedName: null,
+    };
+    const selectedDirectory = {
+      ...directoryClient(),
+      async list() {
+        return {
+          data: [row],
+          pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+        };
+      },
+      async search() {
+        return {
+          data: [row],
+          query: 'my-skill',
+          searchType: 'fuzzy',
+          count: 1,
+          durationMs: 1,
+        };
+      },
+      async curated() {
+        return {
+          data: [{ owner: 'acme', totalInstalls: 1, featuredRepo: 'repo', featuredSkill: 'my-skill', skills: [row] }],
+          totalOwners: 1,
+          totalSkills: 1,
+          generatedAt: '2026-09-10T00:00:00.000Z',
+        };
+      },
+      async detail(id: string) {
+        return {
+          ...foundation,
+          feedName: null,
+          id,
+          source: 'acme/repo',
+          slug: 'my-skill',
+          installs: 1,
+          hash: 'snapshot-1',
+          files: [{ path: 'SKILL.md', contents: 'private text stays internal' }],
+        };
+      },
+      async audit(id: string) {
+        return {
+          id,
+          source: 'acme/repo',
+          slug: 'my-skill',
+          audits: [],
+        };
+      },
+    } as RegistryDirectoryClient;
+    const sharedDirectory = selectedDirectory;
+    const test = setup(undefined, sharedDirectory, {
+      trustedSkillsShBaseUrls: ['https://skills.sh', customBase],
+      directoryBindings: new Map([[customBase, sharedDirectory]]),
+    });
+    const feed: Feed = {
+      id: 'feed-catalog',
+      organizationId: 'org-directory',
+      name: 'catalog',
+      kind: 'skills-sh',
+      enabled: true,
+      baseUrl: customBase,
+      namespace: '@team',
+      configRevision: 'feed-revision-1',
+    };
+    test.repository.state.feeds = [feed];
+    const headers = { authorization: 'Bearer user' };
+
+    const globalList = await test.handler(new Request(`${ORIGIN}/v1/directory/skills`, { headers }));
+    expect(globalList.status).toBe(200);
+    expect(await globalList.json()).toMatchObject({ feedName: null });
+    const globalDetail = await test.handler(new Request(`${ORIGIN}/v1/directory/detail?id=acme%2Frepo%2Fmy-skill`, { headers }));
+    expect(globalDetail.status).toBe(200);
+    expect(await globalDetail.json()).toMatchObject({ feedName: null });
+
+    const duplicateFeed = await test.handler(new Request(`${ORIGIN}/v1/directory/skills?feed=catalog&feed=catalog`, { headers }));
+    expect(duplicateFeed.status).toBe(400);
+    expect(test.directoryForBaseCalls).toEqual([]);
+    const unknownFeed = await test.handler(new Request(`${ORIGIN}/v1/directory/skills?feed=missing`, { headers }));
+    expect(unknownFeed.status).toBe(404);
+    expect(test.directoryForBaseCalls).toEqual([]);
+
+    const selectedRoutes = [
+      '/v1/directory/skills?feed=catalog',
+      '/v1/directory/search?feed=catalog&q=my-skill',
+      '/v1/directory/official?feed=catalog',
+      '/v1/directory/detail?feed=catalog&id=acme%2Frepo%2Fmy-skill',
+      '/v1/directory/audits?feed=catalog&id=acme%2Frepo%2Fmy-skill',
+    ];
+    for (const path of selectedRoutes) {
+      const response = await test.handler(new Request(`${ORIGIN}${path}`, { headers }));
+      expect(response.status, path).toBe(200);
+      const body = await response.json() as Record<string, unknown>;
+      expect(body.feedName, path).toBe('catalog');
+      expect(JSON.stringify(body), path).not.toContain('private text stays internal');
+      if (Array.isArray(body.data)) {
+        const first = body.data[0];
+        const rowValue = typeof first === 'object' && first !== null && 'skills' in first
+          ? (first as { skills?: unknown[] }).skills?.[0]
+          : first;
+        expect(rowValue, path).toMatchObject({
+          feedName: 'catalog',
+          provider: foundation.provider,
+          fetchedAt: foundation.fetchedAt,
+          sourceStatus: foundation.sourceStatus,
+          sourceReason: foundation.sourceReason,
+        });
+      }
+      if (path.includes('/detail?')) expect(body).toMatchObject({
+        provider: foundation.provider,
+        fetchedAt: foundation.fetchedAt,
+        sourceStatus: foundation.sourceStatus,
+        sourceReason: foundation.sourceReason,
+      });
+    }
+    const globalAfterSelected = await test.handler(new Request(`${ORIGIN}/v1/directory/skills`, { headers }));
+    expect(globalAfterSelected.status).toBe(200);
+    expect(await globalAfterSelected.json()).toMatchObject({ feedName: null, data: [{ feedName: null }] });
+    expect(test.directoryForBaseCalls).toEqual([customBase, customBase, customBase, customBase, customBase]);
+    expect(row.feedName).toBeNull();
+  });
+
+  it('checks selected feed ACL and trust before resolving a catalog client', async () => {
+    const customBase = 'https://catalog.example.test/skills';
+    const test = setup(undefined, directoryClient(), {
+      trustedSkillsShBaseUrls: ['https://skills.sh', customBase],
+      directoryBindings: new Map([[customBase, directoryClient()]]),
+    });
+    test.repository.state.feeds = [{
+      id: 'feed-private',
+      organizationId: 'org-directory',
+      name: 'private',
+      kind: 'skills-sh',
+      enabled: true,
+      baseUrl: customBase,
+      namespace: '@other',
+      configRevision: 'feed-revision-1',
+    }];
+    test.setPrincipal({ ...user(), roles: ['reader'], namespaces: ['@team'] });
+    const denied = await test.handler(new Request(`${ORIGIN}/v1/directory/skills?feed=private`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(denied.status).toBe(403);
+    expect(test.directoryForBaseCalls).toEqual([]);
+
+    test.repository.state.feeds[0] = {
+      ...test.repository.state.feeds[0]!,
+      namespace: '@team',
+      enabled: false,
+    };
+    const disabled = await test.handler(new Request(`${ORIGIN}/v1/directory/skills?feed=private`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(disabled.status).toBe(409);
+    expect(test.directoryForBaseCalls).toEqual([]);
+
+    test.repository.state.feeds[0] = {
+      ...test.repository.state.feeds[0]!,
+      enabled: true,
+      baseUrl: 'https://untrusted.example.test/catalog',
+    };
+    const untrusted = await test.handler(new Request(`${ORIGIN}/v1/directory/skills?feed=private`, {
+      headers: { authorization: 'Bearer user' },
+    }));
+    expect(untrusted.status).toBe(503);
+    expect(test.directoryForBaseCalls).toEqual([]);
+  });
+
   it('projects public detail to metadata while retaining full internal snapshot data for import', async () => {
     const canary = 'PRIVATE_SOURCE_CANARY_MUST_NOT_CROSS_READER_ROUTE';
     const internalDetail = {
@@ -186,8 +371,11 @@ describe('skills.sh directory routes', () => {
       sourceType: 'github',
       installUrl: 'https://github.com/acme/repo',
       url: 'https://skills.sh/acme/repo/my-skill',
+      provider: 'untrusted-provider',
+      fetchedAt: 'not-a-timestamp',
+      sourceReason: '\ud800',
       unexpected: 'must not be serialized',
-    } as SkillDetailResponse & Record<string, unknown>;
+    } as unknown as SkillDetailResponse & Record<string, unknown>;
     let detailPayload: SkillDetailResponse = internalDetail;
     let detailCalls = 0;
     let importing = false;
@@ -213,10 +401,14 @@ describe('skills.sh directory routes', () => {
       installs: 7,
       hash: 'snapshot-1',
       files: [{ path: 'SKILL.md' }, { path: 'README.md' }],
+      feedName: null,
     });
     expect(JSON.stringify(publicDetail)).not.toContain(canary);
     expect(publicDetail).not.toHaveProperty('sourceType');
     expect(publicDetail).not.toHaveProperty('installUrl');
+    expect(publicDetail).not.toHaveProperty('provider');
+    expect(publicDetail).not.toHaveProperty('fetchedAt');
+    expect(publicDetail).not.toHaveProperty('sourceReason');
     expect(publicDetail).not.toHaveProperty('unexpected');
     expect(publicDetail.files).toEqual([{ path: 'SKILL.md' }, { path: 'README.md' }]);
     expect(internalDetail.files?.[0]?.contents).toBe(canary);
@@ -231,6 +423,7 @@ describe('skills.sh directory routes', () => {
       installs: 7,
       hash: null,
       files: null,
+      feedName: null,
     });
 
     detailPayload = internalDetail;
@@ -394,6 +587,7 @@ describe('skills.sh directory routes', () => {
     const job = (await claim.json() as { job: { id: string; leaseToken: string } }).job;
     const imported = bundle();
     const artifactDigest = await digestBytes(encodeBundle(imported));
+    const fetchedAt = '2026-09-10T08:00:00.000Z';
     const complete = await test.handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
       method: 'POST', headers: { ...headers, authorization: 'Bearer worker' },
       body: JSON.stringify({
@@ -404,10 +598,19 @@ describe('skills.sh directory routes', () => {
           kind: 'skills-sh', upstreamId: operation.import.upstreamId, repository: 'acme/repo',
           path: 'acme/repo/my-skill', revision: 'snapshot-1', externalId: 'acme/repo/my-skill',
           externalSourceType: 'github', externalSnapshotHash: 'snapshot-1',
+          fetchedAt,
+          external: {
+            provider: 'skills.sh', externalId: 'acme/repo/my-skill', source: 'acme/repo', slug: 'my-skill',
+            sourceType: 'github', sourceUrl: 'https://skills.sh/acme/repo/my-skill', externalSnapshotHash: 'snapshot-1',
+            fetchedAt,
+          },
         },
       }),
     }));
     expect(complete.status).toBe(200);
+    const persisted = test.repository.state.skills[0]?.provenance as unknown as Record<string, unknown> | undefined;
+    expect(persisted?.fetchedAt).toBe(fetchedAt);
+    expect((persisted?.external as Record<string, unknown> | undefined)?.fetchedAt).toBe(fetchedAt);
 
     test.setPrincipal(user());
     const warm = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
@@ -416,6 +619,10 @@ describe('skills.sh directory routes', () => {
     expect(warm.status).toBe(200);
     expect(test.directoryForBaseCalls).toEqual(['https://skills.sh']);
     expect(await warm.json()).toHaveProperty('resolution.digest', artifactDigest);
+    const warmSkill = test.repository.state.skills[0];
+    const warmProvenance = warmSkill?.provenance as unknown as Record<string, unknown> | undefined;
+    expect(warmProvenance?.fetchedAt).toBe(fetchedAt);
+    expect((warmProvenance?.external as Record<string, unknown> | undefined)?.fetchedAt).toBe(fetchedAt);
   });
 
   it('binds a legacy import to the selected upstream catalog for the same external ID', async () => {
