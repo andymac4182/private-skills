@@ -119,7 +119,9 @@ empty). Both keep the existing public `prepare_review` result shape. A failed
 prepare request is recorded as `request_failed`; a completion request whose
 response is lost is recorded as `submission_uncertain`, because the remote
 completion may already have committed. A cached prepare does not erase that
-uncertainty; a successful completion changes the audit to `completed`.
+uncertainty. The one-call submission budget prevents an automatic repost or
+reconciliation in the same session; authoritative API/run data must resolve
+the outcome. A known successful completion RPC records `completed`.
 
 An authenticated backend can start the same fixed prompt through Eve's Client
 SDK. The caller, not the model, supplies the host and bearer token:

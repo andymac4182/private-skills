@@ -68,8 +68,8 @@ export default defineTool({
       reviewState.update((state) => state.invocation ? {
         ...state,
         // The request may have committed remotely before its response was
-        // lost. Keep this explicitly uncertain until a successful completion
-        // RPC, without retaining response/error content.
+        // lost. Keep this explicitly uncertain for authoritative external
+        // correlation; the one-call budget prevents an automatic repost.
         invocation: withReviewInvocationOutcome(state.invocation, "submission_uncertain"),
       } : state);
       throw error;
