@@ -106,6 +106,17 @@ describe('review persistence service', () => {
     expect(claims[0]?.run.eveSessionId).toBe('eve-session-test-opaque');
     expect((await service.listRuns('org-a')).map((run) => run.id)).toHaveLength(1);
     expect((await repository.read('org-a') as ReviewStateForTest).reviewRuns).toHaveLength(1);
+
+    const winner = claims.find((claim) => claim.claimed)!;
+    await service.completeRun('org-a', winner.run.id, winner.run.leaseToken!, [], baseTime);
+    const completedRead = await service.beginRun('org-a', {
+      idempotencyKey: input.idempotencyKey,
+      model: input.model,
+      snapshot: input.snapshot,
+      now: baseTime,
+    });
+    expect(completedRead.claimed).toBe(false);
+    expect(completedRead.run.eveSessionId).toBe('eve-session-test-opaque');
   });
 
   it('fences stale leases and permits failed and expired retries', async () => {
@@ -113,6 +124,7 @@ describe('review persistence service', () => {
     const firstClaim = await service.beginRun('org-a', {
       idempotencyKey: 'retryable',
       model: 'eve-reviewer',
+      eveSessionId: 'eve-session-failed-old',
       snapshot: snapshotOf(first, second),
       now: baseTime,
     });
@@ -136,6 +148,7 @@ describe('review persistence service', () => {
     expect(retry.claimed).toBe(true);
     expect(retry.run.id).toBe(firstClaim.run.id);
     expect(retry.run.leaseToken).not.toBe(firstClaim.run.leaseToken);
+    expect(retry.run.eveSessionId).toBeUndefined();
     await expect(
       service.failRun('org-a', retry.run.id, firstClaim.run.leaseToken!, 'stale', baseTime),
     ).rejects.toMatchObject({ code: 'REVIEW_LEASE_FENCED' });
@@ -161,6 +174,21 @@ describe('review persistence service', () => {
     await expect(
       expiringService.completeRun('org-a', expiringClaim.run.id, expiringClaim.run.leaseToken!, [], Date.parse(baseTime) + 2_000),
     ).rejects.toMatchObject({ code: 'REVIEW_LEASE_FENCED' });
+  });
+
+  it('rejects unsafe Eve session provenance before creating a run', async () => {
+    const { service, first, second } = await fixture();
+    const input = {
+      idempotencyKey: 'invalid-eve-session',
+      model: 'eve-reviewer',
+      snapshot: snapshotOf(first, second),
+      now: baseTime,
+    };
+    await expect(service.beginRun('org-a', { ...input, eveSessionId: 'eve\nsession' }))
+      .rejects.toBeInstanceOf(ReviewValidationError);
+    await expect(service.beginRun('org-a', { ...input, eveSessionId: 'x'.repeat(257) }))
+      .rejects.toBeInstanceOf(ReviewValidationError);
+    expect(await service.listRuns('org-a')).toEqual([]);
   });
 
   it('rejects invented candidates and malformed model output without committing', async () => {

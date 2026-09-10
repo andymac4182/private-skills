@@ -407,6 +407,18 @@ describe('intelligence HTTP handler', () => {
     expect(accepted?.status).toBe(200);
   });
 
+  it('rejects unsafe Eve session metadata at the reviewer boundary', async () => {
+    const harness = await fixture();
+    for (const eveSessionId of ['eve\nsession', 'x'.repeat(257)]) {
+      const response = await harness.handler(request('/internal/reviewer/prepare', {
+        method: 'POST',
+        headers: { authorization: 'Bearer reviewer-secret' },
+        body: { eveSessionId },
+      }));
+      expect(response?.status).toBe(400);
+    }
+  });
+
   it('does not return an active review lease to a duplicate prepare caller', async () => {
     const harness = await fixture();
     const prepare = () => harness.handler(request('/internal/reviewer/prepare', {

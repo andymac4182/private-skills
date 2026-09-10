@@ -663,6 +663,9 @@ export class DefaultReviewPersistenceService implements ReviewPersistenceService
           // A retry after a failed or expired lease is owned by the new Eve
           // session. Keep the run join pointed at its current claimant.
           existing.eveSessionId = normalized.eveSessionId;
+        } else {
+          // A non-Eve retry must not inherit a stale claimant's provenance.
+          delete existing.eveSessionId;
         }
         existing.state = 'running';
         existing.leaseToken = randomId('review-lease');
