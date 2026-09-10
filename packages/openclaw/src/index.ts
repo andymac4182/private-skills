@@ -16,3 +16,8 @@ export {
   parseOpenClawFeed as parseCatalogFeed,
   serializeOpenClawFeed as serializeCatalogFeed,
 } from "./feed.ts";
+export {
+  OpenClawFeedCache,
+  OpenClawRequestError,
+  validateOpenClawFeedUrl,
+} from "./client.ts";
