@@ -13,6 +13,12 @@ are recorded as complete; any archive/checksum publication for the current
 source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
+The latest portable directory-gateway evidence is tracked in
+[`docs/verification-current.md`](docs/verification-current.md). The older
+deployment paragraphs below and the `docs/verification-v0.3.0.md` deployment
+pointers remain historical and are superseded for current status; they retain
+their original evidence links.
+
 | Area | Current status | Boundary |
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
@@ -209,6 +215,7 @@ The request handler owns authorization, resolution, policy state, and audit reco
 - [`docs/eve-reviewer.md`](docs/eve-reviewer.md) documents the separate Eve app, fixed tools, schedule, and human-only decision boundary.
 - [`docs/verification.md`](docs/verification.md) records command, browser, deployment, scanner, and restore evidence.
 - [`docs/verification-v0.2.0.md`](docs/verification-v0.2.0.md) records the historical v0.2.0 release evidence.
+- [`docs/verification-current.md`](docs/verification-current.md) records the latest source, portability, and production-gate checkpoint.
 - [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md) records the directory and sandbox implementation checkpoint and remaining acceptance gates.
 - [`docs/install-directories.md`](docs/install-directories.md) documents absolute-root and agent/scope selection for isolated CLI installs.
 - [`docs/roadmap.md`](docs/roadmap.md) records the source-linked Tessl comparison and prioritized product gaps.
