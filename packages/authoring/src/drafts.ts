@@ -563,9 +563,19 @@ async function rejectBuilderProposal(
     const proposal = session?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
     if (!session || !proposal) throw unavailableDraft();
     if (proposal.state === 'pending') {
+      const rejectedAt = new Date().toISOString();
       proposal.state = 'rejected';
-      proposal.updatedAt = new Date().toISOString();
+      proposal.updatedAt = rejectedAt;
       session.updatedAt = proposal.updatedAt;
+      appendDraftAudit(
+        state,
+        principal,
+        'draft.builder.proposal.rejected',
+        draft,
+        deps.config.organizationId,
+        { source: 'builder-proposal', proposalId },
+        rejectedAt,
+      );
     }
     return proposal;
   });
