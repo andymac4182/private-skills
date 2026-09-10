@@ -125,6 +125,36 @@ small status object and never includes manifest contents, keys, or credentials.
 The default aggregate referenced-object budget is 512 MiB; API callers may
 raise it only up to the bounded 2 GiB hard limit.
 
+For a PostgreSQL and private Files SDK target, use the dedicated PostgreSQL
+entry point. Keep the target connection string and Blob token in the process
+environment or an approved secret manager; do not put either secret in shell
+history or command arguments. The restore path uses separate target names so a
+source credential is not selected by fallback:
+
+```sh
+export PSKILLS_TARGET_DATABASE_URL='(isolated target connection supplied by the secret manager)'
+export PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN='(isolated private target token supplied by the secret manager)'
+export PSKILLS_TARGET_STORAGE_PREFIX='restore-window'
+export PSKILLS_TARGET_INITIALIZE_SCHEMA=true
+
+scripts/restore-backup-postgres restore \
+  --organization "$PSKILLS_ORGANIZATION_ID" \
+  --backup ./work/restore-backup \
+  --target-id isolated-restore-target \
+  --target-isolated true
+```
+
+`PSKILLS_TARGET_INITIALIZE_SCHEMA=true` permits `CREATE TABLE IF NOT EXISTS`
+against the qualified isolated destination only. Source capture never creates
+or migrates a target table. With initialization disabled, a missing target
+table fails closed. The restore preflight requires the entire target state
+table to be empty; an existing row for any organization is rejected before
+referenced object writes. A table lock and a second whole-table read close the
+race between preflight and the metadata insert. The destination must remain
+isolated from ordinary writers for the rehearsal window; the lock prevents a
+normal concurrent insert from being silently overwritten, while a writer that
+arrives after the seed is still an operational isolation violation.
+
 The manifest is private and mode-`0600`, but it is unsigned. The restore
 utility therefore treats it as operator-trusted backup metadata and does not
 claim that its policy, revision, or revocation fields are authenticated. The

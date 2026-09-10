@@ -23,6 +23,7 @@ import {
   assertRegistryState,
   cloneRegistryState,
   defaultRegistryState,
+  postgresStateSchemaSql,
   StateRepositoryError,
   stateRevision,
   type PgClientLike,
@@ -80,6 +81,8 @@ export interface ReadPostgresSnapshotOptions {
 
 export interface PostgresRestoreTargetOptions {
   tableName?: string;
+  /** Create only this explicitly isolated destination table before preflight. */
+  initializeSchema?: boolean;
 }
 
 export interface PostgresRestoreTarget {
@@ -98,6 +101,8 @@ export interface PostgresLogicalRestoreOptions {
   targetLocation: QualifiedLocation;
   backupDirectory: string;
   targetIsolated: true;
+  /** Explicitly allow CREATE TABLE on the isolated destination only. */
+  initializeSchema?: boolean;
   tableName?: string;
   maxTotalObjectBytes?: number;
 }
@@ -265,31 +270,6 @@ function frozenSnapshotRepository(snapshot: PostgresSnapshotRow): StateRepositor
   };
 }
 
-function emptyRestoreState(state: RegistryState): boolean {
-  const extensions = state as RegistryState & {
-    feeds?: unknown[];
-    reviewRuns?: unknown[];
-    reviewSuggestions?: unknown[];
-  };
-  const collections = [
-    'skills',
-    'packs',
-    'jobs',
-    'scans',
-    'upstreams',
-    'authorizations',
-    'grants',
-    'audit',
-  ] as const;
-  return collections.every((field) => state[field].length === 0) &&
-    (extensions.feeds?.length ?? 0) === 0 &&
-    (state.installReceiptTickets?.length ?? 0) === 0 &&
-    (state.installReceipts?.length ?? 0) === 0 &&
-    (extensions.reviewRuns?.length ?? 0) === 0 &&
-    (extensions.reviewSuggestions?.length ?? 0) === 0 &&
-    stateRevision(state) === 0;
-}
-
 function stateWithRevision(state: RegistryState): RegistryState {
   const copy = cloneRegistryState(state) as RegistryState & { metadataRevision?: number };
   copy.metadataRevision = stateRevision(copy);
@@ -297,20 +277,78 @@ function stateWithRevision(state: RegistryState): RegistryState {
   return copy;
 }
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
+    )).join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 'null' : encoded;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+async function initializeTargetSchema(pool: PgPoolLike, tableName: string, enabled: boolean): Promise<void> {
+  if (!enabled) return;
+  try {
+    await pool.query(postgresStateSchemaSql(tableName));
+  } catch {
+    throw new PostgresSnapshotError('TARGET_UNAVAILABLE', 'isolated restore target schema could not be initialized');
+  }
+}
+
 async function readRestoreTargetState(
   pool: PgPoolLike,
   tableName: string | undefined,
+  initializeSchema: boolean,
+  allowRequestedOccupied: boolean,
   organizationId: string,
 ): Promise<RegistryState> {
+  const boundedTableName = boundedString(tableName ?? DEFAULT_POSTGRES_STATE_TABLE, 'tableName', 128);
+  await initializeTargetSchema(pool, boundedTableName, initializeSchema);
+  const table = quoteIdentifier(boundedTableName);
+  let client: PgClientLike | undefined;
+  let inTransaction = false;
   try {
-    return (await readPostgresOrganizationSnapshot(pool, { organizationId, tableName })).state;
-  } catch (error) {
-    if (error instanceof PostgresSnapshotError && error.code === 'SNAPSHOT_MISSING') {
+    client = await pool.connect();
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    inTransaction = true;
+    const result = await client.query<Record<string, unknown>>(
+      `SELECT organization_id, revision, state FROM ${table} LIMIT 2`,
+    );
+    if (result.rows.length > 1) {
+      throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target contains existing organizations');
+    }
+    if (result.rows.length === 0) {
+      await client.query('COMMIT');
+      inTransaction = false;
       // This is an in-memory preflight sentinel only.  The seed below creates
-      // the row atomically after rechecking the empty target under a lock.
+      // the row atomically after rechecking the empty target under a table lock.
       return defaultRegistryState({ production: false, allowUnscanned: true });
     }
-    throw error;
+    const row = result.rows[0]!;
+    if (row.organization_id !== organizationId) {
+      throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target contains another organization');
+    }
+    const current = asSnapshotRow(row, organizationId);
+    if (!allowRequestedOccupied) {
+      throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target table contains an existing row');
+    }
+    await client.query('COMMIT');
+    inTransaction = false;
+    return current.state;
+  } catch (error) {
+    if (inTransaction) {
+      try { await client?.query('ROLLBACK'); } catch { /* retain sanitized target error */ }
+    }
+    if (error instanceof PostgresSnapshotError) throw error;
+    throw new PostgresSnapshotError('TARGET_UNAVAILABLE', 'PostgreSQL restore target could not be read');
+  } finally {
+    try { await client?.release?.(); } catch { /* release failure cannot expose target details */ }
   }
 }
 
@@ -327,22 +365,48 @@ export function createPostgresRestoreTarget(
   if (!pool) throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL restore target pool is required');
   const tableName = options.tableName ?? DEFAULT_POSTGRES_STATE_TABLE;
   quoteIdentifier(boundedString(tableName, 'tableName', 128));
-  const targetSeed = createPostgresStateSeed(pool, { tableName });
+  let schemaPromise: Promise<void> | undefined;
+  const ensureSchema = async (): Promise<void> => {
+    if (options.initializeSchema !== true) return;
+    schemaPromise ??= initializeTargetSchema(pool, tableName, true);
+    await schemaPromise;
+  };
+  const targetSeed = createPostgresStateSeed(pool, {
+    tableName,
+    initializeSchema: false,
+  });
+  let seededOrganization: string | undefined;
+  const wrappedSeed: IsolatedStateSeed = {
+    kind: targetSeed.kind,
+    async seed(organizationId, state) {
+      await ensureSchema();
+      await targetSeed.seed(organizationId, state);
+      seededOrganization = organizationId;
+    },
+  };
   const repository: StateRepository = {
     async read(organizationId: string): Promise<RegistryState> {
-      return cloneRegistryState(await readRestoreTargetState(pool, tableName, boundedString(organizationId, 'organizationId', 512)));
+      await ensureSchema();
+      return cloneRegistryState(await readRestoreTargetState(
+        pool,
+        tableName,
+        false,
+        seededOrganization === organizationId,
+        boundedString(organizationId, 'organizationId', 512),
+      ));
     },
     async transaction<T>(): Promise<T> {
       throw new StateRepositoryError('READ_ONLY_RESTORE_TARGET', 'PostgreSQL restore preflight is read-only');
     },
   };
-  return { repository, targetSeed };
+  return { repository, targetSeed: wrappedSeed };
 }
 
 /**
- * Seed an isolated PostgreSQL target in one transaction.  The placeholder
- * insert handles an absent row without calling the runtime ensure-row path;
- * the locked read then rejects any occupied organization before replacing it.
+ * Seed an isolated PostgreSQL target in one transaction.  The table lock and
+ * whole-table read reject every existing organization before the first insert;
+ * the target is therefore a genuinely empty destination rather than a row
+ * replacement operation.
  */
 export function createPostgresStateSeed(
   pool: PgPoolLike,
@@ -361,18 +425,27 @@ export function createPostgresStateSeed(
       } catch {
         throw new PostgresSnapshotError('SNAPSHOT_INVALID', 'restore state failed validation');
       }
-      const placeholder = defaultRegistryState({ production: false, allowUnscanned: true });
+      await initializeTargetSchema(pool, tableName, options.initializeSchema === true);
       let client: PgClientLike | undefined;
       let inTransaction = false;
       try {
         client = await pool.connect();
         await client.query('BEGIN');
         inTransaction = true;
+        // The table lock closes the gap between the read-only preflight and
+        // the seed.  A concurrent insert either completes before this lock
+        // and is observed below, or waits until this isolated seed commits.
+        await client.query(`LOCK TABLE ${table} IN SHARE ROW EXCLUSIVE MODE`);
+        const existing = await client.query<Record<string, unknown>>(
+          `SELECT organization_id, revision, state FROM ${table} LIMIT 2`,
+        );
+        if (existing.rows.length > 0) {
+          throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target table is not empty');
+        }
         await client.query(
           `INSERT INTO ${table} (organization_id, revision, state)
-           VALUES ($1, 0, $2::jsonb)
-           ON CONFLICT (organization_id) DO NOTHING`,
-          [boundedOrganizationId, JSON.stringify(placeholder)],
+           VALUES ($1, $2, $3::jsonb)`,
+          [boundedOrganizationId, stateRevision(seededState), JSON.stringify(seededState)],
         );
         const selected = await client.query<Record<string, unknown>>(
           `SELECT organization_id, revision, state FROM ${table} WHERE organization_id = $1 FOR UPDATE`,
@@ -382,23 +455,7 @@ export function createPostgresStateSeed(
           throw new PostgresSnapshotError('TARGET_UNAVAILABLE', 'restore target organization row is unavailable');
         }
         const current = asSnapshotRow(selected.rows[0], boundedOrganizationId);
-        if (!emptyRestoreState(current.state)) {
-          throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target organization is not empty');
-        }
-        const update = await client.query(
-          `UPDATE ${table} SET state = $2::jsonb, revision = $3, updated_at = now()
-           WHERE organization_id = $1 AND revision = 0`,
-          [boundedOrganizationId, JSON.stringify(seededState), stateRevision(seededState)],
-        );
-        if ((update.rowCount ?? 0) !== 1) {
-          throw new PostgresSnapshotError('TARGET_CONFLICT', 'restore target changed during seed');
-        }
-        const verified = await client.query<Record<string, unknown>>(
-          `SELECT organization_id, revision, state FROM ${table} WHERE organization_id = $1 FOR UPDATE`,
-          [boundedOrganizationId],
-        );
-        const after = asSnapshotRow(verified.rows[0], boundedOrganizationId);
-        if (JSON.stringify(after.state) !== JSON.stringify(seededState)) {
+        if (stateRevision(current.state) !== stateRevision(seededState) || !sameJsonValue(current.state, seededState)) {
           throw new PostgresSnapshotError('TARGET_STATE_MISMATCH', 'restore target state failed verification');
         }
         await client.query('COMMIT');
@@ -465,7 +522,10 @@ export async function restorePostgresLogicalBackup(
     throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'restore requires an explicitly isolated target');
   }
   const organizationId = boundedString(options.organizationId, 'organizationId', 512);
-  const target = createPostgresRestoreTarget(options.targetPool, { tableName: options.tableName });
+  const target = createPostgresRestoreTarget(options.targetPool, {
+    tableName: options.tableName,
+    initializeSchema: options.initializeSchema === true,
+  });
   return restoreLogicalBackup({
     targetRepository: target.repository,
     targetBlobs: options.targetBlobs,
@@ -657,6 +717,10 @@ export async function main(
   const targetTableName = parsed.values.get('target-table') ?? environment.PSKILLS_TARGET_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
   const targetPrefix = parsed.values.get('target-blob-prefix') ?? environment.PSKILLS_TARGET_STORAGE_PREFIX;
   const targetStoreId = parsed.values.get('target-blob-store-id') ?? environment.PSKILLS_TARGET_BLOB_STORE_ID;
+  const initializeTargetSchemaValue = parsed.values.get('initialize-target-schema') ?? environment.PSKILLS_TARGET_INITIALIZE_SCHEMA ?? 'false';
+  if (initializeTargetSchemaValue !== 'true' && initializeTargetSchemaValue !== 'false') {
+    throw new PostgresSnapshotError('INVALID_OPTIONS', 'initialize-target-schema must be true or false');
+  }
   const targetRuntime = createPostgresBackupPool(targetDatabaseUrl);
   try {
     const targetBlobs = await createNodeFilesSdkBlobStore({
@@ -676,6 +740,7 @@ export async function main(
       backupDirectory,
       targetIsolated: true,
       tableName: targetTableName,
+      initializeSchema: initializeTargetSchemaValue === 'true',
       maxTotalObjectBytes,
     });
     console.log(JSON.stringify({

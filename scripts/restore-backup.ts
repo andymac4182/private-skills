@@ -867,19 +867,19 @@ export async function readLogicalBackup(
 }
 
 function emptyState(state: RegistryState): boolean {
-  const collections = ['skills', 'packs', 'jobs', 'scans', 'upstreams', 'authorizations', 'grants', 'audit'] as const;
-  const extensions = state as RegistryState & {
-    feeds?: unknown[];
-    reviewRuns?: unknown[];
-    reviewSuggestions?: unknown[];
-  };
-  return collections.every((field) => state[field].length === 0) &&
-    (extensions.feeds?.length ?? 0) === 0 &&
-    (state.installReceiptTickets?.length ?? 0) === 0 &&
-    (state.installReceipts?.length ?? 0) === 0 &&
-    (extensions.reviewRuns?.length ?? 0) === 0 &&
-    (extensions.reviewSuggestions?.length ?? 0) === 0 &&
-    stateRevision(state) === 0;
+  const baselinePolicies = [
+    defaultRegistryState().policy,
+    defaultRegistryState({ production: false, allowUnscanned: true }).policy,
+  ];
+  for (const [key, value] of Object.entries(state)) {
+    if (key === 'metadataRevision' || key === 'schemaVersion') continue;
+    if (key === 'policy') {
+      if (!baselinePolicies.some((policy) => canonicalJson(policy) === canonicalJson(value))) return false;
+      continue;
+    }
+    if (!Array.isArray(value) || value.length !== 0) return false;
+  }
+  return stateRevision(state) === 0;
 }
 
 function rewriteBlobKeys(value: unknown, keyMap: ReadonlyMap<string, StoredBlob>, seen = new WeakSet<object>()): unknown {
@@ -901,6 +901,17 @@ function withoutRevision(state: RegistryState): RegistryState {
   const copy = cloneRegistryState(state) as RegistryState & { metadataRevision?: number };
   delete copy.metadataRevision;
   return copy;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`
+    )).join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 'null' : encoded;
 }
 
 export async function restoreLogicalBackup(options: RestoreLogicalBackupOptions): Promise<RestoreLogicalBackupResult> {
@@ -967,7 +978,7 @@ export async function restoreLogicalBackup(options: RestoreLogicalBackupOptions)
 
   const targetAfter = await options.targetRepository.read(organizationId);
   assertRegistryState(targetAfter);
-  if (stateRevision(targetAfter) !== manifest.metadataRevision || JSON.stringify(withoutRevision(targetAfter)) !== JSON.stringify(withoutRevision(rewriteBlobKeys(cloneRegistryState(manifest.state), keyMap) as RegistryState))) {
+  if (stateRevision(targetAfter) !== manifest.metadataRevision || canonicalJson(withoutRevision(targetAfter)) !== canonicalJson(withoutRevision(rewriteBlobKeys(cloneRegistryState(manifest.state), keyMap) as RegistryState))) {
     fail('TARGET_STATE_MISMATCH', 'restored metadata does not match the captured policy, revocations, or state');
   }
   const serializedMap: Record<string, string> = {};

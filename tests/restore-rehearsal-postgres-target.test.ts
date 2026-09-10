@@ -61,8 +61,17 @@ class TargetPgFixture implements PgPoolLike {
   commits = 0;
   rollbacks = 0;
   corruptUpdate = false;
+  corruptInsert = false;
+  reorderJsonKeysOnRead = false;
+  schemaExists = true;
+  rowToInsertOnLock?: Row;
 
-  async query(): Promise<never> {
+  async query<RowType = Record<string, unknown>>(text: string): Promise<{ rows: RowType[]; rowCount: number }> {
+    this.queries.push(text);
+    if (/^\s*CREATE TABLE IF NOT EXISTS /u.test(text)) {
+      this.schemaExists = true;
+      return { rows: [], rowCount: 0 };
+    }
     throw new Error('target adapter must use a dedicated transaction connection');
   }
 
@@ -99,22 +108,43 @@ class TargetPgFixture implements PgPoolLike {
           return { rows: [] as RowType[], rowCount: 0 };
         }
         if (!active) throw new Error('query outside transaction');
+        if (!this.schemaExists) throw new Error('relation does not exist');
+        if (/^LOCK TABLE /u.test(text)) {
+          if (this.rowToInsertOnLock) {
+            transactionRows.set(this.rowToInsertOnLock.organization_id, copy(this.rowToInsertOnLock));
+            this.rowToInsertOnLock = undefined;
+          }
+          return { rows: [] as RowType[], rowCount: 0 };
+        }
         if (/^INSERT INTO /u.test(text)) {
           const organizationId = String(parameters[0]);
-          if (transactionRows.has(organizationId)) return { rows: [] as RowType[], rowCount: 0 };
-          transactionRows.set(organizationId, {
+          if (transactionRows.has(organizationId)) throw new Error('duplicate key');
+          const inserted: Row = {
             organization_id: organizationId,
-            revision: 0,
-            state: JSON.parse(String(parameters[1])) as unknown,
-          });
+            revision: Number(parameters[1]),
+            state: JSON.parse(String(parameters[2])) as unknown,
+          };
+          if (this.corruptInsert) {
+            inserted.state = { schemaVersion: 1 };
+            this.corruptInsert = false;
+          }
+          transactionRows.set(organizationId, inserted);
           return { rows: [] as RowType[], rowCount: 1 };
         }
         if (/^SELECT organization_id, revision, state /u.test(text)) {
-          const organizationId = String(parameters[0]);
-          const row = transactionRows.get(organizationId);
+          const rows = text.includes('LIMIT 2')
+            ? [...transactionRows.values()].slice(0, 2)
+            : (() => {
+              const organizationId = String(parameters[0]);
+              const row = transactionRows.get(organizationId);
+              return row ? [row] : [];
+            })();
           return {
-            rows: (row ? [copy(row)] : []) as RowType[],
-            rowCount: row ? 1 : 0,
+            rows: rows.map((row) => ({
+              ...copy(row),
+              state: this.reorderJsonKeysOnRead ? reorderKeys(row.state) : copy(row.state),
+            })) as RowType[],
+            rowCount: rows.length,
           };
         }
         if (/^UPDATE /u.test(text)) {
@@ -137,6 +167,15 @@ class TargetPgFixture implements PgPoolLike {
       },
     };
   }
+}
+
+function reorderKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(reorderKeys);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().reverse().map((key) => [
+    key,
+    reorderKeys((value as Record<string, unknown>)[key]),
+  ]));
 }
 
 class FixtureBlobStore implements BlobStore {
@@ -246,6 +285,7 @@ describe('PostgreSQL isolated restore target', () => {
     root = await mkdtemp(join(tmpdir(), 'private-skills-postgres-target-'));
     const backup = await makeBackup(root, 7);
     const pool = new TargetPgFixture();
+    pool.reorderJsonKeysOnRead = true;
     const targetBlobRoot = join(root, 'target-privatefs');
     await mkdir(targetBlobRoot, { recursive: true, mode: 0o700 });
     const targetBlobs = await createNodeFilesSdkBlobStore({
@@ -293,22 +333,47 @@ describe('PostgreSQL isolated restore target', () => {
     expect(pool.getRow(ORGANIZATION)).toEqual({ organization_id: ORGANIZATION, revision: 2, state: occupied });
   });
 
-  it('does not overwrite another organization while seeding the requested tenant', async () => {
+  it('rejects even a same-organization revision-zero row before any target blob write', async () => {
+    root = await mkdtemp(join(tmpdir(), 'private-skills-postgres-target-empty-row-'));
+    const backup = await makeBackup(root, 7);
+    const pool = new TargetPgFixture();
+    pool.setRow({
+      organization_id: ORGANIZATION,
+      revision: 0,
+      state: defaultRegistryState({ production: false, allowUnscanned: true }),
+    });
+    const targetBlobs = new FixtureBlobStore('sealed-target');
+    await expect(restorePostgresLogicalBackup({
+      targetPool: pool,
+      targetBlobs,
+      organizationId: ORGANIZATION,
+      targetIdentity: TARGET_IDENTITY,
+      targetLocation: TARGET_LOCATION,
+      backupDirectory: backup.directory,
+      targetIsolated: true,
+    })).rejects.toMatchObject({ code: 'TARGET_NOT_EMPTY' });
+    expect(targetBlobs.putCalls).toBe(0);
+    expect(pool.getRow(ORGANIZATION)?.revision).toBe(0);
+  });
+
+  it('rejects another organization in the target table before any blob write', async () => {
     root = await mkdtemp(join(tmpdir(), 'private-skills-postgres-target-other-org-'));
     const backup = await makeBackup(root, 7);
     const pool = new TargetPgFixture();
     const other = stateFixture(4);
     other.skills[0]!.organizationId = OTHER_ORGANIZATION;
     pool.setRow({ organization_id: OTHER_ORGANIZATION, revision: 4, state: other });
-    await restorePostgresLogicalBackup({
+    const targetBlobs = new FixtureBlobStore('sealed-target');
+    await expect(restorePostgresLogicalBackup({
       targetPool: pool,
-      targetBlobs: new FixtureBlobStore('sealed-target'),
+      targetBlobs,
       organizationId: ORGANIZATION,
       targetIdentity: TARGET_IDENTITY,
       targetLocation: TARGET_LOCATION,
       backupDirectory: backup.directory,
       targetIsolated: true,
-    });
+    })).rejects.toMatchObject({ code: 'TARGET_NOT_EMPTY' });
+    expect(targetBlobs.putCalls).toBe(0);
     expect(pool.getRow(OTHER_ORGANIZATION)).toEqual({ organization_id: OTHER_ORGANIZATION, revision: 4, state: other });
   });
 
@@ -317,11 +382,6 @@ describe('PostgreSQL isolated restore target', () => {
     const backup = await makeBackup(root, 7);
     const pool = new TargetPgFixture();
     const occupied = stateFixture(3);
-    pool.setRow({
-      organization_id: ORGANIZATION,
-      revision: 0,
-      state: defaultRegistryState({ production: false, allowUnscanned: true }),
-    });
     const targetBlobs = new FixtureBlobStore('sealed-target');
     targetBlobs.onPut = () => pool.setRow({ organization_id: ORGANIZATION, revision: 3, state: occupied });
     await expect(restorePostgresLogicalBackup({
@@ -337,23 +397,58 @@ describe('PostgreSQL isolated restore target', () => {
     expect(pool.rollbacks).toBe(1);
   });
 
+  it('rejects a concurrent other-organization insertion under the table lock', async () => {
+    root = await mkdtemp(join(tmpdir(), 'private-skills-postgres-target-other-race-'));
+    const backup = await makeBackup(root, 7);
+    const pool = new TargetPgFixture();
+    const other = stateFixture(4);
+    other.skills[0]!.organizationId = OTHER_ORGANIZATION;
+    const targetBlobs = new FixtureBlobStore('sealed-target');
+    targetBlobs.onPut = () => pool.setRow({ organization_id: OTHER_ORGANIZATION, revision: 4, state: other });
+    await expect(restorePostgresLogicalBackup({
+      targetPool: pool,
+      targetBlobs,
+      organizationId: ORGANIZATION,
+      targetIdentity: TARGET_IDENTITY,
+      targetLocation: TARGET_LOCATION,
+      backupDirectory: backup.directory,
+      targetIsolated: true,
+    })).rejects.toMatchObject({ code: 'TARGET_NOT_EMPTY' });
+    expect(targetBlobs.putCalls).toBe(1);
+    expect(pool.getRow(OTHER_ORGANIZATION)).toEqual({ organization_id: OTHER_ORGANIZATION, revision: 4, state: other });
+    expect(pool.rollbacks).toBe(1);
+  });
+
   it('rolls back malformed and post-update target state without committing metadata', async () => {
     const pool = new TargetPgFixture();
     const malformed = { schemaVersion: 1 };
     pool.setRow({ organization_id: ORGANIZATION, revision: 0, state: malformed });
     const seed = createPostgresStateSeed(pool);
-    await expect(seed.seed(ORGANIZATION, stateFixture(7))).rejects.toMatchObject({ code: 'SNAPSHOT_INVALID' });
+    await expect(seed.seed(ORGANIZATION, stateFixture(7))).rejects.toMatchObject({ code: 'TARGET_NOT_EMPTY' });
     expect(pool.commits).toBe(0);
     expect(pool.rollbacks).toBe(1);
     expect(pool.getRow(ORGANIZATION)).toEqual({ organization_id: ORGANIZATION, revision: 0, state: malformed });
 
     const second = new TargetPgFixture();
-    second.corruptUpdate = true;
+    second.corruptInsert = true;
     await expect(createPostgresStateSeed(second).seed(ORGANIZATION, stateFixture(7)))
       .rejects.toMatchObject({ code: 'SNAPSHOT_INVALID' });
     expect(second.commits).toBe(0);
     expect(second.rollbacks).toBe(1);
     expect(second.getRow(ORGANIZATION)).toBeUndefined();
+  });
+
+  it('initializes only an explicitly authorized isolated target schema', async () => {
+    const pool = new TargetPgFixture();
+    pool.schemaExists = false;
+    await expect(createPostgresRestoreTarget(pool).repository.read(ORGANIZATION))
+      .rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
+    const target = createPostgresRestoreTarget(pool, { initializeSchema: true });
+    const empty = await target.repository.read(ORGANIZATION);
+    expect(empty.metadataRevision).toBeUndefined();
+    expect(empty.skills).toHaveLength(0);
+    await target.targetSeed.seed(ORGANIZATION, stateFixture(0));
+    await expect(target.repository.read(ORGANIZATION)).resolves.toMatchObject({ metadataRevision: 0 });
   });
 
   it('rejects an exact source URL in the restore CLI before constructing a target client', async () => {
