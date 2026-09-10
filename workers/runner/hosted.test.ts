@@ -6,6 +6,7 @@ import {
   type HostedWorkerOptions,
 } from './src/hosted.js';
 import type { WorkerRunner, WorkerRunnerOptions } from './src/worker.js';
+import type { OpenClawNormalizedSource } from '../../packages/openclaw/src/types.js';
 
 const SECRET = '0123456789abcdef';
 const IMAGE = `vcr.private-skills/scanner@sha256:${'b'.repeat(64)}`;
@@ -175,5 +176,70 @@ describe('hosted worker route', () => {
     }));
     expect(response.status).toBe(200);
     expect(forwarded).toBe(tokenProvider);
+  });
+
+  it('builds a bounded OpenClaw fetcher from the operator locator and passes it to the runner', async () => {
+    const source: OpenClawNormalizedSource = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: 'demo-skill',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+    };
+    let located: OpenClawNormalizedSource | undefined;
+    let transportCalls = 0;
+    const handler = createHostedWorkerHandler({
+      ...options({ claimed: false }),
+      fetch: async () => {
+        transportCalls += 1;
+        throw new Error('transport must not be selected by the fixture');
+      },
+      openClawSource: {
+        locator: {
+          locate: (candidate) => {
+            located = candidate;
+            throw new Error('trusted locator selected source');
+          },
+        },
+        allowedArtifactOrigins: ['https://artifacts.example.test'],
+        sourceProviderOrigin: 'https://clawhub.example.test',
+      },
+      createRunner: (runnerOptions) => {
+        const configured = runnerOptions.acquisition?.openClaw;
+        expect(configured?.allowedArtifactOrigins).toEqual(['https://artifacts.example.test']);
+        expect(configured?.sourceProviderOrigin).toBe('https://clawhub.example.test');
+        expect(configured?.fetcher.fetch).toBeTypeOf('function');
+        return {
+          runOnce: async () => {
+            await expect(configured?.fetcher.fetch(source)).rejects.toThrow('trusted locator selected source');
+            return { claimed: false };
+          },
+        } as unknown as WorkerRunner;
+      },
+    });
+
+    const response = await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(response.status).toBe(200);
+    expect(located).toEqual(source);
+    expect(transportCalls).toBe(0);
+  });
+
+  it('rejects an ambiguous caller-supplied OpenClaw transport when hosted binding is configured', () => {
+    expect(() => createHostedWorkerHandler({
+      ...options({ claimed: false }),
+      acquisition: {
+        openClaw: {
+          fetcher: { fetch: async () => { throw new Error('fixture'); } },
+          allowedArtifactOrigins: ['https://artifacts.example.test'],
+        },
+      },
+      openClawSource: {
+        locator: { locate: () => { throw new Error('fixture'); } },
+        allowedArtifactOrigins: ['https://artifacts.example.test'],
+        sourceProviderOrigin: 'https://clawhub.example.test',
+      },
+    })).toThrow('cannot be combined with a caller-supplied OpenClaw fetcher');
   });
 });

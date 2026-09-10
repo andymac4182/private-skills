@@ -6,7 +6,15 @@ import {
 } from '../../../packages/scanners/src/index.js';
 import type { CommandExecutor, ScannerAdapter } from '../../../packages/scanners/src/index.js';
 import { createSandboxProviderLoader } from '../../../packages/sandbox-provider/src/index.js';
-import { workerAcquisitionOptionsFromEnv, type WorkerAcquisitionOptions } from './acquisition.js';
+import {
+  workerAcquisitionOptionsFromEnv,
+  type WorkerAcquisitionOptions,
+  type WorkerOpenClawAcquisitionOptions,
+} from './acquisition.js';
+import {
+  createOpenClawHttpFetcher,
+  type OpenClawSourceLocator,
+} from '../../../packages/upstreams/src/index.js';
 import {
   WorkerRunner,
   type LocalStageHook,
@@ -46,12 +54,28 @@ export interface HostedWorkerOptions {
   adapters?: Map<string, ScannerAdapter> | ScannerAdapter[];
   maxBundleJsonBytes?: number;
   acquisition?: WorkerAcquisitionOptions;
+  /**
+   * Deployment-owned OpenClaw source binding. Feed/job data contains only a
+   * verified source identity; it never supplies an artifact URL. When this is
+   * present the hosted worker creates the bounded HTTPS fetcher from this
+   * locator and refuses a second caller-supplied OpenClaw transport.
+   */
+  openClawSource?: HostedOpenClawSourceConfig;
   /** Durable registry-owned sink for verified OpenClaw source proofs. */
   openClawProofRecorder?: WorkerOpenClawSourceProofRecorder;
   stageHooks?: LocalStageHook[];
   onEvent?: (event: WorkerEvent) => void | Promise<void>;
   /** Allows route tests or deployment wrappers to decorate WorkerRunner. */
   createRunner?: (options: WorkerRunnerOptions) => WorkerRunner;
+}
+
+export interface HostedOpenClawSourceConfig {
+  /** Maps a server-selected source identity to an operator-approved URL. */
+  locator: OpenClawSourceLocator;
+  /** Artifact transport origins approved by deployment configuration. */
+  allowedArtifactOrigins: readonly string[];
+  /** Verified source identity origin, separate from the transport endpoint. */
+  sourceProviderOrigin: string;
 }
 
 export type HostedSandboxDriver = 'computesdk' | 'native';
@@ -77,6 +101,7 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
   validateSandboxDriverOptions(options);
   const scannerImages = validateSandboxImageMap(options.scannerImages, options.sandbox?.trustedSnapshots);
   const executor = options.executor ?? new SandboxExecutor(sandboxExecutorOptions(options));
+  const acquisition = hostedAcquisitionOptions(options);
 
   return async (request: Request): Promise<Response> => {
     if (request.method.toUpperCase() !== 'GET') {
@@ -95,7 +120,7 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
       scannerImages,
       ...(options.adapters ? { adapters: options.adapters } : {}),
       ...(options.maxBundleJsonBytes === undefined ? {} : { maxBundleJsonBytes: options.maxBundleJsonBytes }),
-      ...(options.acquisition ? { acquisition: options.acquisition } : {}),
+      ...(acquisition ? { acquisition } : {}),
       ...(options.openClawProofRecorder ? { openClawProofRecorder: options.openClawProofRecorder } : {}),
       ...(options.stageHooks ? { stageHooks: options.stageHooks } : {}),
       ...(options.onEvent ? { onEvent: options.onEvent } : {}),
@@ -110,6 +135,56 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
       // owned by the deployment wrapper rather than returning them here.
       return jsonResponse({ ok: false, claimed: false, error: 'worker route failed' }, 500);
     }
+  };
+}
+
+/**
+ * Construct the OpenClaw worker seam once at route creation. This keeps the
+ * source locator and origin allowlist deployment-owned while reusing the
+ * shared bounded transport implementation. In particular, no URL is derived
+ * from a claimed package name, repository, or path.
+ */
+export function createHostedOpenClawAcquisition(
+  config: HostedOpenClawSourceConfig,
+  fetchImpl?: typeof fetch,
+): WorkerOpenClawAcquisitionOptions {
+  validateHostedOpenClawSourceConfig(config);
+  const allowedArtifactOrigins = [...config.allowedArtifactOrigins];
+  const sourceProviderOrigin = new URL(config.sourceProviderOrigin).origin;
+  const boundedLocator: OpenClawSourceLocator = {
+    async locate(source, signal) {
+      const location = await config.locator.locate(source, signal);
+      if (!location || typeof location.url !== 'string') {
+        throw new Error('hosted OpenClaw source locator returned an invalid location');
+      }
+      // The locator chooses a path; deployment configuration chooses the
+      // transport and identity boundaries. Do not let a locator result widen
+      // either allowlist, even when it is supplied by another adapter.
+      return {
+        url: location.url,
+        allowedArtifactOrigins,
+        sourceProviderOrigin,
+      };
+    },
+  };
+  return {
+    fetcher: createOpenClawHttpFetcher({
+      locator: boundedLocator,
+      ...(fetchImpl === undefined ? {} : { fetchImpl }),
+    }),
+    allowedArtifactOrigins,
+    sourceProviderOrigin,
+  };
+}
+
+function hostedAcquisitionOptions(options: HostedWorkerOptions): WorkerAcquisitionOptions | undefined {
+  if (options.openClawSource === undefined) return options.acquisition;
+  if (options.acquisition?.openClaw !== undefined) {
+    throw new Error('hosted OpenClaw source configuration cannot be combined with a caller-supplied OpenClaw fetcher');
+  }
+  return {
+    ...(options.acquisition ?? {}),
+    openClaw: createHostedOpenClawAcquisition(options.openClawSource, options.fetch),
   };
 }
 
@@ -159,6 +234,21 @@ function validateHostedOptions(options: HostedWorkerOptions): void {
   }
 }
 
+function validateHostedOpenClawSourceConfig(config: HostedOpenClawSourceConfig): void {
+  if (!config || typeof config.locator?.locate !== 'function') {
+    throw new Error('hosted OpenClaw source locator is required');
+  }
+  if (!Array.isArray(config.allowedArtifactOrigins) || config.allowedArtifactOrigins.length === 0 || config.allowedArtifactOrigins.length > 8) {
+    throw new Error('hosted OpenClaw source requires 1-8 artifact origins');
+  }
+  for (const origin of config.allowedArtifactOrigins) {
+    if (!isStrictHttpsOrigin(origin)) throw new Error('hosted OpenClaw artifact origins must be HTTPS origins');
+  }
+  if (!isStrictHttpsOrigin(config.sourceProviderOrigin)) {
+    throw new Error('hosted OpenClaw source provider must be an HTTPS origin');
+  }
+}
+
 function sandboxExecutorOptions(options: HostedWorkerOptions): SandboxExecutorOptions | undefined {
   const sandbox = options.sandbox;
   const { driver, provider } = validateSandboxDriverOptions(options);
@@ -190,6 +280,20 @@ function isHttpOrigin(value: string): boolean {
     const url = new URL(value);
     return (url.protocol === 'https:' || url.protocol === 'http:')
       && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function isStrictHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash
+      && url.pathname === '/';
   } catch {
     return false;
   }
