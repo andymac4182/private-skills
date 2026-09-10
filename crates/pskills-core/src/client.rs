@@ -282,6 +282,23 @@ impl ApiClient {
         extract(value, "skill")
     }
 
+    /// Fetch one already-imported skill by its registry resource id. This is
+    /// used when a transparent resolve completes on a rescan job, whose
+    /// operation has no import payload to pin the private name and version.
+    pub fn skill_by_id(&self, resource_id: &str) -> Result<SkillVersion, ApiError> {
+        let resource_id = resource_id.trim();
+        if resource_id.is_empty() {
+            return Err(ApiError::Response(
+                "skill resource id must not be empty".into(),
+            ));
+        }
+        let value: Value = self.get_json(&self.endpoint(&["v1", "skills", resource_id])?, true)?;
+        if let Ok(skill) = serde_json::from_value::<SkillVersion>(value.clone()) {
+            return Ok(skill);
+        }
+        extract(value, "skill")
+    }
+
     pub fn publish(&self, request: &PublishRequest) -> Result<Value, ApiError> {
         let value: Value = self.post_json(&self.endpoint(&["v1", "publish"])?, request, true)?;
         Ok(value)
@@ -703,7 +720,20 @@ impl ApiClient {
         request: &ExternalResolveRequest,
         deadline: std::time::Instant,
     ) -> Result<ExternalResolution, ApiError> {
-        let pin = completed_external_operation(operation_value, request)?;
+        let pin = match completed_external_operation(operation_value, request)? {
+            CompletedExternalPin::Import(pin) => pin,
+            CompletedExternalPin::Rescan { resource_id } => {
+                let skill = self.skill_by_id(&resource_id)?;
+                verify_completed_external_skill(&skill, &resource_id, request)?;
+                CompletedExternalOperation {
+                    external_id: request.external_id.clone(),
+                    feed_name: skill.provenance.feed_name.clone(),
+                    name: skill.name,
+                    version: skill.version,
+                    resource_id: skill.id,
+                }
+            }
+        };
         let resolution = self.resolve_until(
             &ResolveRequest {
                 kind: "skill".into(),
@@ -998,16 +1028,35 @@ struct CompletedExternalOperation {
     resource_id: String,
 }
 
+enum CompletedExternalPin {
+    Import(CompletedExternalOperation),
+    Rescan { resource_id: String },
+}
+
 fn completed_external_operation(
     value: &Value,
     request: &ExternalResolveRequest,
-) -> Result<CompletedExternalOperation, ApiError> {
+) -> Result<CompletedExternalPin, ApiError> {
     let operation = value.get("operation").unwrap_or(value);
-    let import = operation.get("import").ok_or_else(|| {
-        ApiError::OperationFailed(
-            "completed external operation did not include its import identity".into(),
-        )
-    })?;
+    let Some(import) = operation.get("import") else {
+        if operation.get("kind").and_then(Value::as_str) != Some("scan") {
+            return Err(ApiError::OperationFailed(
+                "completed external operation did not include its import identity".into(),
+            ));
+        }
+        let resource_id = operation
+            .get("resourceId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ApiError::OperationFailed(
+                    "completed external operation did not include its resourceId".into(),
+                )
+            })?;
+        return Ok(CompletedExternalPin::Rescan {
+            resource_id: resource_id.into(),
+        });
+    };
     let external_id = import
         .get("externalId")
         .and_then(Value::as_str)
@@ -1059,13 +1108,39 @@ fn completed_external_operation(
                 "completed external operation did not include its resourceId".into(),
             )
         })?;
-    Ok(CompletedExternalOperation {
+    Ok(CompletedExternalPin::Import(CompletedExternalOperation {
         external_id: external_id.into(),
         feed_name,
         name: name.into(),
         version: version.into(),
         resource_id: resource_id.into(),
-    })
+    }))
+}
+
+fn verify_completed_external_skill(
+    skill: &SkillVersion,
+    resource_id: &str,
+    request: &ExternalResolveRequest,
+) -> Result<(), ApiError> {
+    if skill.id != resource_id || skill.name.is_empty() || skill.version.is_empty() {
+        return Err(ApiError::OperationFailed(
+            "completed external scan metadata did not include the expected skill identity".into(),
+        ));
+    }
+    if skill.provenance.external_id.as_deref() != Some(request.external_id.as_str()) {
+        return Err(ApiError::OperationFailed(
+            "completed external scan metadata externalId does not match the requested externalId"
+                .into(),
+        ));
+    }
+    if let Some(feed_name) = request.feed.as_deref() {
+        if skill.provenance.feed_name.as_deref() != Some(feed_name) {
+            return Err(ApiError::OperationFailed(
+                "completed external scan metadata feed does not match the requested feed".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn verify_completed_external_resolution(
@@ -1263,6 +1338,28 @@ mod tests {
     }
 
     #[test]
+    fn completed_import_without_import_identity_remains_rejected() {
+        let request = ExternalResolveRequest {
+            feed: None,
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(false),
+        };
+        let value = serde_json::json!({
+            "operation": {
+                "id": "op-import-1",
+                "kind": "import",
+                "state": "completed",
+                "resourceId": "skill-1"
+            }
+        });
+        assert!(matches!(
+            completed_external_operation(&value, &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("did not include its import identity")
+        ));
+    }
+
+    #[test]
     fn external_refresh_pins_completed_operation_without_reposting_proxy() {
         let external_id = "vercel-labs/skills/find-skills";
         let feed = "community";
@@ -1357,6 +1454,136 @@ mod tests {
             result.reference.as_deref(),
             Some("@github/vercel-labs/skills/skills/find-skills")
         );
+    }
+
+    #[test]
+    fn external_rescan_pins_completed_skill_without_reposting_proxy() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let feed = "community";
+        let private_name = "@community/skills-sh-1";
+        let version = "0.0.0+skills-sh.1";
+        let resource_id = "skill-1";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": resource_id,
+            "organizationId": "org-1",
+            "name": private_name,
+            "version": version,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": resource_id,
+                "organizationId": "org-1",
+                "name": private_name,
+                "skillName": "find-skills",
+                "version": version,
+                "description": "",
+                "artifact": {
+                    "key": "blob-1",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "size": 1
+                },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "skills-sh",
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "sourceReference": "@github/vercel-labs/skills/skills/find-skills"
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let operation = serde_json::json!({
+            "operation": {
+                "id": "op-rescan-1",
+                "kind": "scan",
+                "state": "completed",
+                "resourceId": resource_id
+            }
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![
+                mock_exchange(
+                    "POST",
+                    "/v1/proxy/resolve",
+                    Some(serde_json::json!({
+                        "feed": feed,
+                        "externalId": external_id,
+                        "refresh": true
+                    })),
+                    202,
+                    serde_json::json!({ "operation": { "id": "op-rescan-1" } }),
+                ),
+                mock_exchange("GET", "/v1/operations/op-rescan-1", None, 200, operation),
+                mock_exchange(
+                    "GET",
+                    "/v1/skills/skill-1",
+                    None,
+                    200,
+                    serde_json::json!({ "skill": resolution["members"][0].clone() }),
+                ),
+                mock_exchange(
+                    "POST",
+                    "/v1/resolve",
+                    Some(serde_json::json!({
+                        "kind": "skill",
+                        "ref": private_name,
+                        "version": version
+                    })),
+                    200,
+                    serde_json::json!({ "resolution": resolution }),
+                ),
+            ],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(feed.into()),
+            external_id: external_id.into(),
+            refresh: Some(true),
+        };
+        let result = client
+            .resolve_external_until(&request, std::time::Instant::now() + Duration::from_secs(5))
+            .expect("pinned rescan resolution");
+        assert_eq!(result.resolution.name, private_name);
+        assert_eq!(result.resolution.version, version);
+        assert_eq!(
+            result.reference.as_deref(),
+            Some("@github/vercel-labs/skills/skills/find-skills")
+        );
+    }
+
+    #[test]
+    fn completed_rescan_skill_rejects_metadata_identity_mismatch() {
+        let skill: SkillVersion = serde_json::from_value(serde_json::json!({
+            "id": "skill-1",
+            "name": "@community/skills-sh-1",
+            "version": "0.0.0+skills-sh.1",
+            "artifact": {
+                "key": "blob-1",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size": 1
+            },
+            "state": "approved",
+            "provenance": {
+                "kind": "skills-sh",
+                "externalId": "other/skills/item",
+                "feedName": "community"
+            }
+        }))
+        .expect("skill metadata");
+        let request = ExternalResolveRequest {
+            feed: Some("community".into()),
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        };
+        assert!(matches!(
+            verify_completed_external_skill(&skill, "skill-1", &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("externalId does not match")
+        ));
     }
 
     fn mock_exchange(
@@ -1477,6 +1704,9 @@ mod tests {
             feed_name: Some("community".into()),
             feed_config_revision: Some("feed-config-1".into()),
             source_reference: Some("@github/vercel-labs/skills/skills/find-skills".into()),
+            source_provider_origin: Some("https://registry.example".into()),
+            source_resolution_kind: Some("github".into()),
+            well_known_entry_name: Some("find-skills".into()),
             external_digest: Some("sha256:external".into()),
             source_url: Some("https://github.com/vercel-labs/skills".into()),
             page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
@@ -1537,6 +1767,12 @@ mod tests {
             value["provenance"]["sourceReference"],
             "@github/vercel-labs/skills/skills/find-skills"
         );
+        assert_eq!(
+            value["provenance"]["sourceProviderOrigin"],
+            "https://registry.example"
+        );
+        assert_eq!(value["provenance"]["sourceResolutionKind"], "github");
+        assert_eq!(value["provenance"]["wellKnownEntryName"], "find-skills");
         assert_eq!(value["provenance"]["externalDigest"], "sha256:external");
         assert_eq!(
             value["provenance"]["resolvedCommit"],
@@ -1557,6 +1793,9 @@ mod tests {
         assert_eq!(legacy.external_snapshot_hash, None);
         assert_eq!(legacy.feed_name, None);
         assert_eq!(legacy.source_reference, None);
+        assert_eq!(legacy.source_provider_origin, None);
+        assert_eq!(legacy.source_resolution_kind, None);
+        assert_eq!(legacy.well_known_entry_name, None);
     }
 
     #[test]

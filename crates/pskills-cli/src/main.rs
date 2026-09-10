@@ -2125,6 +2125,7 @@ fn parse_install_reference(raw: &str) -> Result<InstallReference, CliError> {
 }
 
 fn parse_skills_sh_url(raw: &str) -> Result<String, CliError> {
+    reject_raw_skills_sh_url_input(raw)?;
     let url = url::Url::parse(raw).map_err(|error| {
         CliError::Message(format!(
             "invalid skills.sh URL `{raw}`: {error}; expected https://skills.sh/<source/slug>"
@@ -2156,6 +2157,36 @@ fn parse_skills_sh_url(raw: &str) -> Result<String, CliError> {
         ));
     }
     validate_external_id(path)
+}
+
+fn reject_raw_skills_sh_url_input(raw: &str) -> Result<(), CliError> {
+    if raw.chars().any(|character| character.is_control()) || raw.contains('%') {
+        return Err(CliError::Message(
+            "skills.sh URL must contain an unencoded canonical source/slug path without controls"
+                .into(),
+        ));
+    }
+    let authority_start = raw.find("://").map(|index| index + 3).unwrap_or(0);
+    let Some(path_start) = raw[authority_start..]
+        .find('/')
+        .map(|offset| authority_start + offset)
+    else {
+        return Ok(());
+    };
+    let path_end = raw[path_start..]
+        .find(['?', '#'])
+        .map(|offset| path_start + offset)
+        .unwrap_or(raw.len());
+    let raw_path = &raw[path_start..path_end];
+    if raw_path
+        .split('/')
+        .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(CliError::Message(
+            "skills.sh URL must not contain dot or traversal path segments".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_external_id(value: &str) -> Result<String, CliError> {
@@ -2190,7 +2221,7 @@ fn parse_feed_name(value: &str) -> Result<String, CliError> {
     let value = value.trim();
     let valid = !value.is_empty()
         && value.len() <= 64
-        && value.as_bytes()[0].is_ascii_lowercase()
+        && (value.as_bytes()[0].is_ascii_lowercase() || value.as_bytes()[0].is_ascii_digit())
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         });
@@ -2422,6 +2453,12 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_install_reference("acme/技能").expect("plain Unicode skills.sh identity"),
+            InstallReference::SkillsSh {
+                external_id: "acme/技能".into(),
+            }
+        );
+        assert_eq!(
             parse_install_reference("https://www.skills.sh/vercel-labs/skills/find-skills/")
                 .expect("skills.sh URL"),
             InstallReference::SkillsSh {
@@ -2438,7 +2475,9 @@ mod tests {
             "https://user@skills.sh/vercel-labs/skills/find-skills",
             "https://skills.sh/vercel-labs/skills/find-skills?raw=1",
             "https://skills.sh/vercel-labs/skills/find%2Fskills",
-            "https://skills.sh/vercel-labs/../find-skills",
+            "https://skills.sh/acme/repo/../my-skill",
+            "https://skills.sh/acme/repo/./my-skill",
+            "https://skills.sh/acme/repo/%2e%2e/my-skill",
             "https://skills.sh/p/example",
             "vercel-labs//find-skills",
             "vercel-labs/../find-skills",
@@ -2478,6 +2517,10 @@ mod tests {
     #[test]
     fn feed_name_accepts_configured_identifiers_only() {
         assert_eq!(parse_feed_name(" community ").expect("feed"), "community");
+        assert_eq!(
+            parse_feed_name("2026-tools").expect("numeric feed"),
+            "2026-tools"
+        );
         for invalid in [
             "",
             "Community",

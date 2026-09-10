@@ -106,6 +106,12 @@ pub struct Provenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_reference: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_provider_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_resolution_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub well_known_entry_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub external_digest: Option<Digest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
@@ -146,6 +152,9 @@ impl Default for Provenance {
             feed_name: None,
             feed_config_revision: None,
             source_reference: None,
+            source_provider_origin: None,
+            source_resolution_kind: None,
+            well_known_entry_name: None,
             external_digest: None,
             source_url: None,
             page_url: None,
