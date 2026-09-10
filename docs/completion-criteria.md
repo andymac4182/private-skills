@@ -15,8 +15,8 @@ The latest source, portability, and deployment status is recorded in
 prebuilt rollout is READY and its read-only API/Pack checks are recorded there.
 The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
 and metadata-only Pack preview are partial evidence; they do not mark C1
-complete. Git-trigger observation, positive scanner-to-warm admission, hosted
-recovery, and native CI remain open. Pack-preview UI proof passed during a
+complete. Positive scanner-to-warm admission, hosted recovery, and native CI
+remain open. Pack-preview UI proof passed during a
 stable-alias cutover, but its exact deployment attribution is unknown.
 
 ## G0 — v0.2.0 shipment
@@ -26,11 +26,12 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified:** the accepted Neon integration is provisioned and connected, and
   the main registry has a production database, private object storage, and
   configured secrets, as recorded in the current verification record;
-- **pending:** a Git-triggered deployment is observed for the final source
-  revision. The existing Vercel project is now connected to
-  `andymac4182/private-skills` on production branch `main` without an
-  additional grant; the guarded prebuilt rollout did not observe a
-  Git-triggered deployment;
+- **verified:** a push of main commit `7c7a33e` produced READY deployment
+  `dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH`. The sanitized [Git-main deployment
+  evidence](evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json)
+  records the connected `andymac4182/private-skills` project, seven
+  authenticated readback successes, the expected unauthenticated Topics 401,
+  and zero registry writes;
 - **verified for the recorded fixtures:** the production-built registry passes
   an authenticated publish → required SkillsGuard scan → approval → semantic
   search → Rust CLI install/verify → analytics/review flow at its real URL;
@@ -81,7 +82,7 @@ parity a prerequisite for shipping v0.2.0. The design,
 limitations, and primary source links are in [`skills-sh.md`](skills-sh.md).
 The criteria below are the acceptance contract for the current follow-up
 delivery; implementation and production verification may proceed independently
-of the remaining G0 GitHub deployment gate.
+of the remaining G0 hosted-recovery gate.
 
 Dependencies: an authenticated skills.sh gateway contract that works on the
 selected Nitro deployment, a versioned external identity model, and a
@@ -90,8 +91,8 @@ validation/scanner worker. The tenant feed registry supports multiple named
 feeds, with one adapter/origin/credential/restriction configuration per feed;
 the current feed kind is `skills-sh`. Per-repository mappings and manual aliases
 are not dependencies. An administrator may add source restrictions or explicit
-proxy mappings as an optional tightening policy. The C1 deployment may be verified independently of
-the remaining G0 GitHub integration step.
+proxy mappings as an optional tightening policy. The C1 deployment may be
+verified independently of the remaining G0 hosted-recovery step.
 The configured feed base must be the canonical skills.sh origin or an
 operator-trusted gateway listed in `trustedSkillsShBaseUrls`; a caller-supplied
 `credentialEnv` is rejected. An omitted feed auto-selects only when exactly one

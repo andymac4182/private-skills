@@ -2,18 +2,22 @@
 
 **Date:** 2026-09-10
 
-**Status:** PR22 is merged on `origin/main` at
-`fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`. Its guarded prebuilt production
-rollout is READY as `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`; the current read-only
-API and metadata-only Pack checks are recorded below. The existing Vercel GitHub
-link is connected, but no Git-triggered deployment has been observed. The
-browser UI proof is complete; its Pack-preview window crossed a stable-alias
+**Status:** PR23 is merged on `origin/main` at
+`7c7a33ec57ead2365cddcf83c93b2992bd92f201`. The earlier PR22 guarded prebuilt
+production rollout is READY as `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`; the current read-only
+API and metadata-only Pack checks are recorded below. A subsequent push of
+that main commit produced READY Git-triggered deployment
+`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH` at its unique URL
+`https://private-skills-m5eqoug51-andrewmcclenaghan-6046s-projects.vercel.app`,
+as recorded in the sanitized [Git-main
+deployment evidence](evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json).
+The browser UI proof is complete; its Pack-preview window crossed a stable-alias
 deployment cutover, so the exact deployment attribution is recorded as unknown.
 Positive scanner-to-warm evidence and hosted recovery remain open. M6
 Diffs/editor plus upload-review Eve and M7 OpenClaw remain
 future milestones.
 
-## Current production rollout
+## Earlier prebuilt rollout checkpoint
 
 The reviewed artifact source is `b1d3b6d77162899491f742e2930abe0b36137d8e`,
 with the rollout record reporting only `tests/multi-feed-e2e.test.ts` as a
@@ -40,8 +44,9 @@ The rollout made no feed, import, scan, install, role, or policy changes. The
 sanitized [Git-link readback](evidence/vercel-git-link-20260910T070859Z.json)
 confirms the existing Vercel project is connected to
 `andymac4182/private-skills` on production branch `main` without an additional
-grant. It does not prove a Git-triggered deployment; that observation remains a
-release gate.
+grant. The separate Git-main deployment record proves the push-triggered READY
+deployment and its seven authenticated plus one unauthenticated readback; it
+does not change the source-specific provenance of the earlier prebuilt rollout.
 
 ## Partial C1 evidence and portability
 
@@ -94,8 +99,6 @@ complete, but it is not promoted as `dpl_8ru…` evidence.
 
 ## Remaining gates
 
-- Observe a Git-triggered production deployment from the connected
-  `andymac4182/private-skills` `main` branch.
 - Prove a clean representative source import through required scanning and a
   warm approved-cache install. The quarantined CI-004 record proves fail-closed
   denial, not positive admission.

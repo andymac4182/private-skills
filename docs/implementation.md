@@ -171,7 +171,7 @@ Install planning uses explicit project/global scope, target-agent adapters (`cod
 
 The repository includes a production Node image and compose profile, a Vercel
 Nitro template, and a Cloudflare Workers template using the edge HTTP adapters.
-The current guarded prebuilt registry rollout is
+The earlier guarded prebuilt registry rollout is
 [`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`](https://private-skills-theta.vercel.app),
 from merged main `fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`. Its current
 read-only probe and policy boundary are recorded in
@@ -209,8 +209,11 @@ required scan failure.
 
 The existing Vercel project is connected to
 `andymac4182/private-skills` on production branch `main` without an additional
-grant, but no Git-triggered deployment has been observed. The current rollout
-uses the authorized skills.sh project-OIDC path for its read-only checks;
+grant. A push of main commit `7c7a33e` produced READY deployment
+`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH`, as recorded in the sanitized
+[Git-main deployment evidence](evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json).
+The earlier prebuilt rollout uses the authorized skills.sh project-OIDC path
+for its read-only checks;
 skills.sh discovery/import acceptance and ComputeSDK production execution
 remain separately bounded in [`verification-current.md`](verification-current.md).
 OIDC/device authentication for primary user login, if required, remains a
