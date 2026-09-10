@@ -60,6 +60,7 @@ import {
   type V1Skill,
 } from '../../directory/src/index.js';
 import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
+import { createReleaseFilesHandler } from '../../authoring/src/index.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -791,6 +792,7 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (path === '/v1/capabilities') return ['registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'skills') {
     if (segments.length === 2 || (segments.length === 3 && method === 'GET')) return ['skills:read', 'registry:read'];
+    if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) return ['skills:read', 'registry:read'];
     if (segments.length === 4 && segments[3] === 'rescan') return ['skills:rescan', 'skills:write', 'skills:publish'];
     if (segments.length === 4 && segments[3] === 'revoke') return ['skills:revoke', 'skills:write', 'skills:admin'];
   }
@@ -970,6 +972,26 @@ async function handleSkillsRoute(
   config: Required<RegistryConfiguration>,
   requestId: string,
 ): Promise<Response> {
+  if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+
+    // The authoring adapter owns bundle decoding and per-file integrity checks,
+    // while core owns the authenticated principal and current policy gate. A
+    // request-local authenticator forwards this already-validated principal so
+    // the adapter cannot perform a second credential lookup for the same read.
+    const releaseFilesHandler = createReleaseFilesHandler({
+      repository: deps.repository,
+      blobs: deps.blobs,
+      auth: { authenticate: async () => principal },
+      config: { organizationId: config.organizationId },
+      releaseAdmission: (state, release, releasePrincipal) =>
+        releasePrincipal.organizationId === config.organizationId &&
+        canReadNamespace(releasePrincipal, release.name) &&
+        skillCurrentlyApproved(state, release),
+    });
+    return await releaseFilesHandler(request);
+  }
+
   if (segments.length === 2) {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);

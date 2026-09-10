@@ -175,6 +175,102 @@ actions are persisted and audited but cannot mutate the artifact. The reviewer
 receives only an authorized snapshot and no registry, storage, scanner, or
 upstream credentials.
 
+## Interactive authoring builder Eve
+
+The editor also has a distinct interactive authoring builder. It helps an
+authorized publisher build an initial skill from a blank or validated
+upload-origin draft (when that draft origin is enabled), and refine a draft
+based on an existing immutable release. It is a third workflow, separate from
+both the daily consolidation Eve and the upload/edit reviewer Eve:
+
+* daily consolidation Eve proposes common-skill consolidation from its own
+  review workflow;
+* upload/edit reviewer Eve asynchronously reviews an exact saved draft
+  snapshot and records advisory findings; and
+* builder Eve holds a bounded conversation with the author and proposes
+  file changes for that author's current draft.
+
+Builder Eve may suggest `add`, `edit`, `rename`, and `delete` operations, but a
+conversation turn never writes a draft directly. The UI shows a reviewable
+proposal diff and the author explicitly applies or rejects it. Proposed
+portable routes are:
+
+```text
+POST /v1/drafts/:draftId/builder/conversations
+GET  /v1/drafts/:draftId/builder/conversations/:conversationId
+POST /v1/drafts/:draftId/builder/conversations/:conversationId/messages
+GET  /v1/drafts/:draftId/builder/proposals/:proposalId
+POST /v1/drafts/:draftId/builder/proposals/:proposalId/apply
+POST /v1/drafts/:draftId/builder/proposals/:proposalId/reject
+```
+
+The route names are a portable seam, not a claim that these endpoints are
+already implemented. A durable conversation and proposal carry the exact
+draft context used to produce them:
+
+```ts
+type BuilderConversation = {
+  id: string;
+  organizationId: string;
+  draftId: string;
+  draftRevision: number;
+  draftDigest: Digest;
+  baseResourceId: string;
+  baseDigest: Digest;
+  gateway: string;
+  model: string;
+  toolRevision: string;
+  state: "active" | "stale" | "closed";
+};
+
+type SkillBuilderOperation = {
+  kind: "add" | "edit" | "rename" | "delete";
+  path: string;
+  toPath?: string;
+  content?: string;
+  expectedPathDigest?: Digest;
+};
+
+type SkillBuilderProposal = {
+  id: string;
+  conversationId: string;
+  draftId: string;
+  baseRevision: number;
+  baseDigest: Digest;
+  operations: readonly SkillBuilderOperation[];
+  diffDigest: Digest;
+  rationale: string;
+  model: string;
+  builderRevision: string;
+  state: "proposed" | "applied" | "rejected" | "stale";
+};
+```
+
+Builder context is bounded by configured file, byte, and model-token limits and
+is read from the exact authorized draft revision. Its server-side tool allowlist
+may inspect the canonical manifest and bounded text files and construct a
+proposal; it has no write, scanner, package-manager, MCP, arbitrary-network,
+release, or execution tool. Gateway/model, tool revision, job/idempotency data,
+and bounded context limits are persisted for audit. Skill text and conversation
+messages are untrusted data, including prompt-injection instructions, and no
+credential or storage/provider URL is sent to the browser or model.
+
+Applying a proposal requires `{ expectedRevision, proposalId, idempotencyKey }`.
+The server revalidates canonical paths, operation preconditions, the proposal's
+bound digest, and the current revision, then performs the same whole-snapshot
+CAS and digesting used by draft saves. A successful apply creates one new draft
+revision; reject is an audited terminal decision. If the revision or digest has
+changed, apply returns an explicit stale/conflict result and does not silently
+rebase, overwrite, or apply a partial proposal. A conversation must be rebound
+to the new revision before it can propose further changes. The immutable base
+release is never mutated.
+
+Builder Eve cannot publish, merge, install, execute content, run a scanner, or
+change scanner policy. Existing required scanner and publication gates remain
+authoritative; upload/edit review remains advisory unless its separately
+versioned optional gate is configured. Missing or stale builder conversations or
+proposals never authorize a release.
+
 ## Ownership and implementation order
 
 | Owner | First slice | Boundary |
@@ -182,10 +278,12 @@ upstream credentials.
 | `registry_completion_audit` | release file reads, draft/revision state, CAS, routes, explicit release transition | Portable Request/Response core; reuse bundle validation, `BlobStore`, auth, and required scanner jobs. |
 | storage/worker owner | immutable draft blobs, review leases/idempotency, scanner completion | No candidate execution; preserve Files SDK verification and existing policy. |
 | Eve/reviewer owner | upload/edit reviewer identity, queue consumer, findings schema, AI Gateway configuration | Separate from daily consolidation Eve; advisory unless an explicit versioned gate is configured. |
-| `web_ui` | read-only file tree/Diffs route, then draft editor/review panel | `@pierre/trees` for paths; `@pierre/diffs` for read/edit/diff; app owns loading and save state. |
+| `delivery_audit` | `packages/skill-builder` contract/types plus app conversation/proposal persistence and route integration, apply/reject CAS, and builder E2E evidence | Keep builder tools proposal-only; reuse draft authorization, canonical bundle validation, and the existing scanner/release boundary. |
+| `web_ui` | read-only file tree/Diffs route, draft editor/review panel, and builder chat/proposal diff/apply/reject states | `@pierre/trees` for paths; `@pierre/diffs` for read/edit/diff; app owns loading, conversation, and save state. |
 | `e2e_tests` / completion audit | cross-tenant, stale-result, scanner-authority, accessibility, and release evidence | Verify exact resource IDs/digests, intended draft/review/new-release writes, and no unintended mutation or change to the immutable base release. |
 
 Implement in this order: M6-VIEW API and fixture, read-only UI, draft CAS and
-reload, editor route, upload/edit review queue, explicit scanner/release
-transition, then accessibility and portability evidence. This keeps the first
-vertical slice useful without implying that editing or Eve review is shipped.
+reload, builder conversation/proposal/apply/reject, editor route, upload/edit
+review queue, explicit scanner/release transition, then accessibility and
+portability evidence. This keeps each vertical slice useful without implying
+that the complete editor, builder, or Eve review is shipped.

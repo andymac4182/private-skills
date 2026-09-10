@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { api, ApiError, isApiErrorCode } from '../lib/api'
-import { shortDigest } from '../lib/format'
+import { formatDirectoryStatus, formatRelativeAge, shortDigest } from '../lib/format'
 import { pinProxyOperation, verifiedSourceReference, type ProxyOperationPin } from '../lib/proxy'
 import { quotePosix, quotePowerShell } from '../lib/shell'
 import { useAuth } from '../lib/auth'
-import type { SkillDetailMetadataResponse } from '../../../../packages/directory/src/index'
+import { resolveSelectedDirectoryFeed, useDirectoryFeedSelection } from '../lib/directoryFeed'
+import { DirectoryFeedSelector } from '../components/DirectoryFeedSelector'
 import type {
   Job,
   DirectoryFeed,
   Principal,
+  SkillDetailMetadataResponse,
   SkillSearchResponse,
   SkillView,
   V1Skill,
@@ -26,6 +28,7 @@ const browseViews: Array<{ id: SkillView; label: string; description: string }> 
 const pageSize = 24
 
 export function DirectoryView() {
+  const { selectedFeedName, setSelectedFeedName } = useDirectoryFeedSelection()
   const [topicReady, setTopicReady] = useState(false)
   const [view, setView] = useState<SkillView>('all-time')
   const [page, setPage] = useState(0)
@@ -44,7 +47,6 @@ export function DirectoryView() {
   const [feeds, setFeeds] = useState<DirectoryFeed[] | null>(null)
   const [feedsLoading, setFeedsLoading] = useState(true)
   const [feedsError, setFeedsError] = useState<string | null>(null)
-  const [selectedFeedName, setSelectedFeedName] = useState('')
   const loadGeneration = useRef(0)
   const detailGeneration = useRef(0)
   const feedGeneration = useRef(0)
@@ -68,9 +70,6 @@ export function DirectoryView() {
       const response = await api.feeds()
       if (generation !== feedGeneration.current) return
       setFeeds(response.feeds)
-      setSelectedFeedName((current) => response.feeds.some((feed) => feed.name === current)
-        ? current
-        : response.feeds.find((feed) => feed.enabled)?.name ?? response.feeds[0]?.name ?? '')
     } catch (cause) {
       if (generation !== feedGeneration.current) return
       setFeeds(null)
@@ -87,14 +86,21 @@ export function DirectoryView() {
     setDisconnected(false)
     setList(null)
     setSearch(null)
+    const selectedFeed = resolveSelectedDirectoryFeed(selectedFeedName, feeds)
+    if (selectedFeedName && selectedFeed === undefined) {
+      setError('The selected discovery feed is no longer available. Choose Global/default or reload the feed list.')
+      setLoading(false)
+      return
+    }
+    const feed = selectedFeed?.name
     try {
       if (submittedQuery) {
-        const response = await api.directorySearch(submittedQuery, { limit: 200 })
+        const response = await api.directorySearch(submittedQuery, { limit: 200, feed })
         if (generation !== loadGeneration.current) return
         setSearch(response)
         setList(null)
       } else {
-        const response = await api.directorySkills({ view, page, perPage: pageSize })
+        const response = await api.directorySkills({ view, page, perPage: pageSize, feed })
         if (generation !== loadGeneration.current) return
         setList(response)
         setSearch(null)
@@ -114,7 +120,7 @@ export function DirectoryView() {
   }
 
   useEffect(() => { if (topicReady) void loadFeeds() }, [topicReady])
-  useEffect(() => { if (topicReady) void load() }, [page, submittedQuery, topicReady, view])
+  useEffect(() => { if (topicReady && !feedsLoading) void load() }, [feeds, feedsLoading, page, selectedFeedName, submittedQuery, topicReady, view])
 
   async function inspect(skill: V1Skill) {
     const generation = ++detailGeneration.current
@@ -123,8 +129,14 @@ export function DirectoryView() {
     setDetailError(null)
     setDetailDisconnected(false)
     setDetailLoading(true)
+    const selectedFeed = resolveSelectedDirectoryFeed(selectedFeedName, feeds)
+    if (selectedFeedName && selectedFeed === undefined) {
+      setDetailLoading(false)
+      setDetailError('The selected discovery feed is no longer available. Choose Global/default or reload the feed list.')
+      return
+    }
     try {
-      const response = await api.directoryDetail(skill.id)
+      const response = await api.directoryDetail(skill.id, { feed: selectedFeed?.name })
       if (generation !== detailGeneration.current) return
       setDetail(response)
     } catch (cause) {
@@ -139,6 +151,19 @@ export function DirectoryView() {
     } finally {
       if (generation === detailGeneration.current) setDetailLoading(false)
     }
+  }
+
+  function chooseFeed(next: string) {
+    setSelectedFeedName(next)
+    setPage(0)
+    ++detailGeneration.current
+    setSelected(null)
+    setDetail(null)
+    setDetailDisconnected(false)
+    setDetailError(null)
+    setLoading(true)
+    setList(null)
+    setSearch(null)
   }
 
   function chooseView(next: SkillView) {
@@ -213,10 +238,7 @@ export function DirectoryView() {
         <div className="directory-search-row"><input id="directory-search" onChange={(event) => setQuery(event.target.value)} placeholder="Search by skill, source, or description" value={query} /><Button type="submit">Search</Button>{submittedQuery && <Button kind="quiet" type="button" onClick={() => { setQuery(''); setSubmittedQuery(''); setPage(0) }}>Clear</Button>}</div>
         <small>Search results are a bounded upstream result set, not a complete catalog enumeration.</small>
       </form>
-      <div className="directory-feed-control">
-        <label className="directory-search-label" htmlFor="directory-feed">Source discovery feed</label>
-        {feedsLoading ? <small>Loading discovery feed configuration…</small> : feedsError ? <Notice kind="warning">Discovery feed configuration is unavailable. Source requests stay disabled until the registry responds.</Notice> : feeds && feeds.length > 0 ? <><select id="directory-feed" onChange={(event) => setSelectedFeedName(event.target.value)} value={selectedFeedName}>{feeds.map((feed) => <option key={feed.id} value={feed.name}>{feed.name} · {feed.kind}{feed.enabled ? '' : ' · disabled'}</option>)}</select><small>{feeds.find((feed) => feed.name === selectedFeedName)?.enabled ? 'Choose which configured feed discovers this source. The server returns its canonical source reference after resolution.' : 'This discovery feed is disabled for new source requests.'}</small></> : <Notice kind="warning">No source discovery feed is configured. Browse remains available; source requests stay disabled.</Notice>}
-      </div>
+      <DirectoryFeedSelector error={feedsError} feeds={feeds} loading={feedsLoading} onChange={chooseFeed} selectedFeedName={selectedFeedName} />
     </Panel>
     {disconnected ? <DisconnectedState title="Cloud directory is disconnected" message="The public skills.sh connection is not configured for this registry. Your private catalog, packs, and policy remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error && <ErrorState message={error} onRetry={() => void load()} />}
     <Panel title={submittedQuery ? `Search results for “${submittedQuery}”` : `${browseViews.find((item) => item.id === view)?.label} skills`} description={resultDescription}>
@@ -235,6 +257,7 @@ function DirectorySkillCard({ skill, selected, onInspect }: { skill: V1Skill; se
       <div className="directory-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="directory-card-heading"><strong>{skill.name}</strong><span>{skill.source}</span></span><span className="directory-card-arrow" aria-hidden="true">↗</span></div>
       <p className="directory-card-slug">{skill.slug}</p>
       <div className="directory-card-tags"><span className="skill-tag">{sourceLabel}</span>{skill.isDuplicate && <span className="skill-tag directory-tag-warn">Duplicate listing</span>}</div>
+      <div className="directory-card-freshness"><span>{formatRelativeAge(skill.fetchedAt)}</span><span>{formatDirectoryStatus(skill.sourceStatus)}</span></div>
       <div className="directory-card-stats"><strong>{formatNumber(skill.installs)}</strong><span>skills.sh installs</span></div>
     </button>
     <div className="directory-card-footer"><span>External metadata</span><a href={skill.url} rel="noreferrer" target="_blank">View source page ↗</a></div>
@@ -273,6 +296,7 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, f
   const operationPin = useRef<ProxyOperationPin | null>(null)
   const canResolveProxy = hasProxyResolveScope(principal)
   const canImport = canResolveProxy && !feedsLoading && !feedsError && feed?.enabled === true
+  const detailSourceStatus = detail?.sourceStatus ?? (detail?.files && detail.files.length > 0 ? 'snapshot-available' : 'metadata-only')
 
   async function requestProxy(refresh = false) {
     if (!feed) {
@@ -429,9 +453,10 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, f
 
   return <Panel className="directory-detail" title="Cloud skill detail" description="External source identity and snapshot evidence. A listing or external audit never approves a private release." action={<div className="row-actions"><Button kind="quiet" type="button" onClick={openAudits}>External audits</Button>{selected.url && <a className="button button-secondary" href={selected.url} rel="noreferrer" target="_blank">Open source page ↗</a>}</div>}>
     {loading ? <LoadingState label="Loading source detail…" /> : detailDisconnected ? <DisconnectedState title="Cloud source is disconnected" message="This listing cannot be inspected until the public skills.sh connection is configured." action={selected.url ? <a className="button button-secondary" href={selected.url} rel="noreferrer" target="_blank">Open source page ↗</a> : undefined} /> : detailError ? <ErrorState message={detailError} onRetry={onRetry} /> : detail && <div className="directory-detail-grid"><div>
-      <div className="detail-heading"><div><span className="eyebrow eyebrow-cloud">skills.sh listing</span><h2>{selected.name}</h2><p>{selected.source}/{selected.slug}</p></div><Badge value={detail.files === null ? 'metadata-only' : 'snapshot-available'} /></div>
+      <div className="detail-heading"><div><span className="eyebrow eyebrow-cloud">skills.sh listing</span><h2>{selected.name}</h2><p>{selected.source}/{selected.slug}</p></div><Badge value={detailSourceStatus} /></div>
       <div className="detail-meta"><div className="meta-row"><span>External ID</span><span>{detail.id}</span></div><div className="meta-row"><span>Source type</span><span>{selected.sourceType === 'github' ? 'GitHub' : 'Well-known provider'}</span></div><div className="meta-row"><span>skills.sh installs</span><span>{formatNumber(detail.installs)}</span></div><div className="meta-row"><span>External snapshot hash</span><span>{detail.hash ? shortDigest(detail.hash) : 'Unavailable'}</span></div></div>
-      {detail.files === null ? <Notice kind="info">This row has metadata only. The first request below asks the registry to resolve the source, retain the external identity, scan the bytes, and cache the result.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Source file paths</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · paths only; downloads require registry approval</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
+      <div className="directory-freshness"><div><span className="helper">External metadata</span><strong>{formatDirectoryStatus(detail.sourceStatus)}</strong></div><div><span className="helper">Fetched from {detail.provider ?? 'the configured directory provider'}</span><strong>{formatRelativeAge(detail.fetchedAt)}</strong></div>{detail.sourceReason && <p className="helper">{detail.sourceReason}</p>}<p className="helper">Source freshness describes the upstream listing only; it does not imply a private scan or approval.</p></div>
+      {detail.files === null || detail.files.length === 0 ? <Notice kind="info">This row has metadata only. The first request below asks the registry to resolve the source, retain the external identity, scan the bytes, and cache the result.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Source file paths</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · paths only; downloads require registry approval</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
     </div><div className="directory-import"><h3 className="subheading">Use this skill privately</h3><p className="helper">The catalog ID below is the source identity while the registry resolves it. No rename, version, or mapping form is required; the registry fetches, scans, and caches it on the first request.</p><div className="proxy-identity"><span>Catalog source ID</span><code>{selected.id}</code></div>{reference && <div className="proxy-reference"><span>Verified source reference</span><code>{reference}</code></div>}{message && <Notice kind={message.kind}>{message.text}</Notice>}{operation && <div className="proxy-operation"><div className="meta-row"><span>Registry operation</span><Badge value={operation.state} /></div><div className="meta-row"><span>Operation ID</span><code>{operation.id}</code></div>{operation.error && <Notice kind="error">{operation.error}</Notice>}</div>}{ready && <Notice kind="success">Approved resolution available through this registry.</Notice>}{feedsLoading && <Notice kind="info">Loading configured discovery feeds…</Notice>}{!feedsLoading && feedsError && <Notice kind="warning">Discovery feed configuration is unavailable; source requests stay disabled.</Notice>}{!feedsLoading && !feedsError && !feed && <Notice kind="warning">No matching discovery feed is available for this source.</Notice>}{!feedsLoading && !feedsError && feed && !feed.enabled && <Notice kind="warning">This discovery feed is disabled for new source requests.</Notice>}{!feedsLoading && !feedsError && feed?.enabled && !canResolveProxy && <Notice kind="warning">Your session does not have the proxy:resolve permission.</Notice>}<div className="proxy-actions"><Button busy={busy} disabled={!canImport} type="button" onClick={() => void requestProxy()}>{ready ? 'Check source again' : 'Fetch and check source'}</Button>{ready && <Button busy={busy} disabled={!canImport} kind="quiet" type="button" onClick={() => void requestProxy(true)}>Refresh source</Button>}</div><div className="proxy-command"><span className="helper">{ready && reference ? 'CLI command using the configured private registry' : 'Canonical source reference pending'}</span>{ready && reference ? <div className="proxy-command-variants"><span className="helper">POSIX (bash/zsh)</span><code>{proxyInstallCommand('posix', selected.id, feed?.name ?? '', registryOrigin())}</code><span className="helper">PowerShell</span><code>{proxyInstallCommand('powershell', selected.id, feed?.name ?? '', registryOrigin())}</code></div> : <div className="proxy-command-pending"><code>{selected.id}</code><span className="helper">Request the source to receive its canonical registry reference before installing.</span></div>}<span className="helper">{ready && reference ? 'Install uses this catalog ID with the selected discovery feed; the verified source reference above records what the registry resolved.' : 'The catalog ID remains visible while the registry fetches, scans, and caches the source.'}</span></div>{operation && <Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link>}</div></div>}
   </Panel>
 }

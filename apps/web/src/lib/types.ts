@@ -13,22 +13,23 @@ import type {
 } from '../../../../packages/contracts/src/index'
 import type { ReviewRun, ReviewSkillSnapshot, ReviewSuggestion } from '../../../../packages/reviews/src/index'
 import type {
-  CuratedOwner,
-  CuratedSkillsResponse,
+  CuratedOwner as CuratedOwnerBase,
+  CuratedSkillsResponse as CuratedSkillsResponseBase,
   SkillAuditEntry,
-  SkillAuditResponse,
+  SkillAuditResponse as SkillAuditResponseBase,
   SkillDetailFile,
+  SkillDetailMetadataResponse as SkillDetailMetadataResponseBase,
   SkillDetailResponse,
-  SkillListResponse as DirectorySkillListResponse,
+  SkillListResponse as DirectorySkillListResponseBase,
   SkillPagination,
-  SkillSearchResponse,
+  SkillSearchResponse as SkillSearchResponseBase,
   SkillSearchType,
   SkillSourceType,
   SkillsTopicLink,
   SkillsTopicResponse,
   SkillsTopicSkill,
   SkillView,
-  V1Skill,
+  V1Skill as V1SkillBase,
 } from '../../../../packages/directory/src/index'
 import type { SkillsPackManifest, SkillsPackMember } from '../../../../packages/directory-packs/src/index'
 
@@ -48,23 +49,48 @@ export type {
 export type ReviewRunView = Omit<ReviewRun, 'leaseToken' | 'leaseExpiresAt'> & { snapshotValid: boolean }
 export type ReviewSuggestionView = ReviewSuggestion & { snapshotValid: boolean }
 export type { ReviewSkillSnapshot }
+
+/**
+ * Metadata owned by the directory adapter.  These fields describe the
+ * discovery response and source freshness; they never imply private scan or
+ * approval state.
+ */
+export interface DirectoryFreshnessMetadata {
+  provider?: string
+  fetchedAt?: string
+  sourceStatus?: string
+  sourceReason?: string
+  feedName?: string | null
+}
+
+export type V1Skill = V1SkillBase & DirectoryFreshnessMetadata
+export type CuratedOwner = Omit<CuratedOwnerBase, 'skills'> & { skills: V1Skill[] }
+export type CuratedSkillsResponse = Omit<CuratedSkillsResponseBase, 'data'> & {
+  data: CuratedOwner[]
+  feedName?: string | null
+}
+export type DirectorySkillListResponse = Omit<DirectorySkillListResponseBase, 'data'> & {
+  data: V1Skill[]
+  feedName?: string | null
+}
+export type SkillSearchResponse = Omit<SkillSearchResponseBase, 'data'> & {
+  data: V1Skill[]
+  feedName?: string | null
+}
+export type SkillAuditResponse = SkillAuditResponseBase & { feedName?: string | null }
+export type SkillDetailMetadataResponse = SkillDetailMetadataResponseBase & DirectoryFreshnessMetadata
+
 export type {
-  CuratedOwner,
-  CuratedSkillsResponse,
   SkillAuditEntry,
-  SkillAuditResponse,
   SkillDetailFile,
   SkillDetailResponse,
-  DirectorySkillListResponse,
   SkillPagination,
-  SkillSearchResponse,
   SkillSearchType,
   SkillSourceType,
   SkillsTopicLink,
   SkillsTopicResponse,
   SkillsTopicSkill,
   SkillView,
-  V1Skill,
 }
 export type { SkillsPackManifest, SkillsPackMember }
 
@@ -100,6 +126,7 @@ export interface DirectoryFeed {
   configRevision: string
   repositories?: string[]
   baseUrl: string
+  namespace?: string
 }
 export interface FeedListResponse { feeds: DirectoryFeed[] }
 export interface ProxyResolveResponse {
@@ -127,3 +154,30 @@ export interface SemanticSearchResult {
 export interface SearchResponse { results: SemanticSearchResult[] }
 export interface SearchStatusResponse { status: 'ok' | 'degraded'; provider: string; profileId?: string; error?: string }
 export interface SearchReindexResponse { indexed: number; profileId: string; truncated: boolean; nextCursor?: string }
+
+/**
+ * The immutable release-file view is deliberately separate from directory
+ * metadata. The manifest never includes file contents; the singular file
+ * route returns bounded text only after the release has passed the server's
+ * current admission checks.
+ */
+export type ReleaseFilePreviewState = 'text' | 'binary' | 'unsupported' | 'oversize'
+export interface ReleaseFileView {
+  path: string
+  size: number
+  contentDigest: `sha256:${string}`
+  previewState: ReleaseFilePreviewState
+  executable?: boolean
+  contents?: string
+}
+export interface ReleaseFilesResponse {
+  release: {
+    id: string
+    name: string
+    skillName: string
+    version: string
+    digest: `sha256:${string}`
+    fileCount: number
+  }
+  files: ReleaseFileView[]
+}

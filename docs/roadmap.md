@@ -170,6 +170,35 @@ The proposed delivery order is:
 | M6-SAFE | Malicious or untrusted uploaded content is treated as data, validated and scanned in the existing isolated worker; no script, hook, MCP, or candidate instruction executes or escapes tenant boundaries. | Existing canonical bundle and scanner controls are authoritative; Diffs annotations/rendering cannot weaken them. |
 | M6-A11Y | File tree, editor, diff, findings, and actions pass keyboard/focus/screen-reader/contrast/reduced-motion checks at 390px and desktop widths. | Requires browser evidence for the complete route, including narrow layouts; current production catalog mobile overflow is a known separate verification gap. |
 
+### M6-BUILDER — interactive authoring builder Eve (active implementation, incomplete)
+
+The editor now includes a separate product requirement for an Eve agent that
+helps an author build a skill. Builder Eve is a conversational design
+assistant, distinct from daily consolidation Eve and from upload/edit reviewer
+Eve. It works against an authorized blank or validated upload-origin draft when
+that origin is enabled, or against a draft based on an existing immutable
+release. The assistant proposes changes; it does not become an alternate
+publisher, scanner, or execution environment. The portable route/type seam and
+the explicit stale/CAS rules are recorded in
+[`m6-authoring-contract.md`](m6-authoring-contract.md#interactive-authoring-builder-eve).
+
+| Slice | Active implementation target | Owner and boundary |
+| --- | --- | --- |
+| M6-BUILDER-0 | Persist an organization-scoped conversation bound to `draftId`, base release/digest, current draft revision/digest, Gateway/model, builder/tool revision, bounded-context limits, and an auditable state. | `delivery_audit` owns the `packages/skill-builder` types plus app route/persistence integration; use existing draft authorization and no secret-bearing browser state. |
+| M6-BUILDER-1 | Provide a bounded chat context from the exact draft manifest and allowed text files, with proposal-only tools for add/edit/rename/delete. Persist generation/job provenance and idempotency without exposing credentials or arbitrary network/content execution. | Builder/Eve service owner owns the separate tool allowlist and configurable AI Gateway/model; daily consolidation and upload-review queues remain separate. |
+| M6-BUILDER-2 | Render each proposal as a reviewable Diffs/file-tree change with canonical paths, per-file preconditions, rationale, and deterministic proposal/diff digest. No proposal mutates draft bytes. | `web_ui` owns the editor chat/proposal panel and loading/error/stale states; `@pierre/diffs` remains a renderer, not the persistence or policy layer. |
+| M6-BUILDER-3 | Apply or reject only after an explicit author action. Apply requires proposal ID, expected revision, and idempotency key; server-side CAS creates one new draft revision or returns an explicit stale/conflict result. | `delivery_audit` integrates proposal apply/reject with draft CAS; no silent rebase, partial apply, base-release mutation, autopublish, or scanner-policy change. |
+| M6-BUILDER-4 | Prove browser chat → proposal → view diff → explicit apply → saved reload → upload/edit review → required scanner decision → explicit immutable release, including a changed-revision stale proposal and cross-tenant denial. | `e2e_tests` / completion audit owns evidence; existing scanner and publication gates remain authoritative and builder output remains advisory. |
+
+The initial useful slice is authoring a new skill and refining an existing one;
+it must preserve exact file context and draft provenance in both cases. A
+conversation or proposal cannot authorize a release, and builder Eve cannot
+execute skill content, scripts, hooks, MCP servers, package managers, or
+arbitrary network calls. M6 remains active and incomplete while this builder,
+the Diffs view/editor, durable drafts, upload/edit review, safety, and release
+evidence are implemented. M7 proceeds in parallel and is not folded into this
+builder gate.
+
 M6 is incomplete until all checkable gates in
 [`completion-criteria.md`](completion-criteria.md) pass. Diffs features are
 the UI substrate; draft durability, release identity, review persistence,
@@ -274,7 +303,8 @@ visibility/automation to **M5**. The active Diffs editor and upload/edit
 review slices map to **M6-EDITOR**, **M6-DRAFT**, **M6-TREE-DIFF**,
 **M6-RELEASE**, **M6-UPLOAD-EVE**, **M6-REVIEW**, **M6-POLICY**,
 **M6-AUTH**, **M6-SAFETY**, **M6-A11Y**, and **M6-EVIDENCE**; the explicit
-read-only and edit workflows map to **M6-VIEW** and **M6-EDIT**. OpenClaw
+read-only and edit workflows map to **M6-VIEW** and **M6-EDIT**; the
+interactive authoring builder maps to **M6-BUILDER**. OpenClaw
 skills feed production and consumption map to **M7-SPEC**, **M7-PRODUCER**,
 **M7-CONSUMER**, **M7-PROVENANCE**, **M7-ADMISSION**, **M7-AUTH**,
 **M7-INTEROP**, **M7-PORTABILITY**, and **M7-EVIDENCE**.

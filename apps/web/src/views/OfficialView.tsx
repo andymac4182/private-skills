@@ -1,23 +1,52 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { api, ApiError, isApiErrorCode } from '../lib/api'
-import { formatDate } from '../lib/format'
-import type { CuratedSkillsResponse, CuratedOwner, V1Skill } from '../lib/types'
+import { formatDate, formatDirectoryStatus, formatRelativeAge } from '../lib/format'
+import { DirectoryFeedSelector } from '../components/DirectoryFeedSelector'
+import { resolveSelectedDirectoryFeed, useDirectoryFeedSelection } from '../lib/directoryFeed'
+import type { CuratedSkillsResponse, CuratedOwner, DirectoryFeed, V1Skill } from '../lib/types'
 import { Badge, DisconnectedState, EmptyState, ErrorState, LoadingState, Panel } from '../components/Primitives'
 
 export function OfficialView() {
+  const { selectedFeedName, setSelectedFeedName } = useDirectoryFeedSelection()
   const [curated, setCurated] = useState<CuratedSkillsResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [disconnected, setDisconnected] = useState(false)
+  const [feeds, setFeeds] = useState<DirectoryFeed[] | null>(null)
+  const [feedsLoading, setFeedsLoading] = useState(true)
+  const [feedsError, setFeedsError] = useState<string | null>(null)
   const loadGeneration = useRef(0)
+  const feedGeneration = useRef(0)
+
+  async function loadFeeds() {
+    const generation = ++feedGeneration.current
+    setFeedsLoading(true)
+    setFeedsError(null)
+    try {
+      const response = await api.feeds()
+      if (generation !== feedGeneration.current) return
+      setFeeds(response.feeds)
+    } catch (cause) {
+      if (generation !== feedGeneration.current) return
+      setFeeds(null)
+      setFeedsError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load configured source feeds.')
+    } finally {
+      if (generation === feedGeneration.current) setFeedsLoading(false)
+    }
+  }
 
   async function load() {
     const generation = ++loadGeneration.current
     setError(null)
     setDisconnected(false)
     setCurated(null)
+    const selectedFeed = resolveSelectedDirectoryFeed(selectedFeedName, feeds)
+    if (selectedFeedName && selectedFeed === undefined) {
+      setError('The selected discovery feed is no longer available. Choose Global/default or reload the feed list.')
+      return
+    }
     try {
-      const response = await api.directoryOfficial()
+      const response = await api.directoryOfficial({ feed: selectedFeed?.name })
       if (generation !== loadGeneration.current) return
       setCurated(response)
     } catch (cause) {
@@ -32,9 +61,10 @@ export function OfficialView() {
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void loadFeeds() }, [])
+  useEffect(() => { if (!feedsLoading) void load() }, [feeds, feedsLoading, selectedFeedName])
 
-  return <div className="view-heading official-view"><div className="page-intro"><div><span className="eyebrow eyebrow-cloud">Cloud directory</span><h1>Official makers</h1><p className="muted">Maker-curated groups from skills.sh. Official describes the upstream curation; it does not mean privately approved or safe to install.</p></div><Link className="button button-primary" params={{ section: 'directory' }} to="/app/$section">Browse all skills</Link></div>{disconnected ? <DisconnectedState title="Official makers are disconnected" message="The public skills.sh connection is not configured for this registry. Private releases and review settings remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error ? <ErrorState message={error} onRetry={() => void load()} /> : curated === null ? <Panel><LoadingState label="Loading official groups…" /></Panel> : <><div className="directory-summary"><span><strong>{formatNumber(curated.totalOwners)}</strong> makers</span><span><strong>{formatNumber(curated.totalSkills)}</strong> listed skills</span><span>Updated {formatDate(curated.generatedAt)}</span></div>{curated.data.length === 0 ? <Panel><EmptyState title="No official groups available" description="skills.sh did not return a maker-curated group for this request." /></Panel> : <div className="official-grid">{curated.data.map((owner) => <OfficialOwnerCard key={owner.owner} owner={owner} />)}</div>}</>}</div>
+  return <div className="view-heading official-view"><div className="page-intro"><div><span className="eyebrow eyebrow-cloud">Cloud directory</span><h1>Official makers</h1><p className="muted">Maker-curated groups from skills.sh. Official describes the upstream curation; it does not mean privately approved or safe to install.</p></div><Link className="button button-primary" params={{ section: 'directory' }} to="/app/$section">Browse all skills</Link></div><Panel className="directory-toolbar"><DirectoryFeedSelector error={feedsError} feeds={feeds} loading={feedsLoading} onChange={setSelectedFeedName} selectedFeedName={selectedFeedName} /></Panel>{disconnected ? <DisconnectedState title="Official makers are disconnected" message="The public skills.sh connection is not configured for this registry. Private releases and review settings remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error ? <ErrorState message={error} onRetry={() => void load()} /> : curated === null ? <Panel><LoadingState label="Loading official groups…" /></Panel> : <><div className="directory-summary"><span><strong>{formatNumber(curated.totalOwners)}</strong> makers</span><span><strong>{formatNumber(curated.totalSkills)}</strong> listed skills</span><span>Updated {formatDate(curated.generatedAt)}</span><span>Feed: <strong>{curated.feedName ?? 'Global/default'}</strong></span></div>{curated.data.length === 0 ? <Panel><EmptyState title="No official groups available" description="skills.sh did not return a maker-curated group for this request." /></Panel> : <div className="official-grid">{curated.data.map((owner) => <OfficialOwnerCard key={owner.owner} owner={owner} />)}</div>}</>}</div>
 }
 
 function OfficialOwnerCard({ owner }: { owner: CuratedOwner }) {
@@ -42,7 +72,7 @@ function OfficialOwnerCard({ owner }: { owner: CuratedOwner }) {
 }
 
 function OfficialSkillRow({ skill }: { skill: V1Skill }) {
-  return <div className="official-skill-row"><div><strong>{skill.name}</strong><span>{skill.source}/{skill.slug}</span></div><div className="official-skill-meta"><span>{formatNumber(skill.installs)} installs</span><a href={skill.url} rel="noreferrer" target="_blank">Open ↗</a></div></div>
+  return <div className="official-skill-row"><div><strong>{skill.name}</strong><span>{skill.source}/{skill.slug}</span></div><div className="official-skill-meta"><span>{formatNumber(skill.installs)} installs</span><span>{formatRelativeAge(skill.fetchedAt)}</span><span>{formatDirectoryStatus(skill.sourceStatus)}</span><a href={skill.url} rel="noreferrer" target="_blank">Open ↗</a></div></div>
 }
 
 function formatNumber(value: number) {

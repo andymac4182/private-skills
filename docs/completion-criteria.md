@@ -643,6 +643,39 @@ Completion requires all of the following:
     and its evidence proves the draft digest, base digest, scan decision, and
     immutable-release preservation end to end.
 
+14. **M6-BUILDER — interactive authoring builder Eve.** An authorized
+    publisher can start a builder conversation for a blank/validated
+    upload-origin draft when that origin is enabled, or for a draft based on an
+    existing immutable release. The conversation is durable and bound to the
+    organization, draft, base release/digest, exact current draft
+    revision/digest, Gateway/model, builder/tool revision, and bounded file and
+    model-context limits. It is a separate workflow and service/tool identity
+    from daily consolidation Eve and upload/edit reviewer Eve.
+
+    Each builder turn receives only the authorized manifest and bounded text
+    content from that exact revision. It can suggest `add`, `edit`, `rename`,
+    and `delete` operations using canonical paths and file-digest preconditions,
+    with rationale and a deterministic proposal/diff digest. A proposal is
+    persisted without changing draft bytes, rendered as a reviewable Diffs/file
+    tree change, and requires an explicit author apply or reject action.
+
+    Apply requires the proposal ID, expected current revision, and an
+    idempotency key. The server revalidates the bound digest and all operations
+    under draft CAS; success creates one new draft revision and digest, while a
+    changed revision/digest returns an explicit stale/conflict result with no
+    auto-rebase, partial apply, or last-writer-wins behavior. Reject is audited,
+    and the conversation must be rebound before proposing from the new
+    revision. The immutable base release remains unchanged.
+
+    A clean authenticated browser/API fixture proves **browser chat → proposal
+    → view diff → explicit apply → saved reload → upload/edit review → required
+    scanner decision → explicit immutable release**, including initial skill
+    authoring and existing-skill refinement, stale-proposal conflict, replayed
+    idempotency, cross-tenant denial, and no unintended writes. Builder Eve has
+    no execution, package-manager, MCP, arbitrary-network, publish, install, or
+    scanner-policy tool; required scanners and publication policy remain
+    authoritative, and builder/reviewer output cannot authorize a release.
+
 M6 implementation may proceed alongside the current G0/C1 work, but its
 storage, policy, and external-source dependencies must be available before
 the end-to-end gates pass. Its UI primitives can be prototyped earlier, but a prototype does not satisfy
