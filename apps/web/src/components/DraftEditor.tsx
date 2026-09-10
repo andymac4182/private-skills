@@ -4,6 +4,7 @@ import { formatBytes, shortDigest } from '../lib/format'
 import type { DraftView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
 import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
+import { DraftReviewPanel } from './DraftReviewPanel'
 
 const PierreDraftSurface = lazy(() => import('./PierreDraftSurface').then((module) => ({ default: module.PierreDraftSurface })))
 
@@ -133,6 +134,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
   const [renameOrigins, setRenameOrigins] = useState<Record<string, string>>({})
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mode, setMode] = useState<'edit' | 'diff'>('diff')
+  const [workspaceTab, setWorkspaceTab] = useState<'files' | 'review'>('files')
   const [creating, setCreating] = useState(false)
   const [resuming, setResuming] = useState(true)
   const [reloading, setReloading] = useState(false)
@@ -180,6 +182,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     setRenameOrigins({})
     setSelectedPath((current) => current && files.some((file) => file.path === current) ? current : firstPath(files))
     setMode('diff')
+    setWorkspaceTab('files')
     setVersion((current) => current || baseVersion)
     saveOperation.current = null
     publishOperation.current = null
@@ -218,6 +221,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     setRenameOrigins({})
     setSelectedPath(null)
     setMode('diff')
+    setWorkspaceTab('files')
     setVersion(baseVersion)
     setMessage(null)
     setError(null)
@@ -444,15 +448,18 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     {!resuming && !draft && <div className="draft-start"><p className="helper">The draft starts with the exact bytes and digest from version <strong>{baseVersion}</strong>. Nothing is saved until you start it.</p><Button kind="secondary" busy={creating} type="button" onClick={() => void startDraft()}>Start draft</Button></div>}
     {!resuming && draft && <>
       <div className="draft-editor-meta"><span>Revision <strong>{draft.revision}</strong></span><span>Files <strong>{workingFiles.length}</strong></span><span>Size <strong>{formatBytes(draft.size)}</strong></span><span title={draft.digest}>Digest <code>{shortDigest(draft.digest)}</code></span>{hasChanges && <span className="draft-dirty">Local changes</span>}</div>
-      <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
-      {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
-      <div className="draft-editor-layout">
-        <div className="draft-editor-main draft-editor-surface-main">
-          <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
-          <DraftRendererBoundary key={`${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
-          <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
+      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => setWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => setWorkspaceTab('review')}>Review</button></div>
+      {workspaceTab === 'review' ? <DraftReviewPanel draft={draft} disabled={busy} /> : <>
+        <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
+        {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
+        <div className="draft-editor-layout">
+          <div className="draft-editor-main draft-editor-surface-main">
+            <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
+            <DraftRendererBoundary key={`${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
+            <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
+          </div>
         </div>
-      </div>
+      </>}
       <footer className="draft-editor-footer"><span className="helper">Revision {draft.revision} is saved on the server. Reload before saving if someone else changed it.</span><Button kind="quiet" disabled={busy} type="button" onClick={() => void reloadDraft()}>Reload draft</Button></footer>
     </>}
   </section>
