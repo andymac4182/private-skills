@@ -2,24 +2,25 @@
 
 **Date:** 2026-09-10
 
-**Status:** PR30 is merged on `origin/main` at
-`0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. Its Git-triggered registry,
-builder, and upload-reviewer deployments are READY as
-`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
-`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [M6 read-only release-file
-evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-records 12 bounded GET checks against the registry deployment, including
-authenticated health, principal, policy, capabilities, feeds, approved-release
-metadata, a metadata-only manifest, and a selected text-file read with a
-matching digest. OpenClaw-disabled routes return 503 and unauthenticated
-release-file/OpenClaw requests return 401; the record has zero registry writes
-and retains no credentials or selected contents. The editor API and authoring
-source are shipped, while local browser acceptance is in progress and Eve
-bridge credentials/model end-to-end activation remain pending. One
-snapshot-only production candidate still has recorded required-scan admission,
-isolated CLI install/repeat, and install analytics. Physical GitHub/well-known
-source resolution, direct upstream-zero instrumentation, and native CI remain
-pending. A bounded hosted Neon/object-storage logical restore is verified in the
+**Status:** PR31 is merged on `origin/main` at
+`9caf2c178e92821cb9f3176a91a8ff5dafe2942f`. Its Git-triggered registry and
+upload-reviewer deployments are READY as
+`dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
+The sanitized [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
+records upload-review enablement/configuration, the credential-rotation
+boundary, 12 read-only registry checks, zero registry writes, and no scanner
+policy change; it records no secret values and no live model session. The
+earlier [M6 read-only release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+retains its own source/deployment provenance. The editor API and authoring
+source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
+from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
+draft flow, reload, stale-CAS, binary/oversize, keyboard, guard, and overflow
+checks; it does not prove hosted UI behavior, a live Eve/model session, or
+screenreader/contrast/reduced-motion acceptance. One snapshot-only production
+candidate still has recorded required-scan admission, isolated CLI
+install/repeat, and install analytics. Physical GitHub/well-known source
+resolution, direct upstream-zero instrumentation, and native CI remain pending.
+A bounded hosted Neon/object-storage logical restore is verified in the
 sanitized [restore evidence](evidence/hosted-restore-20260910.json): source
 revision 114, five referenced objects totaling 10,381 bytes, exact target
 revision 114, five digest/size-verified target objects, and post-restore target
@@ -31,8 +32,8 @@ gate.
 
 ## Current Git-triggered M6 read-only release-file checkpoint
 
-The READY registry deployment `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` was built
-from current main commit `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. The
+The earlier READY registry deployment `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` was
+built from main commit `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. The
 sanitized [production M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
 made 12 bounded GET checks: health, authenticated principal, policy,
 capabilities, feeds, OpenClaw-disabled feed/catalog behavior, approved-release
@@ -44,10 +45,23 @@ file's server-reported digest matched its transiently read contents, response
 bodies and credentials were not retained, and the pass recorded zero
 private-registry writes. This is production HTTP/API evidence for the M6
 read-only release-file slice; it does not prove the full editor/reviewer/builder
-workflow or browser acceptance. Builder deployment
-`dpl_5GfCb5Et8VUcjigcugytvf3NoXqh` and upload-reviewer deployment
-`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP` are also Git-triggered READY deployments;
-their Eve bridge credentials/model activation remains pending.
+workflow or browser acceptance. The current PR31 registry and upload-reviewer
+deployments are recorded in the [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json);
+upload review is enabled/configured, but no live model session has started.
+
+## Current M6 local editor/browser checkpoint
+
+The sanitized [local editor-browser evidence](evidence/m6-editor-browser-local-29f7.json)
+records a synthetic 123-file fixture from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7`.
+The local API/browser flow passed at 1280px and 390px: metadata-only manifest,
+selected text reads, draft creation, revision-2 save/reload, stale CAS conflict,
+add/rename/remove, binary and 3.5 MiB oversize bounded states, keyboard and
+navigation/close guards, and zero mobile overflow or console warnings/errors.
+The fixture made no production writes and executed no candidate content. Browser
+captures were inspected inline only; no portable PNG was committed, and an
+unrelated prior screenshot was excluded. This is local synthetic evidence only:
+hosted UI behavior, live upload-review/model execution, and screenreader,
+contrast, and reduced-motion acceptance remain open.
 
 ## Earlier prebuilt rollout checkpoint
 
@@ -178,20 +192,26 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   lifecycle guarantee or a restored-origin health/scanner run.
 - Recheck nested upstream detail and any remaining provider limits recorded in
   the C1 criteria.
-- M6 editor/authoring API and source are shipped in current main, but local
-  browser acceptance remains in progress. Complete the composed authenticated
-  editor flow, including durable draft/CAS, large unchanged and binary file
-  references, upload/edit review, required scanning, explicit publication,
-  cross-tenant denial, and narrow/desktop accessibility. The next 22:00 UTC
-  Eve run still needs an explicit causal scheduler/session identifier; the
-  earlier cron record is only deployment-scoped temporal correlation.
+- M6 editor/authoring API and source are shipped, and the local synthetic
+  editor/browser fixture passes. Complete hosted UI acceptance, live
+  upload-review/model execution, durable draft/CAS and publication flow,
+  cross-tenant denial, and screenreader/contrast/reduced-motion checks. The
+  next 22:00 UTC Eve run still needs an explicit causal scheduler/session
+  identifier; the earlier cron record is only deployment-scoped temporal
+  correlation.
 - M7 OpenClaw backend code is shipped, but the feed remains disabled. Keep it
   disabled until its explicit feed/trust configuration and bounded producer /
   consumer interoperability evidence are ready.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
-content is never executed. M6's source slices are current, but its composed
-browser/proof gate remains incomplete. M7's source slices are current, but its
-OpenClaw feed remains disabled and has no live interoperability evidence. Both
-remain outside the current release gates here.
+content is never executed. The current unfinished product inventory has three
+areas: builder Eve, upload/edit Eve, and OpenClaw feed interoperability. Seven
+later product bundles remain separate: M1 context packages/agent bridge, M2
+quality/evaluation, M3 team governance/lifecycle, M4 author CI/standards/library
+context, M5 organization-wide visibility/automation, CLI parity, and external
+pack migration. This feature count is separate from the G0, C1, M6, and M7
+verification gates. M6's local synthetic browser proof passes, but its hosted,
+model, and accessibility gates remain incomplete. M7's source slices are
+current, but its OpenClaw feed remains disabled and has no live interoperability
+evidence. Both remain outside the current release gates here.

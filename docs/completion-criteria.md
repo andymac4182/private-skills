@@ -12,17 +12,20 @@ their own criteria and evidence pass. They do not silently expand the current
 release checklist.
 
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). PR30 is merged on
-`origin/main` at `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`, with Git-triggered
-READY registry, builder, and upload-reviewer deployments
-`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
-`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [production M6 read-only
-evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-records bounded authenticated release metadata/file checks, digest verification,
-OpenClaw-disabled responses, unauthenticated 401 boundaries, and zero private
-registry writes. The editor API and authoring source are shipped, while local
-browser acceptance and Eve bridge credential/model activation remain pending.
-The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
+[`verification-current.md`](verification-current.md). PR31 is merged on
+`origin/main` at `9caf2c178e92821cb9f3176a91a8ff5dafe2942f`, with Git-triggered
+READY registry and upload-reviewer deployments
+`dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
+The sanitized [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
+records upload-review enablement/configuration, the credential-rotation
+boundary, 12 read-only registry checks, zero registry writes, and no scanner
+policy change; it records no secret values and no live model session. The
+earlier [production M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+retains its own source/deployment provenance. The editor API and authoring
+source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
+passes the bounded desktop/mobile draft checks, but it does not prove hosted UI,
+live Eve/model, screenreader, contrast, or reduced-motion acceptance. The prior
+quarantined import, same-root CLI result, local edge/multi-feed tests,
 metadata-only Pack preview, and snapshot-only candidate admission remain
 source-specific evidence. Physical GitHub/well-known resolution, direct
 zero-upstream instrumentation, and complete C1 remain open. A bounded hosted
@@ -43,7 +46,7 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
   records the connected `andymac4182/private-skills` project, seven
   authenticated readback successes, the expected unauthenticated Topics 401,
   and zero registry writes;
-- **verified for the current read-only release-file slice:** PR30 main commit
+- **verified for the recorded read-only release-file slice:** PR30 main commit
   `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` produced READY Git deployment
   `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`. The sanitized [M6 release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
   records authenticated manifest and selected text-file reads, digest
@@ -514,13 +517,15 @@ breaking registry distribution.
 
 M6 is the editor and upload/edit reviewer requested for the Private Skills web
 application. The editor and authoring API/source are shipped in current main,
-with Git-triggered READY registry, builder, and upload-reviewer deployments;
-local browser acceptance and Eve bridge credential/model activation remain
-pending. Its read-only release-file VIEW slice has delivered production GET
-evidence for manifest, selected text-file retrieval, digest verification, and
-unauthenticated rejection; the full composed editor, durable draft,
-upload/edit review, and builder evidence criteria remain active and incomplete.
-It is not a G0 or C1 release prerequisite. The concise API/type and ownership sketch is in
+and upload-review configuration is enabled in the current deployment. The local
+synthetic editor/browser fixture passes its bounded desktop/mobile checks, while
+hosted UI acceptance, live Eve/model execution, and screenreader, contrast, and
+reduced-motion evidence remain pending. Its read-only release-file VIEW slice
+has delivered production GET evidence for manifest, selected text-file
+retrieval, digest verification, and unauthenticated rejection; the full
+composed editor, durable draft, upload/edit review, and builder evidence
+criteria remain active and incomplete. It is not a G0 or C1 release
+prerequisite. The concise API/type and ownership sketch is in
 [`m6-authoring-contract.md`](m6-authoring-contract.md). The official
 [Diffs home](https://diffs.com/) and [edit page](https://diffs.com/edit)
 confirm an open source `@pierre/diffs` renderer and beta in-place edit mode;
@@ -642,7 +647,7 @@ Completion requires all of the following:
     existing flow remains a separately evidenced path.
 
 12. **M6-VIEW — read-only release file view (delivered slice; full gate remains).** The
-    current production [read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+    recorded production [read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
     for main `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` proves authenticated
     health/principal/policy, approved-release metadata, a metadata-only
     paths-only manifest, selected `SKILL.md` retrieval with matching digest,

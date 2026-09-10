@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-09-10T13:30:29.239Z",
+  "source": {
+    "mergedMainSha": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f",
+    "releaseBranchHead": "54a3f8ce084c30850502af3bb55f15844fc3274d",
+    "pullRequest": 31,
+    "mergeCommit": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f"
+  },
+  "projects": {
+    "registry": {
+      "name": "private-skills",
+      "environment": "production",
+      "activation": {
+        "PSKILLS_UPLOAD_REVIEW_ENABLED": "added",
+        "PSKILLS_UPLOAD_REVIEWER_URL": "added"
+      }
+    },
+    "uploadReviewer": {
+      "name": "private-skills-upload-reviewer",
+      "environment": "production"
+    }
+  },
+  "deployment": {
+    "id": "dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq",
+    "url": "private-skills-pvbj6vzt3-andrewmcclenaghan-6046s-projects.vercel.app",
+    "aliases": [
+      "private-skills-theta.vercel.app",
+      "private-skills-andrewmcclenaghan-6046s-projects.vercel.app",
+      "private-skills-git-main-andrewmcclenaghan-6046s-projects.vercel.app"
+    ],
+    "target": "production",
+    "readyState": "READY",
+    "node": "24.x",
+    "source": {
+      "provider": "github",
+      "repository": "andymac4182/private-skills",
+      "ref": "main",
+      "commit": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f"
+    },
+    "uploadReviewer": {
+      "id": "dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g",
+      "url": "private-skills-upload-reviewer-169mv3jt5.vercel.app",
+      "aliases": [
+        "private-skills-upload-reviewer.vercel.app",
+        "private-skills-upload-reviewer-andrewmcclenaghan-6046s-projects.vercel.app"
+      ],
+      "target": "production",
+      "readyState": "READY",
+      "sourceCommit": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f"
+    }
+  },
+  "verification": {
+    "eveInfo": {
+      "endpoint": "https://private-skills-upload-reviewer.vercel.app/eve/v1/info",
+      "oldTokenStatus": 401,
+      "newTokenStatus": 200
+    },
+    "registryCapabilities": {
+      "status": 200,
+      "uploadReviewEnabled": true,
+      "uploadReviewConfigured": true,
+      "openClawEnabled": false
+    },
+    "productionReadonly": {
+      "requestCount": 12,
+      "registryWrites": 0,
+      "policyAllowUnscanned": false,
+      "requiredSkillsGuard": true
+    },
+    "registryCallback": {
+      "endpoint": "https://private-skills-theta.vercel.app/internal/upload-review/prepare",
+      "oldTokenStatus": 401,
+      "newTokenStatus": 405,
+      "newTokenAllow": "POST",
+      "requestMethod": "GET",
+      "jobCreated": false
+    }
+  },
+  "limitations": {
+    "noModelSessionStarted": true,
+    "noFeedImport": true,
+    "noRegistryContentMutation": true,
+    "noScannerPolicyChange": true,
+    "githubNativeCi": "provider admission failure before runner steps; no product tests executed"
+  },
+  "secretHandling": {
+    "mappingMode": "0600",
+    "rawIncidentFileUnmodified": true,
+    "secretValuesEmitted": false
+  },
+  "updatedAt": "2026-09-10T13:36:04.581Z"
+}

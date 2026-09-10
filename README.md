@@ -14,31 +14,41 @@ source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
-[`docs/verification-current.md`](docs/verification-current.md). PR30 is merged
+[`docs/verification-current.md`](docs/verification-current.md). PR31 is merged
 on `origin/main` at
-`0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. Its Git-triggered registry,
-builder, and upload-reviewer deployments are READY as
-`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
-`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [M6 read-only release-file
-evidence](docs/evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-records 12 bounded GET checks: authenticated health, principal, policy,
-capabilities, feeds, approved-release metadata, a metadata-only manifest, and a
-selected text-file read with a matching digest. OpenClaw-disabled routes return
-the expected 503 while unauthenticated release-file and OpenClaw requests are
-rejected with 401; the record has zero registry writes and retains no
-credentials or selected contents. The editor API and authoring source are
-shipped, while local browser acceptance is in progress and Eve bridge
-credentials/model end-to-end activation remain pending. Earlier browser and
-Git-main records retain their own deployment provenance. One snapshot-only
-production candidate also has recorded required-scan admission, isolated CLI
-install/repeat, and analytics evidence. Physical GitHub/well-known resolution,
-direct zero-upstream instrumentation, and native CI remain pending. A bounded
-hosted Neon/object-storage logical restore is recorded in the [sanitized restore
+`9caf2c178e92821cb9f3176a91a8ff5dafe2942f`. Its Git-triggered registry and
+upload-reviewer deployments are READY as
+`dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
+The sanitized [activation evidence](docs/evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
+records upload-review enablement/configuration, the credential-rotation
+boundary, 12 read-only registry checks, zero registry writes, and no scanner
+policy change; it records no secret values and no live model session. The
+sanitized [M6 read-only release-file evidence](docs/evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+retains the earlier production source/deployment provenance. The editor API and
+authoring source are shipped. A local synthetic [editor-browser record](docs/evidence/m6-editor-browser-local-29f7.json)
+from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
+draft flow, reload, stale-CAS, binary/oversize, keyboard, guard, and overflow
+checks; it does not prove hosted UI behavior, a live Eve/model session, or
+screenreader/contrast/reduced-motion acceptance. Earlier browser and Git-main
+records retain their own deployment provenance. One snapshot-only production
+candidate also has recorded required-scan admission, isolated CLI install/repeat,
+and analytics evidence. Physical GitHub/well-known resolution, direct
+zero-upstream instrumentation, and native CI remain pending. A bounded hosted
+Neon/object-storage logical restore is recorded in the [sanitized restore
 evidence](docs/evidence/hosted-restore-20260910.json); it verifies an exact
 target revision and digest-checked objects but does not claim a provider
 lifecycle guarantee or restored-origin health/scanner run. The OpenClaw backend
-is shipped but remains disabled, with no live interoperability evidence. M6
-and M7 remain outside the current C1 release gate.
+is shipped but remains disabled, with no live interoperability evidence. M6 and
+M7 remain outside the current C1 release gate.
+
+The current unfinished product inventory has three areas: builder Eve,
+upload/edit Eve, and OpenClaw feed interoperability. Seven later product bundles
+remain separate: M1 context packages/agent bridge, M2 quality/evaluation, M3
+team governance/lifecycle, M4 author CI/standards/library context, M5
+organization-wide visibility/automation, CLI parity, and external pack
+migration. This feature count is separate from the G0, C1, M6, and M7
+verification gates; passing a local or read-only fixture does not mark a
+milestone complete.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -53,7 +63,7 @@ and M7 remain outside the current C1 release gate.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_39j65…` probe proves authenticated read-only release metadata/file retrieval, OpenClaw-disabled behavior, and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). The editor API/source is shipped, but browser acceptance and Eve bridge activation remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_DEgAT…` activation record proves upload-review configuration and read-only boundaries without registry writes; the earlier `dpl_39j65…` probe proves authenticated release metadata/file retrieval and OpenClaw-disabled behavior. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Local synthetic editor/browser acceptance is recorded, while hosted UI, live Eve/model, screenreader, contrast, and reduced-motion acceptance remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.

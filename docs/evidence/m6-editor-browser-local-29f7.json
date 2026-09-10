@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "kind": "m6-editor-browser-evidence",
+  "capturedAt": "2026-09-10T13:28:25Z",
+  "sourceSha": "29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7",
+  "artifact": {
+    "manifestSha256": "4a87030efca86ae0cc4a613c37d38804eac6210649da98b8edc2b402a27a9849",
+    "verifiedEntries": "1047/1047",
+    "dependencyOverlay": "matching frozen Files SDK node_modules supplied through M6_VENDOR_NODE_MODULES; immutable artifact unchanged"
+  },
+  "runtime": {
+    "syntheticFixture": true,
+    "candidateExecution": false,
+    "productionWrites": false,
+    "hostedAcceptance": false
+  },
+  "fixture": {
+    "releaseId": "release-m6-editor-final-browser",
+    "releaseDigest": "sha256:5513562d9e8f7628d4c241d227444bc752c6f47adf68fe6197c03af2c66baf1f",
+    "fileCount": 123,
+    "safePathCount": 117,
+    "decodedReleaseBytes": 4911072,
+    "classes": [
+      "text SKILL.md",
+      "text docs/guide.md",
+      "text src/config.ts",
+      "unsupported notes/custom.data",
+      "binary assets/image.png",
+      "oversize large/oversize.txt"
+    ],
+    "oversize": {
+      "path": "large/oversize.txt",
+      "decodedBytes": 3670016,
+      "digest": "sha256:1b326c3f4b0340ea7fdfa3d541f2bec27a3b5028511818dc945daec6da75f86c"
+    },
+    "binary": {
+      "path": "assets/image.png",
+      "decodedBytes": 12,
+      "digest": "sha256:0f6c3a09018d44c79811cb205e1e03f0f214fdd8728f82e6e92aaaf95da5ee49"
+    },
+    "unsupported": {
+      "path": "notes/custom.data",
+      "decodedBytes": 66,
+      "digest": "sha256:c2c3f7031db26fd89baf0071e230a1398faddfb2de0c5edc9a146e0c8c38534b"
+    }
+  },
+  "browser": {
+    "provider": "Chrome extension via CUA",
+    "agentBrowserVersion": "0.37.1 pinned in prepared harness",
+    "desktop": {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "verified": true
+    },
+    "mobile": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "verified": true,
+      "scrollWidth": 390,
+      "bodyScrollWidth": 390
+    }
+  },
+  "apiChecks": {
+    "preflightStatuses": {
+      "health": 200,
+      "session": 200,
+      "principal": 200,
+      "catalog": 200,
+      "manifest": 200,
+      "selectedSkillMd": 200,
+      "draftCreate": 201,
+      "draftRead": 200
+    },
+    "manifestResponseBytes": 19182,
+    "metadataNoInlinePayload": true,
+    "oversizePreviewState": "oversize",
+    "binaryPreviewState": "binary",
+    "unsupportedPreviewState": "unsupported",
+    "savedDraft": {
+      "id": "draft_ccc49b84-de31-468f-b845-a2ef3af388a7",
+      "revision": 2,
+      "digest": "sha256:b0a9dc591eda7ac00b37c9c8e9947148ee32b5118d4c0299f5389744d6c4b5bd",
+      "fileCount": 123,
+      "responseBytes": 15956,
+      "metadataNoInlinePayload": true
+    },
+    "selectedSavedFiles": {
+      "SKILL.md": {
+        "decodedBytes": 173,
+        "marker": "M6_FINAL_SKILL",
+        "digest": "sha256:335b11d35425d4264600b256a97337773b07ddbb608be9c598ff1f08cf13c966"
+      },
+      "docs/guide.md": {
+        "decodedBytes": 70,
+        "marker": "M6_FINAL_GUIDE",
+        "digest": "sha256:f1dd534d7e6833f764c4e60a619d6c70568552b43855acd61d3cb118c6165f97"
+      },
+      "src/config.ts": {
+        "decodedBytes": 78,
+        "marker": "M6_FINAL_CONFIG",
+        "digest": "sha256:ae1993efcff4e7d126640120df7f16bf0831d669cb3b9b4e44d39486fbdee370"
+      },
+      "assets/image.png": {
+        "previewState": "binary",
+        "size": 12,
+        "digestUnchanged": true
+      },
+      "large/oversize.txt": {
+        "previewState": "oversize",
+        "size": 3670016,
+        "digestUnchanged": true
+      }
+    },
+    "staleCas": {
+      "status": 409,
+      "errorCode": "DRAFT_CONFLICT",
+      "message": "Draft revision is stale; rebase before saving",
+      "savedRevisionUnchanged": true,
+      "savedDigestUnchanged": true
+    },
+    "console": {
+      "mobileWarnings": 0,
+      "mobileErrors": 0
+    }
+  },
+  "assertions": {
+    "pierreGenuine": {
+      "passed": true,
+      "detail": "Pierre contenteditable textbox was inside a shadow root; document-level contenteditable count was zero"
+    },
+    "threeTextBuffers": {
+      "passed": true,
+      "files": [
+        "SKILL.md",
+        "docs/guide.md",
+        "src/config.ts"
+      ],
+      "markersVisible": true
+    },
+    "addRenameRemove": {
+      "passed": true,
+      "detail": "notes/final-added.md added, renamed to notes/final-renamed.md, then removed from the synthetic draft"
+    },
+    "saveDelta": {
+      "passed": true,
+      "revision": 2,
+      "fileCount": 123,
+      "digest": "sha256:b0a9dc591eda7ac00b37c9c8e9947148ee32b5118d4c0299f5389744d6c4b5bd",
+      "releaseBaseDigestUnchanged": true
+    },
+    "reloadResume": {
+      "passed": true,
+      "detail": "browser reload followed by Open draft editor visibly resumed revision 2 and reloaded SKILL.md marker"
+    },
+    "sidebarNavigationGuard": {
+      "passed": true,
+      "detail": "unsaved navigation confirm appeared and was canceled"
+    },
+    "closeGuard": {
+      "passed": true,
+      "detail": "native close confirm appeared and was canceled"
+    },
+    "nativeReloadGuard": {
+      "passed": true,
+      "detail": "Chrome Cmd+R showed `Reload site? Changes that you made may not be saved.` and was canceled"
+    },
+    "mobileKeyboard": {
+      "passed": true,
+      "detail": "Tab reached Rename and Remove; Enter selected config.ts and loaded its content"
+    },
+    "mobileNoOverflow": {
+      "passed": true,
+      "width": 390,
+      "scrollWidth": 390
+    },
+    "mobileBinaryOversize": {
+      "passed": true,
+      "detail": "binary and oversize remained metadata-only at 390px"
+    },
+    "builderTruthfulUnavailable": {
+      "passed": true,
+      "detail": "Skill builder unavailable; no model request"
+    },
+    "reviewUnavailable": {
+      "passed": true,
+      "detail": "review service disconnected; no currentness claim"
+    }
+  },
+  "screenshots": [
+    {
+      "label": "desktop-saved-diff",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "captured": true,
+      "inspected": true,
+      "storage": "inline-only CUA capture",
+      "observed": "revision 2, 123 files, saved digest, tree and genuine diff"
+    },
+    {
+      "label": "mobile-saved-diff",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "captured": true,
+      "inspected": true,
+      "storage": "inline-only CUA capture",
+      "observed": "tree, diff, save controls and no horizontal overflow"
+    },
+    {
+      "label": "mobile-binary",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "captured": true,
+      "inspected": true,
+      "storage": "inline-only CUA capture",
+      "observed": "Binary File, 12 B, no editor"
+    },
+    {
+      "label": "mobile-oversize",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "captured": true,
+      "inspected": true,
+      "storage": "inline-only CUA capture",
+      "observed": "Too Large To Preview, 256.0 KiB cap, 3.5 MiB"
+    }
+  ],
+  "visualEvidence": {
+    "editorScreenshotAvailable": false,
+    "screenshotStorage": "inline-only; no portable PNG committed",
+    "unrelatedPriorCaptureExcluded": true
+  },
+  "hostedAcceptance": {
+    "passed": false,
+    "reason": "This is a local synthetic API/browser proof. It does not prove hosted or production UI behavior."
+  }
+}
