@@ -86,6 +86,7 @@ export interface UpstreamListResponse { upstreams: Upstream[] }
 export interface AuditListResponse { events: AuditEvent[] }
 export interface HealthResponse { ok: boolean; service: string; version: string }
 export interface OperationResponse { operation: Job }
+export interface ResolveResponse { operation?: Job; resolution?: Resolution }
 export interface PublishResponse { operation?: Job; skill?: SkillVersion }
 export interface ScanActionResponse { operation?: Job; skill?: SkillVersion }
 export interface PackCreateResponse { pack: PackVersion }

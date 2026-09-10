@@ -2,7 +2,7 @@ import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../.
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
-  ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
+  ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse,
@@ -61,6 +61,7 @@ export const api = {
   signOut() { return request<void>('/auth/session', { method: 'DELETE' }) },
   skills(query?: string) { return request<SkillListResponse>('/v1/skills', { query: { q: query } }).then(unwrap) },
   skill(id: string) { return request<SkillResponse>(`/v1/skills/${encodeURIComponent(id)}`).then(unwrap) },
+  resolve(input: { kind: 'skill' | 'pack'; ref: string; version?: string }) { return request<ResolveResponse>('/v1/resolve', { method: 'POST', body: input }).then(unwrap) },
   scans(artifactDigest?: string) { return request<ScanListResponse>('/v1/scans', { query: { artifactDigest } }).then(unwrap) },
   publish(input: { name: string; version: string; description: string; bundle: SkillBundle }) { return request<PublishResponse>('/v1/publish', { method: 'POST', body: input }).then(unwrap) },
   rescan(skillId: string) { return request<ScanActionResponse>(`/v1/skills/${encodeURIComponent(skillId)}/rescan`, { method: 'POST' }).then(unwrap) },
