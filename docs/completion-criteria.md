@@ -13,21 +13,26 @@ release checklist.
 
 The latest source, portability, and deployment status is recorded in
 [`verification-current.md`](verification-current.md). The latest verified
-production release checkpoint is PR34, merged with SHA
-`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2` from approved head
-`bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b`; the sanitized [release
-evidence](evidence/production-release-checkpoint-34e4f56.json) records READY
-registry, builder, and upload-reviewer deployments, zero open PRs at capture,
-129 local tests, passing typecheck/diff checks and Vercel previews, and native
-CI stopped before runner steps for provider/account billing admission without a
-bypass. The authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
-records auth 200, genuine Pierre rendering, exact selected-file digest and
-1231-byte size, keyboard tree focus, desktop/mobile overflow checks, inner code
-scrolling, and zero console/page errors. This is read-only viewer evidence; it
-does not prove the M6 model/apply/review/scan workflow, durable upload-draft
-resume, screenreader, contrast, or reduced-motion acceptance. OpenClaw remains
-disabled pending review and explicit activation. The earlier PR32 activation
-and PR30 release-file records retain their own source/deployment provenance.
+deployment checkpoint is PR36's docs-only source commit
+`c7a0f03a4c482afa219f4c86339163b40161f944`; the sanitized [release
+evidence](evidence/production-release-checkpoint-c7a0f03.json) records READY
+registry, builder, and upload-reviewer deployments with no production
+configuration, environment, registry-data, feed, or authenticated
+application-data change. Native CI stopped before runner execution for account
+payment/spending admission. PR34 remains the functional release checkpoint;
+its authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+records auth 200, genuine Pierre rendering, selected-file digest and 1231-byte
+size, keyboard tree focus, desktop/mobile overflow checks, inner code scrolling,
+and zero console/page errors. This is read-only viewer evidence; it does not
+prove the M6 model/apply/review/scan workflow, durable upload-draft resume,
+screenreader, contrast, or reduced-motion acceptance. The [local Cloudflare
+build record](evidence/edge-build-c7a0f03.json) is source/build evidence only:
+Wrangler was unauthenticated and no hosted Cloudflare deployment was attempted.
+PR35 candidate source `c4cd24a` remains pending approval after 62 tests and
+three Vercel previews passed; native CI remains billing-blocked and two UI fixes
+are pending approval, not shipped. OpenClaw remains disabled pending review and
+explicit activation. The earlier PR32 activation and PR30 release-file records
+retain their own source/deployment provenance.
 The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
 metadata-only Pack preview, and snapshot-only candidate admission remain
 source-specific evidence. Physical GitHub/well-known resolution, direct

@@ -1,0 +1,54 @@
+{
+  "observedAtUtc": "2026-09-10T16:09:00.638Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "c7a0f03a4c482afa219f4c86339163b40161f944",
+    "trigger": "Git"
+  },
+  "deployments": [
+    {
+      "service": "registry",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "deploymentId": "dpl_C4miE1vUTCygLpQUyEwXqttXZ1me",
+      "deploymentUrl": "private-skills-id9pu1w0z-andrewmcclenaghan-6046s-projects.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c7a0f03a4c482afa219f4c86339163b40161f944",
+      "sourceRef": "main"
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "deploymentId": "dpl_69cYUpN1YxtVs3zxctYZFYadTjwv",
+      "deploymentUrl": "private-skills-builder-g81x22qm8.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c7a0f03a4c482afa219f4c86339163b40161f944",
+      "sourceRef": "main"
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "deploymentId": "dpl_Fon1NNapbMkVf3m2kdF4NWK4XDeU",
+      "deploymentUrl": "private-skills-upload-reviewer-5rf9md2qu.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c7a0f03a4c482afa219f4c86339163b40161f944",
+      "sourceRef": "main"
+    }
+  ],
+  "qualifications": {
+    "nativeCi": "GitHub CI jobs failed before runner execution because of the documented account payment/spending admission message; the Node container job was skipped.",
+    "productionConfigChanged": false,
+    "environmentChanged": false,
+    "modelCalls": false,
+    "registryDataChanged": false,
+    "feedActivity": false,
+    "authenticatedApplicationDataRead": false
+  }
+}

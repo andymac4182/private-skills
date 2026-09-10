@@ -1,8 +1,29 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-10T15:21:24Z
+**As of:** 2026-09-10T16:09:00.638Z
 
-**Latest verified production release checkpoint:** PR34 was merged at
+**Latest verified deployment checkpoint:** PR36's docs-only source commit
+`c7a0f03a4c482afa219f4c86339163b40161f944` produced READY Git-triggered
+production deployments for the registry, builder, and upload-reviewer. The
+sanitized [PR36 release evidence](evidence/production-release-checkpoint-c7a0f03.json)
+records the exact source/deployment mapping and no production configuration,
+environment, registry-data, feed, or authenticated application-data change.
+Native CI again stopped before runner execution because of the documented
+account payment/spending admission failure; the Node container job was skipped.
+
+The corresponding [local Cloudflare build record](evidence/edge-build-c7a0f03.json)
+passes the frozen offline install and Cloudflare-module edge build from source
+`c7a0f03`, with a clean static storage/provider boundary. Wrangler was not
+authenticated and no Cloudflare deployment or resources were attempted, so
+hosted Cloudflare access, TLS, and runtime behavior remain unverified.
+
+PR35 candidate source commit `c4cd24a` remains pending approval. Its source
+verification reports 62 tests and three Vercel previews passed, while native CI
+stopped at the same billing admission boundary. Two UI fixes are pending
+approval and are not shipped in this checkpoint. PR35 remains a candidate
+status record, not a deployed or live M6 verification.
+
+**Earlier PR34 functional release checkpoint:** PR34 was merged at
 `2026-09-10T15:02:13Z` with approved head
 `bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b` and merge SHA
 `34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`. The Git-triggered registry,
