@@ -606,6 +606,283 @@ describe('skills.sh source acquisition', () => {
     expect(result.provenance.revision).toBe(expected);
   });
 
+  it('preserves an explicit non-marker source-root install URL', async () => {
+    const skill = Buffer.from('---\nname: rooted\ndescription: Rooted well-known demo\n---\n# rooted\n', 'utf8');
+    const expected = digest(skill);
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(url.pathname);
+      if (url.pathname === '/catalog/api/v1/skills/example.test/rooted') {
+        return json({
+          id: 'example.test/rooted', source: 'example.test', slug: 'rooted', name: 'rooted',
+          sourceType: 'well-known', installUrl: `${BASE}/published`, url: '/site/example.test/rooted', hash: null, files: null,
+        });
+      }
+      if (url.pathname === '/published/.well-known/agent-skills/index.json') {
+        return json({ $schema: DISCOVERY_SCHEMA, skills: [{
+          name: 'rooted', type: 'skill-md', description: 'Rooted well-known demo', url: '/published/rooted/SKILL.md', digest: expected,
+        }] });
+      }
+      if (url.pathname === '/published/rooted/SKILL.md') return bytes(skill, 'text/markdown');
+      return json({ error: 'unexpected source path' }, 404);
+    };
+
+    const result = await acquireSkillsShSkill(request('example.test/rooted', fetchImpl));
+
+    expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: skill.toString('base64') }]);
+    expect(calls).toEqual([
+      '/catalog/api/v1/skills/example.test/rooted',
+      '/published/.well-known/agent-skills/index.json',
+      '/published/rooted/SKILL.md',
+    ]);
+    expect(calls).not.toContain('/.well-known/agent-skills/index.json');
+  });
+
+  it('requires skills.sh detail install URLs to be absolute', async () => {
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.pathname === '/catalog/api/v1/skills/example.test/relative') {
+        return json({
+          id: 'example.test/relative', source: 'example.test', slug: 'relative', name: 'relative',
+          sourceType: 'well-known', installUrl: '/published/.well-known/agent-skills/relative', hash: null, files: null,
+        });
+      }
+      throw new Error(`unexpected source request ${url.pathname}`);
+    };
+
+    await expect(acquireSkillsShSkill(request('example.test/relative', fetchImpl)))
+      .rejects.toMatchObject({ code: 'invalid_source' });
+  });
+
+  it('accepts a valid nested external id up to the 2048-byte envelope', async () => {
+    const source = `${'s'.repeat(512)}/${'t'.repeat(512)}`;
+    const slug = 'u'.repeat(512);
+    const id = `${source}/${slug}`;
+    const skill = '---\nname: long\ndescription: Long identifier\n---\n# long\n';
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.pathname === `/catalog/api/v1/skills/${source.split('/').join('/')}/${slug}`) {
+        return json({
+          id, source, slug, name: 'long', sourceType: 'well-known', installUrl: 'https://example.test/published',
+          url: '/site/long', hash: null, files: [{ path: 'SKILL.md', contents: skill }],
+        });
+      }
+      throw new Error(`unexpected source request ${url.pathname}`);
+    };
+    const input = request(id, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: [source] };
+    input.importRequest = { ...input.importRequest!, path: id, name: '@team/long' };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: Buffer.from(skill, 'utf8').toString('base64') }]);
+  });
+
+  it('rehydrates a scoped well-known location from exact authenticated catalog metadata', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Rehydrated well-known demo\n---\n# demo\n', 'utf8');
+    const expected = digest(skill);
+    const calls: Array<{ path: string; authorization: string | undefined }> = [];
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push({ path: `${url.pathname}${url.search}`, authorization: init?.headers?.authorization });
+      if (url.pathname === '/catalog/api/v1/skills/example.test/demo') {
+        // Match the documented detail payload: presentation metadata is
+        // recovered from list/search below, not invented on this response.
+        return json({ id: 'example.test/demo', source: 'example.test', slug: 'demo', installs: 1, hash: null, files: null });
+      }
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        expect(url.searchParams.get('q')).toBe('demo');
+        expect(url.searchParams.get('limit')).toBe('200');
+        return json({
+          data: [{
+            id: 'example.test/demo',
+            source: 'example.test',
+            slug: 'demo',
+            name: 'demo',
+            installs: 1,
+            sourceType: 'well-known',
+            installUrl: `${BASE}/published/.well-known/agent-skills/demo`,
+            url: '/site/example.test/demo',
+          }],
+          query: 'demo',
+          searchType: 'fuzzy',
+          count: 1,
+          durationMs: 1,
+        });
+      }
+      if (url.pathname === '/published/.well-known/agent-skills/index.json') {
+        return json({ $schema: DISCOVERY_SCHEMA, skills: [{
+          name: 'demo',
+          type: 'skill-md',
+          description: 'Rehydrated well-known demo',
+          url: '/published/demo/SKILL.md',
+          digest: expected,
+        }] });
+      }
+      if (url.pathname === '/published/demo/SKILL.md') return bytes(skill, 'text/markdown');
+      return json({ error: 'unexpected source request' }, 404);
+    };
+    const input = request('example.test/demo', fetchImpl);
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId: 'example.test/demo',
+      externalSourceType: 'well-known',
+    };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: skill.toString('base64') }]);
+    expect(result.provenance.externalSourceType).toBe('well-known');
+    expect((result.provenance as unknown as Record<string, unknown>).wellKnownIndexUrl).toContain('/published/.well-known/agent-skills/index.json');
+    expect(calls.map((entry) => entry.path)).toEqual([
+      '/catalog/api/v1/skills/example.test/demo',
+      '/catalog/api/v1/skills/search?q=demo&limit=200',
+      '/published/.well-known/agent-skills/index.json',
+      '/published/demo/SKILL.md',
+    ]);
+  });
+
+  it('rejects conflicting or duplicate exact metadata before well-known source fetches', async () => {
+    let sourceFetches = 0;
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.pathname === '/catalog/api/v1/skills/example.test/conflict') {
+        return json({ id: 'example.test/conflict', source: 'example.test', slug: 'conflict', installs: 1, hash: null, files: null });
+      }
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        return json({ data: [
+          {
+            id: 'example.test/conflict', source: 'example.test', slug: 'conflict', name: 'conflict', installs: 1,
+            sourceType: 'github', installUrl: 'https://github.com/example/repo', url: '/site/example.test/conflict',
+          },
+          {
+            id: 'example.test/conflict', source: 'example.test', slug: 'conflict', name: 'conflict', installs: 2,
+            sourceType: 'well-known', installUrl: `${BASE}/published/.well-known/agent-skills/conflict`, url: '/site/example.test/conflict',
+          },
+        ], query: 'conflict', searchType: 'fuzzy', count: 2, durationMs: 1 });
+      }
+      sourceFetches += 1;
+      return json({ error: 'source must not be fetched' }, 500);
+    };
+    const input = request('example.test/conflict', fetchImpl);
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId: 'example.test/conflict',
+      externalSourceType: 'well-known',
+    };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'ambiguous_source' });
+    expect(sourceFetches).toBe(0);
+  });
+
+  it('rejects a search metadata response larger than its 200-row request limit', async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === '/catalog/api/v1/skills/example.test/oversized-search') {
+        return json({ id: 'example.test/oversized-search', source: 'example.test', slug: 'oversized-search', installs: 0, hash: null, files: null });
+      }
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        return json({ data: Array.from({ length: 201 }, () => ({})), query: 'oversized-search', searchType: 'fuzzy', count: 201, durationMs: 1 });
+      }
+      throw new Error(`unexpected post-search request ${url.pathname}`);
+    };
+    const input = request('example.test/oversized-search', fetchImpl);
+    input.importRequest = { ...input.importRequest!, externalSourceType: 'well-known' };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'invalid_response' });
+    expect(calls).toEqual([
+      '/catalog/api/v1/skills/example.test/oversized-search',
+      '/catalog/api/v1/skills/search?q=oversized-search&limit=200',
+    ]);
+  });
+
+  it('bounds metadata rehydration across a non-yielding response body', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const fetchImpl = async (input: string | URL): Promise<Response> => {
+        const url = new URL(input.toString());
+        calls.push(`${url.pathname}${url.search}`);
+        if (url.pathname === '/catalog/api/v1/skills/example.test/hanging') {
+          return json({ id: 'example.test/hanging', source: 'example.test', slug: 'hanging', installs: 0, hash: null, files: null });
+        }
+        if (url.pathname === '/catalog/api/v1/skills/search') {
+          const body = new ReadableStream<Uint8Array>({ start() { /* intentionally never enqueue or close */ } });
+          return new Response(body, { headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error(`unexpected post-deadline request ${url.pathname}`);
+      };
+      const pending = acquireSkillsShSkill({
+        ...request('example.test/hanging', fetchImpl),
+        importRequest: {
+          ...request('example.test/hanging', fetchImpl).importRequest!,
+          externalSourceType: 'well-known',
+        },
+        limits: { requestTimeoutMs: 30_000 },
+      });
+
+      const outcome = expect(pending).rejects.toMatchObject({ code: 'metadata_timeout' });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await outcome;
+      expect(calls).toEqual([
+        '/catalog/api/v1/skills/example.test/hanging',
+        '/catalog/api/v1/skills/search?q=hanging&limit=200',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates caller cancellation while reading a detail response body', async () => {
+    const controller = new AbortController();
+    let detailStarted = false;
+    let resolveDetailStarted!: () => void;
+    let rejectDetailStarted!: (error: Error) => void;
+    const detailStartedPromise = new Promise<void>((resolve, reject) => {
+      resolveDetailStarted = resolve;
+      rejectDetailStarted = reject;
+    });
+    const detailStartTimeout = setTimeout(
+      () => rejectDetailStarted(new Error('detail request did not start')),
+      1_000,
+    );
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(url.pathname);
+      if (url.pathname === '/catalog/api/v1/skills/example.test/cancelled') {
+        detailStarted = true;
+        resolveDetailStarted();
+        const body = new ReadableStream<Uint8Array>({ start() { /* intentionally never yield */ } });
+        return new Response(body, { headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`unexpected post-cancellation request ${url.pathname}`);
+    };
+    const pending = acquireSkillsShSkill({
+      ...request('example.test/cancelled', fetchImpl),
+      signal: controller.signal,
+      limits: { requestTimeoutMs: 1_000 },
+    });
+    const completion = pending.then(
+      () => ({ rejected: false, error: undefined }),
+      (error: unknown) => ({ rejected: true, error }),
+    );
+    try {
+      await detailStartedPromise;
+    } finally {
+      clearTimeout(detailStartTimeout);
+    }
+    expect(detailStarted).toBe(true);
+    controller.abort();
+    const result = await completion;
+    expect(result.rejected).toBe(true);
+    expect(result.error).toMatchObject({ code: 'cancelled' });
+    expect(calls).toEqual(['/catalog/api/v1/skills/example.test/cancelled']);
+  });
+
   it('extracts a bounded v0.2 archive and strips its single skill root', async () => {
     const skill = Buffer.from('---\nname: archived\ndescription: Archived demo\n---\n# archived\n', 'utf8');
     const readme = Buffer.from('support\n', 'utf8');
