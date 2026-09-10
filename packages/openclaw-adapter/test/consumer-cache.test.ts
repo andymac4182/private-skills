@@ -249,6 +249,53 @@ describe('durable OpenClaw consumer snapshots', () => {
     });
   });
 
+  it('does not let a durable 304 bypass a changed digest pin or a tighter request body limit', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const fetcher = async () => new Response(null, {
+      status: 304,
+      headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+    });
+    const base = { url: SOURCE_URL, expectedFeedId: FEED_ID, allowedOrigins: ['https://feed.example'], fetcher };
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+
+    await expect(cache.refresh({
+      ...base,
+      expectedSha256: `sha256:${'f'.repeat(64)}`,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+
+    await expect(cache.refresh({
+      ...base,
+      maxBodyBytes: original.bytes.byteLength - 1,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+  });
+
+  it('does not accept a durable 304 when the caller aborts after the response is produced', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const controller = new AbortController();
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const result = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      signal: controller.signal,
+      fetcher: async () => {
+        queueMicrotask(() => controller.abort());
+        return new Response(null, {
+          status: 304,
+          headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+        });
+      },
+    });
+    expect(result.kind).not.toBe('not-modified');
+    expect(['aborted', 'no-cache']).toContain('error' in result ? result.error : undefined);
+  });
+
   it('serializes refreshes for one durable feed key', async () => {
     const repository = createMemoryStateRepository();
     const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);

@@ -340,7 +340,7 @@ export class PersistentOpenClawFeedCache {
           if (response.url !== '' && response.url !== key.sourceUrl) {
             throw new OpenClawRequestError('redirected');
           }
-          if (response.status === 304 && usableDurable !== undefined && validatorsMatch(response, usableDurable)) {
+          if (response.status === 304 && usableDurable !== undefined && !request.signal?.aborted && validatorsMatch(response, usableDurable)) {
             // Keep the 304 response intact. The durable snapshot is selected
             // below only after the worker's redirect/validator checks run.
             durableNotModified = true;
@@ -349,7 +349,14 @@ export class PersistentOpenClawFeedCache {
         }
       : undefined;
     const result = await cache.refresh({ ...request, fetcher: wrappedFetcher });
-    if (durableNotModified && usableDurable !== undefined) {
+    const canUseDurable304 = durableNotModified &&
+      usableDurable !== undefined &&
+      result.kind === 'rejected' &&
+      result.error === 'no-cache' &&
+      result.status === 304 &&
+      canServeDurable304(usableDurable, request, this.maxBodyBytes, this.now(), this.maxStaleMs);
+    if (canUseDurable304) {
+      if (request.signal?.aborted) return { kind: 'rejected', status: 304, error: 'aborted' };
       const refreshed = cloneSnapshot(usableDurable);
       refreshed.acceptedAt = this.now();
       try {
@@ -359,6 +366,7 @@ export class PersistentOpenClawFeedCache {
         const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
         return authoritativeResult(authoritative.usable, 304, projectStoreError(error));
       }
+      if (request.signal?.aborted) return { kind: 'rejected', status: 304, error: 'aborted' };
       return { kind: 'not-modified', status: 304, snapshot: refreshed };
     }
     if (result.kind === 'accepted' || result.kind === 'not-modified') {
@@ -410,6 +418,26 @@ function compareSnapshots(
   if (candidate.feed.sequence < durable.feed.sequence) return 'older';
   if (candidate.feed.sequence > durable.feed.sequence) return 'newer';
   return candidate.sha256 === durable.sha256 ? 'same' : 'equivocation';
+}
+
+function canServeDurable304(
+  snapshot: OpenClawCacheSnapshot,
+  request: OpenClawFeedRefreshRequest,
+  maxBodyBytes: number,
+  now: number,
+  maxStaleMs: number,
+): boolean {
+  if (request.signal?.aborted) return false;
+  if (request.expectedSha256 !== undefined && !matchesExpectedSha256(snapshot.sha256, request.expectedSha256)) return false;
+  if (request.maxBodyBytes !== undefined && (!Number.isSafeInteger(request.maxBodyBytes) || request.maxBodyBytes < 1)) return false;
+  const limit = Math.min(request.maxBodyBytes ?? maxBodyBytes, maxBodyBytes);
+  if (snapshot.bytes.byteLength > limit) return false;
+  return usableSnapshot(snapshot, now, maxStaleMs) !== undefined;
+}
+
+function matchesExpectedSha256(actual: string, expected: string): boolean {
+  const normalized = expected.startsWith('sha256:') ? expected : `sha256:${expected}`;
+  return SHA256_RE.test(normalized) && normalized === actual;
 }
 
 function authoritativeResult(
