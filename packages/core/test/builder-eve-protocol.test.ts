@@ -29,6 +29,7 @@ interface EveHarness {
   events: JsonRecord[];
   cancelResponse: JsonRecord;
   mismatchAcceptance: boolean;
+  mismatchRegistrySession: boolean;
   fetch: typeof fetch;
 }
 
@@ -88,6 +89,7 @@ function createEveHarness(): EveHarness {
     events: [],
     cancelResponse: { ok: true, status: 'accepted' },
     mismatchAcceptance: false,
+    mismatchRegistrySession: false,
   } as Omit<EveHarness, 'fetch'> & { fetch?: typeof fetch };
 
   harness.fetch = async (input, init) => {
@@ -107,6 +109,7 @@ function createEveHarness(): EveHarness {
         digest: body.digest,
         requestId: harness.mismatchAcceptance ? 'wrong-request-id' : body.requestId,
         requestDigest: harness.mismatchAcceptance ? ZERO_DIGEST : body.requestDigest,
+        registrySessionId: harness.mismatchRegistrySession ? 'wrong-registry-session' : body.registrySessionId,
       });
     }
 
@@ -340,6 +343,23 @@ describe('core skill builder Eve protocol boundary', () => {
     expect(record?.eveSessionId).toBe('');
     expect(record?.requests).toEqual([
       expect.objectContaining({ id: 'prompt-1', state: 'uncertain' }),
+    ]);
+    expect(test.eve.calls.filter((call) => call.url.includes('/eve/v1/session/'))).toHaveLength(0);
+  });
+
+  it('does not bind an Eve session when app acceptance echoes a different registry session', async () => {
+    const test = fixture();
+    test.eve.mismatchRegistrySession = true;
+    const draft = await createDraft(test);
+    const sessionId = await createSession(test, draft);
+
+    const response = await sendPrompt(test, draft, sessionId, 'prompt-registry-session');
+    expect(response.status).toBe(502);
+    const state = await test.repository.read(ORGANIZATION);
+    const record = state.builderSessions?.find((candidate) => candidate.id === sessionId);
+    expect(record?.eveSessionId).toBe('');
+    expect(record?.requests).toEqual([
+      expect.objectContaining({ id: 'prompt-registry-session', state: 'uncertain' }),
     ]);
     expect(test.eve.calls.filter((call) => call.url.includes('/eve/v1/session/'))).toHaveLength(0);
   });

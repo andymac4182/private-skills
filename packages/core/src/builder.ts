@@ -240,6 +240,11 @@ async function sendPrompt(
   if (!requestRecord) throw builderError('BUILDER_UNAVAILABLE', 'The builder request could not be recorded', 500);
   const payload = {
     sessionKey: record.sessionKey,
+    // The provider session key is intentionally separate from the registry's
+    // durable session identity.  Tool callbacks use this registry id to find
+    // the authorized draft/session record; never make the provider id serve
+    // both roles.
+    registrySessionId: record.id,
     draftId,
     revision: binding.revision,
     digest: binding.digest,
@@ -266,6 +271,7 @@ async function sendPrompt(
       !isRecord(value) ||
       value.requestId !== requestId ||
       value.requestDigest !== requestRecord.requestDigest ||
+      value.registrySessionId !== record.id ||
       value.draftId !== draftId ||
       value.revision !== binding.revision ||
       value.digest !== binding.digest ||
