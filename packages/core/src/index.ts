@@ -60,7 +60,11 @@ import {
   type V1Skill,
 } from '../../directory/src/index.js';
 import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
-import { createReleaseFilesHandler } from '../../authoring/src/index.js';
+import {
+  createReleaseFilesHandler,
+  type AuthoringHandlerDependencies,
+} from '../../authoring/src/index.js';
+import { createDraftHandler } from '../../authoring/src/drafts.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -396,6 +400,12 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
           config,
           requestId,
         );
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'drafts') {
+        return await createDraftHandler(
+          createAuthoringHandlerDependencies(principal, deps, config),
+        )(request);
       }
 
       if (segments[0] === 'v1' && segments[1] === 'publish' && segments.length === 2) {
@@ -793,10 +803,12 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (segments[0] === 'v1' && segments[1] === 'skills') {
     if (segments.length === 2 || (segments.length === 3 && method === 'GET')) return ['skills:read', 'registry:read'];
     if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) return ['skills:read', 'registry:read'];
+    if (segments.length === 4 && segments[3] === 'drafts') return ['skills:write', 'skills:publish'];
     if (segments.length === 4 && segments[3] === 'rescan') return ['skills:rescan', 'skills:write', 'skills:publish'];
     if (segments.length === 4 && segments[3] === 'revoke') return ['skills:revoke', 'skills:write', 'skills:admin'];
   }
   if (segments[0] === 'v1' && segments[1] === 'publish') return ['skills:publish', 'skills:write'];
+  if (segments[0] === 'v1' && segments[1] === 'drafts') return ['skills:write', 'skills:publish'];
   if (segments[0] === 'v1' && segments[1] === 'resolve') return ['skills:read', 'packs:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'operations') return ['jobs:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'install-authorizations') {
@@ -962,6 +974,32 @@ async function createSessionResponse(
   });
 }
 
+/**
+ * Compose authoring adapters with the core's already-authenticated actor.
+ * Keeping this request-local prevents a second credential lookup from
+ * observing a different actor while retaining one repository/blob/config
+ * boundary for both read-only release views and mutable drafts.
+ */
+function createAuthoringHandlerDependencies(
+  principal: Principal,
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+): AuthoringHandlerDependencies {
+  return {
+    repository: deps.repository,
+    blobs: deps.blobs,
+    auth: { authenticate: async () => principal },
+    config: {
+      organizationId: config.organizationId,
+      maxBodyBytes: config.maxBodyBytes,
+    },
+    releaseAdmission: (state, release, releasePrincipal) =>
+      releasePrincipal.organizationId === config.organizationId &&
+      canReadNamespace(releasePrincipal, release.name) &&
+      skillCurrentlyApproved(state, release),
+  };
+}
+
 async function handleSkillsRoute(
   method: HttpMethod,
   segments: string[],
@@ -972,6 +1010,12 @@ async function handleSkillsRoute(
   config: Required<RegistryConfiguration>,
   requestId: string,
 ): Promise<Response> {
+  if (segments.length === 4 && segments[3] === 'drafts') {
+    return await createDraftHandler(
+      createAuthoringHandlerDependencies(principal, deps, config),
+    )(request);
+  }
+
   if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) {
     if (method !== 'GET') return methodNotAllowed(['GET']);
 
@@ -979,16 +1023,9 @@ async function handleSkillsRoute(
     // while core owns the authenticated principal and current policy gate. A
     // request-local authenticator forwards this already-validated principal so
     // the adapter cannot perform a second credential lookup for the same read.
-    const releaseFilesHandler = createReleaseFilesHandler({
-      repository: deps.repository,
-      blobs: deps.blobs,
-      auth: { authenticate: async () => principal },
-      config: { organizationId: config.organizationId },
-      releaseAdmission: (state, release, releasePrincipal) =>
-        releasePrincipal.organizationId === config.organizationId &&
-        canReadNamespace(releasePrincipal, release.name) &&
-        skillCurrentlyApproved(state, release),
-    });
+    const releaseFilesHandler = createReleaseFilesHandler(
+      createAuthoringHandlerDependencies(principal, deps, config),
+    );
     return await releaseFilesHandler(request);
   }
 

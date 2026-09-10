@@ -106,7 +106,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
     if (infrastructure.hostedWorker && env.CRON_SECRET && (response.status === 201 || response.status === 202) && request.method === 'POST' &&
-        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
+        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path) || /^\/v1\/drafts\/[^/]+\/publish$/.test(path))) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.
       const drain = async () => {
