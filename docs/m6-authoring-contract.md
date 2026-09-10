@@ -70,7 +70,7 @@ canonical path after the existing safe-path validation.
 
 ## Draft and release transitions
 
-The editor starts a draft explicitly from an immutable `SkillVersion`:
+The editor can fork an immutable `SkillVersion` or start an upload-origin draft:
 
 ```text
 POST /v1/drafts
