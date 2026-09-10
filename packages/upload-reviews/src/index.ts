@@ -151,6 +151,9 @@ export interface CompleteUploadReviewInput {
 export interface MarkUploadReviewStaleInput {
   draftId: string;
   current: UploadReviewBinding;
+  /** Optional reviewer contract values; changing either also stales old results. */
+  reviewerRevision?: string;
+  model?: string;
   reason: string;
   now?: ReviewNow;
 }
@@ -782,13 +785,20 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     assertOrganizationId(organizationId);
     const draftId = boundedString(input.draftId, 'draftId', MAX_ID_LENGTH);
     const current = validateBinding(input.current);
+    const reviewerRevision = input.reviewerRevision === undefined
+      ? undefined
+      : boundedString(input.reviewerRevision, 'reviewerRevision', MAX_VERSION_LENGTH);
+    const model = input.model === undefined ? undefined : boundedString(input.model, 'model', MAX_MODEL_LENGTH);
     const reason = boundedString(input.reason, 'reason', MAX_REASON_LENGTH);
     const clock = parseClock(input.now);
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs, results } = writableCollections(rawState);
       const changed: UploadReviewJob[] = [];
       for (const job of jobs) {
-        if (job.organizationId !== organizationId || job.binding.draftId !== draftId || sameBinding(job.binding, current)) continue;
+        if (job.organizationId !== organizationId || job.binding.draftId !== draftId) continue;
+        const contractChanged = (reviewerRevision !== undefined && job.reviewerRevision !== reviewerRevision) ||
+          (model !== undefined && job.model !== model);
+        if (sameBinding(job.binding, current) && !contractChanged) continue;
         if (job.state === 'stale') continue;
         job.state = 'stale';
         job.updatedAt = clock.iso;

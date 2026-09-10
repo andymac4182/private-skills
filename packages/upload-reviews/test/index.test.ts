@@ -181,6 +181,28 @@ describe('upload/edit review persistence', () => {
     expect(requeued.resultId).toBeUndefined();
   });
 
+  it('marks old results stale when the reviewer contract changes', async () => {
+    const { service } = await fixture();
+    const job = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.6-luna',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const claim = await service.claim('org-a', job.id, { now: BASE_TIME });
+    await service.complete('org-a', job.id, claim.leaseToken!, { findings: [], now: BASE_TIME });
+    const stale = await service.markStale('org-a', {
+      draftId: 'draft-1',
+      current: binding(),
+      reviewerRevision: 'upload-reviewer-v2',
+      model: 'openai/gpt-5.6-luna',
+      reason: 'reviewer contract changed',
+      now: '2026-01-02T03:09:09.000Z',
+    });
+    expect(stale[0]?.state).toBe('stale');
+  });
+
   it('rejects hostile paths, duplicate paths, invalid findings, and secret-bearing errors', async () => {
     const { service } = await fixture();
     const baseInput = {
