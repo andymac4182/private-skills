@@ -2,41 +2,52 @@
 
 **Date:** 2026-09-10
 
-**Status:** PR26 is merged on `origin/main` at
-`79088eaafa8cca279648004a0266e634b0caade6`. Its Git-triggered production
-deployment is READY as `dpl_GRTEufeDWquQReZmoJatk8rdRdHk`; the current
-read-only release-file proof is recorded below. Earlier prebuilt, Git-main,
-and browser records remain linked with their own source/deployment provenance.
-The browser Pack-preview window crossed a stable-alias deployment cutover, so
-its exact deployment attribution remains unknown. A later source-specific
-production record proves one snapshot-only candidate admission, required-scan
-approval, isolated CLI install/repeat, and install analytics. It does not prove
-physical GitHub or well-known source resolution, direct upstream-zero
-instrumentation, or a restored-origin health/scanner run. A bounded hosted
-Neon/object-storage logical restore is verified in the sanitized [restore
-evidence](evidence/hosted-restore-20260910.json): source revision 114, five
-referenced objects totaling 10,381 bytes, exact target revision 114, five
-digest/size-verified target objects, and post-restore target cleanup. The copy
-window uses operator-quiescence attestation and does not claim a provider
-lifecycle guarantee. M6's read-only VIEW slice has delivered production API
-evidence, while the full Diffs editor, durable drafts, upload/edit Eve, and
-interactive builder remain active and incomplete. M7 OpenClaw remains active
-and incomplete; these milestones stay outside the current C1 release gate.
+**Status:** PR30 is merged on `origin/main` at
+`0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. Its Git-triggered registry,
+builder, and upload-reviewer deployments are READY as
+`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
+`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [M6 read-only release-file
+evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+records 12 bounded GET checks against the registry deployment, including
+authenticated health, principal, policy, capabilities, feeds, approved-release
+metadata, a metadata-only manifest, and a selected text-file read with a
+matching digest. OpenClaw-disabled routes return 503 and unauthenticated
+release-file/OpenClaw requests return 401; the record has zero registry writes
+and retains no credentials or selected contents. The editor API and authoring
+source are shipped, while local browser acceptance is in progress and Eve
+bridge credentials/model end-to-end activation remain pending. One
+snapshot-only production candidate still has recorded required-scan admission,
+isolated CLI install/repeat, and install analytics. Physical GitHub/well-known
+source resolution, direct upstream-zero instrumentation, and native CI remain
+pending. A bounded hosted Neon/object-storage logical restore is verified in the
+sanitized [restore evidence](evidence/hosted-restore-20260910.json): source
+revision 114, five referenced objects totaling 10,381 bytes, exact target
+revision 114, five digest/size-verified target objects, and post-restore target
+cleanup. The copy window uses operator-quiescence attestation and does not
+claim a provider lifecycle guarantee or a restored-origin health/scanner run.
+The OpenClaw backend is shipped but remains disabled, with no live
+interoperability evidence. M6 and M7 remain outside the current C1 release
+gate.
 
-## Current Git-triggered read-only release-file checkpoint
+## Current Git-triggered M6 read-only release-file checkpoint
 
-The READY deployment `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` was built from PR26
-main commit `79088eaafa8cca279648004a0266e634b0caade6`. The sanitized
-[production read-only evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
-made seven bounded GET checks: health, authenticated principal, policy,
-approved-release metadata, a paths-only release manifest, a selected `SKILL.md`
-read, and an unauthenticated release-files request. The authenticated checks
-returned 200; the unauthenticated request returned 401. The selected file's
-server-reported digest matched its transiently read contents, response bodies
-and credentials were not retained, and the pass recorded zero private-registry
-writes. This is production HTTP/API evidence for the read-only release-file
-slice; it is separate from the earlier browser Pack-preview fixture and does
-not claim the full M6 editor/reviewer/builder workflow.
+The READY registry deployment `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` was built
+from current main commit `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. The
+sanitized [production M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+made 12 bounded GET checks: health, authenticated principal, policy,
+capabilities, feeds, OpenClaw-disabled feed/catalog behavior, approved-release
+metadata, a metadata-only release manifest, a selected `SKILL.md` read, and
+unauthenticated release-file/OpenClaw requests. Normal authenticated routes
+returned 200, OpenClaw-disabled routes returned 503, and unauthenticated
+requests returned 401. The manifest contained no file contents, the selected
+file's server-reported digest matched its transiently read contents, response
+bodies and credentials were not retained, and the pass recorded zero
+private-registry writes. This is production HTTP/API evidence for the M6
+read-only release-file slice; it does not prove the full editor/reviewer/builder
+workflow or browser acceptance. Builder deployment
+`dpl_5GfCb5Et8VUcjigcugytvf3NoXqh` and upload-reviewer deployment
+`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP` are also Git-triggered READY deployments;
+their Eve bridge credentials/model activation remains pending.
 
 ## Earlier prebuilt rollout checkpoint
 
@@ -167,10 +178,20 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   lifecycle guarantee or a restored-origin health/scanner run.
 - Recheck nested upstream detail and any remaining provider limits recorded in
   the C1 criteria.
+- M6 editor/authoring API and source are shipped in current main, but local
+  browser acceptance remains in progress. Complete the composed authenticated
+  editor flow, including durable draft/CAS, large unchanged and binary file
+  references, upload/edit review, required scanning, explicit publication,
+  cross-tenant denial, and narrow/desktop accessibility. The next 22:00 UTC
+  Eve run still needs an explicit causal scheduler/session identifier; the
+  earlier cron record is only deployment-scoped temporal correlation.
+- M7 OpenClaw backend code is shipped, but the feed remains disabled. Keep it
+  disabled until its explicit feed/trust configuration and bounded producer /
+  consumer interoperability evidence are ready.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
-content is never executed. M6 Diffs file viewing/editing with immutable draft
-releases and a separate upload/edit Eve reviewer, plus M7 OpenClaw feed
-interoperability, are active implementation milestones with incomplete evidence
-and remain outside the current release gates here.
+content is never executed. M6's source slices are current, but its composed
+browser/proof gate remains incomplete. M7's source slices are current, but its
+OpenClaw feed remains disabled and has no live interoperability evidence. Both
+remain outside the current release gates here.

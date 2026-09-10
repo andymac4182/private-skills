@@ -35,12 +35,14 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close v0.2.0.** Finish the remaining final source-revision checks and
-  restore rehearsal. The GitHub Vercel project connection and Git-triggered
-  production deployment are now evidenced by PR26 and its READY deployment;
-  the Neon production integration, storage, secrets, authenticated production
-  flow, and released CLI evidence are recorded as complete. The latest
-  verification record identifies the remaining gates.
+- **Now: close v0.2.0 and the remaining C1 evidence.** Finish the remaining
+  physical-source and source-revision checks. The GitHub Vercel project
+  connection and PR30 Git-triggered READY deployments are recorded on current
+  main `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`; the Neon production
+  integration, storage, secrets, authenticated production flow, released CLI
+  evidence, and bounded hosted logical restore are recorded as complete. Native
+  CI remains provider-blocked before any job step. The latest verification
+  record identifies the remaining gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
   on-demand skills.sh catalog adapter, identity-preserving automatic source
   pullthrough and approved-cache behavior, and the Packs, Topics, Official, and
@@ -53,9 +55,10 @@ new content and execution boundaries.
   owner has authorized the Vercel project OIDC destination. Source `0f9da75`
   implements the directory, Topics parser, bounded cache, enumeration, and
   security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
-  API evidence. The latest PR26 Git deployment
-  `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` adds verified read-only release manifest
-  and selected-file GETs with an unauthenticated 401 boundary; browser
+  API evidence. The current main deployment
+  `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` and deployment
+  `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` add verified read-only release manifest
+  and selected-file GETs with an unauthenticated 401 boundary; physical source
   acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
   remain open. The required install
   path supports multiple tenant feeds, with one origin/restriction configuration
@@ -66,21 +69,22 @@ new content and execution boundaries.
   cold requests deduplicate, and an explicit refresh reports source failure
   instead of presenting an older cache as fresh. Optional source restrictions
   are an administrator policy, not a prerequisite for a public catalog row.
-- **M6 read-only release view slice delivered; full editor/review remains active and incomplete.** The
-  production Git deployment `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` now proves the
-  authenticated release manifest, selected text-file read, and unauthenticated
-  401 boundary in the [sanitized read-only evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json).
-  This is production GET evidence; the earlier browser Pack fixture remains
-  separately attributed and is not promoted to this deployment. Complete M6
-  still requires the editor, durable drafts, upload/edit reviewer, builder, and
-  their end-to-end evidence. Integrate the
-  Diffs editor primitives with a Private Skills file tree, durable private
-  drafts, immutable new releases, and a separate upload/edit Eve reviewer.
-  The Diffs integration, persistence, identity, review jobs, UI findings,
-  scanner authority, malicious-content boundary, and accessibility gates are
-  specified in **M6** below and [`completion-criteria.md`](completion-criteria.md).
-  This milestone is active implementation work, but it is not a G0 or C1
-  release gate until its criteria and evidence pass.
+- **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
+  Current main `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` has Git-triggered READY
+  registry, builder, and upload-reviewer deployments
+  `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
+  `dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The registry's [sanitized read-only
+  evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+  proves the bounded release metadata/file and authorization checks, including
+  OpenClaw-disabled responses. Local browser acceptance is in progress; Eve
+  bridge credentials/model end-to-end activation remain pending. Complete M6
+  still requires the composed editor, durable drafts, upload/edit reviewer,
+  builder, and their end-to-end evidence. The Diffs integration, persistence,
+  identity, review jobs, UI findings, scanner authority, malicious-content
+  boundary, and accessibility gates are specified in **M6** below and
+  [`completion-criteria.md`](completion-criteria.md). This milestone is active
+  implementation work, but it is not a G0 or C1 release gate until its criteria
+  and evidence pass.
 - **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.** In parallel with M6, add a
   versioned producer and consumer for the
   official ClawHub hosted skills-feed contract. The later **M7** milestone
@@ -156,13 +160,13 @@ or review orchestration.
 | Confirmed limitation | Diffs docs describe retained edit state as bounded and in memory; the documented editor APIs expose change/completion callbacks and application-owned initial state ([docs](https://diffs.com/docs)). | Durable drafts, reload/resume, optimistic concurrency, exact content digests, and immutable releases are Private Skills responsibilities. |
 | Unverified/absent in checked official material | The checked Diffs pages and linked source do not document upload handling, authentication, workspace tenancy, server persistence, immutable release/version semantics, scanner policy, or an Eve/review job service. | Do not attribute these to Diffs. The M6 contract below supplies them through existing Private Skills storage, auth, worker, scanner, and AI Gateway boundaries. |
 
-The current checkout already uploads a complete folder for a new release and
-shows read-only release/external detail plus the daily consolidation Eve review.
-M6 must make the read-only release view and the editing workflow separate:
+The current checkout uploads complete folders for new releases and now includes
+the authoring/editor, durable draft, builder, and upload/edit review services.
+M6 must keep the read-only release view and the editing workflow separate:
 viewing a skill opens an authorized, immutable version through a Diffs file view,
-while editing is an explicit action that creates a draft route. The checkout
-has no draft route, file editor, file-tree/editor synchronization, or upload/edit
-review queue. The new reviewer must remain distinct from the daily
+while editing is an explicit action that creates a draft route. Local browser
+acceptance and the hosted Eve bridge activation remain pending. The new reviewer
+must remain distinct from the daily
 common-skill consolidation Eve: it receives an exact upload/draft snapshot,
 uses its own least-privilege tool boundary and configurable AI Gateway model,
 and returns advisory findings for a human. Neither Eve may execute candidate
@@ -172,7 +176,7 @@ The proposed delivery order is:
 
 | Slice | Later acceptance target | Dependencies and rationale |
 | --- | --- | --- |
-| M6-VIEW | **Delivered slice:** the production read-only route proves an authenticated release manifest, selected text-file retrieval with digest verification, and an unauthenticated 401 boundary in [sanitized evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json). The full gate still requires an authorized reader to browse the complete canonical tree and every allowed file through Diffs, including binary/oversize bounded states, selected-version changes, and no candidate execution. | Existing release authorization, Files SDK retrieval, canonical manifest, and `@pierre/diffs`; the delivered slice makes inspection useful without creating an editable copy, while the remaining fixtures complete the gate. |
+| M6-VIEW | **Delivered slice:** the current production read-only route proves authenticated release metadata, a metadata-only manifest, selected text-file retrieval with digest verification, expected OpenClaw-disabled responses, and an unauthenticated 401 boundary in [sanitized evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json). The full gate still requires an authorized reader to browse the complete canonical tree and every allowed file through Diffs, including binary/oversize bounded states, selected-version changes, and no candidate execution. | Existing release authorization, Files SDK retrieval, canonical manifest, and `@pierre/diffs`; the delivered slice makes inspection useful without creating an editable copy, while the remaining fixtures complete the gate. |
 | M6-EDIT | An authorized publisher takes an explicit edit action from an immutable release, creating a tenant-scoped draft route with base release/version/digest. Saving and reloading restores draft revisions and bytes; a Diffs comparison shows changes against the base, and a separate author action starts the scanner/publication transition. | Depends on M6-VIEW, draft persistence, canonical digesting, and the existing scanner/publish boundary; an editor save is never a release. |
 | M6-UI | Authenticated publishers can open a private draft, browse a canonical file tree, edit files, switch file/diff views, and see line/path annotations. | Existing web auth, bundle validator, `@pierre/diffs`, and `@pierre/trees`; the UI value arrives before release automation. |
 | M6-RELEASE | An explicit **Queue release scan** action creates a new immutable release candidate with a server-computed canonical digest, base/draft provenance, and explicit scan/publish transition; saving a draft only persists a new draft revision and never creates a release. Previous releases remain byte-identical. | Existing Files SDK, state, worker, and scanner policy; keeps draft save separate from publication. |

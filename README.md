@@ -14,27 +14,31 @@ source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
-[`docs/verification-current.md`](docs/verification-current.md). PR26 is merged
-on `origin/main` at `79088ea`; its READY Git-triggered deployment is
-`dpl_GRTEufeDWquQReZmoJatk8rdRdHk`. The sanitized [read-only release-file
-evidence](docs/evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
-proves authenticated health, principal/policy, approved-release metadata,
-paths-only manifest, selected text-file retrieval with matching digest, and
-unauthenticated 401, with zero private-registry writes. This is production GET
-evidence; earlier browser fixtures, including Pack preview, retain their own
-deployment provenance and are not promoted by it. The earlier prebuilt and
-Git-main readbacks remain useful source-specific records. One snapshot-only
+[`docs/verification-current.md`](docs/verification-current.md). PR30 is merged
+on `origin/main` at
+`0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. Its Git-triggered registry,
+builder, and upload-reviewer deployments are READY as
+`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
+`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [M6 read-only release-file
+evidence](docs/evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+records 12 bounded GET checks: authenticated health, principal, policy,
+capabilities, feeds, approved-release metadata, a metadata-only manifest, and a
+selected text-file read with a matching digest. OpenClaw-disabled routes return
+the expected 503 while unauthenticated release-file and OpenClaw requests are
+rejected with 401; the record has zero registry writes and retains no
+credentials or selected contents. The editor API and authoring source are
+shipped, while local browser acceptance is in progress and Eve bridge
+credentials/model end-to-end activation remain pending. Earlier browser and
+Git-main records retain their own deployment provenance. One snapshot-only
 production candidate also has recorded required-scan admission, isolated CLI
 install/repeat, and analytics evidence. Physical GitHub/well-known resolution,
 direct zero-upstream instrumentation, and native CI remain pending. A bounded
 hosted Neon/object-storage logical restore is recorded in the [sanitized restore
 evidence](docs/evidence/hosted-restore-20260910.json); it verifies an exact
 target revision and digest-checked objects but does not claim a provider
-lifecycle guarantee or restored-origin health/scanner run. M6's read-only VIEW
-slice has delivered production evidence, while the full Diffs editor,
-upload/edit Eve, and interactive builder remain active implementation work with
-incomplete evidence. M7 OpenClaw is also active and incomplete; both remain
-outside the current C1 release gate.
+lifecycle guarantee or restored-origin health/scanner run. The OpenClaw backend
+is shipped but remains disabled, with no live interoperability evidence. M6
+and M7 remain outside the current C1 release gate.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -49,7 +53,7 @@ outside the current C1 release gate.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_GRTE…` rollout proves authenticated read-only release metadata/file retrieval and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_39j65…` probe proves authenticated read-only release metadata/file retrieval, OpenClaw-disabled behavior, and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). The editor API/source is shipped, but browser acceptance and Eve bridge activation remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
@@ -99,13 +103,18 @@ cancelled. The primary run was created 2.067 seconds after the cron observation
 and completed 14.353 seconds after it. This is deployment-scoped temporal
 correlation; no explicit opaque scheduler/session correlation or
 proposal/prompt/report/event payload was retained.
-Full C1 catalog acceptance and hosted restore remain pending.
+The next 22:00 UTC run still needs an explicit causal scheduler/session
+identifier; the earlier record is only deployment-scoped temporal correlation.
+Full C1 catalog acceptance remains pending. The bounded hosted logical restore
+is complete for its recorded revision and referenced objects, subject to the
+documented provider-lifecycle and restored-origin health/scanner limitations.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
 The v0.3.0 and C1 records preserve earlier deployment-specific source, scan,
 pagination, browser, and Topics evidence with their own provenance. Current
 C1 remains open because physical-source pullthrough, direct warm-path
-instrumentation, concurrent deduplication, and hosted restore are not complete.
+instrumentation, concurrent deduplication, and tenant/secrecy acceptance are
+not complete.
 The snapshot candidate record is intentionally narrower and does not claim
 those gates. Pack-preview UI proof is complete, with exact deployment attribution
 left unknown by the stable-alias cutover. See [`docs/skills-sh.md`](docs/skills-sh.md) and
