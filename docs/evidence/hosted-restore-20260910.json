@@ -1,0 +1,78 @@
+{
+  "operation": "hosted-isolated-logical-restore",
+  "source": {
+    "neonStoreId": "store_jlJNQdwxMwnxAV4C",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "blobRegion": "syd1",
+    "captureConsistency": "postgres-mvcc-snapshot",
+    "capturedAt": "2026-09-10T11:47:19.593Z",
+    "metadataRevision": 114,
+    "referencedObjectCount": 5,
+    "referencedObjectBytes": 10381
+  },
+  "deletionFence": {
+    "scope": "hosted",
+    "kind": "operator-quiescence",
+    "windowStart": "2026-09-10T11:45:00Z",
+    "windowEnd": "2026-09-10T12:00:00Z",
+    "evidenceRef": "restore-window-20260910-e7492814-4f3e-4722-b661-e95cc79f3c72",
+    "provenance": "operator/user-provided no-source-deletion attestation; not a provider lifecycle guarantee",
+    "announcedInOwnCommentary": true,
+    "announcedByRoot": false,
+    "timestampSeparatelyConfirmedByUser": false
+  },
+  "target": {
+    "neonStoreId": "store_2HcgJ1DNDTuWL6Ps",
+    "neonExternalResourceId": "muddy-unit-15050755",
+    "blobStoreId": "store_aeJlW1hAYTmfxz5B",
+    "blobPrefix": "restore/20260910-e7492814-4f3e-4722-b661-e95cc79f3c72/",
+    "blobUploadInterval": {
+      "earliestObserved": "2026-09-10T11:47:46.000Z",
+      "latestObserved": "2026-09-10T11:48:02.000Z"
+    },
+    "restoreResult": {
+      "metadataRevision": 114,
+      "objectCount": 5,
+      "remappedObjectCount": 5
+    },
+    "independentVerification": {
+      "verifiedAt": "2026-09-10T12:04:53.021Z",
+      "organizationMatches": true,
+      "exactRevision": true,
+      "referencedBlobRefs": 76,
+      "uniqueBlobCount": 5,
+      "listedBlobCount": 5,
+      "listHasMore": false,
+      "allDigestMatches": true,
+      "allSizesMatch": true,
+      "prefixBound": true
+    },
+    "postCleanupReadbackAt": "2026-09-10T12:05:28Z",
+    "neon": {
+      "status": "available",
+      "externalResourceStatus": "ready",
+      "totalConnectedProjects": 0
+    },
+    "blob": {
+      "status": "available",
+      "access": "private",
+      "region": "syd1",
+      "size": 10381,
+      "count": 5,
+      "totalConnectedProjects": 0
+    }
+  },
+  "temporaryProjectCleanup": {
+    "projectId": "prj_FCHPaYPcEMvLVzcubpQCngx7pJ8k",
+    "projectName": "private-skills-restore-check-20260910",
+    "neonConnectionId": "spc_tJ3TRWLkYtAtGAgW",
+    "blobConnectionId": "spc_F1dOCR7844b0IHCi",
+    "preDeleteDeploymentCount": 0,
+    "preDeleteConnectionCount": 0,
+    "neonDisconnected": true,
+    "blobDisconnected": true,
+    "deleted": true,
+    "deleteReadback": "project-not-found",
+    "deleteReadbackAt": "2026-09-10T12:05:28Z"
+  }
+}

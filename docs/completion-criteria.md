@@ -25,10 +25,12 @@ edge/multi-feed tests, and metadata-only Pack preview remain partial evidence.
 A later production record also closes snapshot-only candidate admission,
 required scanning, isolated CLI install/repeat, and analytics for one selected
 row; it does not establish physical GitHub or well-known source resolution,
-direct zero-upstream instrumentation, or complete C1. Hosted recovery and
-native CI remain open. M6's read-only VIEW slice now has this delivered
-evidence, while the full editor/reviewer/builder remains active and incomplete;
-M7 OpenClaw interoperability is also active and incomplete.
+direct zero-upstream instrumentation, or complete C1. A bounded hosted
+Neon/object-storage logical restore is now verified for source revision 114 and
+five referenced objects; native CI remains open. M6's read-only VIEW slice now
+has this delivered evidence, while the full editor/reviewer/builder remains
+active and incomplete; M7 OpenClaw interoperability is also active and
+incomplete.
 
 ## G0 — v0.2.0 shipment
 
@@ -65,17 +67,24 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
   no v0.3 archive is claimed published.
 - **verified for the local rehearsal:** the recovery test resolves the original
   digest and preserves revocation, authorization, and tenant boundaries;
-  **pending for production:** an isolated hosted Neon/object-storage backup and
-  restore with production policy and scanner evidence.
+- **verified for the bounded hosted logical restore:** the sanitized [restore
+  evidence](evidence/hosted-restore-20260910.json) records a PostgreSQL MVCC
+  capture at source revision 114, five referenced objects totaling 10,381 bytes,
+  an isolated target restored at revision 114, five target objects with exact
+  digest/size readback, and post-restore disconnection and cleanup. The copy
+  window records operator-quiescence attestation; this proof does not claim a
+  provider lifecycle guarantee, a temporary restored-origin health/scanner run,
+  or native CI.
 
-The committed read-only PostgreSQL snapshot adapter has a successful revision-83
-probe returning metadata/counts only. It has not copied blobs or completed a
-backup, restore, or hosted-recovery rehearsal, so it does not close the G0
-restore criterion. Exact MVCC and immutable blob-byte hash checks remain source
-integrity evidence; deletion/lifecycle fencing remains an availability
-guarantee for a hosted copy window. The optional unfenced mode is not
-implemented and its mandatory-fence relaxation remains separately
-approval-pending.
+The committed read-only PostgreSQL snapshot adapter's earlier revision-83 probe
+is historical evidence that returned metadata/counts only. The later [hosted
+logical-restore evidence](evidence/hosted-restore-20260910.json) closes the
+bounded G0 database/object restore scope with exact MVCC and immutable blob-byte
+hash checks. Its deletion/lifecycle record is an operator-quiescence attestation
+rather than a provider availability guarantee; a temporary restored-origin
+health/scanner run and native CI remain outside this proof. The optional
+unfenced mode is not implemented and its mandatory-fence relaxation remains
+separately approval-pending.
 
 The separate Eve route and registered `0 22 * * *` UTC schedule (22:00 UTC,
 subject to the hosting execution window) now have a sanitized production
@@ -100,7 +109,7 @@ parity a prerequisite for shipping v0.2.0. The design,
 limitations, and primary source links are in [`skills-sh.md`](skills-sh.md).
 The criteria below are the acceptance contract for the current follow-up
 delivery; implementation and production verification may proceed independently
-of the remaining G0 hosted-recovery gate.
+of the completed bounded G0 hosted logical-restore scope.
 
 Dependencies: an authenticated skills.sh gateway contract that works on the
 selected Nitro deployment, a versioned external identity model, and a
@@ -110,7 +119,8 @@ feeds, with one adapter/origin/credential/restriction configuration per feed;
 the current feed kind is `skills-sh`. Per-repository mappings and manual aliases
 are not dependencies. An administrator may add source restrictions or explicit
 proxy mappings as an optional tightening policy. The C1 deployment may be
-verified independently of the remaining G0 hosted-recovery step.
+verified independently of the completed bounded G0 hosted logical-restore
+scope.
 The configured feed base must be the canonical skills.sh origin or an
 operator-trusted gateway listed in `trustedSkillsShBaseUrls`; a caller-supplied
 `credentialEnv` is rejected. An omitted feed auto-selects only when exactly one

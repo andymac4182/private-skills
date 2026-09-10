@@ -12,11 +12,16 @@ its exact deployment attribution remains unknown. A later source-specific
 production record proves one snapshot-only candidate admission, required-scan
 approval, isolated CLI install/repeat, and install analytics. It does not prove
 physical GitHub or well-known source resolution, direct upstream-zero
-instrumentation, or hosted recovery. M6's read-only VIEW slice has delivered
-production API evidence, while the full Diffs editor, durable drafts,
-upload/edit Eve, and interactive builder remain active and incomplete. M7
-OpenClaw remains active and incomplete; these milestones stay outside the
-current C1 release gate.
+instrumentation, or a restored-origin health/scanner run. A bounded hosted
+Neon/object-storage logical restore is verified in the sanitized [restore
+evidence](evidence/hosted-restore-20260910.json): source revision 114, five
+referenced objects totaling 10,381 bytes, exact target revision 114, five
+digest/size-verified target objects, and post-restore target cleanup. The copy
+window uses operator-quiescence attestation and does not claim a provider
+lifecycle guarantee. M6's read-only VIEW slice has delivered production API
+evidence, while the full Diffs editor, durable drafts, upload/edit Eve, and
+interactive builder remain active and incomplete. M7 OpenClaw remains active
+and incomplete; these milestones stay outside the current C1 release gate.
 
 ## Current Git-triggered read-only release-file checkpoint
 
@@ -153,9 +158,13 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   path makes no upstream request. The snapshot candidate record above closes
   snapshot admission/install/analytics only; the quarantined CI-004 record
   remains separate fail-closed evidence.
-- Complete hosted Neon/object-storage backup and restore. Native CI admission
-  currently stops before any job step with the account payments/spending-limit
-  message; no test failure is claimed.
+- Native CI admission currently stops before any job step with the account
+  payments/spending-limit message; no test failure is claimed. The bounded
+  hosted Neon/object-storage logical restore is complete for source revision 114
+  and five referenced objects, as recorded in the [sanitized restore
+  evidence](evidence/hosted-restore-20260910.json). Its operator-quiescence
+  attestation, isolated target checks, and cleanup do not establish a provider
+  lifecycle guarantee or a restored-origin health/scanner run.
 - Recheck nested upstream detail and any remaining provider limits recorded in
   the C1 criteria.
 

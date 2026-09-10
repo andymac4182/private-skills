@@ -25,13 +25,16 @@ evidence; earlier browser fixtures, including Pack preview, retain their own
 deployment provenance and are not promoted by it. The earlier prebuilt and
 Git-main readbacks remain useful source-specific records. One snapshot-only
 production candidate also has recorded required-scan admission, isolated CLI
-install/repeat, and analytics evidence. Physical
-GitHub/well-known resolution, direct zero-upstream instrumentation, hosted
-restore, and native CI remain pending. M6's read-only VIEW slice has delivered
-production evidence, while the full Diffs editor, upload/edit Eve, and
-interactive builder remain active implementation work with incomplete
-evidence. M7 OpenClaw is also active and incomplete; both remain outside the
-current C1 release gate.
+install/repeat, and analytics evidence. Physical GitHub/well-known resolution,
+direct zero-upstream instrumentation, and native CI remain pending. A bounded
+hosted Neon/object-storage logical restore is recorded in the [sanitized restore
+evidence](docs/evidence/hosted-restore-20260910.json); it verifies an exact
+target revision and digest-checked objects but does not claim a provider
+lifecycle guarantee or restored-origin health/scanner run. M6's read-only VIEW
+slice has delivered production evidence, while the full Diffs editor,
+upload/edit Eve, and interactive builder remain active implementation work with
+incomplete evidence. M7 OpenClaw is also active and incomplete; both remain
+outside the current C1 release gate.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -46,7 +49,7 @@ current C1 release gate.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_GRTE…` rollout proves authenticated read-only release metadata/file retrieval and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, hosted restore, and tenant/secrecy acceptance remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_GRTE…` rollout proves authenticated read-only release metadata/file retrieval and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
