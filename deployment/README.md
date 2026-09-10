@@ -125,6 +125,29 @@ node scripts/build-vercel.mjs
 test -f .vercel/output/config.json
 ```
 
+Use the repository-managed release guard for a production prebuilt handoff.
+The checkout must already contain a reviewed `.vercel/project.json` created by
+an explicit operator `vercel link` step. The guard never links, pulls, creates,
+or selects a project; it fails before starting the CLI when the link is absent,
+invalid, or does not match the explicit project and organization IDs. It also
+uses the repository root as the child working directory and only forwards the
+fixed deploy flags plus sanitized `--meta key=value` values:
+
+```sh
+pnpm run release:vercel -- \
+  --project-id "$VERCEL_PROJECT_ID" \
+  --org-id "$VERCEL_ORG_ID" \
+  -- \
+  --prebuilt --prod --yes
+```
+
+Keep `VERCEL_TOKEN` in the environment supplied to the CLI. Do not pass
+`--cwd`, `--scope`, `--team`, project/name/local-config selectors, `--token`,
+debug, environment, or positional target options; the guard rejects them.
+Review the link and expected IDs in the same checkout before invoking this
+command. A preflight failure is safe to fix by correcting the explicit link or
+arguments and rerunning the guard; it does not auto-create a Vercel project.
+
 Keep the Vercel project on Node 24.x. The repository's `.node-version` and
 `packageManager` fields pin Node `24.20.0` and pnpm `11.19.0`; preserve those
 pins when overriding Build & Development settings.
