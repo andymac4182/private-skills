@@ -6,6 +6,7 @@ const digest = `sha256:${"a".repeat(64)}`;
 function request(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     sessionKey: "builder-session-key",
+    registrySessionId: "builder-registry-session",
     draftId: "draft-1",
     revision: 4,
     digest,
@@ -22,12 +23,15 @@ describe("skill-builder channel request contract", () => {
     const parsed = parseSessionRequest(request());
 
     expect(parsed.message).toBe("Please improve this section.\n\tKeep the code fence intact.\r\n");
+    expect(parsed.registrySessionId).toBe("builder-registry-session");
     expect(parsed.requestId).toBe("request-01");
     expect(parsed.requestDigest).toBe(digest);
     expect(parsed.selectedPath).toBe("SKILL.md");
   });
 
   it.each([
+    ["missing registry session id", { registrySessionId: undefined }],
+    ["unsafe registry session id", { registrySessionId: "builder/registry-session" }],
     ["missing request id", { requestId: undefined }],
     ["whitespace in request id", { requestId: "request 01" }],
     ["control character in request id", { requestId: "request-\u0001" }],

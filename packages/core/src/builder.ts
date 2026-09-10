@@ -16,7 +16,13 @@ import {
 } from '../../authoring/src/index.js';
 import { writeDraftRevision } from '../../authoring/src/drafts.js';
 import { digestBytes } from '../../storage/src/index.js';
-import { SkillBuilderError, validateDraftBinding, type DraftBinding } from '../../skill-builder/src/index.js';
+import {
+  SkillBuilderError,
+  validateBuilderSessionAcceptance,
+  validateDraftBinding,
+  type BuilderSessionAcceptanceExpectation,
+  type DraftBinding,
+} from '../../skill-builder/src/index.js';
 
 const MAX_BODY_BYTES = 96 * 1024;
 const MAX_TURNS = 200;
@@ -266,18 +272,22 @@ async function sendPrompt(
       redirect: 'error',
     });
     const value = await boundedJson(response, 64 * 1024);
-    if (
-      !response.ok ||
-      !isRecord(value) ||
-      value.requestId !== requestId ||
-      value.requestDigest !== requestRecord.requestDigest ||
-      value.registrySessionId !== record.id ||
-      value.draftId !== draftId ||
-      value.revision !== binding.revision ||
-      value.digest !== binding.digest ||
-      typeof value.sessionId !== 'string'
-    ) throw builderError('BUILDER_UPSTREAM', 'The skill builder returned an invalid acceptance', 502);
-    acceptedSessionId = boundedAcceptedSessionId(value.sessionId);
+    if (!response.ok) throw builderError('BUILDER_UPSTREAM', 'The skill builder could not accept the prompt', 502);
+    const expected: BuilderSessionAcceptanceExpectation = {
+      sessionKey: payload.sessionKey,
+      registrySessionId: payload.registrySessionId,
+      draftId: payload.draftId,
+      revision: payload.revision,
+      digest: payload.digest,
+      requestId: payload.requestId,
+      requestDigest: payload.requestDigest,
+      ...(selectedPath === undefined ? {} : { selectedPath }),
+    };
+    try {
+      acceptedSessionId = validateBuilderSessionAcceptance(value, expected).sessionId;
+    } catch {
+      throw builderError('BUILDER_UPSTREAM', 'The skill builder returned an invalid acceptance', 502);
+    }
   } catch (error) {
     // A transport or response failure is ambiguous: Eve may have accepted the
     // durable turn before the registry observed the response.  Keep the
@@ -763,11 +773,6 @@ function boundedSessionId(value: unknown): string {
     throw builderError('INVALID_REQUEST', 'session id is invalid', 400);
   }
   return value;
-}
-
-function boundedAcceptedSessionId(value: unknown): string {
-  if (typeof value !== 'string') throw builderError('BUILDER_UPSTREAM', 'The builder returned an invalid session id', 502);
-  return boundedSessionId(value);
 }
 
 function optionalSelectedPath(value: unknown): string | undefined {

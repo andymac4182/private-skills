@@ -16,6 +16,9 @@ export const MAX_PATCH_OPERATIONS = 40;
 export const MAX_PATCH_CONTENT_BYTES = 64 * 1024;
 export const MAX_PATCH_TOTAL_BYTES = 256 * 1024;
 export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+export const MAX_BUILDER_MESSAGE_BYTES = 64 * 1024;
+export const MAX_BUILDER_REQUEST_ID_LENGTH = 256;
+export const MAX_BUILDER_SELECTED_PATH_LENGTH = MAX_FILE_PATH_LENGTH;
 
 const WINDOWS_RESERVED_SEGMENT = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
@@ -129,6 +132,45 @@ export interface SkillBuilderRegistryClientOptions {
   readonly maxResponseBytes?: number;
 }
 
+/**
+ * Authenticated request from the registry BFF to the separate Eve app.
+ * `registrySessionId` is the registry-owned session identity used by proposal
+ * callbacks; `sessionKey` remains an opaque provider channel key.
+ */
+export interface BuilderSessionStartRequest extends DraftBinding {
+  readonly sessionKey: string;
+  readonly registrySessionId: string;
+  readonly message: string;
+  readonly requestId: string;
+  readonly requestDigest: BuilderDigest;
+  readonly selectedPath?: string;
+}
+
+/** Acceptance returned by the Eve app after it creates the provider session. */
+export interface BuilderSessionAcceptance {
+  readonly status: 'accepted';
+  readonly sessionId: string;
+  readonly sessionKey: string;
+  readonly registrySessionId: string;
+  readonly draftId: string;
+  readonly revision: number;
+  readonly digest: BuilderDigest;
+  readonly requestId: string;
+  readonly requestDigest: BuilderDigest;
+  readonly selectedPath?: string;
+}
+
+export interface BuilderSessionAcceptanceExpectation {
+  readonly sessionKey: string;
+  readonly registrySessionId: string;
+  readonly draftId: string;
+  readonly revision: number;
+  readonly digest: BuilderDigest;
+  readonly requestId: string;
+  readonly requestDigest: BuilderDigest;
+  readonly selectedPath?: string;
+}
+
 export type SkillBuilderErrorCode =
   | 'INVALID_INPUT'
   | 'CONFIGURATION_ERROR'
@@ -179,6 +221,94 @@ export function validateDraftBinding(value: unknown): DraftBinding {
   const revision = boundedRevision(value.revision);
   assertBuilderDigest(value.digest);
   return { draftId, revision, digest: value.digest };
+}
+
+/** Validate an opaque registry/provider identifier without accepting path data. */
+export function validateBuilderOpaqueId(value: unknown, field = 'sessionId', maximum = MAX_SESSION_ID_LENGTH): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\s\u0000-\u001f\u007f/\\]/u.test(value) || hasLoneSurrogate(value)) {
+    throw new SkillBuilderValidationError(`${field} is invalid`);
+  }
+  return value;
+}
+
+/** Validate bounded model-facing text while preserving ordinary line breaks. */
+export function validateBuilderMessage(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.trim().length === 0 ||
+    utf8Bytes(value) > MAX_BUILDER_MESSAGE_BYTES ||
+    hasLoneSurrogate(value) ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  ) {
+    throw new SkillBuilderValidationError('message must be bounded non-empty text');
+  }
+  return value;
+}
+
+function validateBuilderRequestId(value: unknown): string {
+  return validateBuilderOpaqueId(value, 'requestId', MAX_BUILDER_REQUEST_ID_LENGTH);
+}
+
+export function validateBuilderSessionStartRequest(value: unknown): BuilderSessionStartRequest {
+  if (!isRecord(value)) throw new SkillBuilderValidationError('builder session request must be an object');
+  const binding = validateDraftBinding(value);
+  const sessionKey = validateBuilderOpaqueId(value.sessionKey, 'sessionKey');
+  const registrySessionId = validateBuilderOpaqueId(value.registrySessionId, 'registrySessionId');
+  const message = validateBuilderMessage(value.message);
+  const requestId = validateBuilderRequestId(value.requestId);
+  assertBuilderDigest(value.requestDigest, 'requestDigest');
+  const selectedPath = value.selectedPath === undefined ? undefined : validateSafePath(value.selectedPath, 'selectedPath');
+  return {
+    ...binding,
+    sessionKey,
+    registrySessionId,
+    message,
+    requestId,
+    requestDigest: value.requestDigest,
+    ...(selectedPath === undefined ? {} : { selectedPath }),
+  };
+}
+
+export function validateBuilderSessionAcceptance(
+  value: unknown,
+  expected: BuilderSessionAcceptanceExpectation,
+): BuilderSessionAcceptance {
+  if (!isRecord(value) || value.status !== 'accepted') {
+    throw new SkillBuilderValidationError('builder session acceptance is invalid');
+  }
+  const sessionId = validateBuilderOpaqueId(value.sessionId, 'sessionId');
+  const sessionKey = validateBuilderOpaqueId(value.sessionKey, 'sessionKey');
+  const registrySessionId = validateBuilderOpaqueId(value.registrySessionId, 'registrySessionId');
+  const draftId = boundedIdentifier(value.draftId, 'draftId', MAX_DRAFT_ID_LENGTH);
+  const revision = boundedRevision(value.revision);
+  assertBuilderDigest(value.digest);
+  const requestId = validateBuilderRequestId(value.requestId);
+  assertBuilderDigest(value.requestDigest, 'requestDigest');
+  const selectedPath = value.selectedPath === undefined ? undefined : validateSafePath(value.selectedPath, 'selectedPath');
+  if (
+    sessionKey !== expected.sessionKey ||
+    registrySessionId !== expected.registrySessionId ||
+    draftId !== expected.draftId ||
+    revision !== expected.revision ||
+    value.digest !== expected.digest ||
+    requestId !== expected.requestId ||
+    value.requestDigest !== expected.requestDigest ||
+    selectedPath !== expected.selectedPath
+  ) {
+    throw new SkillBuilderValidationError('builder session acceptance does not match its request');
+  }
+  return {
+    status: 'accepted',
+    sessionId,
+    sessionKey,
+    registrySessionId,
+    draftId,
+    revision,
+    digest: value.digest,
+    requestId,
+    requestDigest: value.requestDigest,
+    ...(selectedPath === undefined ? {} : { selectedPath }),
+  };
 }
 
 export function validateDraftContext(value: unknown): DraftContext {
@@ -268,8 +398,8 @@ export function summarizePatchOperations(operations: readonly PatchOperation[]):
 }
 
 export function createProposalIdempotencyKey(sessionId: string, callId: string): string {
-  const session = boundedIdentifier(sessionId, 'sessionId', MAX_SESSION_ID_LENGTH);
-  const call = boundedIdentifier(callId, 'callId', MAX_SESSION_ID_LENGTH);
+  const session = validateBuilderOpaqueId(sessionId, 'sessionId');
+  const call = validateBuilderOpaqueId(callId, 'callId');
   return `skill-builder:${session}:${call}`;
 }
 
@@ -345,9 +475,9 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
   async persistProposal(input: PersistProposalInput): Promise<SkillBuilderProposal> {
     const context = validateDraftContext(input.context);
     const operations = validatePatchOperations(input.operations);
-    const sessionId = boundedIdentifier(input.sessionId, 'sessionId', MAX_SESSION_ID_LENGTH);
+    const sessionId = validateBuilderOpaqueId(input.sessionId, 'sessionId');
     const idempotencyKey = boundedIdentifier(input.idempotencyKey, 'idempotencyKey', 512);
-    const value = await this.requestJson(`/v1/drafts/${encodeURIComponent(context.draftId)}/proposals`, {
+    const responseValue = await this.requestJson(`/v1/drafts/${encodeURIComponent(context.draftId)}/proposals`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -361,7 +491,10 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
         operations,
       }),
     });
-    const proposal = parseProposal(value, context, sessionId);
+    if (!isRecord(responseValue) || !isRecord(responseValue.proposal)) {
+      throw new SkillBuilderError('UPSTREAM_SCHEMA_ERROR', 'authoring service returned an invalid proposal envelope');
+    }
+    const proposal = parseProposal(responseValue.proposal, context, sessionId);
     const expected = summarizePatchOperations(operations);
     if (JSON.stringify(proposal.operations) !== JSON.stringify(expected)) {
       throw new SkillBuilderError('UPSTREAM_SCHEMA_ERROR', 'authoring service returned a proposal with different operations');

@@ -103,7 +103,9 @@ function createEveHarness(): EveHarness {
       if (!body) return responseJson({ error: 'body required' }, 400);
       const sessionId = 'eve-session-1';
       return responseJson({
+        status: 'accepted',
         sessionId,
+        sessionKey: body.sessionKey,
         draftId: body.draftId,
         revision: body.revision,
         digest: body.digest,

@@ -1,21 +1,20 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { defineChannel, GET, POST } from "eve/channels";
 import {
-  assertBuilderDigest,
-  MAX_DRAFT_ID_LENGTH,
-  MAX_SESSION_ID_LENGTH,
+  validateBuilderOpaqueId,
+  validateBuilderSessionStartRequest,
   type BuilderDigest,
+  type BuilderSessionAcceptance,
+  type BuilderSessionStartRequest,
+  validateDraftBinding,
 } from "../../../../packages/skill-builder/src/index.js";
 import { builderServiceToken, builderStatus } from "../lib/config.js";
 
 const MAX_REQUEST_BYTES = 96 * 1024;
-const MAX_MESSAGE_BYTES = 64 * 1024;
-const MAX_REQUEST_ID_LENGTH = 256;
-const MAX_SELECTED_PATH_LENGTH = 4096;
-const UNSUPPORTED_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 
 export interface BuilderChannelState {
   readonly sessionKey: string | null;
+  readonly registrySessionId: string | null;
   readonly draftId: string | null;
   readonly revision: number | null;
   readonly digest: BuilderDigest | null;
@@ -23,6 +22,7 @@ export interface BuilderChannelState {
 
 const initialState: BuilderChannelState = {
   sessionKey: null,
+  registrySessionId: null,
   draftId: null,
   revision: null,
   digest: null,
@@ -67,26 +67,6 @@ function invalid(message: string, status = 400): Response {
   return Response.json({ error: message }, { status, headers: { "cache-control": "no-store" } });
 }
 
-function safeString(value: unknown, field: string, maximum: number): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > maximum || /[\u0000-\u001f\u007f]/u.test(value)) {
-    throw new Error(`${field} is invalid`);
-  }
-  return value.trim();
-}
-
-function safeSessionKey(value: unknown): string {
-  const key = safeString(value, "sessionKey", MAX_SESSION_ID_LENGTH);
-  if (/\s/u.test(key)) throw new Error("sessionKey is invalid");
-  return key;
-}
-
-function boundedRevision(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 1_000_000_000) {
-    throw new Error("revision is invalid");
-  }
-  return value as number;
-}
-
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   const declared = request.headers.get("content-length");
   if (declared !== null && Number.isSafeInteger(Number(declared)) && Number(declared) > MAX_REQUEST_BYTES) {
@@ -126,62 +106,31 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-export interface BuilderSessionRequest {
-  sessionKey: string;
-  draftId: string;
-  revision: number;
-  digest: BuilderDigest;
-  message: string;
-  requestId: string;
-  requestDigest: BuilderDigest;
-  selectedPath?: string;
-}
+export type BuilderSessionRequest = BuilderSessionStartRequest;
 
 export function parseSessionRequest(value: Record<string, unknown>): BuilderSessionRequest {
-  const sessionKey = safeSessionKey(value.sessionKey);
-  const draftId = safeString(value.draftId, "draftId", MAX_DRAFT_ID_LENGTH);
-  const revision = boundedRevision(value.revision);
-  assertBuilderDigest(value.digest);
-  if (typeof value.message !== "string" || value.message.trim().length === 0 || new TextEncoder().encode(value.message).byteLength > MAX_MESSAGE_BYTES || UNSUPPORTED_CONTROL_CHARACTER.test(value.message)) {
-    throw new Error("message must be bounded non-empty text");
-  }
-  const requestId = safeRequestId(value.requestId);
-  assertBuilderDigest(value.requestDigest, "requestDigest");
-  const requestDigest = value.requestDigest;
-  const selectedPath = value.selectedPath === undefined ? undefined : safeSelectedPath(value.selectedPath);
-  return {
-    sessionKey,
-    draftId,
-    revision,
-    digest: value.digest,
-    message: value.message,
-    requestId,
-    requestDigest,
-    ...(selectedPath === undefined ? {} : { selectedPath }),
-  };
-}
-
-function safeRequestId(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_REQUEST_ID_LENGTH || /\s/u.test(value) || /[\u0000-\u001f\u007f]/u.test(value)) {
-    throw new Error("requestId is invalid");
-  }
-  return value;
-}
-
-function safeSelectedPath(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_SELECTED_PATH_LENGTH || /[\u0000-\u001f\u007f]/u.test(value)) {
-    throw new Error("selectedPath is invalid");
-  }
-  return value;
+  return validateBuilderSessionStartRequest(value);
 }
 
 export function channelMetadata(state: BuilderChannelState): Record<string, unknown> {
-  if (!state.draftId || state.revision === null || !state.digest) {
+  if (!state.registrySessionId || !state.draftId || state.revision === null || !state.digest) {
+    return { audience: "private", bound: false };
+  }
+  let registrySessionId: string;
+  try {
+    registrySessionId = validateBuilderOpaqueId(state.registrySessionId, "registrySessionId");
+    validateDraftBinding({
+      draftId: state.draftId,
+      revision: state.revision,
+      digest: state.digest,
+    });
+  } catch {
     return { audience: "private", bound: false };
   }
   return {
     audience: "private",
     bound: true,
+    registrySessionId,
     draftId: state.draftId,
     revision: state.revision,
     digest: state.digest,
@@ -221,22 +170,25 @@ export default defineChannel<BuilderChannelState>({
           auth: servicePrincipal,
           state: {
             sessionKey: input.sessionKey,
+            registrySessionId: input.registrySessionId,
             draftId: input.draftId,
             revision: input.revision,
             digest: input.digest,
           },
         });
-        return Response.json({
+        const acceptance: BuilderSessionAcceptance = {
           status: "accepted",
           sessionId: session.id,
           sessionKey: input.sessionKey,
+          registrySessionId: input.registrySessionId,
           draftId: input.draftId,
           revision: input.revision,
           digest: input.digest,
           requestId: input.requestId,
           requestDigest: input.requestDigest,
           ...(input.selectedPath === undefined ? {} : { selectedPath: input.selectedPath }),
-        }, {
+        };
+        return Response.json(acceptance, {
           status: 202,
           headers: { "cache-control": "no-store" },
         });

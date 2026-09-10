@@ -3,6 +3,8 @@ import {
   MAX_PATCH_CONTENT_BYTES,
   SkillBuilderRegistryClient,
   digestText,
+  validateBuilderSessionAcceptance,
+  validateBuilderSessionStartRequest,
   validatePatchOperations,
   validateDraftContext,
 } from "../src/index.js";
@@ -113,7 +115,7 @@ describe("skill-builder contracts", () => {
     const operations = [{ op: "add", path: "SKILL.md", content: "# Skill" }] as const;
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       expect(String(init?.body)).not.toContain("proposedDigest");
-      return new Response(JSON.stringify({
+      return new Response(JSON.stringify({ proposal: {
         id: "proposal-1",
         draftId: "draft-1",
         baseRevision: 4,
@@ -122,7 +124,7 @@ describe("skill-builder contracts", () => {
         operations: [{ op: "add", path: "SKILL.md", contentBytes: 7 }],
         state: "pending",
         createdAt: "2026-09-10T00:00:00.000Z",
-      }));
+      }}));
     });
     const client = new SkillBuilderRegistryClient({ baseUrl: "https://registry.example.test", serviceToken: "token", fetch: fetchMock });
     const result = await client.persistProposal({
@@ -132,5 +134,46 @@ describe("skill-builder contracts", () => {
       idempotencyKey: "skill-builder:eve-session-1:call-1",
     });
     expect(result.proposedDigest).toMatch(/^sha256:/u);
+  });
+
+  it("binds app acceptance to the registry session while keeping provider identity opaque", () => {
+    const request = validateBuilderSessionStartRequest({
+      sessionKey: "provider-key-1",
+      registrySessionId: "builder-session-1",
+      draftId: "draft-1",
+      revision: 4,
+      digest: baseDigest,
+      message: "Keep this\nmultiline prompt intact.",
+      requestId: "request-1",
+      requestDigest: baseDigest,
+      selectedPath: "SKILL.md",
+    });
+    const acceptance = validateBuilderSessionAcceptance({
+      status: "accepted",
+      sessionId: "eve-session-1",
+      sessionKey: request.sessionKey,
+      registrySessionId: request.registrySessionId,
+      draftId: request.draftId,
+      revision: request.revision,
+      digest: request.digest,
+      requestId: request.requestId,
+      requestDigest: request.requestDigest,
+      selectedPath: request.selectedPath,
+    }, request);
+
+    expect(acceptance.sessionId).toBe("eve-session-1");
+    expect(acceptance.registrySessionId).toBe("builder-session-1");
+    expect(() => validateBuilderSessionAcceptance({
+      status: "accepted",
+      sessionId: "eve-session-1",
+      sessionKey: request.sessionKey,
+      registrySessionId: "eve-session-1",
+      draftId: request.draftId,
+      revision: request.revision,
+      digest: request.digest,
+      requestId: request.requestId,
+      requestDigest: request.requestDigest,
+      selectedPath: request.selectedPath,
+    }, request)).toThrow();
   });
 });
