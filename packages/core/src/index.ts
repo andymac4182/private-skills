@@ -51,6 +51,7 @@ import {
   SkillsDirectoryError,
   type CuratedSkillsResponse,
   type SkillAuditResponse,
+  type SkillDetailMetadataResponse,
   type SkillDetailResponse,
   type SkillListResponse,
   type SkillSearchResponse,
@@ -1049,9 +1050,11 @@ async function handleDirectoryRoute(
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
     const id = requireDirectoryId(url.searchParams.get('id'));
-    const result = segments[2] === 'detail'
-      ? await directoryRequest(() => directory.detail(id))
-      : await directoryRequest(() => directory.audit(id));
+    if (segments[2] === 'detail') {
+      const detail = await directoryRequest(() => directory.detail(id));
+      return jsonResponse(toDirectoryDetailMetadata(detail));
+    }
+    const result = await directoryRequest(() => directory.audit(id));
     return jsonResponse(result);
   }
 
@@ -1066,6 +1069,22 @@ async function handleDirectoryRoute(
   }
 
   throw new RegistryApiError('NOT_FOUND', 'Route not found', 404);
+}
+
+/**
+ * Keep the directory detail route metadata-only.  The injected client still
+ * returns the complete bounded snapshot to import/acquisition callers, but a
+ * reader-facing response must not expose source text before scanner admission.
+ */
+function toDirectoryDetailMetadata(detail: SkillDetailResponse): SkillDetailMetadataResponse {
+  return {
+    id: detail.id,
+    source: detail.source,
+    slug: detail.slug,
+    installs: detail.installs,
+    hash: detail.hash,
+    files: detail.files === null ? null : detail.files.map((file) => ({ path: file.path })),
+  };
 }
 
 async function createDirectoryImport(

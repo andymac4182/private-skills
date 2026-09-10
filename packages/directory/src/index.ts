@@ -57,6 +57,8 @@ export type {
   SkillAuditRiskLevel,
   SkillAuditStatus,
   SkillDetailFile,
+  SkillDetailMetadataFile,
+  SkillDetailMetadataResponse,
   SkillDetailResponse,
   SkillListResponse,
   SkillPagination,

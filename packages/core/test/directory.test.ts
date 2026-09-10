@@ -17,7 +17,7 @@ import type {
   StateRepository,
   StoredBlob,
 } from '../../contracts/src/index.js';
-import type { SkillsTopicResponse } from '../../directory/src/index.js';
+import type { SkillDetailResponse, SkillsTopicResponse } from '../../directory/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 
@@ -143,6 +143,91 @@ describe('skills.sh directory routes', () => {
     expect(await detail.json()).toMatchObject({ id: 'acme/repo/my-skill', source: 'acme/repo' });
     test.setPrincipal(null);
     expect((await test.handler(new Request(`${ORIGIN}/v1/directory/official`))).status).toBe(401);
+  });
+
+  it('projects public detail to metadata while retaining full internal snapshot data for import', async () => {
+    const canary = 'PRIVATE_SOURCE_CANARY_MUST_NOT_CROSS_READER_ROUTE';
+    const internalDetail = {
+      id: 'acme/repo/my-skill',
+      source: 'acme/repo',
+      slug: 'my-skill',
+      installs: 7,
+      hash: 'snapshot-1',
+      files: [
+        { path: 'SKILL.md', contents: canary },
+        { path: 'README.md', contents: 'internal supporting text' },
+      ],
+      sourceType: 'github',
+      installUrl: 'https://github.com/acme/repo',
+      url: 'https://skills.sh/acme/repo/my-skill',
+      unexpected: 'must not be serialized',
+    } as SkillDetailResponse & Record<string, unknown>;
+    let detailPayload: SkillDetailResponse = internalDetail;
+    let detailCalls = 0;
+    let importing = false;
+    let importSawFullSnapshot = false;
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async () => {
+        detailCalls += 1;
+        if (importing && detailPayload.files?.[0]?.contents === canary) importSawFullSnapshot = true;
+        return detailPayload;
+      },
+    };
+    const test = setup(undefined, directory);
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+
+    const publicResponse = await test.handler(new Request(`${ORIGIN}/v1/directory/detail?id=acme%2Frepo%2Fmy-skill`, { headers }));
+    expect(publicResponse.status).toBe(200);
+    const publicDetail = await publicResponse.json() as Record<string, unknown> & { files?: unknown };
+    expect(publicDetail).toEqual({
+      id: 'acme/repo/my-skill',
+      source: 'acme/repo',
+      slug: 'my-skill',
+      installs: 7,
+      hash: 'snapshot-1',
+      files: [{ path: 'SKILL.md' }, { path: 'README.md' }],
+    });
+    expect(JSON.stringify(publicDetail)).not.toContain(canary);
+    expect(publicDetail).not.toHaveProperty('sourceType');
+    expect(publicDetail).not.toHaveProperty('installUrl');
+    expect(publicDetail).not.toHaveProperty('unexpected');
+    expect(publicDetail.files).toEqual([{ path: 'SKILL.md' }, { path: 'README.md' }]);
+    expect(internalDetail.files?.[0]?.contents).toBe(canary);
+
+    detailPayload = { ...internalDetail, hash: null, files: null };
+    const nullSnapshotResponse = await test.handler(new Request(`${ORIGIN}/v1/directory/detail?id=acme%2Frepo%2Fmy-skill`, { headers }));
+    expect(nullSnapshotResponse.status).toBe(200);
+    expect(await nullSnapshotResponse.json()).toEqual({
+      id: 'acme/repo/my-skill',
+      source: 'acme/repo',
+      slug: 'my-skill',
+      installs: 7,
+      hash: null,
+      files: null,
+    });
+
+    detailPayload = internalDetail;
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'skills-catalog', kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: 'https://skills.sh' }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+    importing = true;
+    const importResponse = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: 'acme/repo/my-skill', name: '@team/my-skill', version: '1.0.0' }),
+    }));
+    expect(importResponse.status).toBe(202);
+    expect(detailCalls).toBe(3);
+    expect(await importResponse.json()).toMatchObject({ operation: { import: {
+      path: 'acme/repo/my-skill',
+      externalSnapshotHash: 'snapshot-1',
+    } } });
+    expect(importSawFullSnapshot).toBe(true);
+    expect(internalDetail.files?.[0]?.contents).toBe(canary);
   });
 
   it('returns a bounded topic DTO to an authenticated reader', async () => {

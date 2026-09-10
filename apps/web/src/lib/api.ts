@@ -1,10 +1,11 @@
 import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
+import type { SkillDetailMetadataResponse } from '../../../../packages/directory/src/index'
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
-  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
+  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse,
 } from './types'
 
@@ -102,7 +103,7 @@ export const api = {
   },
   directoryOfficial() { return request<CuratedSkillsResponse>('/v1/directory/official') },
   directoryTopic(slug: string) { return request<SkillsTopicResponse>('/v1/directory/topic', { query: { slug } }) },
-  directoryDetail(id: string) { return request<SkillDetailResponse>('/v1/directory/detail', { query: { id } }) },
+  directoryDetail(id: string) { return request<SkillDetailMetadataResponse>('/v1/directory/detail', { query: { id } }) },
   directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
   feeds() { return request<FeedListResponse>('/v1/feeds') },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {

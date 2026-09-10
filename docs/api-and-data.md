@@ -82,6 +82,13 @@ request must not perform an upstream lookup by default, while explicit refresh
 or update must recheck the source and surface failure instead of treating an
 older cache as fresh.
 
+The authenticated `GET /v1/directory/detail` route returns the metadata-only
+`SkillDetailMetadataResponse` DTO: it preserves the external `id`, `source`,
+`slug`, install count, snapshot hash, and whether a snapshot is `null`, while
+each non-null file entry contains only its path. Snapshot text remains in the
+internal directory/acquisition boundary until required scanners and policy
+admission complete; the public reader route never serializes `contents`.
+
 For a project spanning registries, the CLI partitions the desired plan by registry origin and organization. Each service sees and authorizes only its own resources; the CLI completes final validation with every participating registry before activation and aborts on any failure. Never share another registry's credentials or private member metadata. A published v1 pack belongs to one registry/organization; its proxied members are locally mirrored resources in that same registry.
 
 Transfer descriptors specify `mode: signed-url | gateway`, approved URL, method, explicit per-transfer headers, expiry, digest, byte size, and range support. The CLI forwards only those scoped transfer headers to that exact approved origin; registry session credentials never flow to storage or a cross-origin gateway. A gateway grant is separate from registry credentials and binds actor/resource/pack context, operation, object, limits, and expiry. The gateway rechecks current authorization before opening the stream. See [storage and transfers](storage.md) for provider capability fallback, upload sealing, and host limits. Metadata replies, reports, and authorization routes set private/no-store caching as appropriate; shared CDN caching never bypasses authorization.
