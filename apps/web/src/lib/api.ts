@@ -1,11 +1,10 @@
 import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
-import type { SkillDetailMetadataResponse } from '../../../../packages/directory/src/index'
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
-  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
+  CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse,
 } from './types'
 
@@ -87,24 +86,26 @@ export const api = {
   search(query: string) { return request<SearchResponse>('/v1/search', { query: { q: query } }).then(unwrap) },
   searchStatus() { return request<SearchStatusResponse>('/v1/search/status').then(unwrap) },
   reindexSearch(cursor?: string) { return request<SearchReindexResponse>('/v1/search/reindex', { method: 'POST', body: cursor ? { cursor } : {} }).then(unwrap) },
-  directorySkills(options: { view?: SkillView; page?: number; perPage?: number } = {}) {
+  directorySkills(options: { view?: SkillView; page?: number; perPage?: number; feed?: string } = {}) {
     return request<DirectorySkillListResponse>('/v1/directory/skills', { query: {
       view: options.view,
       page: options.page === undefined ? undefined : String(options.page),
       per_page: options.perPage === undefined ? undefined : String(options.perPage),
+      feed: options.feed,
     } })
   },
-  directorySearch(query: string, options: { limit?: number; owner?: string } = {}) {
+  directorySearch(query: string, options: { limit?: number; owner?: string; feed?: string } = {}) {
     return request<SkillSearchResponse>('/v1/directory/search', { query: {
       q: query,
       limit: options.limit === undefined ? undefined : String(options.limit),
       owner: options.owner,
+      feed: options.feed,
     } })
   },
-  directoryOfficial() { return request<CuratedSkillsResponse>('/v1/directory/official') },
+  directoryOfficial(options: { feed?: string } = {}) { return request<CuratedSkillsResponse>('/v1/directory/official', { query: { feed: options.feed } }) },
   directoryTopic(slug: string) { return request<SkillsTopicResponse>('/v1/directory/topic', { query: { slug } }) },
-  directoryDetail(id: string) { return request<SkillDetailMetadataResponse>('/v1/directory/detail', { query: { id } }) },
-  directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
+  directoryDetail(id: string, options: { feed?: string } = {}) { return request<SkillDetailMetadataResponse>('/v1/directory/detail', { query: { id, feed: options.feed } }) },
+  directoryAudits(id: string, options: { feed?: string } = {}) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id, feed: options.feed } }) },
   feeds() { return request<FeedListResponse>('/v1/feeds') },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {
     return request<OperationResponse>('/v1/directory/import', { method: 'POST', body: input })
