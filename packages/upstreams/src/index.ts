@@ -1221,6 +1221,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
       allowedOrigin: apiBase.origin,
       retryable: false,
       stripCredentialsOnRedirect: true,
+      rejectRedirects: true,
       detailRoute: true,
     });
     detail = parseSkillsShDetail(
@@ -1480,6 +1481,7 @@ async function discoverSkillsShMetadataById(
           retryable: false,
           signal: deadline.signal,
           stripCredentialsOnRedirect: true,
+          rejectRedirects: true,
         });
       } catch (error) {
         if (isCatalogNotFound(error)) continue;
@@ -1503,6 +1505,7 @@ async function discoverSkillsShMetadataById(
           retryable: false,
           signal: deadline.signal,
           stripCredentialsOnRedirect: true,
+          rejectRedirects: true,
         });
       } catch (error) {
         if (isCatalogNotFound(error)) break;
@@ -1611,6 +1614,7 @@ async function discoverSkillsShMetadata(
         retryable: false,
         signal,
         stripCredentialsOnRedirect: true,
+        rejectRedirects: true,
       });
       const page = parseSkillsShCatalogMetadataPage(value, limits, false);
       const match = selectSkillsShMetadata(page.rows, detail);
@@ -1633,6 +1637,7 @@ async function discoverSkillsShMetadata(
         retryable: false,
         signal,
         stripCredentialsOnRedirect: true,
+        rejectRedirects: true,
       });
     } catch (error) {
       if (isCatalogNotFound(error)) break;
@@ -1915,6 +1920,10 @@ function parseSkillsShDetail(
   if (files === null && sourceType === undefined) {
     throw new UpstreamAcquisitionError('source_unavailable', 'skills.sh detail has no verified sourceType for source fallback');
   }
+  // Parse every file before deciding whether the detail identity mismatch is
+  // recoverable. A malformed file must never be hidden behind the nested-row
+  // fallback marker.
+  const parsedFiles = files === null ? null : files.map((file: unknown) => parseSkillsShFile(file));
   const installUrl = value.installUrl === null || value.installUrl === undefined
     ? null
     : requireSkillsShURL(value.installUrl, 'skills.sh installUrl');
@@ -1935,6 +1944,12 @@ function parseSkillsShDetail(
     : requireSkillsShString(hashValue, 'skills.sh snapshot hash', 512);
   const ref = value.ref === undefined ? undefined : validateRef(requireSkillsShString(value.ref, 'skills.sh detail ref', 256));
   const canonicalId = validateSkillsShId(`${source}/${slug}`);
+  if (canonicalId !== id) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh detail id does not match its source/slug identity',
+    );
+  }
   if (canonicalId !== requestedId || id !== requestedId) {
     throw new UpstreamAcquisitionError(
       'identity_mismatch',
@@ -1952,7 +1967,7 @@ function parseSkillsShDetail(
     installUrl,
     ...(pageUrl === undefined ? {} : { pageUrl }),
     externalSnapshotHash,
-    files: files === null ? null : files.map((file: unknown) => parseSkillsShFile(file)),
+    files: parsedFiles,
     ...(ref === undefined ? {} : { ref }),
   };
 }
@@ -4385,6 +4400,7 @@ class HttpClient {
           response,
           this.limits.maxResponseBytes,
           request.signal ?? this.options.signal,
+          this.limits.requestTimeoutMs,
         )) {
           throw new UpstreamAcquisitionError(
             'upstream_http_error',
@@ -4571,9 +4587,38 @@ async function hasInvalidPathDetailBody(
   response: Response,
   maxBytes: number,
   signal?: AbortSignal,
+  timeoutMs = 10_000,
 ): Promise<boolean> {
+  if (signal?.aborted) return false;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onParentAbort: (() => void) | undefined;
+  let stop!: () => void;
+  const stopped = new Promise<undefined>((resolve) => {
+    stop = () => {
+      controller.abort();
+      try {
+        const cancellation = response.body?.cancel();
+        if (cancellation) void cancellation.catch(() => undefined);
+      } catch {
+        // The body may already be locked by readResponseBytes' reader.
+      }
+      resolve(undefined);
+    };
+  });
+  if (signal) {
+    onParentAbort = () => stop();
+    signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  timer = setTimeout(stop, Math.max(1, timeoutMs));
+  const bodyRead = readResponseBytes(response, maxBytes, controller.signal);
+  // A timed-out reader may remain pending if a non-conforming stream ignores
+  // cancellation. Observe its eventual rejection so the bounded classifier
+  // can return without creating an unhandled promise.
+  void bodyRead.catch(() => undefined);
   try {
-    const bytes = await readResponseBytes(response, maxBytes, signal);
+    const bytes = await Promise.race([bodyRead, stopped]);
+    if (bytes === undefined) return false;
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
@@ -4585,6 +4630,10 @@ async function hasInvalidPathDetailBody(
     // An unreadable/malformed error body is never evidence of the narrow route
     // incompatibility and therefore remains a normal HTTP failure.
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onParentAbort !== undefined) signal?.removeEventListener('abort', onParentAbort);
+    controller.abort();
   }
 }
 

@@ -725,6 +725,112 @@ describe('skills.sh source acquisition', () => {
     expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
   });
 
+  it('rejects a selected detail redirect before any nested fallback classification', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (calls.length === 1) {
+        return new Response(null, {
+          status: 301,
+          headers: { location: `${BASE}/catalog/api/v1/skills/${externalId}` },
+        });
+      }
+      return json({ error: 'invalid_path', message: 'fallback must not follow a redirect' }, 400);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'redirect_denied', status: 301 });
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
+  it('bounds a stalled invalid-path body and keeps the 400 terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const externalId = 'catalog-owner/skills/facebook/meta-ads';
+      const calls: string[] = [];
+      const fetchImpl = async (input: string | URL): Promise<Response> => {
+        const url = new URL(input.toString());
+        calls.push(`${url.pathname}${url.search}`);
+        const body = new ReadableStream<Uint8Array>({ start() { /* intentionally never enqueue or close */ } });
+        return new Response(body, { status: 400, headers: { 'content-type': 'application/json' } });
+      };
+      const input = request(externalId, fetchImpl);
+      input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+      input.importRequest = { ...input.importRequest!, externalId };
+      input.limits = { requestTimeoutMs: 1_000 };
+
+      const pending = acquireSkillsShSkill(input);
+      const outcome = expect(pending).rejects.toMatchObject({ code: 'upstream_http_error', status: 400 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await outcome;
+      expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects a wrong-ID detail with a malformed file before identity fallback', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) {
+        return json({
+          id: 'other-owner/skills/facebook/meta-ads',
+          source: 'other-owner/skills',
+          slug: 'facebook/meta-ads',
+          name: 'meta-ads',
+          sourceType: 'github',
+          installUrl: null,
+          hash: null,
+          files: [{}],
+        });
+      }
+      return json({ error: 'metadata lookup must not run' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'invalid_path' });
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
+  it('does not mark an internally inconsistent detail identity as recoverable', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) {
+        return json({
+          id: externalId,
+          source: 'other-owner/skills',
+          slug: 'facebook/meta-ads',
+          name: 'meta-ads',
+          sourceType: 'github',
+          installUrl: null,
+          hash: null,
+          files: [],
+        });
+      }
+      return json({ error: 'metadata lookup must not run' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    const error = await acquireSkillsShSkill(input).catch((value: unknown) => value);
+    expect(error).toMatchObject({ code: 'identity_mismatch' });
+    expect((error as UpstreamAcquisitionError).detailIdentityMismatch).toBeUndefined();
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
   it('records the canonical GitHub origin for the default resolver without an install URL', async () => {
     const skill = Buffer.from('---\nname: default-origin\ndescription: Default GitHub origin\n---\n# default\n', 'utf8');
     const skillSha = sha(skill);
