@@ -431,6 +431,85 @@ describe('upload/edit review persistence', () => {
     expect(await complete!.json()).toMatchObject({ status: 'passed', findingCount: 0 });
   });
 
+  it('recovers a delayed first Eve prepare through the job-specific binding handshake', async () => {
+    const { service } = await fixture();
+    const job = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.6-luna',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const handler = createUploadReviewHttpHandler({
+      repository: new MemoryStateRepository(),
+      organizationId: 'org-a',
+      reviewerToken: 'upload-review-token',
+      service,
+    });
+    const endpoint = (path: string, body: unknown) => handler(new Request(`https://registry.test${path}`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer upload-review-token', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+
+    // This exceeds the old 100/200/400ms retry budget. The job-specific
+    // metadata still lets the first prepare request bind exactly this job.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    const prepared = await endpoint('/internal/upload-review/prepare', {
+      sessionId: 'eve-delayed-session',
+      jobId: job.id,
+    });
+    expect(prepared?.status).toBe(200);
+    const preparedBody = await prepared!.json() as Record<string, unknown>;
+    expect(preparedBody).toMatchObject({ status: 'prepared', jobId: job.id });
+    expect((await service.listJobs('org-a'))[0]).toMatchObject({
+      eveSessionId: 'eve-delayed-session',
+      state: 'running',
+    });
+
+    const completed = await endpoint('/internal/upload-review/complete', {
+      sessionId: 'eve-delayed-session',
+      jobId: job.id,
+      leaseToken: preparedBody.leaseToken,
+      findings: [],
+    });
+    expect(completed?.status).toBe(200);
+    expect(await completed!.json()).toMatchObject({ status: 'passed', findingCount: 0 });
+    expect((await service.listResults('org-a'))[0]?.findings).toEqual([]);
+  });
+
+  it('fences the delayed handshake when the draft becomes stale before prepare', async () => {
+    const repository = new MemoryStateRepository();
+    let current = binding();
+    const service = createUploadReviewPersistenceService(repository, {
+      resolveCurrentBinding: (_state, draftId) => draftId === current.draftId ? current : undefined,
+    });
+    const job = await service.enqueue('org-a', {
+      binding: current,
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.6-luna',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const handler = createUploadReviewHttpHandler({
+      repository,
+      organizationId: 'org-a',
+      reviewerToken: 'upload-review-token',
+      service,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    current = binding(2, 'e');
+    const prepared = await handler(new Request('https://registry.test/internal/upload-review/prepare', {
+      method: 'POST',
+      headers: { authorization: 'Bearer upload-review-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'eve-stale-session', jobId: job.id }),
+    }));
+    expect(prepared?.status).toBe(409);
+    expect((await service.listJobs('org-a'))[0]).toMatchObject({ state: 'stale' });
+    expect((await service.listJobs('org-a'))[0]?.eveSessionId).toBeUndefined();
+    expect(await service.listResults('org-a')).toEqual([]);
+  });
+
   it('creates a metadata-only snapshot for binary and oversized files', async () => {
     const text = new TextEncoder().encode('# Safe\n');
     const binary = Uint8Array.from([0, 255, 1]);

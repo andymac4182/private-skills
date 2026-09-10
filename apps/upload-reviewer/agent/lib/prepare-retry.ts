@@ -1,6 +1,9 @@
 import { UploadReviewApiError } from './api.js';
 
-const PREPARE_RETRY_DELAYS_MS = [100, 200, 400] as const;
+// The job-specific prepare handshake normally binds immediately. Keep a
+// bounded fallback for older sessions that lack the handshake header; the
+// total wait is 3.1s, still below the 45s request budget.
+const PREPARE_RETRY_DELAYS_MS = [100, 200, 400, 800, 1_600] as const;
 
 export type PrepareRequest<T> = () => Promise<T>;
 export type PrepareWait = (milliseconds: number, signal: AbortSignal) => Promise<void>;

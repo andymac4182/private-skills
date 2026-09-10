@@ -80,6 +80,11 @@ async function prepare(
 ): Promise<UploadReviewPrepareResponse> {
   const body = await readJson(request, maxBodyBytes);
   const sessionId = requiredId(body.sessionId, 'sessionId');
+  // Eve can start its first turn before the registry's post-create bind
+  // returns. A job-specific opaque id lets this authenticated request finish
+  // that bind atomically, without guessing among pending jobs.
+  const jobId = body.jobId === undefined ? undefined : requiredId(body.jobId, 'jobId');
+  if (jobId !== undefined) await service.bindEveSession(organizationId, jobId, sessionId);
   const claim = await service.claimForEveSession(organizationId, sessionId);
   const job = claim.job;
   if (job.state === 'passed') {

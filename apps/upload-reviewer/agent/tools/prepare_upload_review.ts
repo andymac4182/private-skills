@@ -32,10 +32,15 @@ export default defineTool({
     if (current.status === 'completed' || current.status === 'failed' || current.status === 'stale') {
       return { status: current.status === 'completed' ? 'already_completed' as const : current.status, files: [] };
     }
+    const jobId = ctx.session.auth.initiator?.attributes.uploadReviewJobId
+      ?? ctx.session.auth.current?.attributes.uploadReviewJobId;
     const response = await retryUnboundPrepare(
       () => postUploadReviewerJson(
         '/internal/upload-review/prepare',
-        { sessionId: ctx.session.id },
+        {
+          sessionId: ctx.session.id,
+          ...(typeof jobId === 'string' ? { jobId } : {}),
+        },
         (value) => prepareResponseSchema.parse(value),
         ctx.abortSignal,
       ),
