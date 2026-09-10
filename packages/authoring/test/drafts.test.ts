@@ -172,6 +172,14 @@ function updateRequest(
   });
 }
 
+function uploadCreateRequest(name: string, key: string, files: SkillBundle['files']): Request {
+  return new Request(`${ORIGIN}/v1/drafts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': key },
+    body: JSON.stringify({ name, files }),
+  });
+}
+
 function publishRequest(draftId: string, key: string, expectedRevision: number, version: string): Request {
   return new Request(`${ORIGIN}/v1/drafts/${draftId}/publish`, {
     method: 'POST',
@@ -181,6 +189,59 @@ function publishRequest(draftId: string, key: string, expectedRevision: number, 
 }
 
 describe('durable skill drafts', () => {
+  it('creates an upload-origin draft, edits it, and queues a scanner release without a fake base', async () => {
+    const test = await fixture();
+    const denied = await test.handler(uploadCreateRequest('@other/demo', 'upload-denied', test.bundle.files));
+    expect(denied.status).toBe(404);
+
+    const incomplete = await test.handler(uploadCreateRequest('@team/incomplete', 'upload-incomplete', [
+      { path: 'docs/only.md', content: base64('# Repair this draft\n') },
+    ]));
+    expect(incomplete.status).toBe(201);
+    const incompleteDraft = (await json(incomplete)).draft;
+    expect(incompleteDraft).toMatchObject({ origin: 'upload', skillName: '', status: 'open' });
+    const incompletePublish = await test.handler(publishRequest(incompleteDraft.id, 'upload-incomplete-publish', 1, '1.0.0'));
+    expect(incompletePublish.status).toBe(409);
+    expect((await json(incompletePublish)).error.code).toBe('DRAFT_INVALID');
+    expect((await test.repository.read(ORGANIZATION)).jobs).toHaveLength(0);
+
+    const createdResponse = await test.handler(uploadCreateRequest('@team/new-skill', 'upload-create', test.bundle.files));
+    expect(createdResponse.status).toBe(201);
+    const created = (await json(createdResponse)).draft;
+    expect(created).toMatchObject({
+      origin: 'upload',
+      name: '@team/new-skill',
+      revision: 1,
+      status: 'open',
+    });
+    expect(created).not.toHaveProperty('baseResourceId');
+    expect(created).not.toHaveProperty('baseDigest');
+
+    const editedFiles = [
+      { ...test.bundle.files[0]!, content: base64('---\nname: new-skill\ndescription: Edited upload\n---\n# Edited\n') },
+      ...test.bundle.files.slice(1),
+    ];
+    const updated = await test.handler(updateRequest(created.id, 'upload-update', 1, editedFiles));
+    expect(updated.status).toBe(200);
+    const updatedDraft = (await json(updated)).draft;
+    const published = await test.handler(publishRequest(created.id, 'upload-publish', 2, '1.0.0'));
+    expect(published.status).toBe(202);
+    const operation = (await json(published)).operation;
+    const state = await test.repository.read(ORGANIZATION);
+    const release = state.skills.find((skill) => skill.id === operation.resourceId)!;
+    expect(release).toMatchObject({
+      name: '@team/new-skill',
+      skillName: 'new-skill',
+      description: 'Edited upload',
+      state: 'pending',
+      artifact: { digest: updatedDraft.digest },
+      provenance: { kind: 'native', sourceDigest: updatedDraft.digest },
+    });
+    expect(release).not.toHaveProperty('authoring');
+    expect(state.jobs).toHaveLength(1);
+    expect(state.jobs[0]).toMatchObject({ kind: 'scan', resourceId: operation.resourceId, state: 'queued' });
+  });
+
   it('creates from an approved immutable release and retries idempotently', async () => {
     const test = await fixture();
     const createdResponse = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {

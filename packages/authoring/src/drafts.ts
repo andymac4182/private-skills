@@ -7,6 +7,7 @@ import type {
   SkillDraft,
   SkillDraftFileManifestEntry,
   SkillDraftIdempotencyRecord,
+  SkillDraftOrigin,
   SkillDraftPublicationRecord,
   SkillVersion,
   StoredBlob,
@@ -42,11 +43,12 @@ const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 
 export interface PublicSkillDraft {
   id: string;
+  origin: SkillDraftOrigin;
   name: string;
   skillName: string;
   description: string;
-  baseResourceId: string;
-  baseDigest: Digest;
+  baseResourceId?: string;
+  baseDigest?: Digest;
   revision: number;
   digest: Digest;
   size: number;
@@ -118,6 +120,15 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
           return await updateDraft(body, request, draftId, principal, deps);
         }
         throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET and PUT are supported', 405);
+      }
+
+      if (segments.length === 2 && segments[0] === 'v1' && segments[1] === 'drafts') {
+        if (request.method.toUpperCase() !== 'POST') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+        }
+        assertPublisher(principal);
+        const body = await readJson(request, maxBodyBytes);
+        return await createUploadDraft(body, request, principal, deps);
       }
 
       if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'publish') {
@@ -234,6 +245,7 @@ async function createDraft(
   const draft: SkillDraft = {
     id: draftId,
     organizationId: deps.config.organizationId,
+    origin: 'release',
     name: snapshot.release.name,
     skillName: snapshot.release.skillName,
     description: snapshot.release.description,
@@ -284,6 +296,104 @@ async function createDraft(
   });
 }
 
+async function createUploadDraft(
+  body: Record<string, unknown>,
+  request: Request,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const idempotencyKey = requireIdempotencyKey(request);
+  const name = requireDraftName(body.name);
+  if (!Array.isArray(body.files)) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'files must be an array', 400);
+  }
+  let bundle: ReturnType<typeof decodeBundle>;
+  try {
+    bundle = canonicalizeBundle(body.files);
+  } catch {
+    throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
+  }
+  if (!canReadNamespace(principal, name)) throw unavailableDraft();
+  const encoded = encodeBundle(bundle);
+  const digest = await digestBytes(encoded);
+  const requestDigest = await digestText(JSON.stringify({ origin: 'upload', name, digest }));
+  const existingState = await deps.repository.read(deps.config.organizationId);
+  const existing = existingState.drafts?.find(
+    (candidate) =>
+      candidate.organizationId === deps.config.organizationId &&
+      candidate.actor === principal.subject &&
+      candidate.createIdempotency?.key === idempotencyKey,
+  );
+  if (existing) {
+    if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
+    if (existing.createIdempotency?.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    const existingDraft = await draftFromCreateRecord(existing, deps);
+    return jsonResponse({
+      draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }),
+      idempotent: true,
+    }, 200, { 'cache-control': 'private, no-store' });
+  }
+
+  const metadata = draftMetadataOrEmpty(bundle);
+  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  const now = new Date().toISOString();
+  const draftId = randomId('draft');
+  const record: SkillDraftIdempotencyRecord = {
+    key: idempotencyKey,
+    subject: principal.subject,
+    requestDigest,
+    revision: 1,
+    digest,
+    artifact: stored,
+    manifest: await compactManifest(bundle.files),
+    updatedAt: now,
+  };
+  const draft: SkillDraft = {
+    id: draftId,
+    organizationId: deps.config.organizationId,
+    origin: 'upload',
+    name,
+    skillName: metadata.skillName,
+    description: metadata.description,
+    revision: 1,
+    digest,
+    artifact: stored,
+    files: bundle.files,
+    status: 'open',
+    actor: principal.subject,
+    createdAt: now,
+    updatedAt: now,
+    createIdempotency: record,
+    idempotency: [],
+  };
+
+  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    ensureDrafts(state);
+    const current = state.drafts!.find(
+      (candidate) =>
+        candidate.organizationId === deps.config.organizationId &&
+        candidate.actor === principal.subject &&
+        candidate.createIdempotency?.key === idempotencyKey,
+    );
+    if (current) {
+      if (!canReadNamespace(principal, current.name)) throw unavailableDraft();
+      if (current.createIdempotency?.requestDigest !== requestDigest) throw idempotencyConflict();
+      return { draft: current, idempotent: true };
+    }
+    state.drafts!.push(draft);
+    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
+    return { draft, idempotent: false };
+  });
+
+  const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
+  await syncDraftReview(responseDraft, responseDraft.files, deps, false);
+  return jsonResponse({
+    draft: toPublicDraft(responseDraft, { format: 'pskills-bundle-v1', files: responseDraft.files }),
+  }, result.idempotent ? 200 : 201, { 'cache-control': 'private, no-store' });
+}
+
 async function getDraft(
   draftId: string,
   principal: Principal,
@@ -311,10 +421,7 @@ async function updateDraft(
   }
   let bundle;
   try {
-    const validated = validateBundle({ format: 'pskills-bundle-v1', files: body.files });
-    // encodeBundle sorts paths; decode the exact bytes once so the persisted
-    // manifest and every replay use the same canonical file order.
-    bundle = decodeBundle(encodeBundle(validated));
+    bundle = canonicalizeBundle(body.files);
   } catch {
     throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
   }
@@ -399,16 +506,18 @@ async function syncDraftReview(
       (candidate) => candidate.id === draft.id && candidate.organizationId === deps.config.organizationId,
     );
     if (!currentDraft || currentDraft.revision !== draft.revision || currentDraft.digest !== draft.digest) return undefined;
-    const base = state.skills.find(
-      (candidate) => candidate.id === currentDraft.baseResourceId && candidate.organizationId === deps.config.organizationId,
-    );
+    const base = currentDraft.baseResourceId === undefined
+      ? undefined
+      : state.skills.find(
+        (candidate) => candidate.id === currentDraft.baseResourceId && candidate.organizationId === deps.config.organizationId,
+      );
     const binding: UploadReviewBinding = {
       draftId: currentDraft.id,
       draftRevision: currentDraft.revision,
       contentDigest: currentDraft.digest,
-      baseReleaseId: currentDraft.baseResourceId,
+      ...(currentDraft.baseResourceId === undefined ? {} : { baseReleaseId: currentDraft.baseResourceId }),
       ...(base?.version === undefined ? {} : { baseReleaseVersion: base.version }),
-      baseDigest: currentDraft.baseDigest,
+      ...(currentDraft.baseDigest === undefined ? {} : { baseDigest: currentDraft.baseDigest }),
       policyRevision: state.policy.revision,
     };
     if (markPreviousStale) {
@@ -640,9 +749,11 @@ async function publishDraft(
   try {
     metadata = parseSkillMetadata(draftBundle);
   } catch {
-    throw new AuthoringApiError('INVALID_BUNDLE', 'Draft metadata is not a valid SKILL.md manifest', 400);
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft metadata is not a valid SKILL.md manifest', 409);
   }
-  const base = await assertCurrentPublishableBase(stateBefore, before, principal, deps);
+  const base = draftOrigin(before) === 'release'
+    ? await assertCurrentPublishableBase(stateBefore, before, principal, deps)
+    : undefined;
   const policy = clonePolicy(stateBefore.policy);
   const now = new Date().toISOString();
   const resourceId = randomId('skill');
@@ -661,13 +772,15 @@ async function publishDraft(
     provenance: { kind: 'native', sourceDigest: before.digest },
     fileCount: before.files.length,
     scanIds: [],
-    authoring: {
-      baseResourceId: before.baseResourceId,
-      baseDigest: before.baseDigest,
-      draftId: before.id,
-      draftRevision: before.revision,
-      actor: principal.subject,
-    },
+    ...(base === undefined ? {} : {
+      authoring: {
+        baseResourceId: before.baseResourceId!,
+        baseDigest: before.baseDigest!,
+        draftId: before.id,
+        draftRevision: before.revision,
+        actor: principal.subject,
+      },
+    }),
   };
   const job: Job = {
     id: jobId,
@@ -705,14 +818,27 @@ async function publishDraft(
     if (current.status !== 'open') {
       throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
     }
-    const currentBase = state.skills.find((candidate) => candidate.id === current.baseResourceId);
-    if (!currentBase || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+    if (
+      draftOrigin(current) !== draftOrigin(before) ||
+      current.baseResourceId !== before.baseResourceId ||
+      current.baseDigest !== before.baseDigest
+    ) {
+      throw unavailableDraft();
+    }
+    const currentBase = current.baseResourceId === undefined
+      ? undefined
+      : state.skills.find((candidate) => candidate.id === current.baseResourceId);
+    if (draftOrigin(current) === 'release') {
+      if (!currentBase || current.baseDigest === undefined || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+        throw unavailableDraft();
+      }
+    } else if (current.baseResourceId !== undefined || current.baseDigest !== undefined) {
       throw unavailableDraft();
     }
     if (state.policy.revision !== policy.revision) {
       throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
     }
-    if (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal)) {
+    if (currentBase !== undefined && (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal))) {
       throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
     }
     if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
@@ -763,6 +889,9 @@ async function assertCurrentPublishableBase(
   principal: Principal,
   deps: AuthoringHandlerDependencies,
 ): Promise<SkillVersion> {
+  if (draftOrigin(draft) !== 'release' || draft.baseResourceId === undefined || draft.baseDigest === undefined) {
+    throw unavailableDraft();
+  }
   const base = state.skills.find((candidate) => candidate.id === draft.baseResourceId);
   if (!base || base.organizationId !== deps.config.organizationId || !sameReadableBase(base, base, state, principal, draft.baseDigest)) {
     throw unavailableDraft();
@@ -783,6 +912,12 @@ function findDraft(state: RegistryState, draftId: string, principal: Principal, 
   );
   if (!draft) throw unavailableDraft();
   return draft;
+}
+
+function draftOrigin(draft: Pick<SkillDraft, 'origin' | 'baseResourceId'>): SkillDraftOrigin {
+  // Older persisted drafts predate the explicit origin field; their base
+  // reference is an unambiguous release origin during the transition.
+  return draft.origin ?? (draft.baseResourceId === undefined ? 'upload' : 'release');
 }
 
 async function readDraftBundle(draft: SkillDraft, deps: AuthoringHandlerDependencies): Promise<ReturnType<typeof decodeBundle>> {
@@ -812,11 +947,12 @@ async function readDraftBundle(draft: SkillDraft, deps: AuthoringHandlerDependen
 function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): PublicSkillDraft {
   return {
     id: draft.id,
+    origin: draftOrigin(draft),
     name: draft.name,
     skillName: draft.skillName,
     description: draft.description ?? '',
-    baseResourceId: draft.baseResourceId,
-    baseDigest: draft.baseDigest,
+    ...(draft.baseResourceId === undefined ? {} : { baseResourceId: draft.baseResourceId }),
+    ...(draft.baseDigest === undefined ? {} : { baseDigest: draft.baseDigest }),
     revision: draft.revision,
     digest: draft.digest,
     size: draft.artifact.size,
@@ -946,6 +1082,24 @@ function appendDraftAudit(
   });
 }
 
+function canonicalizeBundle(files: unknown[]): ReturnType<typeof decodeBundle> {
+  const validated = validateBundle({ format: 'pskills-bundle-v1', files });
+  // encodeBundle sorts paths; decode the exact bytes once so the persisted
+  // manifest and every replay use the same canonical file order.
+  return decodeBundle(encodeBundle(validated));
+}
+
+function draftMetadataOrEmpty(bundle: ReturnType<typeof decodeBundle>): { skillName: string; description: string } {
+  try {
+    const metadata = parseSkillMetadata(bundle);
+    return { skillName: metadata.skillName, description: metadata.description };
+  } catch {
+    // An upload draft may be repaired while open. Publication performs the
+    // authoritative metadata parse immediately before queueing its scan job.
+    return { skillName: '', description: '' };
+  }
+}
+
 async function compactManifest(files: BundleFile[]): Promise<SkillDraftFileManifestEntry[]> {
   return Promise.all(files.map(async (file) => {
     const bytes = decodeBase64(file.content);
@@ -1014,6 +1168,13 @@ function requireDigest(value: unknown, field: string): Digest {
     throw new AuthoringApiError('INVALID_REQUEST', `${field} must be a sha256 digest`, 400);
   }
   return value as Digest;
+}
+
+function requireDraftName(value: unknown): string {
+  if (typeof value !== 'string' || !/^@[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,127}$/u.test(value)) {
+    throw new AuthoringApiError('INVALID_NAME', 'Draft names must use @namespace/slug', 400);
+  }
+  return value;
 }
 
 function requireRevision(value: unknown): number {

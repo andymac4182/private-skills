@@ -114,15 +114,18 @@ export interface SkillDraftPublicationRecord {
   jobId: string;
   createdAt: string;
 }
+export type SkillDraftOrigin = 'release' | 'upload';
 /** Tenant-scoped mutable authoring state; the referenced artifact is always a fresh sealed object. */
 export interface SkillDraft {
   id: string;
   organizationId: string;
+  origin: SkillDraftOrigin;
   name: string;
   skillName: string;
   description: string;
-  baseResourceId: string;
-  baseDigest: Digest;
+  /** Set only when the draft was forked from an approved immutable release. */
+  baseResourceId?: string;
+  baseDigest?: Digest;
   revision: number;
   digest: Digest;
   artifact: StoredBlob;
