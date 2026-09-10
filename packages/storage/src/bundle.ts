@@ -33,7 +33,10 @@ export const MAX_FRONTMATTER_FIELDS = 256;
 export const MAX_METADATA_FIELDS = 128;
 export const MAX_METADATA_VALUE_CHARS = 4_096;
 const MAX_FRONTMATTER_VALUE_CHARS = 16_384;
-const MAX_FRONTMATTER_DEPTH = 2;
+const MAX_FRONTMATTER_DEPTH = 8;
+const MAX_FRONTMATTER_NODES = 2_048;
+const MAX_FRONTMATTER_MAP_ITEMS = 256;
+const MAX_FRONTMATTER_SEQUENCE_ITEMS = 128;
 const FRONTMATTER_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const RESERVED_AGENT_SEGMENTS = new Set([
   ".agents",
@@ -75,7 +78,19 @@ export interface SkillMetadata {
 
 export type FrontmatterScalar = string | number | boolean;
 export type FrontmatterMetadata = Record<string, string>;
-export type FrontmatterValue = FrontmatterScalar | FrontmatterMetadata;
+/** Bounded, data-only nested values accepted under `metadata.openclaw`. */
+export interface FrontmatterOpenClawMetadata {
+  [key: string]: FrontmatterOpenClawValue;
+}
+export type FrontmatterOpenClawValue =
+  | FrontmatterScalar
+  | FrontmatterOpenClawMetadata
+  | FrontmatterOpenClawValue[];
+export type FrontmatterValue =
+  | FrontmatterScalar
+  | FrontmatterMetadata
+  | FrontmatterOpenClawMetadata
+  | FrontmatterOpenClawValue[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -604,7 +619,18 @@ function assertFrontmatterText(
  * keeps aliases, tags, and custom object construction out of the metadata
  * boundary.
  */
-function assertSafeYamlNode(node: unknown, depth: number): void {
+function assertSafeYamlNode(
+  node: unknown,
+  depth: number,
+  budget: { nodes: number },
+): void {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_FRONTMATTER_NODES) {
+    frontmatterError(
+      "SKILL.md frontmatter exceeds the node limit",
+      "unsafe_frontmatter",
+    );
+  }
   if (isAlias(node)) {
     frontmatterError(
       "SKILL.md frontmatter aliases are not allowed",
@@ -642,22 +668,34 @@ function assertSafeYamlNode(node: unknown, depth: number): void {
   }
 
   if (isSeq(node)) {
-    frontmatterError(
-      "SKILL.md frontmatter sequences are not allowed",
-      "unsafe_frontmatter"
-    );
+    if (node.items.length > MAX_FRONTMATTER_SEQUENCE_ITEMS) {
+      frontmatterError(
+        "SKILL.md frontmatter sequence exceeds its item limit",
+        "unsafe_frontmatter",
+      );
+    }
+    for (const item of node.items) {
+      assertSafeYamlNode(item, depth + 1, budget);
+    }
+    return;
   }
 
   if (isMap(node)) {
-    if (depth >= MAX_FRONTMATTER_DEPTH) {
+    if (depth > MAX_FRONTMATTER_DEPTH) {
       frontmatterError(
         "SKILL.md frontmatter nesting exceeds the allowed depth",
         "unsafe_frontmatter"
       );
     }
+    if (node.items.length > MAX_FRONTMATTER_MAP_ITEMS) {
+      frontmatterError(
+        "SKILL.md frontmatter map exceeds its item limit",
+        "unsafe_frontmatter",
+      );
+    }
     for (const pair of node.items) {
-      assertSafeYamlNode(pair.key, depth + 1);
-      assertSafeYamlNode(pair.value, depth + 1);
+      assertSafeYamlNode(pair.key, depth + 1, budget);
+      assertSafeYamlNode(pair.value, depth + 1, budget);
     }
     return;
   }
@@ -714,7 +752,7 @@ function parseYamlScalar(
   );
 }
 
-function parseMetadataMap(node: unknown): FrontmatterMetadata {
+function parseMetadataMap(node: unknown): Record<string, FrontmatterValue> {
   if (!isMap(node)) {
     frontmatterError(
       "SKILL.md frontmatter metadata must be a map of strings",
@@ -730,7 +768,7 @@ function parseMetadataMap(node: unknown): FrontmatterMetadata {
     );
   }
 
-  const metadata: FrontmatterMetadata = Object.create(null) as FrontmatterMetadata;
+  const metadata: Record<string, FrontmatterValue> = Object.create(null) as Record<string, FrontmatterValue>;
   const seen = new Set<string>();
   for (const pair of node.items) {
     const key = yamlMapKey(pair.key, "metadata");
@@ -755,6 +793,16 @@ function parseMetadataMap(node: unknown): FrontmatterMetadata {
       );
     }
     seen.add(normalizedKey);
+    if (normalizedKey === "openclaw") {
+      if (!isMap(pair.value)) {
+        frontmatterError(
+          "SKILL.md frontmatter metadata.openclaw must be a map",
+          "unsafe_frontmatter",
+        );
+      }
+      metadata[key] = parseOpenClawMetadataMap(pair.value, "metadata." + key);
+      continue;
+    }
     const value = parseYamlScalar(
       pair.value,
       "metadata." + key,
@@ -770,6 +818,84 @@ function parseMetadataMap(node: unknown): FrontmatterMetadata {
     metadata[key] = value;
   }
   return metadata;
+}
+
+/**
+ * Parse OpenClaw's nested metadata as inert data.  This deliberately accepts
+ * bounded maps and sequences only below `metadata.openclaw`; ordinary
+ * frontmatter metadata remains the flat string map used by Agent Skills.
+ */
+function parseOpenClawMetadataMap(
+  node: unknown,
+  location: string,
+  depth = 0,
+): FrontmatterOpenClawMetadata {
+  if (!isMap(node)) {
+    frontmatterError(
+      "SKILL.md frontmatter " + location + " must be a map",
+      "unsafe_frontmatter",
+    );
+  }
+  if (depth > MAX_FRONTMATTER_DEPTH || node.items.length > MAX_FRONTMATTER_MAP_ITEMS) {
+    frontmatterError(
+      "SKILL.md frontmatter " + location + " exceeds its bounds",
+      "unsafe_frontmatter",
+    );
+  }
+  const metadata: FrontmatterOpenClawMetadata = Object.create(null) as FrontmatterOpenClawMetadata;
+  const seen = new Set<string>();
+  for (const pair of node.items) {
+    const key = yamlMapKey(pair.key, location);
+    const normalizedKey = frontmatterKey(key).replaceAll(/[-_]/gu, "");
+    if (
+      seen.has(normalizedKey) ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      isDangerousFrontmatterKey(key)
+    ) {
+      frontmatterError(
+        "SKILL.md frontmatter " + location + " contains a duplicate or blocked field " + key,
+        "unsafe_frontmatter",
+      );
+    }
+    seen.add(normalizedKey);
+    metadata[key] = parseOpenClawValue(pair.value, location + "." + key, depth + 1);
+  }
+  return metadata;
+}
+
+function parseOpenClawValue(
+  node: unknown,
+  location: string,
+  depth: number,
+): FrontmatterOpenClawValue {
+  if (depth > MAX_FRONTMATTER_DEPTH) {
+    frontmatterError(
+      "SKILL.md frontmatter " + location + " exceeds the allowed depth",
+      "unsafe_frontmatter",
+    );
+  }
+  if (isScalar(node)) {
+    return parseYamlScalar(node, location, MAX_FRONTMATTER_VALUE_CHARS, true);
+  }
+  if (isSeq(node)) {
+    if (node.items.length > MAX_FRONTMATTER_SEQUENCE_ITEMS) {
+      frontmatterError(
+        "SKILL.md frontmatter " + location + " sequence exceeds its item limit",
+        "unsafe_frontmatter",
+      );
+    }
+    return node.items.map((item, index) =>
+      parseOpenClawValue(item, location + "[" + index + "]", depth + 1),
+    );
+  }
+  if (isMap(node)) {
+    return parseOpenClawMetadataMap(node, location, depth);
+  }
+  frontmatterError(
+    "SKILL.md frontmatter " + location + " contains an unsupported YAML node",
+    "unsafe_frontmatter",
+  );
 }
 
 function parseFrontmatter(text: string): Record<string, FrontmatterValue> {
@@ -853,7 +979,7 @@ function parseFrontmatter(text: string): Record<string, FrontmatterValue> {
     );
   }
 
-  assertSafeYamlNode(document.contents, 0);
+  assertSafeYamlNode(document.contents, 0, { nodes: 0 });
   const result: Record<string, FrontmatterValue> = Object.create(null) as Record<
     string,
     FrontmatterValue

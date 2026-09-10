@@ -61,6 +61,30 @@ import {
 } from '../../directory/src/index.js';
 import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
 import { createReleaseFilesHandler } from '../../authoring/src/index.js';
+import {
+  OpenClawConsumerSelectionError,
+  createOpenClawFeedAdvertisement,
+  createOpenClawTenantFeedRoute,
+  OpenClawPublicationManager,
+  type OpenClawImportOperation,
+  type OpenClawImportQueue,
+  type OpenClawImportQueueRequest,
+  previewOpenClawFeed,
+  selectOpenClawEligibleRecords,
+  type OpenClawApprovedSkillCandidate,
+  type OpenClawFeedAdvertisement,
+  type OpenClawFeedPublicationSnapshot,
+  type OpenClawMetadataSnapshot,
+  type OpenClawPublicationReader,
+  type OpenClawSourceArtifactProof,
+  type OpenClawStoredPublication,
+  type OpenClawTrustedFeedProfile,
+} from '../../openclaw-adapter/src/index.ts';
+import {
+  normalizeOpenClawCandidate,
+  parseOpenClawFeed,
+  type OpenClawFeedEntry,
+} from '../../openclaw/src/index.ts';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -227,11 +251,221 @@ export interface RegistryDirectoryPackClient {
   inspect(input: string | URL): Promise<SkillsPackManifest>;
 }
 
+/**
+ * A verifier-backed candidate for the private OpenClaw publication. The
+ * worker owns construction of `entry` and `sourceArtifact`; core only binds
+ * it to an existing registry skill and rechecks the current policy.
+ */
+export interface RegistryOpenClawCandidate {
+  skillId: string;
+  skill: OpenClawApprovedSkillCandidate['skill'];
+  entry: OpenClawFeedEntry;
+  sourceArtifact: OpenClawSourceArtifactProof;
+}
+
+/** Completion seam for the durable source-proof store owned by the adapter. */
+export interface RegistryOpenClawSourceProofCompletion {
+  tenantId: string;
+  completionJobId: string;
+  skillId: string;
+  entry: OpenClawFeedEntry;
+  sourceArtifact: OpenClawSourceArtifactProof;
+}
+
+export interface RegistryOpenClawConsumerDependencies {
+  /** Refreshes the configured trusted snapshot before a selection. */
+  refresh?: (signal: AbortSignal) => Promise<{
+    kind: string;
+    snapshot?: OpenClawMetadataSnapshot;
+  }>;
+  /** Selects one verified snapshot entry and queues the canonical import job. */
+  selectAndQueue: (input: {
+    key: { tenantId: string; feedId: string; sourceUrl: string };
+    externalId: string;
+    principal: Principal;
+    signal?: AbortSignal;
+  }) => Promise<{ operationId: string; state: 'queued' | 'running' }>;
+}
+
+/**
+ * Server-owned queue options for the OpenClaw consumer.  The queue is kept in
+ * core because the public selection route must derive the import name,
+ * upstream identity, policy snapshot, and worker source descriptor together
+ * in one transaction.  Browser input never reaches this seam.
+ */
+export interface RegistryOpenClawImportQueueOptions {
+  repository: StateRepository;
+  organizationId: string;
+  namespace: string;
+  /** Operator-owned HTTPS origin used by the hosted source adapter. */
+  sourceProviderOrigin: string;
+  now?: () => number;
+}
+
+/** Build the durable import queue consumed by OpenClawTrustedSnapshotImportService. */
+export function createOpenClawImportQueue(
+  options: RegistryOpenClawImportQueueOptions,
+): OpenClawImportQueue {
+  const namespace = validateOpenClawQueueNamespace(options.namespace);
+  const sourceProviderOrigin = validateOpenClawSourceProviderOrigin(options.sourceProviderOrigin);
+  const now = options.now ?? Date.now;
+  if (!options.repository || typeof options.repository.read !== 'function' || typeof options.repository.transaction !== 'function') {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'OpenClaw import queue storage is invalid', 500);
+  }
+  if (!options.organizationId || typeof options.organizationId !== 'string') {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'OpenClaw import queue organization is invalid', 500);
+  }
+
+  return {
+    async enqueue(input: OpenClawImportQueueRequest): Promise<OpenClawImportOperation> {
+      if (input.signal?.aborted) throw new RegistryApiError('REQUEST_ABORTED', 'The OpenClaw selection was cancelled', 400);
+      if (input.tenantId !== options.organizationId || input.principal.organizationId !== options.organizationId) {
+        throw new RegistryApiError('FORBIDDEN', 'The OpenClaw consumer tenant is not authorized', 403);
+      }
+      if (!canReadNamespace(input.principal, namespace)) {
+        throw new RegistryApiError('FORBIDDEN', 'The OpenClaw feed namespace is denied', 403);
+      }
+      const normalized = normalizeOpenClawQueueEntry(input.entry);
+      const source = normalized.source;
+      const feedDigest = input.feedDigest;
+      if (!/^sha256:[0-9a-f]{64}$/u.test(feedDigest)) {
+        throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed digest is invalid', 503, { retryable: true });
+      }
+      if (!Number.isSafeInteger(input.feedSequence) || input.feedSequence < 0) {
+        throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed sequence is invalid', 503, { retryable: true });
+      }
+      const sourceIdentity = openClawQueueSourceIdentity(source);
+      const sourceKey = await digestBytes(new TextEncoder().encode(sourceIdentity));
+      const managedName = `${namespace}/openclaw-${sourceKey.slice('sha256:'.length, 'sha256:'.length + 48)}`;
+      const version = openClawQueueVersion(input.entry.version, source);
+      const upstreamIdDigest = await digestBytes(new TextEncoder().encode(`${sourceProviderOrigin}\u0000${sourceIdentity}`));
+      const upstreamId = `openclaw-${upstreamIdDigest.slice('sha256:'.length, 'sha256:'.length + 32)}`;
+      const upstream: Upstream = {
+        id: upstreamId,
+        organizationId: options.organizationId,
+        name: `openclaw-${source.kind === 'public-clawhub' ? 'clawhub' : 'github'}`,
+        kind: source.kind === 'public-github' ? 'github' : 'registry',
+        enabled: true,
+        repositories: source.kind === 'public-github' ? [source.repo] : [sourceProviderOrigin],
+        baseUrl: source.kind === 'public-github' ? 'https://api.github.com' : sourceProviderOrigin,
+        namespace,
+      };
+      const importRequest: ImportRequest = {
+        upstreamId,
+        repository: source.kind === 'public-github' ? source.repo : sourceProviderOrigin,
+        path: source.kind === 'public-github' ? source.path : source.packageName,
+        ...(source.kind === 'public-github' ? { ref: source.commit } : {}),
+        name: managedName,
+        version,
+        externalId: input.externalId,
+      };
+      const sourceDescriptor = {
+        source,
+        entry: input.entry,
+        feed: {
+          id: input.feedId,
+          sequence: input.feedSequence,
+          digest: feedDigest,
+          sourceUrl: input.sourceUrl,
+        },
+      };
+      return await options.repository.transaction(options.organizationId, (state) => {
+        const mutable = ensureState(state, defaultPolicy());
+        const sameSource = (job: Job): boolean => {
+          if (job.organizationId !== options.organizationId || job.kind !== 'import' || !job.import || !isObject(job.openclawSource)) return false;
+          if (job.import.externalId !== input.externalId || job.import.name !== managedName || !job.upstream) return false;
+          if (job.upstream.id !== upstream.id || !sameUpstreamOrigin(job.upstream, upstream)) return false;
+          const descriptor = job.openclawSource;
+          return isObject(descriptor.source) && stableStringify(descriptor.source) === stableStringify(source);
+        };
+        const candidates = mutable.jobs
+          .filter(sameSource)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+        const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
+        if (active) return { operationId: active.id, state: active.state === 'queued' ? 'queued' : 'running' };
+        const completed = candidates.find((job) => job.state === 'completed' && job.resourceId);
+        if (completed) {
+          const skill = mutable.skills.find((candidate) => candidate.id === completed.resourceId);
+          if (skill && skillCurrentlyApproved(mutable, skill, now())) {
+            return { operationId: completed.id, state: 'running' };
+          }
+          const scan = skill && mutable.jobs.find((job) => job.kind === 'scan' && job.resourceId === skill.id && (job.state === 'queued' || job.state === 'running'));
+          if (scan) return { operationId: scan.id, state: 'running' };
+        }
+        if (mutable.skills.some((skill) => skill.organizationId === options.organizationId && skill.name === managedName && skill.version === version)) {
+          throw new RegistryApiError('PROVENANCE_CONFLICT', 'The OpenClaw source identity is already bound to a different release', 409);
+        }
+        const job: Job = {
+          id: randomId('job'),
+          organizationId: options.organizationId,
+          kind: 'import',
+          state: 'queued',
+          policyRevision: mutable.policy.revision,
+          policy: clonePolicy(mutable.policy),
+          import: importRequest,
+          upstream,
+          openclawSource: sourceDescriptor,
+          createdAt: new Date(now()).toISOString(),
+          updatedAt: new Date(now()).toISOString(),
+          attempts: 0,
+        };
+        mutable.jobs.push(job);
+        appendAudit(mutable, audit(input.principal, 'openclaw.import.queued', job.id, {
+          feedId: input.feedId,
+          feedSequence: input.feedSequence,
+          feedDigest,
+          externalId: input.externalId,
+          source: source.kind,
+        }, options.organizationId));
+        return { operationId: job.id, state: 'queued' as const };
+      });
+    },
+  };
+}
+
+/**
+ * Optional OpenClaw composition. The route is disabled when this is absent.
+ * A configured feed without a verifier-backed candidate provider can serve an
+ * already persisted publication, but cannot refresh it.
+ */
+export interface RegistryOpenClawDependencies {
+  enabled?: boolean;
+  feedId: string;
+  feedUrl: string;
+  publicationManager: OpenClawPublicationManager & OpenClawPublicationReader;
+  /** Server-side source verifier output; never derived from catalog rows. */
+  candidatesForTenant?: (input: {
+    tenantId: string;
+    principal: Principal;
+    state: RegistryState;
+    metadata?: OpenClawMetadataSnapshot;
+    signal: AbortSignal;
+  }) => Promise<readonly RegistryOpenClawCandidate[]> | readonly RegistryOpenClawCandidate[];
+  /** Persist a proof only after the core has accepted an import completion. */
+  recordSourceProof?: (input: RegistryOpenClawSourceProofCompletion) => Promise<unknown> | unknown;
+  /** Optional consumer selection path for an explicitly configured trusted feed. */
+  consumer?: RegistryOpenClawConsumerDependencies;
+  /** Internal namespace used for server-generated imported release names. */
+  namespace?: string;
+  /** Operator-owned source provider origin used by OpenClaw worker jobs. */
+  sourceProviderOrigin?: string;
+  /** Optional trusted-feed metadata source. It is metadata-only and bounded. */
+  trustedFeed?: OpenClawTrustedFeedProfile;
+  /**
+   * Reads the latest validated persisted trusted-feed metadata without doing
+   * network I/O. A configured trusted feed must provide this for publication
+   * reads to recheck current upstream eligibility.
+   */
+  currentTrustedMetadata?: () => Promise<OpenClawMetadataSnapshot | undefined> | OpenClawMetadataSnapshot | undefined;
+  now?: () => number;
+}
+
 export type RegistryHandlerDependencies = RegistryDependencies & {
   directory?: RegistryDirectoryClient;
   /** Resolve the metadata client bound to one exact transparent feed base. */
   directoryForBase?: (baseUrl: string) => RegistryDirectoryClient | undefined;
   directoryPacks?: RegistryDirectoryPackClient;
+  openClaw?: RegistryOpenClawDependencies;
 };
 
 /** A safe, empty state used by memory repositories and migration shims. */
@@ -279,6 +513,7 @@ export function defaultPolicy(): Policy {
  */
 export function createRegistryHandler(deps: RegistryHandlerDependencies): RegistryHandler {
   const config = normalizeConfiguration(deps.config);
+  const openClaw = normalizeOpenClawDependencies(deps.openClaw);
 
   return async function registryHandler(request: Request): Promise<Response> {
     const requestId = randomId('req');
@@ -360,6 +595,7 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
             directory: !!deps.directory,
             installAuthorizations: true,
             installReceipts: true,
+            openClaw: openClawCapability(openClaw),
             transferMode: 'gateway',
             rangeSupported: false,
           },
@@ -516,6 +752,18 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
       }
 
       if (segments[0] === 'v1' && segments[1] === 'feeds') {
+        if (segments[2] === 'skills') {
+          return await handleOpenClawRoute(
+            method,
+            segments,
+            request,
+            principal,
+            deps,
+            config,
+            openClaw,
+            requestId,
+          );
+        }
         return await handleFeedsRoute(
           method,
           segments,
@@ -817,6 +1065,12 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
   if (segments[0] === 'v1' && segments[1] === 'packs') return method === 'GET' ? ['packs:read', 'registry:read'] : ['packs:publish', 'packs:write'];
   if (segments[0] === 'v1' && segments[1] === 'policy') return method === 'GET' ? ['policy:read', 'registry:read'] : ['policy:write', 'policy:admin'];
   if (segments[0] === 'v1' && segments[1] === 'scans') return ['scans:read', 'registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'feeds' && segments[2] === 'skills') {
+    if ((segments.length === 3 || (segments.length === 4 && segments[3] === 'catalog')) && method === 'GET') return ['registry:read'];
+    if (segments.length === 4 && segments[3] === 'refresh' && method === 'POST') return ['registry:admin'];
+    if (segments.length === 4 && segments[3] === 'import' && method === 'POST') return ['proxy:resolve'];
+    return ['registry:admin'];
+  }
   if (segments[0] === 'v1' && segments[1] === 'feeds') return method === 'GET' ? ['registry:read'] : ['upstreams:write', 'upstreams:admin'];
   if (segments[0] === 'v1' && segments[1] === 'upstreams') return method === 'GET' ? ['upstreams:read', 'registry:read'] : ['upstreams:write', 'upstreams:admin'];
   if (segments[0] === 'v1' && segments[1] === 'imports') return ['imports:create', 'upstreams:write', 'skills:publish', 'proxy:resolve'];
@@ -1905,6 +2159,21 @@ function skillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now =
   return evaluatePolicy(state.policy, scans, skill.artifact.digest, now).state === 'approved';
 }
 
+/** Shared admission predicate for durable source-proof projections. */
+export function isSkillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now = Date.now()): boolean {
+  return skillCurrentlyApproved(state, skill, now);
+}
+
+/** Shared namespace predicate for adapter-owned candidate providers. */
+export function canReadSkillForPrincipal(principal: Principal, skill: SkillVersion): boolean {
+  return skill.organizationId === principal.organizationId && canReadNamespace(principal, skill.name);
+}
+
+/** Shared namespace predicate for consumer selection and runtime composition. */
+export function canReadOpenClawNamespace(principal: Principal, namespace: string): boolean {
+  return canReadNamespace(principal, namespace);
+}
+
 async function handleInstallAuthorizationRoute(
   method: HttpMethod,
   segments: string[],
@@ -2682,6 +2951,596 @@ interface PublicFeed {
   repositories?: string[];
   baseUrl: string;
   namespace: string;
+}
+
+interface NormalizedRegistryOpenClawDependencies extends RegistryOpenClawDependencies {
+  enabled: boolean;
+  advertisement?: OpenClawFeedAdvertisement;
+}
+
+function normalizeOpenClawDependencies(
+  value: RegistryOpenClawDependencies | undefined,
+): NormalizedRegistryOpenClawDependencies | undefined {
+  if (value === undefined) return undefined;
+  const enabled = value.enabled !== false;
+  if (!enabled) return { ...value, enabled: false };
+  if (
+    !value.publicationManager ||
+    typeof value.publicationManager.get !== 'function' ||
+    typeof value.publicationManager.publishNext !== 'function'
+  ) {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'OpenClaw publication dependencies are invalid', 500);
+  }
+  if (value.feedId === 'clawhub-official') {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'The private OpenClaw feed identity is reserved', 500);
+  }
+  let advertisement: OpenClawFeedAdvertisement;
+  try {
+    advertisement = createOpenClawFeedAdvertisement({
+      feedId: value.feedId,
+      feedUrl: value.feedUrl,
+    });
+  } catch {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'The OpenClaw feed advertisement is invalid', 500);
+  }
+  return { ...value, enabled: true, advertisement };
+}
+
+function openClawCapability(
+  openClaw: NormalizedRegistryOpenClawDependencies | undefined,
+): Record<string, unknown> {
+  if (!openClaw || !openClaw.enabled) return { enabled: false };
+  return {
+    enabled: true,
+    advertisement: openClaw.advertisement,
+    trustedFeedPreview: openClaw.trustedFeed !== undefined,
+    refresh: typeof openClaw.candidatesForTenant === 'function',
+    consumer: typeof openClaw.consumer?.selectAndQueue === 'function',
+  };
+}
+
+async function handleOpenClawRoute(
+  method: HttpMethod,
+  segments: string[],
+  request: Request,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  openClaw: NormalizedRegistryOpenClawDependencies | undefined,
+  requestId: string,
+): Promise<Response> {
+  if (!openClaw || !openClaw.enabled) {
+    return errorResponse(
+      new RegistryApiError('OPENCLAW_DISABLED', 'The OpenClaw feed is not configured', 503, { retryable: false }),
+      requestId,
+    );
+  }
+  if (segments.length === 3) {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    const route = createOpenClawTenantFeedRoute({
+      manager: openClaw.publicationManager,
+      authenticate: async () => principal,
+      authorize: (candidate) => candidate.organizationId === config.organizationId,
+      authorizePublication: (input) => authorizeOpenClawPublication(input, deps, config, openClaw),
+      now: openClaw.now,
+    });
+    return route(request);
+  }
+  if (segments.length === 4 && segments[3] === 'catalog') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    if (!openClaw.consumer?.refresh || !openClaw.trustedFeed) {
+      throw new RegistryApiError(
+        'OPENCLAW_CONSUMER_UNAVAILABLE',
+        'The configured OpenClaw metadata consumer is unavailable',
+        503,
+        { retryable: true },
+      );
+    }
+    if (openClaw.namespace && !canReadNamespace(principal, openClaw.namespace)) {
+      throw new RegistryApiError('FORBIDDEN', 'The OpenClaw feed namespace is denied', 403);
+    }
+    let refreshed: Awaited<ReturnType<NonNullable<RegistryOpenClawConsumerDependencies['refresh']>>>;
+    try {
+      refreshed = await openClaw.consumer.refresh(request.signal);
+    } catch {
+      throw new RegistryApiError(
+        'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
+        'The configured OpenClaw metadata feed is unavailable',
+        503,
+        { retryable: true },
+      );
+    }
+    if (!refreshed.snapshot || (refreshed.kind !== 'accepted' && refreshed.kind !== 'not-modified' && refreshed.kind !== 'stale')) {
+      throw new RegistryApiError(
+        'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
+        'The configured OpenClaw metadata feed is unavailable',
+        503,
+        { retryable: true },
+      );
+    }
+    return jsonResponse({
+      feed: refreshed.snapshot.feed,
+      source: {
+        sha256: refreshed.snapshot.sha256,
+        etag: refreshed.snapshot.etag,
+        ...(refreshed.snapshot.lastModified === undefined ? {} : { lastModified: refreshed.snapshot.lastModified }),
+        acceptedAt: new Date(refreshed.snapshot.acceptedAt).toISOString(),
+        sourceUrl: refreshed.snapshot.sourceUrl,
+        state: refreshed.kind,
+      },
+    });
+  }
+  if (segments.length === 4 && segments[3] === 'import') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    requireReader(principal);
+    if (!openClaw.consumer || !openClaw.trustedFeed) {
+      throw new RegistryApiError(
+        'OPENCLAW_CONSUMER_UNAVAILABLE',
+        'The configured OpenClaw consumer is unavailable',
+        503,
+        { retryable: true },
+      );
+    }
+    if (openClaw.namespace && !canReadNamespace(principal, openClaw.namespace)) {
+      throw new RegistryApiError('FORBIDDEN', 'The OpenClaw feed namespace is denied', 403);
+    }
+    const body = await readJson(request, config.maxBodyBytes);
+    const externalId = stringValue(body.externalId);
+    if (!externalId || externalId.length > 2_048 || /[\u0000-\u001f\u007f]/u.test(externalId)) {
+      throw new RegistryApiError('INVALID_REQUEST', 'externalId is invalid', 400);
+    }
+    if (openClaw.consumer.refresh) {
+      const refreshed = await openClaw.consumer.refresh(request.signal);
+      if (
+        (refreshed.kind !== 'accepted' && refreshed.kind !== 'not-modified') ||
+        refreshed.snapshot === undefined
+      ) {
+        throw new RegistryApiError(
+          'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
+          'The configured OpenClaw metadata feed is unavailable',
+          503,
+          { retryable: true },
+        );
+      }
+    }
+    let operation: OpenClawImportOperation;
+    try {
+      operation = await openClaw.consumer.selectAndQueue({
+        key: {
+          tenantId: config.organizationId,
+          feedId: openClaw.trustedFeed.expectedFeedId,
+          sourceUrl: new URL(openClaw.trustedFeed.url).href,
+        },
+        externalId,
+        principal,
+        signal: request.signal,
+      });
+    } catch (error) {
+      throw openClawConsumerApiError(error);
+    }
+    return jsonResponse({
+      feed: openClaw.trustedFeed.expectedFeedId,
+      externalId,
+      operation,
+    }, 202);
+  }
+  if (segments.length === 4 && segments[3] === 'refresh') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    requireAdmin(principal);
+    return refreshOpenClawPublication(request, principal, deps, config, openClaw, requestId);
+  }
+  throw new RegistryApiError('NOT_FOUND', 'OpenClaw feed route not found', 404);
+}
+
+async function refreshOpenClawPublication(
+  request: Request,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  openClaw: NormalizedRegistryOpenClawDependencies,
+  requestId: string,
+): Promise<Response> {
+  const candidateProvider = openClaw.candidatesForTenant;
+  if (!candidateProvider) {
+    throw new RegistryApiError(
+      'OPENCLAW_SOURCE_PROOF_UNAVAILABLE',
+      'The OpenClaw source verifier is not configured',
+      503,
+      { retryable: true },
+    );
+  }
+
+  let metadata: OpenClawMetadataSnapshot | undefined;
+  if (openClaw.trustedFeed) {
+    const preview = openClaw.consumer?.refresh
+      ? await openClaw.consumer.refresh(request.signal)
+      : await previewOpenClawFeed(openClaw.trustedFeed, { signal: request.signal });
+    if (
+      (preview.kind !== 'accepted' && preview.kind !== 'not-modified') ||
+      preview.snapshot === undefined
+    ) {
+      throw new RegistryApiError(
+        'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
+        'The configured OpenClaw metadata feed is unavailable',
+        503,
+        { retryable: true },
+      );
+    }
+    metadata = preview.snapshot;
+  }
+
+  const state = await readState(deps.repository, config.organizationId);
+  const provided = await candidateProvider({
+    tenantId: config.organizationId,
+    principal,
+    state,
+    ...(metadata === undefined ? {} : { metadata }),
+    signal: request.signal,
+  });
+  if (!Array.isArray(provided) || provided.length > 1_000) {
+    throw new RegistryApiError('OPENCLAW_SOURCE_PROOF_INVALID', 'The OpenClaw source verifier returned an invalid candidate set', 503, { retryable: true });
+  }
+
+  const currentCandidateSkills = new Set<OpenClawApprovedSkillCandidate['skill']>();
+  const candidates: OpenClawApprovedSkillCandidate[] = [];
+  for (const candidate of provided) {
+    const skill = state.skills.find((entry) => entry.id === candidate?.skillId);
+    if (!skill || skill.organizationId !== config.organizationId || !canReadNamespace(principal, skill.name)) continue;
+    if (!candidate.skill || candidate.skill.state !== skill.state || candidate.skill.version !== skill.version || candidate.skill.policyRevision !== skill.policyRevision || candidate.skill.artifact.digest !== skill.artifact.digest) continue;
+    if (!skillCurrentlyApproved(state, skill, openClaw.now?.() ?? Date.now())) continue;
+    const currentEntry = metadata === undefined
+      ? candidate.entry
+      : openClawCandidateMatchesMetadata(candidate.entry, metadata);
+    if (!currentEntry) continue;
+    const normalized: OpenClawApprovedSkillCandidate = {
+      skill: candidate.skill,
+      entry: currentEntry,
+      sourceArtifact: candidate.sourceArtifact,
+    };
+    currentCandidateSkills.add(candidate.skill);
+    candidates.push(normalized);
+  }
+  const records = selectOpenClawEligibleRecords(
+    candidates,
+    (skill) => currentCandidateSkills.has(skill),
+  );
+  const generatedAt = new Date(openClaw.now?.() ?? Date.now()).toISOString();
+  const expiresAt = new Date((openClaw.now?.() ?? Date.now()) + 24 * 60 * 60 * 1_000).toISOString();
+  const publication: Omit<OpenClawFeedPublicationSnapshot, 'sequence'> = {
+    id: openClaw.feedId,
+    generatedAt,
+    expiresAt,
+    records,
+  };
+  const authorized = await authorizeOpenClawPublication({
+    tenantId: config.organizationId,
+    principal,
+    publication,
+    signal: request.signal,
+    ...(metadata === undefined ? {} : { metadata }),
+  }, deps, config, openClaw);
+  if (!authorized) {
+    throw new RegistryApiError('OPENCLAW_PUBLICATION_DENIED', 'The OpenClaw publication did not pass current registry policy', 403);
+  }
+  const stored = await openClaw.publicationManager.publishNext({
+    tenantId: config.organizationId,
+    publication,
+  });
+  await deps.repository.transaction(config.organizationId, (mutableState) => {
+    const mutable = ensureState(mutableState, defaultPolicy());
+    appendAudit(mutable, audit(principal, 'openclaw.publication.refresh', stored.id, {
+      feedId: stored.id,
+      sequence: stored.sequence,
+      entryCount: records.length,
+      requestId,
+    }, config.organizationId));
+  });
+  return jsonResponse({
+    feed: {
+      id: stored.id,
+      sequence: stored.sequence,
+      generatedAt: stored.generatedAt,
+      expiresAt: stored.expiresAt,
+      sha256: stored.sha256,
+      entryCount: records.length,
+    },
+    ...(metadata === undefined ? {} : {
+      source: {
+        feedId: metadata.feed.id,
+        sequence: metadata.feed.sequence,
+        sha256: metadata.sha256,
+        acceptedAt: new Date(metadata.acceptedAt).toISOString(),
+        entryCount: metadata.feed.entries.length,
+      },
+    }),
+  }, 200);
+}
+
+function openClawConsumerApiError(error: unknown): RegistryApiError {
+  if (error instanceof OpenClawConsumerSelectionError) {
+    if (error.code === 'forbidden') return new RegistryApiError('FORBIDDEN', 'The requested OpenClaw skill is not authorized', 403);
+    if (error.code === 'entry-not-found') return new RegistryApiError('NOT_FOUND', 'The requested OpenClaw skill is unavailable', 404);
+    if (error.code === 'entry-invalid') return new RegistryApiError('INVALID_REQUEST', 'The requested OpenClaw skill is invalid', 400);
+    if (error.code === 'aborted') return new RegistryApiError('REQUEST_ABORTED', 'The OpenClaw selection was cancelled', 400);
+    if (error.code === 'snapshot-expired' || error.code === 'snapshot-unavailable' || error.code === 'snapshot-invalid' || error.code === 'queue-unavailable') {
+      return new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The OpenClaw consumer is temporarily unavailable', 503, { retryable: true });
+    }
+  }
+  return new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The OpenClaw consumer is temporarily unavailable', 503, { retryable: true });
+}
+
+type OpenClawQueueNormalizedCandidate = ReturnType<typeof normalizeOpenClawCandidate>;
+
+function normalizeOpenClawQueueEntry(entry: OpenClawFeedEntry): OpenClawQueueNormalizedCandidate {
+  if (!entry || entry.type !== 'skill' || entry.state !== 'available' || !Array.isArray(entry.install?.candidates) || entry.install.candidates.length !== 1) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw entry is not importable', 503, { retryable: true });
+  }
+  try {
+    return normalizeOpenClawCandidate(entry, entry.install.candidates[0]!);
+  } catch {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw entry is not importable', 503, { retryable: true });
+  }
+}
+
+function openClawQueueSourceIdentity(source: OpenClawQueueNormalizedCandidate['source']): string {
+  return source.kind === 'public-clawhub'
+    ? `${source.kind}:${source.packageName}@${source.version}:${source.artifactDigest}`
+    : `${source.kind}:${source.repo}:${source.path}@${source.commit}:${source.contentHash}`;
+}
+
+function openClawQueueVersion(
+  entryVersion: string,
+  source: OpenClawQueueNormalizedCandidate['source'],
+): string {
+  if (/^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(entryVersion)) return entryVersion;
+  const suffix = source.kind === 'public-clawhub'
+    ? source.artifactDigest.slice('sha256:'.length, 'sha256:'.length + 32)
+    : source.commit.slice(0, 32);
+  return `0.0.0+openclaw.${suffix}`;
+}
+
+function validateOpenClawQueueNamespace(value: string): string {
+  if (typeof value !== 'string' || !/^@[a-z0-9][a-z0-9._-]{0,63}$/u.test(value)) {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'The OpenClaw import namespace is invalid', 500);
+  }
+  return value;
+}
+
+function validateOpenClawSourceProviderOrigin(value: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'The OpenClaw source provider origin is invalid', 500);
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      throw new Error('invalid origin');
+    }
+    return parsed.origin;
+  } catch {
+    throw new RegistryApiError('INVALID_CONFIGURATION', 'The OpenClaw source provider origin is invalid', 500);
+  }
+}
+
+function openClawCandidateMatchesMetadata(
+  entry: OpenClawFeedEntry,
+  metadata: OpenClawMetadataSnapshot,
+  requireCurrentPresentation = false,
+): OpenClawFeedEntry | undefined {
+  const metadataEntry = metadata.feed.entries.find((candidate) => candidate.id === entry.id && candidate.version === entry.version);
+  if (!metadataEntry || entry.type !== 'skill' || metadataEntry.type !== 'skill' || metadataEntry.state !== 'available') return undefined;
+  const matches = entry.install.candidates.some((candidate) => metadataEntry.install.candidates.some((expected) =>
+    expected.sourceRef === candidate.sourceRef &&
+    expected.package === candidate.package &&
+    expected.version === candidate.version &&
+    expected.integrity === candidate.integrity &&
+    JSON.stringify(expected.github) === JSON.stringify(candidate.github),
+  ));
+  if (matches && requireCurrentPresentation && (
+    metadataEntry.title !== entry.title ||
+    metadataEntry.description !== entry.description ||
+    metadataEntry.icon !== entry.icon ||
+    metadataEntry.featured !== entry.featured ||
+    metadataEntry.featuredAt !== entry.featuredAt ||
+    JSON.stringify(metadataEntry.publisher) !== JSON.stringify(entry.publisher)
+  )) return undefined;
+  return matches ? metadataEntry as OpenClawFeedEntry : undefined;
+}
+
+function openClawTrustedMetadataUsable(
+  metadata: OpenClawMetadataSnapshot | undefined,
+  expectedFeedId: string,
+  expectedSourceUrl: string,
+  now: number,
+): metadata is OpenClawMetadataSnapshot {
+  if (!metadata || metadata.feed.id !== expectedFeedId || metadata.feed.schemaVersion !== 1) return false;
+  let sourceUrl: string;
+  try {
+    sourceUrl = new URL(metadata.sourceUrl).href;
+  } catch {
+    return false;
+  }
+  if (sourceUrl !== expectedSourceUrl) return false;
+  const generatedAt = Date.parse(metadata.feed.generatedAt);
+  const expiresAt = Date.parse(metadata.feed.expiresAt);
+  return Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
+    generatedAt <= now && expiresAt > now &&
+    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now;
+}
+
+async function authorizeOpenClawPublication(
+  input: {
+    tenantId: string;
+    principal: Principal;
+    publication: OpenClawStoredPublication | OpenClawFeedPublicationSnapshot | Omit<OpenClawFeedPublicationSnapshot, 'sequence'>;
+    signal: AbortSignal;
+    metadata?: OpenClawMetadataSnapshot;
+  },
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  openClaw: NormalizedRegistryOpenClawDependencies,
+): Promise<boolean> {
+  if (input.signal.aborted || input.tenantId !== config.organizationId || input.principal.organizationId !== config.organizationId) return false;
+  const entries = openClawPublicationEntries(input.publication, openClaw.feedId);
+  if (!entries) return false;
+  let trustedMetadata = input.metadata;
+  if (trustedMetadata === undefined && openClaw.trustedFeed !== undefined) {
+    if (openClaw.currentTrustedMetadata === undefined) return false;
+    try {
+      trustedMetadata = await openClaw.currentTrustedMetadata();
+    } catch {
+      return false;
+    }
+  }
+  if (openClaw.trustedFeed !== undefined &&
+      !openClawTrustedMetadataUsable(
+        trustedMetadata,
+        openClaw.trustedFeed.expectedFeedId,
+        new URL(openClaw.trustedFeed.url).href,
+        openClaw.now?.() ?? Date.now(),
+      )) {
+    return false;
+  }
+  const state = await readState(deps.repository, config.organizationId);
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.id) || entry.type !== 'skill' || entry.state !== 'available' || entry.install.candidates.length !== 1) return false;
+    seen.add(entry.id);
+    let normalized;
+    try {
+      normalized = normalizeOpenClawCandidate(entry, entry.install.candidates[0]!);
+    } catch {
+      return false;
+    }
+    if (trustedMetadata !== undefined && !openClawCandidateMatchesMetadata(entry, trustedMetadata, true)) return false;
+    const matches = state.skills.filter((skill) =>
+      skill.organizationId === config.organizationId &&
+      canReadNamespace(input.principal, skill.name) &&
+      skillCurrentlyApproved(state, skill, openClaw.now?.() ?? Date.now()) &&
+      openClawProvenanceMatches(skill, normalized),
+    );
+    if (matches.length !== 1) return false;
+  }
+  return true;
+}
+
+function openClawPublicationEntries(
+  publication: OpenClawStoredPublication | OpenClawFeedPublicationSnapshot | Omit<OpenClawFeedPublicationSnapshot, 'sequence'>,
+  expectedFeedId: string,
+): readonly OpenClawFeedEntry[] | undefined {
+  try {
+    if ('body' in publication) {
+      return parseOpenClawFeed(publication.body, {
+        expectedFeedId,
+        checkExpiry: false,
+      }).entries;
+    }
+    if (publication.id !== expectedFeedId) return undefined;
+    return publication.records.map((record) => record.entry);
+  } catch {
+    return undefined;
+  }
+}
+
+function openClawProvenanceMatches(
+  skill: SkillVersion,
+  normalized: ReturnType<typeof normalizeOpenClawCandidate>,
+): boolean {
+  const provenance = skill.provenance;
+  if (provenance.externalDigest !== normalized.candidate.integrity) return false;
+  if (normalized.source.kind === 'public-clawhub') {
+    return provenance.kind === 'registry' &&
+      provenance.sourceResolutionKind === 'snapshot' &&
+      provenance.externalId === normalized.candidate.package &&
+      provenance.revision === normalized.candidate.version;
+  }
+  return provenance.kind === 'github' &&
+    provenance.sourceResolutionKind === 'github' &&
+    provenance.externalId === normalized.candidate.package &&
+    provenance.repository === normalized.source.repo &&
+    provenance.path === normalized.source.path &&
+    provenance.resolvedCommit === normalized.source.commit &&
+    provenance.sourceProviderOrigin === 'https://github.com';
+}
+
+/**
+ * Reconstruct source-proof material from a server-owned OpenClaw job target.
+ * The target is carried through the leased worker job, while the digest and
+ * immutable source fields are checked again against worker completion
+ * provenance.  A browser cannot submit this extension through a public route.
+ */
+function openClawCompletionProof(
+  job: Job,
+  rawProvenance: unknown,
+  canonicalArtifactDigest: string | undefined,
+): { entry: OpenClawFeedEntry; sourceArtifact: OpenClawSourceArtifactProof } | undefined {
+  if (!isObject(job.openclawSource) || !isObject(job.openclawSource.entry) || !isObject(job.openclawSource.source)) return undefined;
+  const descriptor = job.openclawSource;
+  const entry = descriptor.entry as unknown as OpenClawFeedEntry;
+  const source = descriptor.source;
+  if (!isObject(source)) return undefined;
+  let normalized: ReturnType<typeof normalizeOpenClawCandidate>;
+  try {
+    if (!Array.isArray(entry.install?.candidates) || entry.install.candidates.length !== 1) return undefined;
+    normalized = normalizeOpenClawCandidate(entry, entry.install.candidates[0]!);
+  } catch {
+    return undefined;
+  }
+  const provenance = isObject(rawProvenance) ? rawProvenance : undefined;
+  if (
+    !provenance ||
+    canonicalArtifactDigest === undefined ||
+    provenance.externalDigest !== normalized.candidate.integrity ||
+    provenance.sourceDigest !== canonicalArtifactDigest
+  ) return undefined;
+  // ImportRequest.version is a server-owned private release version.  Hosted
+  // ClawHub candidates may carry SemVer while GitHub candidates carry an
+  // immutable commit, so the worker source descriptor and completion proof,
+  // rather than the private release version, bind the external entry.
+  if (job.import?.externalId !== entry.id) return undefined;
+
+  if (normalized.source.kind === 'public-clawhub') {
+    if (
+      source.kind !== 'public-clawhub' ||
+      source.sourceRef !== 'public-clawhub' ||
+      source.packageName !== normalized.source.packageName ||
+      source.version !== normalized.source.version ||
+      source.artifactDigest !== normalized.source.artifactDigest ||
+      provenance.kind !== 'registry' ||
+      provenance.sourceResolutionKind !== 'snapshot' ||
+      provenance.externalId !== normalized.source.packageName ||
+      provenance.revision !== normalized.source.version ||
+      provenance.repository !== job.upstream?.baseUrl ||
+      provenance.sourceProviderOrigin !== job.upstream?.baseUrl
+    ) return undefined;
+  } else {
+    if (
+      source.kind !== 'public-github' ||
+      source.sourceRef !== 'public-github' ||
+      source.repo !== normalized.source.repo ||
+      source.path !== normalized.source.path ||
+      source.commit !== normalized.source.commit ||
+      source.contentHash !== normalized.source.contentHash ||
+      provenance.kind !== 'github' ||
+      provenance.sourceResolutionKind !== 'github' ||
+      provenance.externalId !== normalized.candidate.package ||
+      provenance.repository !== normalized.source.repo ||
+      provenance.path !== normalized.source.path ||
+      provenance.resolvedCommit !== normalized.source.commit ||
+      provenance.sourceProviderOrigin !== 'https://github.com'
+    ) return undefined;
+  }
+  return {
+    entry,
+    sourceArtifact: {
+      verified: true,
+      digest: normalized.candidate.integrity,
+      format: normalized.source.kind === 'public-clawhub' ? 'clawhub-skill-v1' : 'github-skill-folder-v1',
+      identity: normalized.source.kind === 'public-clawhub'
+        ? `${normalized.source.packageName}@${normalized.source.version}`
+        : `${normalized.source.repo}:${normalized.source.path}@${normalized.source.commit}`,
+    },
+  };
 }
 
 async function handleFeedsRoute(
@@ -4392,6 +5251,28 @@ async function completeJob(
     }, config.organizationId));
     return currentJob;
   });
+  const recordSourceProof = (deps as RegistryHandlerDependencies).openClaw?.recordSourceProof;
+  if (recordSourceProof && result.kind === 'import' && result.state === 'completed' && result.resourceId && body.error === undefined) {
+    const proof = openClawCompletionProof(job, body.provenance, result.artifact?.digest);
+    if (proof) {
+      // Proof persistence is deliberately a separate adapter transaction. A
+      // failure leaves the approved release intact but unavailable to the
+      // OpenClaw publication provider; it must never turn a completed import
+      // into an implicitly trusted feed entry.
+      try {
+        await recordSourceProof({
+          tenantId: config.organizationId,
+          completionJobId: result.id,
+          skillId: result.resourceId,
+          entry: proof.entry,
+          sourceArtifact: proof.sourceArtifact,
+        });
+      } catch {
+        // The next refresh will omit the unrecorded proof and the durable job
+        // remains inspectable through the normal operation endpoint.
+      }
+    }
+  }
   return jsonResponse({ operation: result });
 }
 
@@ -4633,6 +5514,23 @@ function normalizeProvenance(
   const suppliedSourceReference = optionalProvenanceString(raw.sourceReference, 'sourceReference', 2_048);
   const suppliedSourceProviderOrigin = optionalProvenanceString(raw.sourceProviderOrigin, 'sourceProviderOrigin', 512);
   const suppliedFetchedAt = optionalCanonicalProvenanceTimestamp(raw.fetchedAt, 'fetchedAt');
+  const suppliedExternalDigest = optionalProvenanceString(raw.externalDigest, 'externalDigest', 128);
+  if (suppliedExternalDigest !== undefined && !isDigest(suppliedExternalDigest)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external digest is invalid', 409);
+  }
+  // OpenClaw GitHub imports carry the immutable commit resolved by the worker.
+  // Preserve that verified claim through completion so source-proof recording
+  // and publication can bind the public commit version without conflating it
+  // with the registry's private SemVer release version.
+  const suppliedResolvedCommit = upstream.kind === 'github'
+    ? optionalProvenanceString(raw.resolvedCommit, 'resolvedCommit', 128)
+    : undefined;
+  if (suppliedResolvedCommit !== undefined && !isCommit(suppliedResolvedCommit)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved commit is invalid', 409);
+  }
+  if (suppliedResolvedCommit !== undefined && suppliedResolvedCommit !== suppliedRevision) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved commit does not match its revision', 409);
+  }
   const suppliedSourceResolutionKind = raw.sourceResolutionKind === undefined || raw.sourceResolutionKind === null
     ? undefined
     : raw.sourceResolutionKind;
@@ -4700,6 +5598,8 @@ function normalizeProvenance(
     ...(suppliedSourceProviderOrigin ? { sourceProviderOrigin: suppliedSourceProviderOrigin } : {}),
     ...(suppliedFetchedAt === undefined ? {} : { fetchedAt: suppliedFetchedAt }),
     ...(suppliedSourceResolutionKind ? { sourceResolutionKind: suppliedSourceResolutionKind as Provenance['sourceResolutionKind'] } : {}),
+    ...(suppliedExternalDigest === undefined ? {} : { externalDigest: suppliedExternalDigest }),
+    ...(suppliedResolvedCommit === undefined ? {} : { resolvedCommit: suppliedResolvedCommit }),
     ...skillsShEvidence,
     ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
   };

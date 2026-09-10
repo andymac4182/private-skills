@@ -1,7 +1,11 @@
 import { materializeBundle, parseSkillBundle, validateArtifactDigest, type MaterializedBundle, type SkillBundleInput } from './bundle.js';
 import { artifactDigest, digestBytes, fencingToken, WorkerApiClient, type WorkerClaimedJob, type WorkerApiClientOptions } from './client.js';
 import { normalizePolicies, toContractScanResult, type Policy, type ScanResult } from './protocol.js';
-import { acquireImportJob, type WorkerAcquisitionOptions } from './acquisition.js';
+import {
+  acquireImportJob,
+  type WorkerAcquisitionOptions,
+  type WorkerOpenClawProof,
+} from './acquisition.js';
 import type { HookConfiguration, SkillBundle } from '../../../packages/contracts/src/index.js';
 import { encodeBundle } from '../../../packages/storage/src/index.js';
 import {
@@ -24,10 +28,28 @@ export interface WorkerRunnerOptions extends WorkerApiClientOptions {
   allowUtf8BundleContent?: boolean;
   /** Source acquisition settings; credentials remain named process env refs. */
   acquisition?: WorkerAcquisitionOptions;
+  /**
+   * Optional durable proof sink owned by the registry/directory integration.
+   * It is called only after the completion response confirms the import job
+   * and required scanners were accepted; the worker never publishes a feed.
+   */
+  openClawProofRecorder?: WorkerOpenClawSourceProofRecorder;
   /** Deployment-owned pure/in-process stage hooks. Remote URLs are never invoked by the worker. */
   stageHooks?: LocalStageHook[];
   onEvent?: (event: WorkerEvent) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+export interface WorkerOpenClawSourceProofCompletion {
+  tenantId: string;
+  completionJobId: string;
+  skillId: string;
+  entry: WorkerOpenClawProof['entry'];
+  sourceArtifact: WorkerOpenClawProof['sourceArtifact'];
+}
+
+export interface WorkerOpenClawSourceProofRecorder {
+  recordFromCompletion(input: WorkerOpenClawSourceProofCompletion): Promise<unknown>;
 }
 
 export type WorkerEvent =
@@ -99,7 +121,10 @@ export class WorkerRunner {
     let materialized: MaterializedBundle | undefined;
     let importedBundle: SkillBundle | undefined;
     let importedProvenance: Awaited<ReturnType<typeof acquireImportJob>>['provenance'] | undefined;
+    let importedOpenClawProof: WorkerOpenClawProof | undefined;
+    let importedOpenClawSource = false;
     let scanArtifactDigest: `sha256:${string}`;
+    let completionSubmitted = false;
     try {
       let bundleForScan: SkillBundleInput;
       if (job.kind === 'import') {
@@ -109,6 +134,8 @@ export class WorkerRunner {
         });
         importedBundle = imported.bundle;
         importedProvenance = imported.provenance;
+        importedOpenClawProof = imported.openClawProof;
+        importedOpenClawSource = imported.openClawSource === true;
         const bytes = encodeBundle(imported.bundle);
         scanArtifactDigest = digestBytes(bytes);
         bundleForScan = toWorkerBundle(imported.bundle);
@@ -161,17 +188,34 @@ export class WorkerRunner {
         files: materialized.files,
         scannerResults: scanResults.map((result) => ({ scannerId: result.scannerId, status: result.status })),
       }, signal);
-      await this.client.complete(job, {
+      if (importedOpenClawSource && this.options.openClawProofRecorder !== undefined && importedOpenClawProof === undefined) {
+        throw new Error('OpenClaw source proof entry is required when proof recording is enabled');
+      }
+      const completion = await this.client.complete(job, {
         scanResults,
         artifactDigest: scanArtifactDigest,
         attempt: job.attempt,
         ...(importedBundle === undefined ? {} : { bundle: importedBundle, provenance: importedProvenance }),
       }, signal);
+      completionSubmitted = true;
+      if (evaluation.allow && importedOpenClawProof !== undefined && this.options.openClawProofRecorder !== undefined) {
+        const skillId = completion.operation?.resourceId;
+        if (completion.operation?.state !== 'completed' || typeof skillId !== 'string' || skillId.length === 0) {
+          throw new Error('OpenClaw proof completion did not confirm an approved skill');
+        }
+        await this.options.openClawProofRecorder.recordFromCompletion({
+          tenantId: job.organizationId,
+          completionJobId: job.id,
+          skillId,
+          entry: importedOpenClawProof.entry,
+          sourceArtifact: importedOpenClawProof.sourceArtifact,
+        });
+      }
       await this.emit({ type: 'completed', jobId: job.id, scannerCount: scanResults.length, allow: evaluation.allow });
       return { claimed: true, jobId: job.id, scannerResults: scanResults, allow: evaluation.allow };
     } catch (error) {
       const message = sanitizeError(error);
-      await this.completeFailure(job, token, message, signal);
+      if (!completionSubmitted) await this.completeFailure(job, token, message, signal);
       await this.emit({ type: 'failed', jobId: job.id, error: message });
       return { claimed: true, jobId: job.id, error: message };
     } finally {

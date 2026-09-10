@@ -1,0 +1,390 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PersistentOpenClawFeedCache,
+  StateRepositoryOpenClawConsumerSnapshotStore,
+} from '../src/index.ts';
+import { createMemoryStateRepository } from '../../database/src/index.ts';
+import {
+  parseOpenClawFeed,
+  serializeOpenClawFeed,
+  sha256,
+  utf8Bytes,
+  type OpenClawCacheSnapshot,
+} from '../../openclaw/src/index.ts';
+
+const TENANT = 'tenant-a';
+const FEED_ID = 'clawhub-official';
+const SOURCE_URL = 'https://feed.example/v1/feeds/skills';
+const OTHER_SOURCE_URL = 'https://other.example/v1/feeds/skills';
+const CLOCK = Date.parse('2030-01-01T01:00:00.000Z');
+const LAST_MODIFIED = 'Wed, 01 Jan 2030 00:00:00 GMT';
+
+async function snapshot(
+  sequence = 1,
+  sourceUrl = SOURCE_URL,
+  acceptedAt = CLOCK,
+): Promise<OpenClawCacheSnapshot> {
+  const body = serializeOpenClawFeed({
+    schemaVersion: 1,
+    id: FEED_ID,
+    generatedAt: '2030-01-01T00:00:00.000Z',
+    sequence,
+    expiresAt: '2030-01-02T00:00:00.000Z',
+    entries: [],
+  });
+  const bytes = utf8Bytes(body);
+  const digest = await sha256(bytes);
+  return {
+    feed: parseOpenClawFeed(body, { expectedFeedId: FEED_ID, checkExpiry: false }),
+    body,
+    bytes,
+    sha256: digest,
+    etag: `"${digest}"`,
+    lastModified: LAST_MODIFIED,
+    acceptedAt,
+    sourceUrl,
+  };
+}
+
+function key(overrides: Partial<{ tenantId: string; feedId: string; sourceUrl: string }> = {}) {
+  return {
+    tenantId: overrides.tenantId ?? TENANT,
+    feedId: overrides.feedId ?? FEED_ID,
+    sourceUrl: overrides.sourceUrl ?? SOURCE_URL,
+  };
+}
+
+describe('durable OpenClaw consumer snapshots', () => {
+  it('retains bounded bytes, validators, expiry, and identity across repository-backed restarts', async () => {
+    const repository = createMemoryStateRepository();
+    const first = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+
+    await first.put(key(), original);
+
+    // A fresh adapter over the same StateRepository models a process restart.
+    const restarted = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    await expect(restarted.read(key())).resolves.toMatchObject({
+      body: original.body,
+      sha256: original.sha256,
+      etag: original.etag,
+      lastModified: LAST_MODIFIED,
+      acceptedAt: CLOCK,
+      sourceUrl: SOURCE_URL,
+      feed: { id: FEED_ID, sequence: 1, expiresAt: '2030-01-02T00:00:00.000Z' },
+    });
+
+    const state = await repository.read(TENANT);
+    const persisted = (state as unknown as { openClawConsumerSnapshots?: Record<string, unknown> }).openClawConsumerSnapshots;
+    expect(persisted).toBeDefined();
+    expect(Object.values(persisted!)).toHaveLength(1);
+    expect(Object.values(persisted!)[0]).toMatchObject({
+      feedId: FEED_ID,
+      sourceUrl: SOURCE_URL,
+      bytesLength: original.bytes.byteLength,
+    });
+    expect(typeof (Object.values(persisted!)[0] as { bytesBase64: unknown }).bytesBase64).toBe('string');
+  });
+
+  it('does not cross tenant, feed, or source identities', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    await store.put(key(), await snapshot());
+
+    await expect(store.read(key({ tenantId: 'tenant-b' }))).resolves.toBeUndefined();
+    await expect(store.read(key({ feedId: 'other-feed' }))).resolves.toBeUndefined();
+    await expect(store.read(key({ sourceUrl: OTHER_SOURCE_URL }))).resolves.toBeUndefined();
+  });
+
+  it('rejects replay and same-sequence equivocation while allowing an identical revalidation timestamp', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    await store.put(key(), await snapshot(2, SOURCE_URL, CLOCK));
+
+    await expect(store.put(key(), await snapshot(1))).rejects.toMatchObject({
+      code: 'replay',
+    });
+
+    await expect(store.put(key(), await snapshot(2, SOURCE_URL, CLOCK + 1_000))).resolves.toBeUndefined();
+    await expect(store.read(key())).resolves.toMatchObject({ acceptedAt: CLOCK + 1_000 });
+
+    const changed = await snapshot(2, SOURCE_URL, CLOCK + 2_000);
+    changed.body = changed.body.replace('"entries":[]', '"description":"changed","entries":[]');
+    changed.bytes = utf8Bytes(changed.body);
+    changed.sha256 = await sha256(changed.bytes);
+    changed.etag = `"${changed.sha256}"`;
+    changed.feed = parseOpenClawFeed(changed.body, { expectedFeedId: FEED_ID, checkExpiry: false });
+    await expect(store.put(key(), changed)).rejects.toMatchObject({
+      code: 'equivocation',
+    });
+  });
+
+  it('hydrates a fresh feed cache instance for a conditional 304 without serving another origin', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    let calls = 0;
+    const seenHeaders: Headers[] = [];
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      seenHeaders.push(new Headers(init?.headers));
+      return new Response(null, {
+        status: 304,
+        headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+      });
+    };
+    const request = {
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher,
+    };
+
+    const first = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(first.refresh(request)).resolves.toMatchObject({
+      kind: 'not-modified',
+      status: 304,
+      snapshot: { sha256: original.sha256, sourceUrl: SOURCE_URL, feed: { sequence: 1 } },
+    });
+
+    const restarted = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(restarted.refresh(request)).resolves.toMatchObject({
+      kind: 'not-modified',
+      snapshot: { body: original.body, etag: original.etag },
+    });
+    expect(calls).toBe(2);
+    expect(seenHeaders[0]?.get('if-none-match')).toBe(original.etag);
+    expect(seenHeaders[0]?.get('if-modified-since')).toBe(LAST_MODIFIED);
+    expect(seenHeaders[1]?.get('if-none-match')).toBe(original.etag);
+    expect(seenHeaders[1]?.get('if-modified-since')).toBe(LAST_MODIFIED);
+  });
+
+  it('keeps the durable high-water snapshot when an instance receives an older 200 and then loses the network', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const durable = await snapshot(2);
+    const old = await snapshot(1);
+    await store.put(key(), durable);
+
+    const first = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(first.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(old.body, { status: 200, headers: { etag: old.etag } }),
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      error: 'replay',
+      snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 },
+    });
+
+    const restarted = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const networkFailure = await restarted.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => { throw new Error('upstream unavailable'); },
+    });
+    expect(networkFailure).toMatchObject({ kind: 'stale', snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 } });
+    expect(['fetch-failed', 'timeout']).toContain(networkFailure.kind === 'stale' ? networkFailure.error : undefined);
+  });
+
+  it('does not serve a same-sequence equivocation from local memory after durable fallback', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const durable = await snapshot(2);
+    const changed = await snapshot(2);
+    changed.body = changed.body.replace('"entries":[]', '"description":"changed","entries":[]');
+    changed.bytes = utf8Bytes(changed.body);
+    changed.sha256 = await sha256(changed.bytes);
+    changed.etag = `"${changed.sha256}"`;
+    changed.feed = parseOpenClawFeed(changed.body, { expectedFeedId: FEED_ID, checkExpiry: false });
+    await store.put(key(), durable);
+
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(changed.body, { status: 200, headers: { etag: changed.etag } }),
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      error: 'equivocation',
+      snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 },
+    });
+
+    const networkFailure = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => { throw new Error('upstream unavailable'); },
+    });
+    expect(networkFailure).toMatchObject({ kind: 'stale', snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 } });
+    expect(['fetch-failed', 'timeout']).toContain(networkFailure.kind === 'stale' ? networkFailure.error : undefined);
+  });
+
+  it('preserves a redirected 304 marker instead of converting it to not-modified', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const redirected = new Response(null, {
+      status: 304,
+      headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+    });
+    Object.defineProperty(redirected, 'redirected', { value: true });
+
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => redirected,
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      status: 304,
+      error: 'redirected',
+      snapshot: { feed: { sequence: 1 }, sha256: original.sha256 },
+    });
+  });
+
+  it('does not let a durable 304 bypass a changed digest pin or a tighter request body limit', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const fetcher = async () => new Response(null, {
+      status: 304,
+      headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+    });
+    const base = { url: SOURCE_URL, expectedFeedId: FEED_ID, allowedOrigins: ['https://feed.example'], fetcher };
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+
+    await expect(cache.refresh({
+      ...base,
+      expectedSha256: `sha256:${'f'.repeat(64)}`,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+
+    await expect(cache.refresh({
+      ...base,
+      maxBodyBytes: original.bytes.byteLength - 1,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+  });
+
+  it('does not accept a durable 304 when the caller aborts after the response is produced', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const controller = new AbortController();
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const result = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      signal: controller.signal,
+      fetcher: async () => {
+        queueMicrotask(() => controller.abort());
+        return new Response(null, {
+          status: 304,
+          headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+        });
+      },
+    });
+    expect(result.kind).not.toBe('not-modified');
+    expect(['aborted', 'no-cache']).toContain('error' in result ? result.error : undefined);
+  });
+
+  it('serializes refreshes for one durable feed key', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    let calls = 0;
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const fetcher = async () => {
+      calls += 1;
+      if (calls === 1) {
+        started();
+        await blocked;
+      }
+      return new Response(original.body, { status: 200, headers: { etag: original.etag } });
+    };
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const request = { url: SOURCE_URL, expectedFeedId: FEED_ID, allowedOrigins: ['https://feed.example'], fetcher };
+    const first = cache.refresh(request);
+    await firstStarted;
+    const second = cache.refresh(request);
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    release();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(calls).toBe(2);
+  });
+
+  it('persists a newly accepted 200 snapshot and enforces per-tenant bounds', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository, {
+      maxEntriesPerTenant: 1,
+      maxBytesPerTenant: 64 * 1024,
+    });
+    const original = await snapshot();
+    let calls = 0;
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => {
+        calls += 1;
+        return new Response(original.body, {
+          status: 200,
+          headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+        });
+      },
+    })).resolves.toMatchObject({ kind: 'accepted', snapshot: { sha256: original.sha256 } });
+    expect(calls).toBe(1);
+
+    const persisted = await store.read(key());
+    expect(persisted).toMatchObject({ body: original.body, sourceUrl: SOURCE_URL });
+    await expect(store.put(key({ sourceUrl: OTHER_SOURCE_URL }), await snapshot(1, OTHER_SOURCE_URL))).rejects.toMatchObject({
+      code: 'capacity',
+    });
+  });
+
+  it('does not reuse a durable snapshot when the origin changes or the snapshot expires', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    let calls = 0;
+    const fetcher = async () => {
+      calls += 1;
+      return new Response(null, { status: 304, headers: { etag: original.etag, 'last-modified': LAST_MODIFIED } });
+    };
+
+    const otherOrigin = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(otherOrigin.refresh({
+      url: OTHER_SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://other.example'],
+      fetcher,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+
+    const expired = new PersistentOpenClawFeedCache({
+      store,
+      tenantId: TENANT,
+      now: () => Date.parse('2030-01-02T00:00:01.000Z'),
+    });
+    await expect(expired.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+    expect(calls).toBe(2);
+  });
+});

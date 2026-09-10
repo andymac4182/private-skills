@@ -7,6 +7,8 @@ export interface WorkerClaimedJob {
   id: string;
   kind: 'scan' | 'import' | string;
   organizationId: string;
+  /** Registry resource created by an accepted import completion. */
+  resourceId?: string;
   fencingToken?: string;
   /** Legacy name accepted while API deployments roll forward. */
   leaseToken?: string;
@@ -17,6 +19,8 @@ export interface WorkerClaimedJob {
   scanners?: Policy['scanners'];
   attempt?: number;
   expiresAt?: string;
+  /** Server-owned OpenClaw source target/entry; never accepted from browser input. */
+  openclawSource?: unknown;
   [key: string]: unknown;
 }
 
@@ -47,6 +51,11 @@ export interface CompletionPayload {
   bundle?: SkillBundle;
   /** Source evidence captured by the acquisition adapter. */
   provenance?: Provenance;
+}
+
+export interface WorkerCompletionResponse {
+  operation?: WorkerClaimedJob;
+  raw?: unknown;
 }
 
 export class WorkerApiError extends Error {
@@ -109,7 +118,7 @@ export class WorkerApiClient {
     return bytes;
   }
 
-  async complete(job: WorkerClaimedJob, payload: Omit<CompletionPayload, 'fencingToken'>, signal?: AbortSignal): Promise<void> {
+  async complete(job: WorkerClaimedJob, payload: Omit<CompletionPayload, 'fencingToken'>, signal?: AbortSignal): Promise<WorkerCompletionResponse> {
     const token = fencingToken(job);
     const response = await this.request(`/internal/jobs/${encodeURIComponent(job.id)}/complete`, {
       method: 'POST',
@@ -121,6 +130,15 @@ export class WorkerApiClient {
       const body = await safeText(response);
       throw new WorkerApiError(response.status, `job completion rejected (${response.status})`, body);
     }
+    const value = await parseJson(response);
+    if (value === null) return {};
+    if (!isObject(value)) throw new WorkerApiError(response.status, 'job completion response is not an object');
+    const operation = value.operation;
+    if (operation === undefined) return { raw: value };
+    if (!isObject(operation) || typeof operation.id !== 'string') {
+      throw new WorkerApiError(response.status, 'job completion response omitted operation id');
+    }
+    return { operation: operation as unknown as WorkerClaimedJob, raw: value };
   }
 
   private async request(path: string, init: RequestInit): Promise<Response> {
