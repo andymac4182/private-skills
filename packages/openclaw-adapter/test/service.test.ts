@@ -17,6 +17,7 @@ import {
   type OpenClawFeedEntry,
 } from '../../openclaw/src/index.ts';
 import type { Digest, Principal, RegistryState, SkillVersion } from '../../contracts/src/index.ts';
+import type { OpenClawMetadataSnapshot } from '../src/index.ts';
 
 const TENANT = 'tenant-a';
 const SOURCE_URL = 'https://feed.example/v1/feeds/skills';
@@ -48,6 +49,29 @@ const sourceArtifact = {
   identity: '@acme/demo@1.0.0',
 };
 
+type TestOpenClawJob = RegistryState['jobs'][number] & { openclawSource?: unknown };
+
+function firstJob(state: RegistryState): TestOpenClawJob {
+  return state.jobs[0]! as TestOpenClawJob;
+}
+
+function metadataSnapshot(overrides: Partial<OpenClawFeedEntry> = {}): OpenClawMetadataSnapshot {
+  return {
+    feed: {
+      schemaVersion: 1,
+      id: 'clawhub-official',
+      generatedAt: '2030-01-01T00:00:00.000Z',
+      sequence: 5,
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      entries: [{ ...entry, ...overrides, install: { candidates: entry.install.candidates } }],
+    },
+    sha256: SOURCE_DIGEST,
+    etag: `"${SOURCE_DIGEST}"`,
+    acceptedAt: FIXED_NOW,
+    sourceUrl: 'https://feed.example/v1/feeds/skills',
+  };
+}
+
 function principal(overrides: Partial<Principal> = {}): Principal {
   return {
     organizationId: TENANT,
@@ -77,6 +101,7 @@ function skill(): SkillVersion {
       path: entry.id,
       revision: entry.version,
       externalDigest: SOURCE_DIGEST,
+      sourceDigest: REGISTRY_DIGEST,
       sourceResolutionKind: 'snapshot',
     },
     fileCount: 1,
@@ -120,6 +145,16 @@ async function repositoryWithCompletedImport(): Promise<ReturnType<typeof create
       updatedAt: '2030-01-01T00:00:00.000Z',
       attempts: 1,
     });
+    firstJob(state).openclawSource = {
+      source: {
+        kind: 'public-clawhub',
+        sourceRef: 'public-clawhub',
+        packageName: entry.id,
+        version: entry.version,
+        artifactDigest: SOURCE_DIGEST,
+      },
+      entry,
+    };
   });
   return repository;
 }
@@ -194,6 +229,50 @@ describe('OpenClaw source proof and consumer services', () => {
     })).resolves.toEqual([]);
   });
 
+  it('uses current trusted metadata claims without changing source identity, and withholds blocked states', async () => {
+    const repository = await repositoryWithCompletedImport();
+    const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => FIXED_NOW });
+    await proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    });
+    const provider = createOpenClawCandidateProvider({ proofs, now: () => FIXED_NOW });
+    const state = await repository.read(TENANT);
+    const downgraded = await provider({
+      tenantId: TENANT,
+      principal: principal(),
+      state,
+      metadata: metadataSnapshot({
+        title: 'Current catalog title',
+        publisher: { id: 'community', trust: 'community' },
+      }),
+      signal: new AbortController().signal,
+    });
+    expect(downgraded).toMatchObject([{
+      entry: {
+        title: 'Current catalog title',
+        publisher: { id: 'community', trust: 'community' },
+        state: 'available',
+        version: entry.version,
+        install: { candidates: [{ integrity: SOURCE_DIGEST, package: entry.id }] },
+      },
+      sourceArtifact: { digest: SOURCE_DIGEST, identity: sourceArtifact.identity },
+    }]);
+
+    for (const stateValue of ['blocked', 'disabled', 'deprecated'] as const) {
+      await expect(provider({
+        tenantId: TENANT,
+        principal: principal(),
+        state,
+        metadata: metadataSnapshot({ state: stateValue }),
+        signal: new AbortController().signal,
+      })).resolves.toEqual([]);
+    }
+  });
+
   it('rejects metadata-only or changed completion evidence and preserves the immutable proof', async () => {
     const repository = await repositoryWithCompletedImport();
     const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => FIXED_NOW });
@@ -220,6 +299,59 @@ describe('OpenClaw source proof and consumer services', () => {
       state.skills[0]!.provenance = { ...state.skills[0]!.provenance, sourceResolutionKind: 'snapshot' };
     });
 
+    await repository.transaction(TENANT, (state) => {
+      state.skills[0]!.provenance = { ...state.skills[0]!.provenance, sourceDigest: undefined };
+    });
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+    await repository.transaction(TENANT, (state) => {
+      state.skills[0]!.provenance = { ...state.skills[0]!.provenance, sourceDigest: REGISTRY_DIGEST };
+    });
+
+    await repository.transaction(TENANT, (state) => {
+      delete firstJob(state).openclawSource;
+    });
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+    await repository.transaction(TENANT, (state) => {
+      firstJob(state).openclawSource = {
+        source: {
+          kind: 'public-clawhub',
+          sourceRef: 'public-clawhub',
+          packageName: entry.id,
+          version: entry.version,
+          artifactDigest: SOURCE_DIGEST,
+        },
+        entry,
+      };
+    });
+
+    await repository.transaction(TENANT, (state) => {
+      const descriptor = firstJob(state).openclawSource as { source: Record<string, unknown>; entry: OpenClawFeedEntry };
+      firstJob(state).openclawSource = { ...descriptor, entry: { ...entry, title: 'descriptor mismatch' } };
+    });
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+    await repository.transaction(TENANT, (state) => {
+      const descriptor = firstJob(state).openclawSource as { source: Record<string, unknown> };
+      firstJob(state).openclawSource = { ...descriptor, entry };
+    });
+
     const spoofDigest = `sha256:${'c'.repeat(64)}` as Digest;
     await expect(proofs.recordFromCompletion({
       tenantId: TENANT,
@@ -240,6 +372,10 @@ describe('OpenClaw source proof and consumer services', () => {
       sourceArtifact,
     });
     const changedEntry = { ...entry, title: 'changed' };
+    await repository.transaction(TENANT, (state) => {
+      const descriptor = firstJob(state).openclawSource as { source: Record<string, unknown> };
+      firstJob(state).openclawSource = { ...descriptor, entry: changedEntry };
+    });
     await expect(proofs.recordFromCompletion({
       tenantId: TENANT,
       completionJobId: 'job-1',
@@ -405,6 +541,29 @@ describe('OpenClaw source proof and consumer services', () => {
       externalId: entry.id,
       principal: principal(),
     })).rejects.toMatchObject({ code: 'forbidden' });
+    expect(calls).toBe(0);
+  });
+
+  it('fails closed when a combined refresh reports stale metadata instead of queueing cached bytes', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, await feedSnapshot());
+    let calls = 0;
+    const service = new OpenClawTrustedSnapshotImportService({
+      store,
+      refresh: async () => ({ kind: 'stale' as const, snapshot: await feedSnapshot() }),
+      queue: {
+        enqueue: async () => {
+          calls += 1;
+          return { operationId: 'unexpected', state: 'queued' as const };
+        },
+      },
+    });
+    await expect(service.selectAndQueue({
+      key: { tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL },
+      externalId: entry.id,
+      principal: principal(),
+    })).rejects.toMatchObject({ code: 'snapshot-unavailable' });
     expect(calls).toBe(0);
   });
 });

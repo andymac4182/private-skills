@@ -23,7 +23,11 @@ import type {
   OpenClawConsumerCacheKey,
   OpenClawConsumerSnapshotStore,
 } from './consumer-cache.ts';
-import type { OpenClawMetadataSnapshot, OpenClawSourceArtifactProof } from './index.ts';
+import type {
+  OpenClawMetadataPreviewResult,
+  OpenClawMetadataSnapshot,
+  OpenClawSourceArtifactProof,
+} from './index.ts';
 
 const MAX_TENANT_ID_BYTES = 512;
 const MAX_SKILL_ID_BYTES = 512;
@@ -34,6 +38,11 @@ const DEFAULT_MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1_000;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
+
+// `openclawSource` is an optional registry job extension. Keep this adapter
+// source-compatible with older contract snapshots that do not yet declare
+// the extension on Job while still requiring it at the proof boundary.
+type OpenClawJob = Job & { openclawSource?: unknown };
 
 /** A source proof is produced only after an import job completed and its skill is approved. */
 export interface OpenClawSourceProofRecord {
@@ -174,7 +183,11 @@ export class StateRepositoryOpenClawSourceProofStore implements OpenClawSourcePr
         }
         const entry = validateProofEntry(input.entry, input.sourceArtifact);
         const normalized = normalizeOpenClawEntry(entry)[0];
-        if (!normalized || !sourceProofMatchesProvenance(skill, normalized, input.sourceArtifact)) {
+        if (
+          !normalized ||
+          !openClawCompletionDescriptorMatches(job, entry, normalized, input.sourceArtifact) ||
+          !sourceProofMatchesProvenance(skill, normalized, input.sourceArtifact)
+        ) {
           throw new OpenClawSourceProofStoreError('not-eligible', 'The source proof is not bound to worker provenance');
         }
         const record: OpenClawSourceProofRecord = {
@@ -336,6 +349,13 @@ export class OpenClawConsumerSelectionError extends Error {
 export interface OpenClawTrustedSnapshotImportServiceOptions {
   store: OpenClawConsumerSnapshotStore;
   queue: OpenClawImportQueue;
+  /**
+   * Optional freshness gate for callers that combine refresh and selection in
+   * one service. The callback must persist a new snapshot before returning;
+   * stale/rejected results are never allowed to fall back to an older snapshot.
+   * The registry route performs this gate itself when it owns the refresh.
+   */
+  refresh?: (signal: AbortSignal) => Promise<Pick<OpenClawMetadataPreviewResult, 'kind' | 'snapshot'>>;
   authorize?: (input: {
     principal: Principal;
     tenantId: string;
@@ -354,6 +374,7 @@ export interface OpenClawTrustedSnapshotImportServiceOptions {
 export class OpenClawTrustedSnapshotImportService {
   private readonly store: OpenClawConsumerSnapshotStore;
   private readonly queue: OpenClawImportQueue;
+  private readonly refresh: OpenClawTrustedSnapshotImportServiceOptions['refresh'];
   private readonly authorize: NonNullable<OpenClawTrustedSnapshotImportServiceOptions['authorize']>;
   private readonly now: () => number;
   private readonly maxSnapshotAgeMs: number;
@@ -364,6 +385,7 @@ export class OpenClawTrustedSnapshotImportService {
     }
     this.store = options.store;
     this.queue = options.queue;
+    this.refresh = options.refresh;
     this.authorize = options.authorize ?? ((input) => defaultCanReadEntry(input.principal, input.entry));
     this.now = options.now ?? Date.now;
     this.maxSnapshotAgeMs = boundedInteger(options.maxSnapshotAgeMs ?? DEFAULT_MAX_SNAPSHOT_AGE_MS, 0, MAX_SNAPSHOT_AGE_MS, 'snapshot age');
@@ -381,6 +403,21 @@ export class OpenClawTrustedSnapshotImportService {
     const externalId = safeExternalId(input.externalId);
     if (key.tenantId !== input.principal.organizationId) {
       throw new OpenClawConsumerSelectionError('forbidden', 'The consumer tenant is not authorized');
+    }
+    if (this.refresh) {
+      let refreshed: Pick<OpenClawMetadataPreviewResult, 'kind' | 'snapshot'>;
+      try {
+        refreshed = await this.refresh(signal ?? new AbortController().signal);
+      } catch {
+        throw new OpenClawConsumerSelectionError('snapshot-unavailable', 'The trusted feed could not be refreshed');
+      }
+      if (
+        (refreshed.kind !== 'accepted' && refreshed.kind !== 'not-modified') ||
+        refreshed.snapshot === undefined
+      ) {
+        throw new OpenClawConsumerSelectionError('snapshot-unavailable', 'The trusted feed could not be refreshed');
+      }
+      if (signal?.aborted) throw new OpenClawConsumerSelectionError('aborted', 'The operation was aborted');
     }
     let snapshot: OpenClawCacheSnapshot | undefined;
     try {
@@ -507,6 +544,11 @@ function sourceProofMatchesProvenance(
   sourceArtifact: OpenClawSourceArtifactProof,
 ): boolean {
   const provenance = skill.provenance;
+  // The external source digest and the registry's canonical bundle digest are
+  // separate claims. Both must be present: accepting an omitted sourceDigest
+  // would allow an older generic import to be re-labelled as a verified feed
+  // proof after the fact.
+  if (provenance.sourceDigest !== skill.artifact.digest) return false;
   if (normalized.source.kind === 'public-clawhub') {
     return provenance.externalId === normalized.candidate.package &&
       (provenance.path === undefined || provenance.path === normalized.candidate.package) &&
@@ -561,7 +603,110 @@ function sanitizeEntry(entry: OpenClawFeedEntry, normalized: OpenClawNormalizedC
 }
 
 function findCompletionJob(jobs: readonly Job[], id: string, tenantId: string): Job | undefined {
-  return jobs.find((job) => job.id === id && job.organizationId === tenantId && job.kind === 'import' && job.state === 'completed');
+  return jobs.find((job) =>
+    job.id === id &&
+    job.organizationId === tenantId &&
+    job.kind === 'import' &&
+    job.state === 'completed' &&
+    hasOpenClawSourceDescriptor(openClawSourceOf(job)),
+  );
+}
+
+function hasOpenClawSourceDescriptor(value: unknown): value is { source: Record<string, unknown>; entry: OpenClawFeedEntry } {
+  return isRecord(value) && isRecord(value.source) && isRecord(value.entry);
+}
+
+function openClawSourceOf(job: Job): unknown {
+  return (job as OpenClawJob).openclawSource;
+}
+
+function openClawCompletionDescriptorMatches(
+  job: Job,
+  entry: OpenClawFeedEntry,
+  normalized: OpenClawNormalizedCandidate,
+  sourceArtifact: OpenClawSourceArtifactProof,
+): boolean {
+  const rawDescriptor = openClawSourceOf(job);
+  if (!hasOpenClawSourceDescriptor(rawDescriptor)) return false;
+  const descriptor = rawDescriptor;
+  let descriptorNormalized: OpenClawNormalizedCandidate;
+  try {
+    const candidates = normalizeOpenClawEntry(descriptor.entry);
+    if (candidates.length !== 1 || !sourceMatchesNormalized(descriptor.source, candidates[0]!)) return false;
+    descriptorNormalized = candidates[0]!;
+  } catch {
+    return false;
+  }
+  if (!sameNormalizedSource(descriptorNormalized, normalized)) return false;
+  const descriptorArtifact = sourceArtifactForNormalized(descriptorNormalized);
+  if (!sameSourceArtifact(descriptorArtifact, sourceArtifact)) return false;
+  try {
+    const descriptorEntry = validateProofEntry(descriptor.entry, descriptorArtifact);
+    return JSON.stringify(descriptorEntry) === JSON.stringify(entry);
+  } catch {
+    return false;
+  }
+}
+
+function sourceMatchesNormalized(
+  descriptor: Record<string, unknown>,
+  normalized: OpenClawNormalizedCandidate,
+): boolean {
+  if (normalized.source.kind === 'public-clawhub') {
+    return descriptor.kind === 'public-clawhub' &&
+      descriptor.sourceRef === 'public-clawhub' &&
+      descriptor.packageName === normalized.source.packageName &&
+      descriptor.version === normalized.source.version &&
+      descriptor.artifactDigest === normalized.source.artifactDigest;
+  }
+  return descriptor.kind === 'public-github' &&
+    descriptor.sourceRef === 'public-github' &&
+    descriptor.repo === normalized.source.repo &&
+    descriptor.path === normalized.source.path &&
+    descriptor.commit === normalized.source.commit &&
+    descriptor.contentHash === normalized.source.contentHash;
+}
+
+function sameNormalizedSource(
+  left: OpenClawNormalizedCandidate,
+  right: OpenClawNormalizedCandidate,
+): boolean {
+  if (left.source.kind !== right.source.kind) return false;
+  if (left.source.kind === 'public-clawhub' && right.source.kind === 'public-clawhub') {
+    return left.source.packageName === right.source.packageName &&
+      left.source.version === right.source.version &&
+      left.source.artifactDigest === right.source.artifactDigest;
+  }
+  if (left.source.kind === 'public-github' && right.source.kind === 'public-github') {
+    return left.source.repo === right.source.repo &&
+      left.source.path === right.source.path &&
+      left.source.commit === right.source.commit &&
+      left.source.contentHash === right.source.contentHash;
+  }
+  return false;
+}
+
+function sourceArtifactForNormalized(normalized: OpenClawNormalizedCandidate): OpenClawSourceArtifactProof {
+  return normalized.source.kind === 'public-clawhub'
+    ? {
+      verified: true,
+      digest: normalized.source.artifactDigest,
+      format: 'clawhub-skill-v1',
+      identity: `${normalized.source.packageName}@${normalized.source.version}`,
+    }
+    : {
+      verified: true,
+      digest: `sha256:${normalized.source.contentHash}`,
+      format: 'github-skill-folder-v1',
+      identity: `${normalized.source.repo}:${normalized.source.path}@${normalized.source.commit}`,
+    };
+}
+
+function sameSourceArtifact(left: OpenClawSourceArtifactProof, right: OpenClawSourceArtifactProof): boolean {
+  return left.verified === right.verified &&
+    left.digest === right.digest &&
+    left.format === right.format &&
+    left.identity === right.identity;
 }
 
 function skillCurrentlyApproved(
