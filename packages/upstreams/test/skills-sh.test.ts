@@ -162,6 +162,8 @@ describe('skills.sh source acquisition', () => {
       expect(result.provenance.externalSnapshotHash).toBe('snapshot-123');
       expect(result.provenance.revision).toBe('snapshot-123');
       expect(result.provenance.sourceDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect((result.provenance as unknown as Record<string, unknown>).sourceResolutionKind).toBe('snapshot');
+      expect((result.provenance as unknown as Record<string, unknown>).sourceProviderOrigin).toBeUndefined();
       expect(calls).toEqual(['/catalog/api/v1/skills/octo/repo/demo']);
     } finally {
       delete process.env.PSKILLS_SKILLS_SH_TOKEN;
@@ -442,20 +444,70 @@ describe('skills.sh source acquisition', () => {
       if (url.pathname === `/github/repos/octo/repo/git/blobs/${licenseSha}`) return json({ encoding: 'base64', content: license.toString('base64'), size: license.length, sha: licenseSha });
       return json({ error: 'not found' }, 404);
     };
-    const result = await acquireSkillsShSkill({
+    const input = {
       ...request('octo/repo/demo', fetchImpl),
       upstream: {
         ...request('octo/repo/demo', fetchImpl).upstream!,
         githubApiBaseUrl: `${BASE}/github`,
       } as AcquireSkillInput['upstream'],
-    });
+    };
+    const result = await acquireSkillsShSkill(input);
     expect(result.bundle.files.map((file) => file.path)).toEqual(['LICENSE', 'SKILL.md']);
     expect(result.provenance.repository).toBe('octo/repo');
     expect(result.provenance.revision).toBe(COMMIT);
     const metadata = result.provenance as unknown as Record<string, unknown>;
+    expect(metadata.sourceResolutionKind).toBe('github');
+    expect(metadata.sourceProviderOrigin).toBeUndefined();
     expect(metadata.resolvedCommit).toBe(COMMIT);
     expect(metadata.skillPath).toBe('skills/demo');
     expect(metadata.resolvedTree).toBe(TREE);
+
+    const explicitlyTrusted = await acquireSkillsShSkill({
+      ...input,
+      upstream: {
+        ...input.upstream!,
+        githubSourceOrigin: 'https://github.enterprise.example',
+      } as AcquireSkillInput['upstream'],
+    });
+    expect((explicitlyTrusted.provenance as unknown as Record<string, unknown>).sourceProviderOrigin).toBe('https://github.enterprise.example');
+  });
+
+  it('records the canonical GitHub origin for the default resolver without an install URL', async () => {
+    const skill = Buffer.from('---\nname: default-origin\ndescription: Default GitHub origin\n---\n# default\n', 'utf8');
+    const skillSha = sha(skill);
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.origin === 'https://skills.sh' && url.pathname === '/api/v1/skills/octo/repo/default-origin') {
+        return json({
+          id: 'octo/repo/default-origin', source: 'octo/repo', slug: 'default-origin', name: 'default-origin',
+          sourceType: 'github', installUrl: null, hash: null, files: null,
+        });
+      }
+      if (url.origin === 'https://api.github.com' && url.pathname === '/repos/octo/repo') return json({ default_branch: 'main' });
+      if (url.origin === 'https://api.github.com' && url.pathname === `/repos/octo/repo/commits/main`) return json({ sha: COMMIT });
+      if (url.origin === 'https://api.github.com' && url.pathname === `/repos/octo/repo/git/trees/${COMMIT}`) {
+        return json({ sha: TREE, truncated: false, tree: [
+          { path: 'skills/default-origin', mode: '040000', type: 'tree', sha: TREE },
+          { path: 'skills/default-origin/SKILL.md', mode: '100644', type: 'blob', sha: skillSha, size: skill.length },
+        ] });
+      }
+      if (url.origin === 'https://api.github.com' && url.pathname === `/repos/octo/repo/git/blobs/${skillSha}`) {
+        return json({ encoding: 'base64', content: skill.toString('base64'), size: skill.length, sha: skillSha });
+      }
+      return json({ error: 'not found' }, 404);
+    };
+    const input = request('octo/repo/default-origin', fetchImpl);
+    input.upstream = { ...input.upstream!, baseUrl: 'https://skills.sh' };
+    input.importRequest = { ...input.importRequest!, externalId: 'octo/repo/default-origin', externalSourceType: 'github' };
+
+    const result = await acquireSkillsShSkill(input);
+    const metadata = result.provenance as unknown as Record<string, unknown>;
+    expect(metadata.sourceResolutionKind).toBe('github');
+    expect(metadata.sourceProviderOrigin).toBe('https://github.com');
+    expect(metadata.resolvedCommit).toBe(COMMIT);
+    expect(metadata.skillPath).toBe('skills/default-origin');
+    expect((result.provenance.external as unknown as Record<string, unknown>).sourceResolutionKind).toBe('github');
+    expect((result.provenance.external as unknown as Record<string, unknown>).sourceProviderOrigin).toBe('https://github.com');
   });
 
   it('resolves a repository-root skill with an explicit immutable source ref', async () => {
@@ -495,7 +547,8 @@ describe('skills.sh source acquisition', () => {
     expect(result.provenance.revision).toBe(COMMIT);
     const metadata = result.provenance as unknown as Record<string, unknown>;
     expect(metadata.requestedRef).toBe('release');
-    expect(metadata.skillPath).toBeUndefined();
+    expect(metadata.skillPath).toBe('');
+    expect(metadata.sourceResolutionKind).toBe('github');
     expect(metadata.resolvedCommit).toBe(COMMIT);
     expect(metadata.resolvedTree).toBe(TREE);
   });
@@ -506,7 +559,7 @@ describe('skills.sh source acquisition', () => {
     const fetchImpl = async (input: string | URL): Promise<Response> => {
       const url = new URL(input.toString());
       if (url.pathname === '/catalog/api/v1/skills/googleworkspace/cli/gws-sheets') {
-        return json({ id: 'googleworkspace/cli/gws-sheets', source: 'googleworkspace/cli', slug: 'gws-sheets', installs: 1, hash: null, files: null });
+        return json({ id: 'googleworkspace/cli/gws-sheets', source: 'googleworkspace/cli', slug: 'gws-sheets', installs: 1, hash: 'catalog-opaque', files: null });
       }
       if (url.pathname === `/github/repos/googleworkspace/cli`) return json({ default_branch: 'main' });
       if (url.pathname === `/github/repos/googleworkspace/cli/commits/main`) return json({ sha: COMMIT });
@@ -533,8 +586,10 @@ describe('skills.sh source acquisition', () => {
     expect(result.bundle.files.map((file) => file.path)).toEqual(['SKILL.md']);
     expect(result.provenance.repository).toBe('googleworkspace/cli');
     expect(result.provenance.externalSourceType).toBe('well-known');
-    expect(result.provenance.revision).toBe(COMMIT);
+    expect(result.provenance.revision).toBe('catalog-opaque');
     const metadata = result.provenance as unknown as Record<string, unknown>;
+    expect(metadata.sourceResolutionKind).toBe('github');
+    expect(metadata.sourceProviderOrigin).toBeUndefined();
     expect(metadata.skillPath).toBe('skills/gws-sheets');
     expect(metadata.resolvedCommit).toBe(COMMIT);
   });
@@ -583,9 +638,9 @@ describe('skills.sh source acquisition', () => {
     const expected = digest(skill);
     const fetchImpl = async (input: string | URL): Promise<Response> => {
       const url = new URL(input.toString());
-      if (url.pathname === '/catalog/api/v1/skills/example.test/demo') {
+      if (url.pathname === '/catalog/api/v1/skills/example.test/catalog-demo') {
         return json({
-          id: 'example.test/demo', source: 'example.test', slug: 'demo', name: 'demo', sourceType: 'well-known',
+          id: 'example.test/catalog-demo', source: 'example.test', slug: 'catalog-demo', name: 'demo', sourceType: 'well-known',
           installUrl: `${BASE}/published/.well-known/agent-skills/demo`, url: '/site/example.test/demo', hash: null, files: null,
         });
       }
@@ -597,12 +652,16 @@ describe('skills.sh source acquisition', () => {
       if (url.pathname === '/published/demo/SKILL.md') return bytes(skill, 'text/markdown');
       return json({ error: 'not found' }, 404);
     };
-    const result = await acquireSkillsShSkill(request('example.test/demo', fetchImpl));
+    const result = await acquireSkillsShSkill(request('example.test/catalog-demo', fetchImpl));
     expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: skill.toString('base64') }]);
     expect(result.provenance.externalSourceType).toBe('well-known');
     const metadata = result.provenance as unknown as Record<string, unknown>;
     expect(metadata.externalDigest).toBe(expected);
     expect(metadata.wellKnownIndexUrl).toContain('/published/.well-known/agent-skills/index.json');
+    expect(metadata.wellKnownEntryName).toBe('demo');
+    expect(metadata.wellKnownEntryName).not.toBe('catalog-demo');
+    expect(metadata.sourceResolutionKind).toBe('well-known');
+    expect(metadata.sourceProviderOrigin).toBe(BASE);
     expect(result.provenance.revision).toBe(expected);
   });
 

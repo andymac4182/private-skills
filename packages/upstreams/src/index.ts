@@ -213,6 +213,10 @@ interface SkillsShResolutionMetadata {
   source: string;
   slug: string;
   sourceType?: 'github' | 'well-known';
+  /** Actual acquisition path, distinct from the catalog's reported sourceType. */
+  sourceResolutionKind: 'snapshot' | 'github' | 'well-known';
+  /** Verified source-provider origin; omitted when a custom resolver is opaque. */
+  sourceProviderOrigin?: string;
   sourceUrl: string;
   pageUrl?: string;
   externalSnapshotHash: string | null;
@@ -223,6 +227,8 @@ interface SkillsShResolutionMetadata {
   resolvedCommit?: string;
   resolvedTree?: string;
   wellKnownIndexUrl?: string;
+  /** Name selected from the fetched discovery index, never inferred from catalog slug. */
+  wellKnownEntryName?: string;
   artifactUrl?: string;
   frontmatterName?: string;
   frontmatterDescription?: string;
@@ -830,6 +836,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     return {
       bundle: snapshot,
       provenance: skillsShProvenance(upstream, detail, {
+        sourceResolutionKind: 'snapshot',
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
@@ -852,6 +859,8 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     return {
       bundle: github.bundle,
       provenance: skillsShProvenance(upstream, detail, {
+        sourceResolutionKind: 'github',
+        ...(github.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: github.sourceProviderOrigin }),
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
@@ -889,6 +898,8 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     return {
       bundle: github.bundle,
       provenance: skillsShProvenance(upstream, detail, {
+        sourceResolutionKind: 'github',
+        ...(github.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: github.sourceProviderOrigin }),
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
@@ -915,11 +926,14 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
   return {
     bundle: wellKnown.bundle,
     provenance: skillsShProvenance(upstream, detail, {
+      sourceResolutionKind: 'well-known',
+      sourceProviderOrigin: wellKnown.sourceProviderOrigin,
       sourceUrl,
       pageUrl,
       externalSnapshotHash: detail.externalSnapshotHash,
       externalDigest: wellKnown.externalDigest,
       wellKnownIndexUrl: wellKnown.indexUrl,
+      wellKnownEntryName: wellKnown.wellKnownEntryName,
       artifactUrl: wellKnown.artifactUrl,
       revision: detail.externalSnapshotHash ?? wellKnown.externalDigest,
       frontmatterName: frontmatter.name,
@@ -1265,7 +1279,8 @@ function parseSkillsShFile(value: unknown): SkillsShFile {
 function skillsShProvenance(
   upstream: Upstream,
   detail: ParsedSkillsShDetail,
-  values: Omit<SkillsShResolutionMetadata, 'provider' | 'externalId' | 'source' | 'slug' | 'sourceType' | 'externalSnapshotHash'> & {
+  values: Omit<SkillsShResolutionMetadata, 'provider' | 'externalId' | 'source' | 'slug' | 'sourceType' | 'sourceResolutionKind' | 'externalSnapshotHash'> & {
+    sourceResolutionKind: SkillsShResolutionMetadata['sourceResolutionKind'];
     sourceUrl: string;
     pageUrl?: string;
     externalSnapshotHash: string | null;
@@ -1279,20 +1294,23 @@ function skillsShProvenance(
     source: detail.source,
     slug: detail.slug,
     ...(detail.sourceType === undefined ? {} : { sourceType: detail.sourceType }),
+    sourceResolutionKind: values.sourceResolutionKind,
+    ...(values.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: values.sourceProviderOrigin }),
     sourceUrl: values.sourceUrl,
     ...(values.pageUrl === undefined ? {} : { pageUrl: values.pageUrl }),
     externalSnapshotHash: values.externalSnapshotHash,
     ...(values.externalDigest === undefined ? {} : { externalDigest: values.externalDigest }),
     ...(values.repository === undefined ? {} : { repository: values.repository }),
-    // The root repository skill has an empty relative directory.  Keep that
-    // as an omitted optional evidence field because the completion contract
-    // treats empty metadata strings as invalid; the repository/revision still
-    // identify the immutable root source.
-    ...(values.skillPath ? { skillPath: values.skillPath } : {}),
+    // The root repository skill has an empty relative directory. Preserve the
+    // empty value so a verified root source remains distinguishable from a
+    // resolver that never established a physical path. Core validates this
+    // only for a GitHub resolution with immutable commit/origin evidence.
+    ...(values.skillPath === undefined ? {} : { skillPath: values.skillPath }),
     ...(values.requestedRef === undefined ? {} : { requestedRef: values.requestedRef }),
     ...(values.resolvedCommit === undefined ? {} : { resolvedCommit: values.resolvedCommit }),
     ...(values.resolvedTree === undefined ? {} : { resolvedTree: values.resolvedTree }),
     ...(values.wellKnownIndexUrl === undefined ? {} : { wellKnownIndexUrl: values.wellKnownIndexUrl }),
+    ...(values.wellKnownEntryName === undefined ? {} : { wellKnownEntryName: values.wellKnownEntryName }),
     ...(values.artifactUrl === undefined ? {} : { artifactUrl: values.artifactUrl }),
     ...(values.frontmatterName === undefined ? {} : { frontmatterName: values.frontmatterName }),
     ...(values.frontmatterDescription === undefined ? {} : { frontmatterDescription: values.frontmatterDescription }),
@@ -1393,6 +1411,7 @@ interface SkillsShGithubResult {
   requestedRef: string;
   resolvedCommit: string;
   resolvedTree: string;
+  sourceProviderOrigin?: string;
 }
 
 async function acquireSkillsShGithub(args: {
@@ -1410,6 +1429,11 @@ async function acquireSkillsShGithub(args: {
     ? upstreamRecord.githubApiBaseUrl
     : undefined;
   const apiBase = normalizeGithubApiBase(configuredBase, options.allowLoopbackForTests);
+  const sourceProviderOrigin = resolveGithubSourceProviderOrigin(
+    upstreamRecord,
+    apiBase,
+    options.allowLoopbackForTests ?? false,
+  );
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
   const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
   const headers: FetchHeaders = {
@@ -1500,7 +1524,45 @@ async function acquireSkillsShGithub(args: {
     : typeof selectedTreeEntry === 'object' && selectedTreeEntry !== null && typeof (selectedTreeEntry as Record<string, unknown>).sha === 'string'
       ? String((selectedTreeEntry as Record<string, unknown>).sha)
       : resolvedCommit;
-  return { bundle, repository, skillPath: selectedPath, requestedRef, resolvedCommit, resolvedTree };
+  return {
+    bundle,
+    repository,
+    skillPath: selectedPath,
+    requestedRef,
+    resolvedCommit,
+    resolvedTree,
+    ...(sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin }),
+  };
+}
+
+/**
+ * The GitHub API endpoint is a resolver transport, not proof of the source
+ * host.  The official API has a canonical github.com source origin; a custom
+ * endpoint needs an explicit operator-approved origin before it is exposed as
+ * provenance.  This field is metadata only and never changes the fetch base.
+ */
+function resolveGithubSourceProviderOrigin(
+  upstream: Record<string, unknown>,
+  apiBase: URL,
+  allowLoopbackForTests: boolean,
+): string | undefined {
+  const explicit = upstream.githubSourceOrigin;
+  if (explicit !== undefined) {
+    if (typeof explicit !== 'string' || explicit.trim() === '') {
+      throw new UpstreamAcquisitionError('invalid_upstream_base', 'GitHub source origin is invalid');
+    }
+    return parseSourceProviderOrigin(explicit, allowLoopbackForTests);
+  }
+  if (apiBase.origin === GITHUB_API_ORIGIN) return 'https://github.com';
+  return undefined;
+}
+
+function parseSourceProviderOrigin(value: string, allowLoopbackForTests: boolean): string {
+  const parsed = parseFixedBase(value, allowLoopbackForTests);
+  if (parsed.pathname !== '/') {
+    throw new UpstreamAcquisitionError('invalid_upstream_base', 'Source provider origin must not include a path');
+  }
+  return parsed.origin;
 }
 
 function parseSkillFrontmatterBytes(bytes: Uint8Array): { name: string; description: string } {
@@ -1586,6 +1648,8 @@ function parseGithubInstallHint(value: string | null): { repository: string; ref
 interface SkillsShWellKnownResult {
   bundle: SkillBundle;
   indexUrl: string;
+  sourceProviderOrigin: string;
+  wellKnownEntryName: string;
   artifactUrl?: string;
   externalDigest?: string;
 }
@@ -1636,12 +1700,24 @@ async function acquireSkillsShWellKnown(args: {
       const artifact = await fetchWellKnownV2(client, base, indexUrl, entry as WellKnownV2Entry, limits, fetchImpl, options);
       const frontmatter = readSkillFrontmatter(artifact.bundle);
       assertFrontmatterIdentity(frontmatter, detail);
-      return { bundle: artifact.bundle, indexUrl: indexUrl.toString(), artifactUrl: artifact.artifactUrl, externalDigest: (entry as WellKnownV2Entry).digest };
+      return {
+        bundle: artifact.bundle,
+        indexUrl: indexUrl.toString(),
+        sourceProviderOrigin: indexUrl.origin,
+        wellKnownEntryName: entry.name,
+        artifactUrl: artifact.artifactUrl,
+        externalDigest: (entry as WellKnownV2Entry).digest,
+      };
     }
     const bundle = await fetchWellKnownV1(client, base, wellKnownDirectory, entry as WellKnownV1Entry, limits);
     const frontmatter = readSkillFrontmatter(bundle);
     assertFrontmatterIdentity(frontmatter, detail);
-    return { bundle, indexUrl: indexUrl.toString() };
+    return {
+      bundle,
+      indexUrl: indexUrl.toString(),
+      sourceProviderOrigin: indexUrl.origin,
+      wellKnownEntryName: entry.name,
+    };
   }
   if (lastUnavailable) {
     throw new UpstreamAcquisitionError(
