@@ -15,6 +15,18 @@ export type SkillView = 'all-time' | 'trending' | 'hot';
 
 export type SkillSourceType = 'github' | 'well-known';
 
+/**
+ * Server-owned catalog/source state.  Directory browsing can establish only
+ * metadata-only state; source and policy transitions belong to acquisition.
+ */
+export type SkillSourceStatus =
+  | 'metadata-only'
+  | 'snapshot-available'
+  | 'source-resolved'
+  | 'changed'
+  | 'unavailable'
+  | 'rejected';
+
 export interface V1Skill {
   id: string;
   slug: string;
@@ -24,6 +36,16 @@ export interface V1Skill {
   sourceType: SkillSourceType;
   installUrl: string | null;
   url: string;
+  /** Server-owned provenance, populated by real directory normalization. */
+  provider?: 'skills.sh';
+  /** Server wall-clock time at which this response was normalized. */
+  fetchedAt?: string;
+  /** Source/pullthrough state; legacy injected fixtures may omit it. */
+  sourceStatus?: SkillSourceStatus;
+  /** Bounded, server-owned explanation for `sourceStatus`. */
+  sourceReason?: string;
+  /** Null identifies an unscoped provider result; feed names are not upstream data. */
+  feedName?: null;
   isDuplicate?: boolean;
   /** Present for the `hot` leaderboard view. */
   installsYesterday?: number;
@@ -101,6 +123,12 @@ export interface SkillDetailResponse {
   hash: string | null;
   /** Null means the upstream has no available file snapshot. */
   files: SkillDetailFile[] | null;
+  /** Server-owned provenance, populated by real directory normalization. */
+  provider?: 'skills.sh';
+  fetchedAt?: string;
+  sourceStatus?: SkillSourceStatus;
+  sourceReason?: string;
+  feedName?: null;
 }
 
 /**
@@ -126,6 +154,11 @@ export interface SkillDetailMetadataResponse {
   hash: string | null;
   /** Null means the upstream has no available file snapshot. */
   files: SkillDetailMetadataFile[] | null;
+  provider?: 'skills.sh';
+  fetchedAt?: string;
+  sourceStatus?: SkillSourceStatus;
+  sourceReason?: string;
+  feedName?: null;
 }
 
 export type SkillAuditStatus = 'pass' | 'warn' | 'fail';
@@ -211,6 +244,8 @@ export interface SkillsDirectoryClientOptions {
   maxRetryAfterMs?: number;
   /** Injected delay function so callers/tests can avoid wall-clock waits. */
   sleep?: Sleep;
+  /** Injected wall clock for server-owned fetchedAt metadata and tests. */
+  now?: () => number;
   /**
    * Per-client bounded metadata cache. Set to false to disable caching for a
    * host that needs explicit refresh behavior. Credentials are resolved for

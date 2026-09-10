@@ -86,6 +86,7 @@ export type {
   SkillPagination,
   SkillSearchResponse,
   SkillSearchType,
+  SkillSourceStatus,
   SkillSourceType,
   SkillView,
   SkillsDirectoryClientOptions,

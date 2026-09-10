@@ -59,6 +59,9 @@ const MAX_OWNER_BYTES = 512;
 const MAX_IDENTIFIER_BYTES = 2_048;
 const MAX_IDENTIFIER_SEGMENTS = 64;
 const MAX_IDENTIFIER_SEGMENT_BYTES = 512;
+const SOURCE_METADATA_REASON = 'Catalog metadata is not a validated source snapshot.';
+const SOURCE_SNAPSHOT_REASON = 'skills.sh returned a bounded and validated source snapshot.';
+const SOURCE_UNAVAILABLE_REASON = 'skills.sh did not provide a source snapshot.';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -83,6 +86,7 @@ export class SkillsDirectoryClient {
   private readonly getToken?: SkillsTokenProvider;
   private readonly limits: DirectoryLimits;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly responseCache?: DirectoryResponseCache;
 
   constructor(options: SkillsDirectoryClientOptions = {}) {
@@ -91,7 +95,11 @@ export class SkillsDirectoryClient {
     this.getToken = options.getToken;
     this.limits = normalizeLimits(options);
     this.sleep = options.sleep ?? defaultSleep;
-    this.responseCache = options.cache === false ? undefined : new DirectoryResponseCache(options.cache);
+    const cacheNow = options.cache !== false ? options.cache?.now : undefined;
+    this.now = options.now ?? cacheNow ?? Date.now;
+    this.responseCache = options.cache === false ? undefined : new DirectoryResponseCache(
+      options.cache === undefined ? { now: this.now } : { ...options.cache, now: options.cache.now ?? this.now },
+    );
   }
 
   /** Return safe cache metadata without exposing cached response values. */
@@ -113,7 +121,7 @@ export class SkillsDirectoryClient {
       'skills',
       query,
       options.signal,
-      (body) => normalizeSkillListResponse(body, this.limits, this.baseURL),
+      (body, fetchedAt) => normalizeSkillListResponse(body, this.limits, this.baseURL, fetchedAt),
       'list',
     );
   }
@@ -143,7 +151,7 @@ export class SkillsDirectoryClient {
       'skills/search',
       query,
       searchOptions.signal,
-      (body) => normalizeSkillSearchResponse(body, this.limits, this.baseURL),
+      (body, fetchedAt) => normalizeSkillSearchResponse(body, this.limits, this.baseURL, fetchedAt),
       'search',
     );
   }
@@ -154,7 +162,7 @@ export class SkillsDirectoryClient {
       'skills/curated',
       undefined,
       options.signal,
-      (body) => normalizeCuratedSkillsResponse(body, this.limits, this.baseURL),
+      (body, fetchedAt) => normalizeCuratedSkillsResponse(body, this.limits, this.baseURL, fetchedAt),
       'curated',
     );
   }
@@ -169,8 +177,8 @@ export class SkillsDirectoryClient {
       `skills/${pathEncodeId(normalizedId)}`,
       undefined,
       options.signal,
-      (body) => {
-        const detail = normalizeSkillDetailResponse(body, this.limits, this.baseURL);
+      (body, fetchedAt) => {
+        const detail = normalizeSkillDetailResponse(body, this.limits, this.baseURL, fetchedAt);
         if (detail.id !== normalizedId) throw invalidResponseError('detail.id');
         return detail;
       },
@@ -244,7 +252,7 @@ export class SkillsDirectoryClient {
     endpoint: string,
     query: URLSearchParams | undefined,
     signal: AbortSignal | undefined,
-    normalize: (body: unknown) => T,
+    normalize: (body: unknown, fetchedAt: string) => T,
     cacheEndpoint?: DirectoryCacheEndpoint,
   ): Promise<T> {
     if (signal?.aborted) throw requestTimeoutError();
@@ -299,7 +307,7 @@ export class SkillsDirectoryClient {
     endpoint: string,
     query: URLSearchParams | undefined,
     signal: AbortSignal | undefined,
-    normalize: (body: unknown) => T,
+    normalize: (body: unknown, fetchedAt: string) => T,
     token: string | undefined,
   ): Promise<DirectoryCacheLoadResult<T>> {
     if (signal?.aborted) throw requestTimeoutError();
@@ -384,7 +392,7 @@ export class SkillsDirectoryClient {
           }
           throw error;
         }
-        return { value: normalize(body), status: response.status };
+        return { value: normalize(body, this.currentFetchedAt()), status: response.status };
       } finally {
         attemptResult.cleanup();
       }
@@ -501,6 +509,18 @@ export class SkillsDirectoryClient {
       throw unavailableError();
     } finally {
       callerSignal?.removeEventListener('abort', abortCaller);
+    }
+  }
+
+  private currentFetchedAt(): string {
+    try {
+      const value = this.now();
+      if (!Number.isFinite(value)) throw new Error('invalid directory clock');
+      const timestamp = new Date(value);
+      if (!Number.isFinite(timestamp.getTime())) throw new Error('invalid directory timestamp');
+      return timestamp.toISOString();
+    } catch {
+      throw new SkillsDirectoryError('unavailable', 'skills.sh metadata timestamp is unavailable');
     }
   }
 
@@ -700,25 +720,25 @@ function pathEncodeId(id: string): string {
   return id.split('/').map((segment) => encodeURIComponent(segment)).join('/');
 }
 
-function normalizeSkillListResponse(value: unknown, limits: DirectoryLimits, baseURL: URL): SkillListResponse {
+function normalizeSkillListResponse(value: unknown, limits: DirectoryLimits, baseURL: URL, fetchedAt: string): SkillListResponse {
   const record = responseRecord(value, 'list');
   const data = responseArray(record.data, 'list.data');
   if (data.length > 500) throw invalidResponseError('list.data');
   const pagination = responseRecord(record.pagination, 'list.pagination');
   return {
-    data: data.map((entry, index) => normalizeSkill(entry, limits, baseURL, `list.data[${index}]`)),
+    data: data.map((entry, index) => normalizeSkill(entry, limits, baseURL, `list.data[${index}]`, fetchedAt)),
     pagination: normalizePagination(pagination, 'list.pagination'),
   };
 }
 
-function normalizeSkillSearchResponse(value: unknown, limits: DirectoryLimits, baseURL: URL): SkillSearchResponse {
+function normalizeSkillSearchResponse(value: unknown, limits: DirectoryLimits, baseURL: URL, fetchedAt: string): SkillSearchResponse {
   const record = responseRecord(value, 'search');
   const data = responseArray(record.data, 'search.data');
   if (data.length > 200) throw invalidResponseError('search.data');
   const searchType = boundedMetadataString(record.searchType, limits, 'search.searchType');
   if (searchType !== 'fuzzy' && searchType !== 'semantic') throw invalidResponseError('search.searchType');
   return {
-    data: data.map((entry, index) => normalizeSkill(entry, limits, baseURL, `search.data[${index}]`)),
+    data: data.map((entry, index) => normalizeSkill(entry, limits, baseURL, `search.data[${index}]`, fetchedAt)),
     query: boundedMetadataString(record.query, limits, 'search.query'),
     searchType,
     count: nonNegativeInteger(record.count, 'search.count'),
@@ -726,19 +746,19 @@ function normalizeSkillSearchResponse(value: unknown, limits: DirectoryLimits, b
   };
 }
 
-function normalizeCuratedSkillsResponse(value: unknown, limits: DirectoryLimits, baseURL: URL): CuratedSkillsResponse {
+function normalizeCuratedSkillsResponse(value: unknown, limits: DirectoryLimits, baseURL: URL, fetchedAt: string): CuratedSkillsResponse {
   const record = responseRecord(value, 'curated');
   const data = responseArray(record.data, 'curated.data');
   if (data.length > limits.maxFiles) throw invalidResponseError('curated.data');
   return {
-    data: data.map((entry, index) => normalizeCuratedOwner(entry, limits, baseURL, `curated.data[${index}]`)),
+    data: data.map((entry, index) => normalizeCuratedOwner(entry, limits, baseURL, `curated.data[${index}]`, fetchedAt)),
     totalOwners: nonNegativeInteger(record.totalOwners, 'curated.totalOwners'),
     totalSkills: nonNegativeInteger(record.totalSkills, 'curated.totalSkills'),
     generatedAt: isoTimestamp(record.generatedAt, 'curated.generatedAt', limits),
   };
 }
 
-function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _baseURL: URL): SkillDetailResponse {
+function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _baseURL: URL, fetchedAt: string): SkillDetailResponse {
   const record = responseRecord(value, 'detail');
   const id = boundedMetadataString(record.id, limits, 'detail.id');
   const source = boundedMetadataString(record.source, limits, 'detail.source');
@@ -771,6 +791,11 @@ function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _
     installs: nonNegativeInteger(record.installs, 'detail.installs'),
     hash: nullableSnapshotHash(record.hash, limits, 'detail.hash'),
     files,
+    provider: 'skills.sh',
+    fetchedAt,
+    sourceStatus: files === null ? 'unavailable' : 'snapshot-available',
+    sourceReason: files === null ? SOURCE_UNAVAILABLE_REASON : SOURCE_SNAPSHOT_REASON,
+    feedName: null,
   };
 }
 
@@ -790,7 +815,7 @@ function normalizeSkillAuditResponse(value: unknown, limits: DirectoryLimits, _b
   };
 }
 
-function normalizeSkill(value: unknown, limits: DirectoryLimits, baseURL: URL, context: string): V1Skill {
+function normalizeSkill(value: unknown, limits: DirectoryLimits, baseURL: URL, context: string, fetchedAt: string): V1Skill {
   const record = responseRecord(value, context);
   const sourceType = boundedMetadataString(record.sourceType, limits, `${context}.sourceType`);
   if (sourceType !== 'github' && sourceType !== 'well-known') throw invalidResponseError(`${context}.sourceType`);
@@ -810,6 +835,11 @@ function normalizeSkill(value: unknown, limits: DirectoryLimits, baseURL: URL, c
     sourceType,
     installUrl,
     url: httpsUrl(record.url, limits, `${context}.url`, baseURL, true),
+    provider: 'skills.sh',
+    fetchedAt,
+    sourceStatus: 'metadata-only',
+    sourceReason: SOURCE_METADATA_REASON,
+    feedName: null,
   };
   if (record.isDuplicate !== undefined) {
     if (typeof record.isDuplicate !== 'boolean') throw invalidResponseError(`${context}.isDuplicate`);
@@ -831,7 +861,7 @@ function normalizePagination(value: JsonRecord, context: string): SkillPaginatio
   return pagination as SkillPagination;
 }
 
-function normalizeCuratedOwner(value: unknown, limits: DirectoryLimits, baseURL: URL, context: string): CuratedOwner {
+function normalizeCuratedOwner(value: unknown, limits: DirectoryLimits, baseURL: URL, context: string, fetchedAt: string): CuratedOwner {
   const record = responseRecord(value, context);
   const skills = responseArray(record.skills, `${context}.skills`);
   if (skills.length > limits.maxFiles) throw invalidResponseError(`${context}.skills`);
@@ -840,7 +870,7 @@ function normalizeCuratedOwner(value: unknown, limits: DirectoryLimits, baseURL:
     totalInstalls: nonNegativeInteger(record.totalInstalls, `${context}.totalInstalls`),
     featuredRepo: boundedMetadataString(record.featuredRepo, limits, `${context}.featuredRepo`),
     featuredSkill: boundedMetadataString(record.featuredSkill, limits, `${context}.featuredSkill`),
-    skills: skills.map((entry, index) => normalizeSkill(entry, limits, baseURL, `${context}.skills[${index}]`)),
+    skills: skills.map((entry, index) => normalizeSkill(entry, limits, baseURL, `${context}.skills[${index}]`, fetchedAt)),
   };
 }
 

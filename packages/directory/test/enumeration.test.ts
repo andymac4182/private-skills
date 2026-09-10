@@ -48,7 +48,18 @@ describe('enumerateSkills', () => {
       name: 'meta-ads',
       source: 'catalog-owner/skills',
       url: 'https://skills.sh/catalog-owner/skills/facebook/meta-ads',
+      provider: 'skills.sh',
+      fetchedAt: '2026-04-20T12:00:00.000Z',
+      sourceStatus: 'metadata-only',
+      sourceReason: 'page zero metadata',
+      feedName: null,
     });
+    const duplicateWithNewContext = {
+      ...duplicate,
+      fetchedAt: '2026-04-20T12:00:01.000Z',
+      sourceStatus: 'snapshot-available' as const,
+      sourceReason: 'page one metadata',
+    };
     const wellKnown = skill({
       id: 'open.feishu.cn/lark-doc',
       slug: 'lark-doc',
@@ -69,7 +80,7 @@ describe('enumerateSkills', () => {
     });
     const client = fixtureClient(new Map([
       [0, page(0, [duplicate], 4, true)],
-      [1, page(1, [wellKnown, duplicate], 4, true)],
+      [1, page(1, [wellKnown, duplicateWithNewContext], 4, true)],
       [2, page(2, [finalSkill], 4, false)],
     ]));
 
@@ -83,6 +94,7 @@ describe('enumerateSkills', () => {
     expect(result.uniqueIds).toEqual([duplicate.id, wellKnown.id, finalSkill.id]);
     expect(result.rows.map((row) => row.id)).toEqual(result.uniqueIds);
     expect(result.rows[1]).toMatchObject({ sourceType: 'well-known', installUrl: null });
+    expect(result.rows[0]).toMatchObject({ sourceStatus: 'metadata-only', fetchedAt: '2026-04-20T12:00:00.000Z' });
     expect(result.observedRows).toBe(4);
     expect(result.receivedRows).toBe(4);
     expect(result.reportedTotal).toBe(4);

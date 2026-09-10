@@ -59,10 +59,41 @@ describe('SkillsDirectoryClient', () => {
 
     const result = await client.search({ q: '  react native ', limit: 5, owner: 'expo' });
     expect(result.query).toBe('react native');
+    expect(result.data[0]).toMatchObject({ provider: 'skills.sh', sourceStatus: 'metadata-only', feedName: null });
+    expect(result.data[0]?.fetchedAt).toEqual(expect.any(String));
     expect(String(fetch.mock.calls[0]?.[0])).toBe('https://skills.sh/api/v1/skills/search?q=react+native&limit=5&owner=expo');
     await expect(client.search({ q: 'x' })).rejects.toMatchObject({ code: 'invalid_input' });
     await expect(client.list({ perPage: 501 })).rejects.toMatchObject({ code: 'invalid_input' });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('assigns bounded server-owned provenance instead of trusting upstream fields', async () => {
+    const now = Date.parse('2026-04-20T12:34:56.000Z');
+    const fetch = vi.fn(async () => response({
+      data: [{
+        ...skill,
+        provider: 'attacker.example',
+        fetchedAt: '2000-01-01T00:00:00.000Z',
+        sourceStatus: 'source-resolved',
+        sourceReason: 'approved by an upstream party',
+        feedName: 'untrusted-feed',
+      }],
+      pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+    }));
+    const client = new SkillsDirectoryClient({ fetch, now: () => now, cache: false });
+
+    const result = await client.list();
+    const row = result.data[0]!;
+    expect(row).toMatchObject({
+      provider: 'skills.sh',
+      fetchedAt: '2026-04-20T12:34:56.000Z',
+      sourceStatus: 'metadata-only',
+      feedName: null,
+    });
+    expect(row.sourceReason).toBe('Catalog metadata is not a validated source snapshot.');
+    expect(JSON.stringify(row)).not.toContain('attacker.example');
+    expect(JSON.stringify(row)).not.toContain('untrusted-feed');
+    expect(JSON.stringify(row)).not.toContain('approved by an upstream party');
   });
 
   it('normalizes curated, detail, and external partner-audit shapes', async () => {
@@ -116,8 +147,10 @@ describe('SkillsDirectoryClient', () => {
     const audits = await client.audit(skill.id);
 
     expect(curated.data[0]?.skills[0]?.sourceType).toBe('github');
+    expect(curated.data[0]?.skills[0]).toMatchObject({ provider: 'skills.sh', sourceStatus: 'metadata-only', feedName: null });
     expect(detail.files).toBeNull();
     expect(detail.hash).toBeNull();
+    expect(detail).toMatchObject({ provider: 'skills.sh', sourceStatus: 'unavailable', feedName: null });
     expect(audits.audits[0]?.provider).toBe('Socket');
     expect(audits.audits[0]?.status).toBe('pass');
     expect(audits.audits[0]?.riskLevel).toBeNull();
@@ -140,6 +173,7 @@ describe('SkillsDirectoryClient', () => {
     const client = new SkillsDirectoryClient({ fetch, limits: { maxTextBytes: 128 } });
     const detail = await client.detail(skill.id);
     expect(detail.files).toEqual([{ path: 'SKILL.md', contents: '# Safe text\n' }]);
+    expect(detail).toMatchObject({ provider: 'skills.sh', sourceStatus: 'snapshot-available', feedName: null });
 
     const traversalFetch = vi.fn(async () => response({
       id: skill.id,
@@ -422,6 +456,39 @@ describe('SkillsDirectoryClient', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(getToken).toHaveBeenCalledTimes(2);
     expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 1, stores: 1, entries: 1, totalBytes: expect.any(Number) });
+  });
+
+  it('stamps fetchedAt once and preserves it across coalesced and warm reads', async () => {
+    let now = Date.parse('2026-04-20T12:00:00.000Z');
+    let releaseResponse!: () => void;
+    const responseReady = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    const fetch = vi.fn(async () => {
+      await responseReady;
+      return response({
+        data: [{ ...skill }],
+        pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+      });
+    });
+    const client = new SkillsDirectoryClient({
+      fetch,
+      cache: { now: () => now },
+    });
+
+    const firstPromise = client.list();
+    await Promise.resolve();
+    const secondPromise = client.list();
+    releaseResponse();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(first.data[0]?.fetchedAt).toBe('2026-04-20T12:00:00.000Z');
+    expect(second.data[0]?.fetchedAt).toBe(first.data[0]?.fetchedAt);
+
+    now += 5_000;
+    const warm = await client.list();
+    expect(warm.data[0]?.fetchedAt).toBe(first.data[0]?.fetchedAt);
+    expect(client.cacheStats()).toMatchObject({ hits: 1, coalesced: 1, stores: 1 });
+    expect(client.cacheStats()?.cached[0]?.ageMs).toBe(5_000);
   });
 
   it('does not cache detail snapshots while keeping each request authenticated', async () => {
