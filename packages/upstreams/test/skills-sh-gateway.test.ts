@@ -8,6 +8,7 @@ vi.mock('node:dns/promises', () => ({
 }));
 
 import {
+  acquireSkill,
   acquireSkillsShSkill,
   type AcquireSkillInput,
 } from '../src/index.js';
@@ -232,6 +233,97 @@ describe('skills.sh gateway credentials', () => {
 
     await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
     expect(authorizations).toEqual(['Bearer gateway-token', undefined]);
+  });
+
+  it('strips a canonical OIDC token before following a same-origin catalog redirect', async () => {
+    const authorizations: Array<string | undefined> = [];
+    let tokenCalls = 0;
+    const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
+      const url = new URL(raw.toString());
+      authorizations.push(init?.headers?.authorization);
+      if (url.pathname === '/api/v1/skills/octo/repo/demo') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://skills.sh/api/v1/skills/octo/repo/demo-redirect' },
+        });
+      }
+      if (url.pathname === '/api/v1/skills/octo/repo/demo-redirect') return json(detail());
+      return json({ error: 'not found' }, 404);
+    };
+    const request = input(fetchImpl);
+    request.upstream = { ...request.upstream!, baseUrl: 'https://skills.sh' };
+    request.getSkillsShToken = async () => {
+      tokenCalls += 1;
+      return 'oidc-token';
+    };
+
+    await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
+    expect(tokenCalls).toBe(1);
+    expect(authorizations).toEqual(['Bearer oidc-token', undefined]);
+  });
+
+  it('retains authenticated same-origin redirects for noncatalog source requests', async () => {
+    const skill = Buffer.from('---\nname: demo\ndescription: Same-origin source fixture\n---\n# demo\n', 'utf8');
+    const skillSha = gitBlobSha(skill);
+    const authorizations: Array<string | undefined> = [];
+    const key = 'PSKILLS_TEST_SAME_ORIGIN_SOURCE_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'source-token';
+    try {
+      const result = await acquireSkill({
+        upstream: {
+          id: 'github-same-origin-redirect',
+          organizationId: 'org-1',
+          name: 'same-origin source fixture',
+          kind: 'github',
+          enabled: true,
+          repositories: ['octo/repo'],
+          baseUrl: `${BASE}/github`,
+          credentialEnv: key,
+          namespace: '@team',
+        },
+        importRequest: {
+          upstreamId: 'github-same-origin-redirect',
+          repository: 'octo/repo',
+          path: 'skills/demo',
+          ref: 'main',
+          name: '@team/demo',
+          version: '1.0.0',
+        },
+        allowLoopbackForTests: true,
+        fetchImpl: async (raw, init) => {
+          const url = new URL(raw.toString());
+          authorizations.push(init?.headers?.authorization);
+          if (url.pathname === '/github/repos/octo/repo/commits/main') {
+            return new Response(null, {
+              status: 302,
+              headers: { location: `${BASE}/github/repos/octo/repo/commits/main-redirect` },
+            });
+          }
+          if (url.pathname === '/github/repos/octo/repo/commits/main-redirect') return json({ sha: COMMIT });
+          if (url.pathname === `/github/repos/octo/repo/git/trees/${COMMIT}`) {
+            return json({ truncated: false, tree: [
+              { path: 'skills/demo/SKILL.md', type: 'blob', mode: '100644', sha: skillSha, size: skill.length },
+            ] });
+          }
+          if (url.pathname === `/github/repos/octo/repo/git/blobs/${skillSha}`) {
+            return json({ encoding: 'base64', content: skill.toString('base64'), size: skill.length, sha: skillSha });
+          }
+          return json({ error: 'not found' }, 404);
+        },
+      });
+
+      expect(result.bundle.files).toHaveLength(1);
+      expect(authorizations).toEqual([
+        'Bearer source-token',
+        'Bearer source-token',
+        'Bearer source-token',
+        'Bearer source-token',
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
   });
 
   it('redacts gateway provider failures and fails closed before catalog I/O', async () => {

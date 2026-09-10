@@ -796,6 +796,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     headers,
     allowedOrigin: apiBase.origin,
     retryable: false,
+    stripCredentialsOnRedirect: true,
   });
   const importSourceType = (importRequest as unknown as { externalSourceType?: unknown }).externalSourceType;
   if (importSourceType !== undefined && importSourceType !== 'github' && importSourceType !== 'well-known') {
@@ -1045,6 +1046,7 @@ async function discoverSkillsShMetadata(
         allowedOrigin: apiBase.origin,
         retryable: false,
         signal,
+        stripCredentialsOnRedirect: true,
       });
       const page = parseSkillsShCatalogMetadataPage(value, limits, false);
       const match = selectSkillsShMetadata(page.rows, detail);
@@ -1066,6 +1068,7 @@ async function discoverSkillsShMetadata(
         allowedOrigin: apiBase.origin,
         retryable: false,
         signal,
+        stripCredentialsOnRedirect: true,
       });
     } catch (error) {
       if (isCatalogNotFound(error)) break;
@@ -3083,11 +3086,13 @@ class HttpClient {
           throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirect location is invalid', status);
         }
         assertSafeURL(next, this.options.allowLoopbackForTests);
-        // Credentials are bound to the original fixed API/source request, not
-        // to an arbitrary redirect path.  Strip them even for same-origin
-        // redirects so a gateway token cannot reach a sibling endpoint; an
-        // off-origin redirect is denied unless the caller explicitly opted in.
-        headers = withoutCredentialHeaders(headers);
+        // Off-origin redirects always lose credentials. Catalog API requests
+        // also opt into same-origin stripping because a gateway/OIDC bearer
+        // is bound to the exact catalog request path. Other source and
+        // artifact requests retain their existing same-origin auth behavior.
+        if (request.stripCredentialsOnRedirect || next.origin !== current.origin) {
+          headers = withoutCredentialHeaders(headers);
+        }
         if (next.origin !== current.origin) {
           if (!request.allowCrossOriginRedirectWithoutAuth) {
             throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirect changed origin', status);
@@ -3203,6 +3208,8 @@ interface ClientRequest {
   allowedOrigin?: string;
   retryable?: boolean;
   allowCrossOriginRedirectWithoutAuth?: boolean;
+  /** Strip credentials on same-origin redirects for bound catalog requests. */
+  stripCredentialsOnRedirect?: boolean;
   expectJson?: boolean;
 }
 
