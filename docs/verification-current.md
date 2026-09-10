@@ -17,8 +17,9 @@ A later source-specific production record now proves one snapshot-only
 candidate admission, required-scan approval, isolated CLI install/repeat, and
 install analytics. It does not prove physical GitHub or well-known source
 resolution, direct upstream-zero instrumentation, or hosted recovery. M6
-Diffs/editor plus upload-review Eve and M7 OpenClaw remain
-future milestones.
+Diffs/editor plus upload-review Eve and M7 OpenClaw are active implementation
+milestones with incomplete evidence; they remain outside the current C1 release
+gate.
 
 ## Earlier prebuilt rollout checkpoint
 
@@ -146,8 +147,9 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
 - Recheck nested upstream detail and any remaining provider limits recorded in
   the C1 criteria.
 
-These records do not establish complete C1 catalog acceptance. Scanner policy
-remains authoritative, and uploaded skill content is never executed. M6 Diffs
-file viewing/editing with immutable draft releases and a separate upload/edit
-Eve reviewer, plus M7 OpenClaw feed interoperability, remain future roadmap
-milestones and are not release gates here.
+These records do not establish complete C1 catalog acceptance. SkillsGuard and
+the other configured scanner policy remain authoritative, and uploaded skill
+content is never executed. M6 Diffs file viewing/editing with immutable draft
+releases and a separate upload/edit Eve reviewer, plus M7 OpenClaw feed
+interoperability, are active implementation milestones with incomplete evidence
+and remain outside the current release gates here.

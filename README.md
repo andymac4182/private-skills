@@ -31,7 +31,8 @@ one snapshot-only production candidate now has recorded required-scan
 admission, isolated CLI install/repeat, and analytics evidence. Physical
 GitHub/well-known resolution, direct zero-upstream instrumentation, hosted
 restore, and native CI remain pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
-remain future milestones.
+are active implementation milestones with incomplete evidence; they remain
+outside the current C1 release gate.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
