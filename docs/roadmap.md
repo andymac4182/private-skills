@@ -36,16 +36,18 @@ amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
 - **Now: close v0.2.0 and the remaining C1 evidence.** Finish the remaining
-  physical-source and source-revision checks. The latest verified deployment
-  checkpoint is PR32 source SHA
-  `fa13c5689380ab2e71784f72a36b7cac7296bbc8`, captured at
-  `2026-09-10T13:59:48Z`, with READY registry, builder, and upload-reviewer
-  deployments recorded in the [activation readback](evidence/production-activation-readback-fa13c568.json)
-  and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json).
-  The Neon production integration, storage, secrets, authenticated production
-  flow, released CLI evidence, and bounded hosted logical restore are recorded
-  as complete. Native CI remains provider-blocked before any job step. The
-  latest verification record identifies the remaining gates.
+  physical-source and source-revision checks. The latest verified production
+  release checkpoint is PR34 merge SHA
+  `34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`; its [sanitized release
+  evidence](evidence/production-release-checkpoint-34e4f56.json) records READY
+  registry, builder, and upload-reviewer deployments. The authenticated
+  [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+  is read-only and records selected-file digest, keyboard focus, responsive
+  overflow, and zero console/page errors. The Neon production integration,
+  storage, secrets, authenticated production flow, released CLI evidence, and
+  bounded hosted logical restore are recorded as complete. Native CI remains
+  provider-blocked before any job step. The latest verification record
+  identifies the remaining gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
   on-demand skills.sh catalog adapter, identity-preserving automatic source
   pullthrough and approved-cache behavior, and the Packs, Topics, Official, and
@@ -58,9 +60,9 @@ new content and execution boundaries.
   owner has authorized the Vercel project OIDC destination. Source `0f9da75`
   implements the directory, Topics parser, bounded cache, enumeration, and
   security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
-  API evidence. The latest verified PR32 deployment checkpoint records
-  upload-review and builder activation while preserving the earlier verified
-  read-only release manifest and selected-file GET evidence; physical source
+  API evidence. The PR34 release checkpoint records the current READY
+  deployment set and hosted read-only viewer evidence while preserving the
+  earlier verified release manifest and selected-file GET evidence; physical source
   acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
   remain open. The required install
   path supports multiple tenant feeds, with one origin/restriction configuration
@@ -72,15 +74,15 @@ new content and execution boundaries.
   instead of presenting an older cache as fresh. Optional source restrictions
   are an administrator policy, not a prerequisite for a public catalog row.
 - **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
-  The latest verified PR32 deployment checkpoint has READY registry, builder,
-  and upload-reviewer services. The [activation readback](evidence/production-activation-readback-fa13c568.json)
-  records bounded service checks without a live model session, and the [builder
-  callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json)
-  records the non-worker builder principal without a mutating request or draft
-  context.
-  The [local synthetic editor/browser evidence](evidence/m6-editor-browser-local-29f7.json)
-  passes bounded desktop/mobile draft checks; hosted UI, live Eve/model, and
-  screenreader/contrast/reduced-motion acceptance remain pending. Complete M6
+  The PR34 release checkpoint has READY registry, builder, and upload-reviewer
+  services. The [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+  records authenticated release-file rendering and responsive/keyboard checks,
+  without authoring mutations or publication; `modelCalls` was false for that
+  viewer capture. The [local synthetic editor/browser
+  evidence](evidence/m6-editor-browser-local-29f7.json) passes bounded
+  desktop/mobile draft checks; live upload-review/model execution, durable
+  upload-draft resume, and screenreader/contrast/reduced-motion acceptance
+  remain pending. Complete M6
   still requires the composed editor, durable drafts, upload/edit reviewer,
   builder, and their end-to-end evidence. The Diffs integration, persistence,
   identity, review jobs, UI findings, scanner authority, malicious-content

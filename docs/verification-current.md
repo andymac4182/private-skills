@@ -1,37 +1,64 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-10T13:59:48Z
+**As of:** 2026-09-10T15:21:24Z
 
-**Latest verified deployment checkpoint:** PR32 source SHA
-`fa13c5689380ab2e71784f72a36b7cac7296bbc8` has Git-triggered READY registry,
-builder, and upload-reviewer deployments
-`dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`, `dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and
-`dpl_5towM6j191dG7rPGzefwhh68uYm6`. The sanitized [activation readback](evidence/production-activation-readback-fa13c568.json)
-records seven bounded GET checks, the fail-closed callback method boundary,
-zero registry writes, and no model session. The sanitized [builder callback
-preflight](evidence/builder-callback-auth-preflight-fa13c568.json) records an
-enabled builder service, the non-worker `skills:builder` principal, and no
-mutating request, draft context, or model session. This is an
-as-of/source-scoped deployment record; it does not stand in for a later source
-commit's deployment. The earlier [M6 read-only release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-retains its own source/deployment provenance. The editor API and authoring
-source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
-from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
-draft flow, reload, stale-CAS, binary/oversize, keyboard, guard, and overflow
-checks; it does not prove hosted UI behavior, a live Eve/model session, or
-screenreader/contrast/reduced-motion acceptance. One snapshot-only production
-candidate still has recorded required-scan admission, isolated CLI
-install/repeat, and install analytics. Physical GitHub/well-known source
-resolution, direct upstream-zero instrumentation, and native CI remain pending.
-A bounded hosted Neon/object-storage logical restore is verified in the
-sanitized [restore evidence](evidence/hosted-restore-20260910.json): source
-revision 114, five referenced objects totaling 10,381 bytes, exact target
-revision 114, five digest/size-verified target objects, and post-restore target
-cleanup. The copy window uses operator-quiescence attestation and does not
-claim a provider lifecycle guarantee or a restored-origin health/scanner run.
-The OpenClaw backend is shipped but its feed remains disabled pending review and
-explicit activation, with no live interoperability evidence. M6 and M7 remain
-outside the current C1 release gate.
+**Latest verified production release checkpoint:** PR34 was merged at
+`2026-09-10T15:02:13Z` with approved head
+`bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b` and merge SHA
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`. The Git-triggered registry,
+builder, and upload-reviewer production deployments are all READY. Their
+sanitized [release checkpoint](evidence/production-release-checkpoint-34e4f56.json)
+records the deployment identities, zero open PRs at capture, 129 local tests,
+passing typecheck/diff checks and Vercel previews, and native CI stopped before
+runner steps because of provider/account billing admission without a bypass.
+The release scope recorded no OpenClaw activation or environment change,
+registry import, or model job.
+
+The authenticated [hosted M6 viewer checkpoint](evidence/production-m6-hosted-viewer-34e4f56.json)
+used the stable production alias and the named deployment from this release.
+It returned auth 200 and rendered the genuine Pierre viewer. The selected
+`SKILL.md` was 1,231 bytes and its browser-computed digest matched the
+selected-file content digest; keyboard tree focus, desktop 1280px/mobile 390px
+no-overflow behavior, and inner code scrolling were observed, with no console
+or page errors. This is read-only viewer evidence: the capture recorded no
+authoring mutations or publication, with `modelCalls: false` for this viewer
+capture, and does not prove the M6 model/apply/review/scan workflow,
+screenreader, contrast, or reduced-motion acceptance. The upload-draft resume
+gap remains active because `PublishView` keeps an upload draft in memory while
+the catalog release query is not a compatible upload-draft resume route. The
+OpenClaw feed remains disabled pending review and explicit activation, and
+native CI remains open. This checkpoint does not claim all G0, C1, or M6
+criteria complete.
+
+A separate bounded [M6 Eve session record](evidence/production-m6-eve-session-34e4f56.json)
+captures one accepted prompt in a ready two-turn session. No proposal was
+created, and the assistant reported that proposal tools were unavailable. A
+bounded runtime log matched JSON serialization of captured tool state and
+`list_draft_files`; correlated source/compiler inspection identified the
+captured registry client object returned by [`registryClient()`](../apps/skill-builder/agent/lib/config.ts#L158)
+as incompatible with Eve's JSON closure boundary. Candidate source commit
+`c4cd24a` constructs that client inside the executors. Its source-scoped
+verification passes: skill-builder typecheck, 15/15 skill-builder tests, 47/47
+related tests, and the Eve build all passed. The candidate has not been deployed
+or live-tested. Hosted fix validation and end-to-end model/proposal evidence
+remain unverified; this source/build diagnosis does not mark M6 complete.
+
+The editor API and authoring source remain shipped, the local synthetic
+[editor-browser record](evidence/m6-editor-browser-local-29f7.json) retains its
+own source-scoped checks, and physical GitHub/well-known source resolution plus
+direct upstream-zero instrumentation remain pending. A bounded hosted
+Neon/object-storage logical restore is verified in the sanitized [restore
+evidence](evidence/hosted-restore-20260910.json): source revision 114, five
+referenced objects totaling 10,381 bytes, exact target revision 114, five
+digest/size-verified target objects, and post-restore target cleanup. The copy
+window uses operator-quiescence attestation and does not claim a provider
+lifecycle guarantee or restored-origin health/scanner run. The earlier PR32
+activation and PR30 read-only records retain their own source/deployment
+provenance below. The current source-34e4f56 local [Compose reproducibility
+proof](evidence/local-compose-required-scan-34e4f56.json) and [source-built CLI
+proof](evidence/transparent-proxy-cli-evidence-1789055769960.json) close the
+earlier dependency-alignment and unattested-build-source qualifications while
+retaining their local transport, scanner, native-CI, and syscall-capture limits.
 
 ## Recorded local required-scan portability proof
 
@@ -58,6 +85,111 @@ the loopback HTTP gateway because production runtime guards reject that path;
 the inert synthetic fixture demonstrates required-scan coverage and clean
 policy evaluation, not malicious-pattern detection breadth. OpenClaw remains
 disabled, and no secrets or artifact contents were retained.
+## Recorded public OpenClaw metadata interoperability probe
+
+As of `2026-09-10T14:36:59Z`, the sanitized [public ClawHub feed
+record](evidence/openclaw-clawhub-feed-evidence-20260910.json) accepted the
+HTTPS `GET` of `https://clawhub.ai/api/v1/feeds/skills` with status 200, no
+redirect, and the configured origin restriction. The normalized response had
+feed ID `clawhub-official-skills`, schema version 1, sequence 316, 891 entries,
+and zero rejected candidates. The canonical body SHA-256, canonical/transport
+ETags, last-modified value, and byte length are retained in the record. The
+wire `expiresAt` was seven days after publication; the adapter constrained its
+local effective expiry to 24 hours. The source specification commit is labeled
+as upstream specification provenance, and the selected publisher `official`
+trust value remains an upstream claim.
+
+The probe retained one normalized metadata candidate with its public package,
+version, and declared artifact digest. It stored no feed body or skill text,
+executed no skill content, and made no registry mutation. This proves public
+metadata interoperability only; it does not prove artifact import, private
+publication, feed activation, scanner admission, or hosted production
+acceptance. The adapter behavior was checked against tested registry commit
+`0ab50abcaf4bc7f924bdeb501d78462f4c16497b`.
+
+## Historical local transparent-proxy CLI fixture
+
+The sanitized [CLI fixture record](evidence/transparent-proxy-cli-evidence-1789051607574.json)
+is a verified local HTTP plus Files SDK filesystem and deterministic-scanner
+fixture. Its provenance records registry source commit
+`547d9c2e5a1ac88c38456757961ce0bc19afd338`, verifier SHA-256
+`187272da2831dfa1ab1c6fad328daec89668cae26a38f5d55147b004e637594d`, and a
+cached `pskills 0.3.0` Darwin/arm64 binary SHA-256
+`6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a`.
+The cached binary's build source commit is explicitly unknown and unattested.
+The fixture proves named-feed listing and guards (unknown feed 404, disabled
+feed 409), two successful cold CLI installs, required-scan failure and rescan
+behavior, and a warm repeat that exited 0. The injected Node
+directory/acquisition fetch boundary counted 38 source-origin attempts before
+and after the warm stop (delta zero); after the source server stopped, source
+requests and attempts were both zero. The warm repeat recorded no new import
+job after the prior cold/rescan setup, preserved the selected feed, and made no
+authorization-bearing public source request or unexpected route.
+
+This is local fixture evidence, not native CLI syscall tracing, native CI,
+Docker scanner execution, or production acceptance. It does not establish
+hosted source availability or a separately attested CLI build source.
+
+## Recorded PR34 source-built transparent-proxy CLI fixture
+
+As of source commit `34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`, the sanitized
+[source-built CLI record](evidence/transparent-proxy-cli-evidence-1789055769960.json)
+attests a locked offline Cargo build of `pskills 0.3.0` for Darwin/arm64. The
+binary SHA-256, Cargo lockfile SHA-256, verifier SHA-256, and exact build-source
+commit are retained. The local fixture listed three feeds, exercised unknown and
+disabled-feed guards, completed two cold installs, required-scan failure and
+rescan behavior, and completed a warm repeat with exit 0. The source-origin
+boundary counted 38 attempts before and after the warm stop (delta zero), then
+zero attempts after the source server stopped; warm import jobs remained 6 → 6.
+
+This remains deterministic local scanner-fixture evidence using a local HTTP
+origin and Files SDK filesystem adapter. It does not prove native CLI syscall
+capture, Windows/Linux CI, hosted source availability, or production acceptance.
+
+## Historical local Compose required-scan proof
+
+As of `2026-09-10T14:50:30Z`, source commit
+`62c4a58ab9075a8267d784f1ed7bfaf3634cb309` has a sanitized [local Compose
+proof](evidence/local-compose-required-scan-62c4.json). The production-mode
+local stack used PostgreSQL `17.6`, the Files SDK filesystem adapter, and
+SkillsGuard `1.1.1`. Its policy returned `allowUnscanned=false`, Cisco and
+NVIDIA disabled, and SkillsGuard required. The required scan completed with
+2/2 files enumerated and analyzed, zero findings, and an approved release.
+The authorized install resolved the same artifact digest and transferred 347
+bytes with matching download digest.
+
+The API image used the Dockerfile's frozen-lockfile install and a pinned Node
+image, so its dependency set is aligned with source `62c4a58`. The host
+WorkerRunner instead ran against shared `node_modules` linked to the BFF
+worktree with a different installed lockfile; dependency alignment to
+`62c4a58` and a fully reproducible worker artifact therefore remain unverified.
+This qualification does not negate the recorded required-scan or
+digest-matched download evidence.
+
+The API origin was loopback HTTP with an HTTPS-shaped local public-origin
+validation; this proof did not provision a TLS terminator. It is local Compose
+evidence, not hosted Cloudflare/TLS or production deployment proof, and does
+not close the broader container, provider, or semantic-search gates. No
+credentials, raw artifact bytes, scanner report content, or grant URL were
+retained.
+
+## Recorded PR34 local Compose reproducibility proof
+
+As of `2026-09-10T15:50:37Z`, source commit
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2` has a sanitized [local Compose
+reproducibility record](evidence/local-compose-required-scan-34e4f56.json).
+Both the isolated host WorkerRunner and API Docker image passed frozen-lockfile
+installation checks without shared `node_modules` drift. The production-mode
+local stack used PostgreSQL `17.6`, the Files SDK filesystem adapter, and
+SkillsGuard `1.1.1` as the required scanner with `allowUnscanned=false`; 2/2
+files were analyzed with zero findings, worker completion allowed approval, and
+the authorized transfer matched the published digest for 367 bytes.
+
+The proof is loopback HTTP with HTTPS-shaped public-origin validation and did
+not provision a TLS terminator. It is local Compose evidence, not hosted
+Cloudflare/TLS, provider, production object-storage, semantic-search, or native
+CI proof. No credentials, raw artifact bytes, scanner report content, or grant
+URL were retained.
 
 ## Recorded Git-triggered M6 read-only release-file checkpoint
 
@@ -74,11 +206,11 @@ file's server-reported digest matched its transiently read contents, response
 bodies and credentials were not retained, and the pass recorded zero
 private-registry writes. This is production HTTP/API evidence for the M6
 read-only release-file slice; it does not prove the full editor/reviewer/builder
-workflow or browser acceptance. The latest verified PR32 registry, builder, and
-upload-reviewer deployment set is recorded in the [activation readback](evidence/production-activation-readback-fa13c568.json)
-and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json);
-the checkpoint records enabled services and authenticated boundaries, but no
-live model session or draft context has started.
+workflow or browser acceptance. The earlier PR32 registry, builder, and
+upload-reviewer deployment set is retained in the [activation readback](evidence/production-activation-readback-fa13c568.json)
+and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json)
+as historical source/deployment evidence; it records enabled services and
+authenticated boundaries, but no live model session or draft context started.
 
 ## Recorded M6 local editor/browser checkpoint
 
@@ -230,9 +362,10 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   next 22:00 UTC Eve run still needs an explicit causal scheduler/session
   identifier; the earlier cron record is only deployment-scoped temporal
   correlation.
-- M7 OpenClaw backend code is shipped, but the feed remains disabled. Keep it
-  disabled until its explicit feed/trust configuration and bounded producer /
-  consumer interoperability evidence are ready.
+- M7 OpenClaw backend code is shipped, but the feed remains disabled. The public
+  metadata probe above is interoperability evidence only; keep the feed disabled
+  until its explicit feed/trust configuration, bounded producer/consumer
+  interoperability, artifact import, and private publication evidence are ready.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
@@ -244,5 +377,7 @@ context, M5 organization-wide visibility/automation, CLI parity, and external
 pack migration. This feature count is separate from the G0, C1, M6, and M7
 verification gates. M6's local synthetic browser proof passes, but its hosted,
 model, and accessibility gates remain incomplete. M7's source slices are
-current, but its OpenClaw feed remains disabled and has no live interoperability
-evidence. Both remain outside the current release gates here.
+current, but its OpenClaw feed remains disabled. The public metadata probe above
+is interoperability evidence only; hosted artifact import, private publication,
+and feed activation remain unproven. Both remain outside the current release
+gates here.

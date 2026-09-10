@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-transparent-skills-sh-cli-acceptance",
+  "verified": true,
+  "provenance": {
+    "registryTestSourceCommit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+    "verifierSha256": "a1957247278df998ae701fb167ce37c8fbe7a50cb588cd3e215569ee878b4621",
+    "cli": {
+      "version": "pskills 0.3.0",
+      "platform": "darwin/arm64",
+      "sha256": "e2cf0243a3f5619404e57e91ae746dd13279ac5bb85f3afe597f1a0654fbba42",
+      "buildSourceCommit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+      "buildSourceCommitStatus": "built locally from the exact fixture/source checkout commit"
+    }
+  },
+  "build": {
+    "cargoVersion": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "cargoLockSha256": "71e3a2aff0d0cf6e03f5da2be8b270e360dfb541c332acbb18703cefa75fdb7f",
+    "locked": true,
+    "offline": true
+  },
+  "feedListing": {
+    "status": 200,
+    "names": [
+      "community",
+      "disabled",
+      "partner"
+    ]
+  },
+  "feedGuards": {
+    "unknownStatus": 404,
+    "disabledStatus": 409,
+    "upstreamRequestsBefore": 0,
+    "upstreamRequestsAfter": 0
+  },
+  "sourceRequestCounts": {
+    "detailRequests": 13,
+    "metadataSearchRequests": 13,
+    "wellKnownIndexRequests": 6,
+    "artifactRequests": 6,
+    "publicRequestsWithAuthorization": 0,
+    "unexpectedRoutes": [],
+    "requestCountBeforeWarmStop": 38,
+    "sourceOriginAttemptsBeforeWarmStop": 38,
+    "sourceOriginAttemptsAfterWarmStop": 38,
+    "warmAttemptDelta": 0
+  },
+  "cold": {
+    "cliExitCodes": [
+      0,
+      0
+    ],
+    "importJobs": 3,
+    "skills": 3,
+    "approved": 3,
+    "requiredScanResults": 3
+  },
+  "failedScanner": {
+    "cliExitCode": 1,
+    "scannerReasonPresent": true,
+    "scanErrorSkills": 2,
+    "failedScans": 2
+  },
+  "rescan": {
+    "status": 202,
+    "workerClaimed": true,
+    "workerAllowed": true,
+    "installedArtifactDigest": "sha256:fbb613656aab2162eb31a960fcdee008a05e6ad50db571f9ae7479a8f3620c2a",
+    "proxyRequestsBefore": 9,
+    "proxyRequestsAfterQueue": 10,
+    "proxyRequestsAfterCompletion": 10,
+    "cliExitCode": 0
+  },
+  "warm": {
+    "protocolStatus": 200,
+    "feed": "community",
+    "cliExitCode": 0,
+    "sourceServerRequestsAfterStop": 0,
+    "sourceOriginAttemptsAfterStop": 0,
+    "importJobsBefore": 6,
+    "importJobsAfter": 6,
+    "importJobDelta": 0
+  },
+  "qualifications": {
+    "transport": "local HTTP plus Files SDK filesystem adapter",
+    "scanner": "deterministic local scanner fixture",
+    "nativeCliSyscallCapture": false,
+    "nativeCi": false,
+    "windowsLinuxCi": false,
+    "production": false,
+    "sourceStoppedForWarmCheck": true
+  },
+  "safety": {
+    "uploadedInstructionsExecuted": false,
+    "noCredentialInEvidence": true
+  }
+}

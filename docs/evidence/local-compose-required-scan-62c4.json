@@ -1,0 +1,148 @@
+{
+  "kind": "private-skills.local-production-compose-proof",
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-10T14:50:30Z",
+  "source": {
+    "sha": "62c4a58ab9075a8267d784f1ed7bfaf3634cb309"
+  },
+  "runtime": {
+    "environment": "production",
+    "stateProvider": "postgres",
+    "storageProvider": "filesystem (Files SDK fs adapter)",
+    "allowUnscanned": false,
+    "apiBind": "127.0.0.1 loopback HTTP",
+    "configuredPublicOrigin": "https://127.0.0.1 loopback HTTPS-shaped origin",
+    "transportLimitation": "HTTPS-shaped public-origin validation was required; this local proof did not provision a TLS terminator."
+  },
+  "images": {
+    "api": {
+      "imageId": "sha256:abff1e6e19cca6de083e4403d42be7c6f87c86075a06b14acaaf074583329193"
+    },
+    "postgres": {
+      "image": "postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
+      "imageId": "sha256:29e645e20571728f22df398b9954bb6c1cefec390d99ed4e26308fc2f52d6a37"
+    },
+    "skillsguard": {
+      "image": "private-skills/skillsguard:1.1.1",
+      "imageId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+      "architecture": "arm64",
+      "os": "linux",
+      "labels": {
+        "io.private-skills.scanner.id": "skillsguard"
+      }
+    }
+  },
+  "resources": {
+    "containers": [
+      {
+        "imageId": "sha256:abff1e6e19cca6de083e4403d42be7c6f87c86075a06b14acaaf074583329193",
+        "platform": "linux",
+        "state": "running",
+        "health": "healthy"
+      },
+      {
+        "imageId": "sha256:29e645e20571728f22df398b9954bb6c1cefec390d99ed4e26308fc2f52d6a37",
+        "platform": "linux",
+        "state": "running",
+        "health": "healthy"
+      }
+    ],
+    "scannerContainersAfterRun": 0
+  },
+  "policy": {
+    "revision": "policy_a60ca18c-d652-4cc9-890c-253956a2303e",
+    "allowUnscanned": false,
+    "scanners": [
+      {
+        "id": "cisco-skill-scanner",
+        "mode": "disabled",
+        "blockSeverities": [
+          "high",
+          "critical"
+        ]
+      },
+      {
+        "id": "nvidia-skillspector",
+        "mode": "disabled",
+        "blockSeverities": [
+          "high",
+          "critical"
+        ]
+      },
+      {
+        "id": "skillsguard",
+        "mode": "required",
+        "blockSeverities": [
+          "high",
+          "critical"
+        ]
+      }
+    ],
+    "responseStatus": 200
+  },
+  "publish": {
+    "kind": "scan",
+    "state": "queued",
+    "artifactDigest": "sha256:760c45ef4101b6b8e640c1252dfb8cc9bc3e505c2b87da678a182673efb7d511",
+    "artifactSize": 347,
+    "responseStatus": 202
+  },
+  "scan": {
+    "state": "completed",
+    "attempt": null,
+    "responseStatus": 200,
+    "results": [
+      {
+        "scannerId": "skillsguard",
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "configurationHash": "sha256:112b554175b7b930e5f829c67120ab274910b27d057d29ef0619448900bdc859",
+        "status": "completed",
+        "policyRevision": "policy_a60ca18c-d652-4cc9-890c-253956a2303e",
+        "coverage": {
+          "filesEnumerated": 2,
+          "filesAnalyzed": 2,
+          "complete": null
+        },
+        "findingsCount": 0
+      }
+    ],
+    "workerCompletionAllow": true
+  },
+  "approval": {
+    "state": "approved",
+    "name": "@proof/compose-required-scan",
+    "version": "1.0.0",
+    "responseStatus": 200
+  },
+  "authorizedInstall": {
+    "resolutionDigest": "sha256:760c45ef4101b6b8e640c1252dfb8cc9bc3e505c2b87da678a182673efb7d511",
+    "memberCount": 1,
+    "resolveStatus": 200,
+    "authorizationStatus": 201,
+    "expiresAt": "2026-09-10T14:50:48.196Z",
+    "downloadDescriptorStatus": 200,
+    "transferStatus": 200,
+    "downloadBytes": 347,
+    "downloadDigest": "sha256:760c45ef4101b6b8e640c1252dfb8cc9bc3e505c2b87da678a182673efb7d511",
+    "digestMatchesPublished": true
+  },
+  "redaction": {
+    "containsCredentials": false,
+    "containsRawArtifactBytes": false,
+    "containsScannerReportContent": false,
+    "containsGrantUrl": false
+  },
+  "dependencyQualification": {
+    "apiImage": {
+      "install": "Dockerfile frozen-lockfile install",
+      "nodeImage": "pinned Node image",
+      "sourceAlignment": "aligned with source 62c4a58"
+    },
+    "hostWorker": {
+      "dependencyAlignment": "unverified",
+      "observedSetup": "shared node_modules linked to the BFF worktree with a different installed lockfile",
+      "reproducibleWorkerArtifact": false
+    }
+  }
+}

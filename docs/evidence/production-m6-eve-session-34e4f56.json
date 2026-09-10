@@ -1,0 +1,23 @@
+{
+  "schema": "private-skills-m6-session-body-inspection-v1",
+  "registryOrigin": "https://private-skills-theta.vercel.app",
+  "method": "GET",
+  "status": 200,
+  "elapsedMs": 7195,
+  "bodyBytes": 962,
+  "bodySha256": "fc3e5edd30fc97de65cc808c7dd49d696291fd40b8330f97d2a04e0a9640b018",
+  "checkpointPhase": "prompt-accepted",
+  "promptAccepted": true,
+  "bindingMatches": true,
+  "sessionState": "ready",
+  "turnRoles": [
+    "user",
+    "assistant"
+  ],
+  "turnCount": 2,
+  "assistantMessageCount": 1,
+  "proposalPresent": false,
+  "assistantOutcome": "reported proposal tools unavailable; no pending proposal was created",
+  "structuredError": {},
+  "scope": "One same-origin GET; no POSTs, retries, headers, or credentials persisted"
+}

@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-transparent-skills-sh-cli-acceptance",
+  "verified": true,
+  "provenance": {
+    "registryTestSourceCommit": "547d9c2e5a1ac88c38456757961ce0bc19afd338",
+    "verifierSha256": "187272da2831dfa1ab1c6fad328daec89668cae26a38f5d55147b004e637594d",
+    "cli": {
+      "path": "target/debug/pskills",
+      "version": "pskills 0.3.0",
+      "platform": "darwin/arm64",
+      "sha256": "6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a",
+      "buildSourceCommit": null,
+      "buildSourceCommitStatus": "unknown; cached binary provenance was not independently attested"
+    }
+  },
+  "seam": {
+    "method": "POST",
+    "path": "/v1/proxy/resolve",
+    "request": "{feed?,externalId,refresh?}",
+    "cliArguments": "install <skills.sh-source-id> --feed <configured-feed>; update <skills.sh-source-id> --feed <configured-feed>",
+    "manualFieldsSupplied": false
+  },
+  "feeds": [
+    {
+      "id": "feed-community-fixture",
+      "name": "community",
+      "configRevision": "feed-community-config-v1"
+    },
+    {
+      "id": "feed-partner-fixture",
+      "name": "partner",
+      "configRevision": "feed-partner-config-v1"
+    },
+    {
+      "id": "feed-disabled-fixture",
+      "name": "disabled",
+      "configRevision": "feed-disabled-config-v1"
+    }
+  ],
+  "feedListing": {
+    "status": 200,
+    "names": [
+      "community",
+      "disabled",
+      "partner"
+    ]
+  },
+  "feedGuards": {
+    "unknownStatus": 404,
+    "disabledStatus": 409,
+    "upstreamRequestsBefore": 0,
+    "upstreamRequestsAfter": 0
+  },
+  "source": {
+    "detailRequests": 13,
+    "metadataSearchRequests": 13,
+    "wellKnownIndexRequests": 6,
+    "artifactRequests": 6,
+    "publicRequestsWithAuthorization": 0,
+    "unexpectedRoutes": [],
+    "requestCountBeforeWarmStop": 38,
+    "sourceOriginAttemptsBeforeWarmStop": 38,
+    "sourceOriginAttemptsAfterWarmStop": 38
+  },
+  "registry": {
+    "origin": "http://127.0.0.1:49891",
+    "blobs": "Files SDK filesystem adapter",
+    "blobReads": 9,
+    "tenantBStateSkills": 0,
+    "proxyRequestShapes": [
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed",
+        "refresh"
+      ],
+      [
+        "externalId",
+        "feed",
+        "refresh"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ],
+      [
+        "externalId",
+        "feed"
+      ]
+    ]
+  },
+  "cold": {
+    "cliOne": {
+      "code": 0,
+      "signal": null,
+      "stdoutBytes": 563,
+      "stderrBytes": 0,
+      "stderrHasScannerReason": false
+    },
+    "cliTwo": {
+      "code": 0,
+      "signal": null,
+      "stdoutBytes": 563,
+      "stderrBytes": 0,
+      "stderrHasScannerReason": false
+    },
+    "state": {
+      "importJobs": 3,
+      "skills": 3,
+      "approved": 3,
+      "requiredScanResults": 3
+    }
+  },
+  "failedScanner": {
+    "cli": {
+      "code": 1,
+      "signal": null,
+      "stdoutBytes": 0,
+      "stderrBytes": 88,
+      "stderrHasScannerReason": true
+    },
+    "state": {
+      "scanErrorSkills": 2,
+      "failedScans": 2
+    }
+  },
+  "rescan": {
+    "status": 202,
+    "version": "0.0.0+skills-sh.sion19653bdb-9c15-4acf-b80f-1828daaef75e",
+    "proxyRequestsBefore": 9,
+    "proxyRequestsAfterQueue": 10,
+    "workerClaimed": true,
+    "workerAllowed": true,
+    "installedArtifactDigest": "sha256:fbb613656aab2162eb31a960fcdee008a05e6ad50db571f9ae7479a8f3620c2a",
+    "proxyRequestsAfterCompletion": 10,
+    "cli": {
+      "code": 0,
+      "signal": null,
+      "stdoutBytes": 568,
+      "stderrBytes": 0,
+      "stderrHasScannerReason": false
+    }
+  },
+  "warm": {
+    "protocolResponse": {
+      "status": 200,
+      "echoedFeed": "community"
+    },
+    "cli": {
+      "code": 0,
+      "signal": null,
+      "stdoutBytes": 566,
+      "stderrBytes": 0,
+      "stderrHasScannerReason": false
+    },
+    "sourceServerRequestsAfterStop": 0,
+    "sourceOriginAttemptsAfterStop": 0,
+    "offlineWarmBoundary": "source server stopped; source-origin attempts counted at registry/worker fetch boundary; native CLI syscalls are outside this counter",
+    "stateImportJobs": 6
+  },
+  "safety": {
+    "uploadedInstructionsExecuted": false,
+    "noCredentialInEvidence": true,
+    "separateExplicitDirectories": 10
+  }
+}

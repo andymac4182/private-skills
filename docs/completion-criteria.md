@@ -13,31 +13,29 @@ release checklist.
 
 The latest source, portability, and deployment status is recorded in
 [`verification-current.md`](verification-current.md). The latest verified
-deployment checkpoint is PR32 source SHA
-`fa13c5689380ab2e71784f72a36b7cac7296bbc8`, captured at
-`2026-09-10T13:59:48Z`, with Git-triggered READY registry, builder, and
-upload-reviewer deployments `dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`,
-`dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and `dpl_5towM6j191dG7rPGzefwhh68uYm6`.
-The sanitized [activation readback](evidence/production-activation-readback-fa13c568.json)
-records seven bounded GET checks, the fail-closed callback method boundary,
-zero registry writes, and no model session. The sanitized [builder callback
-preflight](evidence/builder-callback-auth-preflight-fa13c568.json) records an
-enabled service, its non-worker `skills:builder` principal, and no mutating
-request or draft context. These records are an as-of/source-scoped checkpoint;
-a later source commit needs a new deployment readback. The earlier [production
-M6 read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-retains its own source/deployment provenance. The editor API and authoring
-source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
-passes the bounded desktop/mobile draft checks, but it does not prove hosted UI,
-live Eve/model, screenreader, contrast, or reduced-motion acceptance. The prior
-quarantined import, same-root CLI result, local edge/multi-feed tests,
+production release checkpoint is PR34, merged with SHA
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2` from approved head
+`bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b`; the sanitized [release
+evidence](evidence/production-release-checkpoint-34e4f56.json) records READY
+registry, builder, and upload-reviewer deployments, zero open PRs at capture,
+129 local tests, passing typecheck/diff checks and Vercel previews, and native
+CI stopped before runner steps for provider/account billing admission without a
+bypass. The authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+records auth 200, genuine Pierre rendering, exact selected-file digest and
+1231-byte size, keyboard tree focus, desktop/mobile overflow checks, inner code
+scrolling, and zero console/page errors. This is read-only viewer evidence; it
+does not prove the M6 model/apply/review/scan workflow, durable upload-draft
+resume, screenreader, contrast, or reduced-motion acceptance. OpenClaw remains
+disabled pending review and explicit activation. The earlier PR32 activation
+and PR30 release-file records retain their own source/deployment provenance.
+The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
 metadata-only Pack preview, and snapshot-only candidate admission remain
 source-specific evidence. Physical GitHub/well-known resolution, direct
 zero-upstream instrumentation, and complete C1 remain open. A bounded hosted
 Neon/object-storage logical restore is verified for source revision 114 and five
-referenced objects; native CI remains open. M7 OpenClaw backend code is shipped
-but the feed remains disabled pending review and explicit activation, with no
-live interoperability evidence.
+referenced objects; native CI remains open. M7's public metadata probe is
+interoperability evidence only and does not prove hosted artifact import,
+private publication, or feed activation.
 
 ## G0 — v0.2.0 shipment
 
@@ -65,6 +63,15 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified for the recorded failure check:** the production worker/hosting
   boundary proves required scanner failures are fail-closed and does not expose
   artifact bytes, credentials, or reports;
+- **recorded local Compose support:** the latest source-34e4f56 [reproducibility
+  proof](evidence/local-compose-required-scan-34e4f56.json) records matching
+  frozen-lockfile installs for the isolated host WorkerRunner and API image, a
+  local PostgreSQL 17.6/Files SDK filesystem stack with SkillsGuard 1.1.1
+  required, `allowUnscanned=false`, 2/2 files analyzed, approval, and a
+  digest-matched 367-byte authorized transfer. It is loopback HTTP with an
+  HTTPS-shaped local origin and does not close hosted Cloudflare/TLS, provider,
+  semantic-search, or native CI gates; the earlier 62c4a58 record remains
+  historical in the current verification record;
 - **E7 source review reported green:** source head `0f9da75` has 286 tests
   passed and two environment-dependent skips; TypeScript, five SDK probes,
   Files SDK checks, and the Cloudflare build pass, and two independent reviews
