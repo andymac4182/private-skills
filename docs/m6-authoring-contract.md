@@ -70,26 +70,30 @@ canonical path after the existing safe-path validation.
 
 ## Draft and release transitions
 
-The editor can fork an immutable `SkillVersion` or start an upload-origin draft:
+The server supports both release-fork and upload-origin drafts. The current
+HTTP surface is:
 
 ```text
+POST /v1/skills/:resourceId/drafts
 POST /v1/drafts
 GET  /v1/drafts/:draftId
-GET  /v1/drafts/:draftId/files
-PUT  /v1/drafts/:draftId/files
-POST /v1/drafts/:draftId/reviews
-POST /v1/drafts/:draftId/release
+PUT  /v1/drafts/:draftId
+POST /v1/drafts/:draftId/publish
+GET/POST /v1/drafts/:draftId/reviews
+POST /v1/drafts/:draftId/reviews/:resultId/decisions
+POST /v1/drafts/:draftId/reviews/:jobId/retry
 ```
 
-The initial create body is `{ baseResourceId, idempotencyKey }`; this first
-slice starts from an existing immutable release. A later upload-origin slice
-may create a draft from a validated upload, but this contract does not claim
-that new-upload draft creation is implemented. The atomic file-save
-body is `{ expectedRevision, files }`, where `files` is the complete canonical
-draft snapshot returned by the Diffs edit callback. The server validates the
-whole snapshot, applies compare-and-swap on `expectedRevision`, computes the
-canonical digest, and writes a new immutable blob. A later patch optimization
-must preserve this snapshot/CAS contract.
+Release-fork creation is `POST /v1/skills/:resourceId/drafts` with
+`{ baseDigest }`; upload-origin creation is `POST /v1/drafts` with
+`{ name, files }`. Both require an `Idempotency-Key` header. The atomic file
+save is `PUT /v1/drafts/:draftId` with `{ expectedRevision, files }`, where
+`files` is the complete draft snapshot returned by the Diffs edit callback.
+The server canonicalizes path order before sealing, applies compare-and-swap
+on `expectedRevision`, computes the canonical digest, and writes a new
+immutable blob. Replaying the same idempotency key and payload returns the
+same draft; a stale revision returns `DRAFT_CONFLICT` without changing the
+draft or its immutable base.
 
 The durable state is split between metadata and sealed blobs:
 
@@ -121,10 +125,10 @@ type DraftRevision = {
 };
 ```
 
-Stale writes return an explicit conflict/rebase response. Saving, viewing, or
-reviewing a draft never mutates the base release. `POST .../release` is the
-only author transition that materializes the draft as a new release and queues
-the existing required scanner/publish boundary. Scanner failure, policy
+Saving, viewing, or reviewing a draft never mutates the base release.
+`POST /v1/drafts/:draftId/publish` with `{ expectedRevision, version }` is the
+author transition that materializes the draft as a new pending release and
+queues the existing required scanner/publish boundary. Scanner failure, policy
 failure, authorization failure, or digest mismatch blocks admission.
 
 ## Upload/edit Eve
@@ -138,14 +142,21 @@ review gate; without that policy, a missing or stale Eve result is not a new
 implicit publication blocker.
 
 ```ts
-type UploadReview = {
-  id: string;
-  organizationId: string;
+type UploadReviewBinding = {
   draftId: string;
   draftRevision: number;
-  draftDigest: Digest;
-  baseResourceId: string;
+  contentDigest: Digest;
+  baseReleaseId?: string;
+  baseReleaseVersion?: string;
+  baseDigest?: Digest;
   policyRevision: string;
+};
+
+type UploadReview = {
+  id: string;
+  jobId: string;
+  organizationId: string;
+  binding: UploadReviewBinding;
   reviewerRevision: string;
   model: string;
   state: "pending" | "running" | "passed" | "failed" | "stale";
@@ -169,11 +180,14 @@ type UploadReviewFinding = {
 ```
 
 `POST /v1/drafts/:draftId/reviews` binds the job to the exact current
-revision/digest and is idempotent. Any byte/revision, base-release, policy, or
-reviewer-contract change makes the old result stale. Findings and human
-actions are persisted and audited but cannot mutate the artifact. The reviewer
-receives only an authorized snapshot and no registry, storage, scanner, or
-upstream credentials.
+revision/digest and is idempotent; `GET` lists sanitized jobs/results without
+lease tokens or snapshots. `POST /v1/drafts/:draftId/reviews/:resultId/decisions`
+records a publisher decision, while `POST .../reviews/:jobId/retry` requests a
+new review job. Any byte/revision, base-release, policy, or reviewer-contract
+change makes the old result stale. Findings and human actions are persisted
+and audited but cannot mutate the artifact. The reviewer receives only an
+authorized snapshot and no registry, storage, scanner, or upstream
+credentials.
 
 ## Interactive authoring builder Eve
 
