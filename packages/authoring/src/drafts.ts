@@ -1025,7 +1025,8 @@ function requireRevision(value: unknown): number {
 
 function requireVersion(value: unknown): string {
   const version = typeof value === 'string' ? validSemver(value) : null;
-  if (version === null || version !== value) {
+  const canonicalShape = typeof value === 'string' && /^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value);
+  if (version === null || !canonicalShape) {
     throw new AuthoringApiError('INVALID_VERSION', 'Version must be SemVer', 400);
   }
   return value;

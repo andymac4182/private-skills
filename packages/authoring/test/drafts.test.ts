@@ -426,6 +426,9 @@ describe('durable skill drafts', () => {
     const response = await test.handler(publishRequest(created.draft.id, 'invalid-prerelease', 1, '1.2.3-'));
     expect(response.status).toBe(400);
     expect((await json(response)).error.code).toBe('INVALID_VERSION');
+    const buildMetadata = await test.handler(publishRequest(created.draft.id, 'valid-build-metadata', 1, '1.2.3+build.7'));
+    expect(buildMetadata.status).toBe(202);
+    expect((await json(buildMetadata)).operation.version).toBe('1.2.3+build.7');
   });
 
   it('rejects publication when the base release loses admission or the CAS revision is stale', async () => {
