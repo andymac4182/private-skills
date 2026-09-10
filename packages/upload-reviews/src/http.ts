@@ -3,6 +3,7 @@ import type { StateRepository } from '../../contracts/src/index.js';
 import {
   createUploadReviewPersistenceService,
   type UploadReviewFindingInput,
+  type UploadReviewCurrentBindingResolver,
   type UploadReviewPersistenceService,
   type UploadReviewSnapshotFile,
 } from './index.js';
@@ -17,6 +18,8 @@ export interface UploadReviewHttpDependencies {
   organizationId: string;
   /** A distinct upload-reviewer token; never reuse the daily reviewer token. */
   reviewerToken: string;
+  /** Core-owned draft binding lookup evaluated inside queue transactions. */
+  resolveCurrentBinding?: UploadReviewCurrentBindingResolver;
   service?: UploadReviewPersistenceService;
   maxBodyBytes?: number;
 }
@@ -42,7 +45,9 @@ export function createUploadReviewHttpHandler(
   dependencies: UploadReviewHttpDependencies,
 ): (request: Request) => Promise<Response | undefined> {
   const maxBodyBytes = normalizeBodyBytes(dependencies.maxBodyBytes);
-  const service = dependencies.service ?? createUploadReviewPersistenceService(dependencies.repository);
+  const service = dependencies.service ?? createUploadReviewPersistenceService(dependencies.repository, {
+    resolveCurrentBinding: dependencies.resolveCurrentBinding,
+  });
   assertToken(dependencies.reviewerToken);
 
   return async (request: Request): Promise<Response | undefined> => {
@@ -116,6 +121,7 @@ async function complete(
   if (!Array.isArray(findings)) throw new UploadReviewHttpError(400, 'findings must be an array');
   const job = await service.getLeasedJob(organizationId, jobId, leaseToken);
   if (job.eveSessionId !== sessionId) throw new UploadReviewHttpError(404, 'upload review job was not found');
+  if (job.state === 'stale') return { status: 'stale', ...(job.resultId === undefined ? {} : { resultId: job.resultId }) };
   const result = await service.complete(organizationId, jobId, leaseToken, {
     findings: findings as UploadReviewFindingInput[],
   });
@@ -134,6 +140,7 @@ async function fail(
   const leaseToken = requiredId(body.leaseToken, 'leaseToken');
   const job = await service.getLeasedJob(organizationId, jobId, leaseToken);
   if (job.eveSessionId !== sessionId) throw new UploadReviewHttpError(404, 'upload review job was not found');
+  if (job.state === 'stale') return { status: 'stale', ...(job.resultId === undefined ? {} : { resultId: job.resultId }) };
   const error = typeof body.error === 'string' ? body.error.slice(0, MAX_ERROR_LENGTH) : 'upload review failed';
   const result = await service.fail(organizationId, jobId, leaseToken, error);
   return { status: result.state, resultId: result.id };

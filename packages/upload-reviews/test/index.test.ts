@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryStateRepository } from '../../database/src/index.js';
 import {
+  UploadReviewBindingStaleError,
   UploadReviewConflictError,
   UploadReviewLeaseError,
   UploadReviewValidationError,
@@ -85,6 +86,64 @@ describe('upload/edit review persistence', () => {
     });
     expect(second.id).not.toBe(first.id);
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it('rejects stale enqueue/requeue and fences active claims through the transaction binding resolver', async () => {
+    const repository = new MemoryStateRepository();
+    let current = binding();
+    const service = createUploadReviewPersistenceService(repository, {
+      resolveCurrentBinding: (_state, draftId) => draftId === current.draftId ? current : undefined,
+    });
+    const job = await service.enqueue('org-a', {
+      binding: current,
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+
+    current = binding(2, 'e');
+    await expect(service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    })).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
+
+    const claim = await service.claim('org-a', job.id, { eveSessionId: 'eve-session-1', now: BASE_TIME });
+    expect(claim.claimed).toBe(false);
+    expect(claim.job.state).toBe('stale');
+    expect((await service.listResults('org-a'))[0]?.state).toBe('stale');
+    await expect(service.requeue('org-a', job.id, BASE_TIME)).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
+  });
+
+  it('rejects completion and finding decisions after the current binding changes', async () => {
+    const repository = new MemoryStateRepository();
+    let current = binding();
+    const service = createUploadReviewPersistenceService(repository, {
+      resolveCurrentBinding: (_state, draftId) => draftId === current.draftId ? current : undefined,
+    });
+    const job = await service.enqueue('org-a', {
+      binding: current,
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const claim = await service.claim('org-a', job.id, { eveSessionId: 'eve-session-1', now: BASE_TIME });
+    current = binding(2, 'e');
+
+    const stale = await service.complete('org-a', job.id, claim.leaseToken!, { findings: [], now: BASE_TIME });
+    expect(stale.state).toBe('stale');
+    await expect(service.updateFindingDecision(
+      'org-a',
+      stale.id,
+      'missing-finding',
+      'acknowledged',
+      'publisher-1',
+      BASE_TIME,
+    )).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
   });
 
   it('keeps tenants isolated and binds the completion to the leased snapshot', async () => {
