@@ -93,6 +93,7 @@ describe('review persistence service', () => {
     const input = {
       idempotencyKey: 'daily-2026-01-02',
       model: 'eve-reviewer',
+      eveSessionId: 'eve-session-test-opaque',
       snapshot: snapshotOf(first, second),
       now: baseTime,
     };
@@ -102,6 +103,7 @@ describe('review persistence service', () => {
     ]);
     expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
     expect(claims[0]?.run.id).toBe(claims[1]?.run.id);
+    expect(claims[0]?.run.eveSessionId).toBe('eve-session-test-opaque');
     expect((await service.listRuns('org-a')).map((run) => run.id)).toHaveLength(1);
     expect((await repository.read('org-a') as ReviewStateForTest).reviewRuns).toHaveLength(1);
   });
@@ -143,16 +145,19 @@ describe('review persistence service', () => {
     const expiringClaim = await expiringService.beginRun('org-a', {
       idempotencyKey: 'expired',
       model: 'eve-reviewer',
+      eveSessionId: 'eve-session-expired-old',
       snapshot: snapshotOf(otherFixture.first, otherFixture.second),
       now: baseTime,
     });
     const reclaimed = await expiringService.beginRun('org-a', {
       idempotencyKey: 'expired',
       model: 'eve-reviewer',
+      eveSessionId: 'eve-session-expired-new',
       snapshot: snapshotOf(otherFixture.first, otherFixture.second),
       now: Date.parse(baseTime) + 2_000,
     });
     expect(reclaimed.claimed).toBe(true);
+    expect(reclaimed.run.eveSessionId).toBe('eve-session-expired-new');
     await expect(
       expiringService.completeRun('org-a', expiringClaim.run.id, expiringClaim.run.leaseToken!, [], Date.parse(baseTime) + 2_000),
     ).rejects.toMatchObject({ code: 'REVIEW_LEASE_FENCED' });

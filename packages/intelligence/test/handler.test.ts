@@ -311,7 +311,7 @@ describe('intelligence HTTP handler', () => {
     const prepare = await harness.handler(request('/internal/reviewer/prepare', {
       method: 'POST',
       headers: { authorization: 'Bearer reviewer-secret' },
-      body: { model: 'test-reviewer' },
+      body: { model: 'test-reviewer', eveSessionId: 'eve-session-test-opaque' },
     }));
     expect(prepare?.status).toBe(200);
     const prepared = await json<{
@@ -334,6 +334,7 @@ describe('intelligence HTTP handler', () => {
     const runningBody = await json<{ runs: Array<Record<string, unknown>> }>(reviewsWhileRunning!);
     expect(runningBody.runs[0]).not.toHaveProperty('leaseToken');
     expect(runningBody.runs[0]).not.toHaveProperty('leaseExpiresAt');
+    expect(runningBody.runs[0]?.eveSessionId).toBe('eve-session-test-opaque');
 
     const complete = await harness.handler(request('/internal/reviewer/complete', {
       method: 'POST',

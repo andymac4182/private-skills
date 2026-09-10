@@ -489,6 +489,9 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
   const model = body.model === undefined
     ? DEFAULT_REVIEW_MODEL
     : boundedText(body.model, 256, 'Review model');
+  const eveSessionId = body.eveSessionId === undefined
+    ? undefined
+    : boundedOpaqueId(body.eveSessionId, MAX_ID_LENGTH, 'Eve session ID');
   const day = new Date().toISOString().slice(0, 10);
   const idempotencyKey = `common-skill-review:${day}`;
   try {
@@ -524,6 +527,7 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
       key: idempotencyKey,
       model,
       snapshot: selected.map(toReviewSnapshot),
+      ...(eveSessionId === undefined ? {} : { eveSessionId }),
     });
   } catch (error) {
     throw mapReviewError(error);
@@ -857,6 +861,14 @@ function boundedText(value: unknown, maximum: number, label: string): string {
     throw new IntelligenceHttpError('INVALID_REQUEST', `${label} is invalid or exceeds its limit`, 400);
   }
   return value.trim();
+}
+
+function boundedOpaqueId(value: unknown, maximum: number, label: string): string {
+  const result = boundedText(value, maximum, label);
+  if (/[\u0000-\u001f\u007f]/u.test(result)) {
+    throw new IntelligenceHttpError('INVALID_REQUEST', `${label} contains invalid characters`, 400);
+  }
+  return result;
 }
 
 function boundedOptionalString(value: unknown, maximum: number): string | undefined {

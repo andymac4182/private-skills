@@ -46,6 +46,8 @@ export interface ReviewRun {
   idempotencyKey: string;
   day: string;
   model: string;
+  /** Opaque Eve session ID that causally initiated the prepare call, when available. */
+  eveSessionId?: string;
   state: ReviewRunState;
   snapshot: ReviewSkillSnapshot[];
   createdAt: string;
@@ -101,6 +103,8 @@ export interface BeginReviewRunInput {
   idempotencyKey?: string;
   model: string;
   snapshot: readonly ReviewSkillSnapshot[];
+  /** Opaque Eve session ID used to correlate a scheduled invocation with its run. */
+  eveSessionId?: string;
   now?: ReviewNow;
 }
 
@@ -344,6 +348,7 @@ function normalizeBeginInput(input: BeginReviewRunInput): {
   idempotencyKey: string;
   model: string;
   snapshot: ReviewSkillSnapshot[];
+  eveSessionId?: string;
   clock: ReviewClock;
 } {
   if (!isRecord(input)) {
@@ -357,8 +362,19 @@ function normalizeBeginInput(input: BeginReviewRunInput): {
     idempotencyKey: boundedString(key, 'key', MAX_KEY_LENGTH),
     model: boundedString(input.model, 'model', MAX_MODEL_LENGTH),
     snapshot: validateSnapshotShape(input.snapshot),
+    ...(input.eveSessionId === undefined
+      ? {}
+      : { eveSessionId: boundedOpaqueId(input.eveSessionId, 'eveSessionId', MAX_ID_LENGTH) }),
     clock: parseClock(input.now as ReviewNow | undefined),
   };
+}
+
+function boundedOpaqueId(value: unknown, field: string, maximum: number): string {
+  const result = boundedString(value, field, maximum);
+  if (/[\u0000-\u001f\u007f]/u.test(result)) {
+    throw new ReviewValidationError(`${field} contains invalid characters`);
+  }
+  return result;
 }
 
 function randomId(prefix: string): string {
@@ -643,6 +659,11 @@ export class DefaultReviewPersistenceService implements ReviewPersistenceService
         if (existing.state === 'running' && !leaseIsExpired(existing, normalized.clock.milliseconds)) {
           return { run: clone(existing), claimed: false };
         }
+        if (normalized.eveSessionId !== undefined) {
+          // A retry after a failed or expired lease is owned by the new Eve
+          // session. Keep the run join pointed at its current claimant.
+          existing.eveSessionId = normalized.eveSessionId;
+        }
         existing.state = 'running';
         existing.leaseToken = randomId('review-lease');
         existing.leaseExpiresAt = new Date(
@@ -662,6 +683,7 @@ export class DefaultReviewPersistenceService implements ReviewPersistenceService
         idempotencyKey: normalized.idempotencyKey,
         day: normalized.clock.day,
         model: normalized.model,
+        ...(normalized.eveSessionId === undefined ? {} : { eveSessionId: normalized.eveSessionId }),
         state: 'running',
         snapshot,
         createdAt: normalized.clock.iso,
