@@ -7,6 +7,7 @@ import {
 const DEFAULT_BUILDER_MODEL = "openai/gpt-5.5";
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/iu;
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const MAX_OIDC_TOKEN_LENGTH = 16 * 1024;
 
 export type BuilderStatusReason =
   | "AI_DISABLED"
@@ -34,6 +35,11 @@ function nonEmptyEnv(name: string): string | undefined {
   return value && value.length <= 1024 ? value : undefined;
 }
 
+function boundedEnv(name: string, maximum: number): string | undefined {
+  const value = process.env[name]?.trim();
+  return value && value.length <= maximum ? value : undefined;
+}
+
 function isDevelopment(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.VERCEL_ENV !== "production";
 }
@@ -41,6 +47,12 @@ function isDevelopment(): boolean {
 function validBoundedSecret(name: string): boolean {
   const value = nonEmptyEnv(name);
   return Boolean(value && value.length <= 512 && !/\s/u.test(value));
+}
+
+/** Vercel OIDC JWTs are request credentials and may exceed short API-key bounds. */
+function validOidcCredential(): boolean {
+  const value = boundedEnv("VERCEL_OIDC_TOKEN", MAX_OIDC_TOKEN_LENGTH);
+  return Boolean(value && !/\s/u.test(value));
 }
 
 function validateGatewayBase(value: string): boolean {
@@ -86,7 +98,7 @@ export function builderStatus(): BuilderStatus {
   const gatewayBase = nonEmptyEnv("PSKILLS_AI_GATEWAY_BASE_URL");
   if (gatewayBase && !validateGatewayBase(gatewayBase)) reasons.push("GATEWAY_BASE_INVALID");
   const gatewayConfigured = !reasons.includes("GATEWAY_BASE_INVALID") && validBoundedSecret("AI_GATEWAY_API_KEY")
-    || !reasons.includes("GATEWAY_BASE_INVALID") && validBoundedSecret("VERCEL_OIDC_TOKEN");
+    || !reasons.includes("GATEWAY_BASE_INVALID") && validOidcCredential();
   if (!gatewayConfigured) reasons.push("GATEWAY_CREDENTIAL_MISSING");
 
   const registryUrl = nonEmptyEnv("PSKILLS_BUILDER_REGISTRY_API_URL");

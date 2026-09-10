@@ -162,6 +162,9 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
       throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid analytics collection');
     }
   }
+  if (value.builderSessions !== undefined && !Array.isArray(value.builderSessions)) {
+    throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid builder session collection');
+  }
   if (!validPolicy(value.policy)) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid scanner policy');
   }

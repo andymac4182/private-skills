@@ -67,6 +67,7 @@ import {
 } from '../../authoring/src/index.js';
 import { createDraftHandler } from '../../authoring/src/drafts.js';
 import type { UploadReviewBinding } from '../../upload-reviews/src/index.js';
+import { createBuilderBffHandler, type BuilderBffRuntime } from './builder.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -240,6 +241,8 @@ export type RegistryHandlerDependencies = RegistryDependencies & {
   directoryPacks?: RegistryDirectoryPackClient;
   /** Optional separate upload/edit reviewer; scanner admission remains core-owned. */
   uploadReview?: UploadReviewIntegration;
+  /** Optional same-origin facade for the separately deployed skill builder. */
+  builder?: BuilderBffRuntime;
 };
 
 /** A safe, empty state used by memory repositories and migration shims. */
@@ -256,6 +259,7 @@ export function createEmptyRegistryState(policy: Policy = defaultPolicy()): Regi
     authorizations: [],
     installReceiptTickets: [],
     installReceipts: [],
+    builderSessions: [],
     grants: [],
     audit: [],
   };
@@ -316,6 +320,24 @@ export function resolveCurrentUploadReviewBinding(
  */
 export function createRegistryHandler(deps: RegistryHandlerDependencies): RegistryHandler {
   const config = normalizeConfiguration(deps.config);
+  const builderBff = deps.builder
+    ? createBuilderBffHandler({
+      repository: deps.repository,
+      blobs: deps.blobs,
+      auth: deps.auth,
+      config: {
+        organizationId: config.organizationId,
+        publicOrigin: config.publicOrigin,
+        maxBodyBytes: config.maxBodyBytes,
+      },
+      authoring: createAuthoringHandlerDependencies({
+        organizationId: config.organizationId,
+        subject: 'builder-bff',
+        roles: ['publisher'],
+      }, deps, config),
+      runtime: deps.builder,
+    })
+    : undefined;
 
   return async function registryHandler(request: Request): Promise<Response> {
     const requestId = randomId('req');
@@ -376,6 +398,17 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
       const internalJobs = segments[0] === 'internal' && segments[1] === 'jobs';
       if (!internalJobs) assertUserPrincipal(principal);
       requireRouteScopes(principal, scopesForRoute(method, path, segments));
+
+      if (builderBff && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'builder') {
+        const response = await builderBff(request, principal);
+        if (response) return response;
+      }
+      if (!builderBff && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'builder') {
+        if (method === 'GET' && segments[4] === 'availability') {
+          return jsonResponse({ enabled: false, reason: 'The skill builder is not configured for this registry.' }, 200, { 'cache-control': 'no-store' });
+        }
+        return jsonResponse({ code: 'BUILDER_DISABLED', message: 'The skill builder is not configured for this registry.' }, 503, { 'cache-control': 'no-store' });
+      }
 
       if (path === '/v1/me') {
         if (method !== 'GET') return methodNotAllowed(['GET']);
@@ -5200,6 +5233,7 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
   target.authorizations ||= [];
   target.installReceiptTickets ||= [];
   target.installReceipts ||= [];
+  target.builderSessions ||= [];
   target.grants ||= [];
   target.audit ||= [];
   if (!target.policy) target.policy = fallbackPolicy;

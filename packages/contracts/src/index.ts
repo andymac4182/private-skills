@@ -138,6 +138,53 @@ export interface SkillDraft {
   idempotency?: SkillDraftIdempotencyRecord[];
   publications?: SkillDraftPublicationRecord[];
 }
+/** A bounded text-only operation proposed by the private skill builder. */
+export type SkillBuilderPatchOperation =
+  | { op: 'add' | 'edit'; path: string; content: string }
+  | { op: 'rename'; path: string; newPath: string }
+  | { op: 'delete'; path: string };
+export type SkillBuilderProposalState = 'pending' | 'applied' | 'rejected' | 'stale';
+export interface SkillBuilderProposalRecord {
+  id: string;
+  idempotencyKey: string;
+  organizationId: string;
+  draftId: string;
+  subject: string;
+  sessionId: string;
+  baseRevision: number;
+  baseDigest: Digest;
+  proposedDigest: Digest;
+  operations: SkillBuilderPatchOperation[];
+  state: SkillBuilderProposalState;
+  createdAt: string;
+  updatedAt: string;
+}
+export type SkillBuilderRequestState = 'accepted' | 'completed' | 'failed';
+export interface SkillBuilderRequestRecord {
+  id: string;
+  state: SkillBuilderRequestState;
+  proposalId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+/** Registry-owned mapping; the Eve session key and service credentials never leave the server. */
+export interface SkillBuilderSessionRecord {
+  id: string;
+  organizationId: string;
+  subject: string;
+  draftId: string;
+  draftRevision: number;
+  draftDigest: Digest;
+  sessionKey: string;
+  eveSessionId: string;
+  /** Last provider turn observed for this session; used to scope cancellation. */
+  activeTurnId?: string;
+  state: 'ready' | 'running' | 'stopped' | 'failed' | 'completed';
+  requests: SkillBuilderRequestRecord[];
+  proposals: SkillBuilderProposalRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
 export interface PackMember { resourceId: string; name: string; version: string; digest: Digest; }
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }
 export interface Resolution { kind: 'skill' | 'pack'; resourceId: string; organizationId: string; name: string; version: string; digest: Digest; members: SkillVersion[]; }
@@ -290,6 +337,8 @@ export interface RegistryState {
   installReceiptTickets?: InstallReceiptTicket[];
   /** Optional so states written before analytics can still be loaded. */
   installReceipts?: InstallReceipt[];
+  /** Optional so states written before the interactive builder can still be loaded. */
+  builderSessions?: SkillBuilderSessionRecord[];
   grants: TransferGrant[];
   audit: AuditEvent[];
 }

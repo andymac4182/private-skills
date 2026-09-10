@@ -11,6 +11,9 @@ import type {
   SkillDraftPublicationRecord,
   SkillVersion,
   StoredBlob,
+  SkillBuilderPatchOperation,
+  SkillBuilderProposalRecord,
+  SkillBuilderSessionRecord,
 } from '../../contracts/src/index.js';
 import { createUploadReviewSnapshot } from '../../upload-reviews/src/snapshot.js';
 import type {
@@ -37,6 +40,14 @@ import {
   parseSkillMetadata,
   validateBundle,
 } from '../../storage/src/index.js';
+import {
+  MAX_CONTEXT_FILES,
+  MAX_MODEL_FILE_BYTES,
+  validatePatchOperations,
+  validateDraftBinding,
+  type DraftBinding,
+  type PatchOperation,
+} from '../../skill-builder/src/index.js';
 
 const MAX_IDEMPOTENCY_RECORDS = 32;
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
@@ -87,6 +98,13 @@ export interface DraftRevisionWriteInput {
   readonly deps: AuthoringHandlerDependencies;
   readonly kind?: 'update' | 'builder-proposal';
   readonly proposalId?: string;
+  /**
+   * Trusted internal callback executed after the draft CAS mutation but before
+   * the repository transaction commits. It is intentionally unavailable to
+   * HTTP callers; builder proposal state uses it to commit its state transition
+   * with the revision it authorizes.
+   */
+  readonly onCommit?: (state: RegistryState, draft: SkillDraft) => void;
 }
 
 export interface DraftRevisionWriteResult {
@@ -125,6 +143,17 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
       }
       const url = parseRequestUrl(request);
       const segments = splitPath(url.pathname);
+
+      if (segments[0] === 'v1' && segments[1] === 'drafts' && isBuilderDraftRoute(segments)) {
+        const draftId = decodePathPart(segments[2] ?? '');
+        if (!isSafeId(draftId)) throw unavailableDraft();
+        const internalBuilder = isBuilderServiceRequest(request, principal);
+        if (internalBuilder && !isBuilderInternalRoute(segments)) {
+          throw new AuthoringApiError('FORBIDDEN', 'Builder service route is not allowed', 403);
+        }
+        if (!internalBuilder) assertPublisher(principal);
+        return await handleBuilderDraftRoute(request, url, segments, draftId, principal, deps, internalBuilder);
+      }
 
       if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'skills' && segments[3] === 'drafts') {
         if (request.method.toUpperCase() !== 'POST') {
@@ -225,6 +254,450 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
       return errorResponse(error);
     }
   };
+}
+
+const MAX_BUILDER_PROPOSALS = 32;
+const MAX_BUILDER_REQUEST_KEY_BYTES = 512;
+const MAX_BUILDER_PREVIEW_BYTES = 16 * 1024;
+
+function isBuilderDraftRoute(segments: string[]): boolean {
+  return segments.length >= 4 && segments[0] === 'v1' && segments[1] === 'drafts' && (
+    segments[3] === 'builder-context' ||
+    segments[3] === 'builder-file' ||
+    segments[3] === 'proposals'
+  );
+}
+
+function isBuilderInternalRoute(segments: string[]): boolean {
+  return segments[3] === 'builder-context' || segments[3] === 'builder-file' || (
+    segments[3] === 'proposals' && segments.length === 4
+  );
+}
+
+function isBuilderServiceRequest(request: Request, principal: Principal): boolean {
+  const identity = (principal as Principal & { identity?: unknown }).identity;
+  return identity !== 'worker' && !principal.roles.includes('worker') &&
+    (principal.roles.includes('publisher') || principal.roles.includes('admin') || principal.roles.includes('owner')) &&
+    request.headers.get('x-pskills-tool-identity') === 'skill-builder';
+}
+
+async function handleBuilderDraftRoute(
+  request: Request,
+  url: URL,
+  segments: string[],
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+  internalBuilder: boolean,
+): Promise<Response> {
+  const operation = segments[3];
+  if (operation === 'builder-context') {
+    if (request.method.toUpperCase() !== 'GET') throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET is supported', 405);
+    return await builderContext(url, draftId, principal, deps, internalBuilder);
+  }
+  if (operation === 'builder-file') {
+    if (request.method.toUpperCase() !== 'GET') throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET is supported', 405);
+    return await builderFile(url, draftId, principal, deps, internalBuilder);
+  }
+  if (operation !== 'proposals') throw unavailableDraft();
+  if (segments.length === 4 && request.method.toUpperCase() === 'GET') {
+    return await listBuilderProposals(url, draftId, principal, deps);
+  }
+  if (segments.length === 4 && request.method.toUpperCase() === 'POST') {
+    if (!internalBuilder) throw new AuthoringApiError('FORBIDDEN', 'Only the builder service may create proposals', 403);
+    return await createBuilderProposal(request, draftId, principal, deps);
+  }
+  if (segments.length === 6 && (segments[5] === 'apply' || segments[5] === 'reject')) {
+    if (request.method.toUpperCase() !== 'POST') throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+    const proposalId = decodePathPart(segments[4] ?? '');
+    if (!isSafeId(proposalId)) throw unavailableDraft();
+    const body = await readJson(request, normalizeBodyLimit(deps.config.maxBodyBytes));
+    return segments[5] === 'apply'
+      ? await applyBuilderProposal(body, request, draftId, proposalId, principal, deps)
+      : await rejectBuilderProposal(body, request, draftId, proposalId, principal, deps);
+  }
+  throw new AuthoringApiError('NOT_FOUND', 'Route not found', 404);
+}
+
+async function builderContext(
+  url: URL,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+  internalBuilder: boolean,
+): Promise<Response> {
+  const binding = parseBuilderBinding(url, draftId);
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findBuilderDraft(state, binding, principal, deps.config.organizationId, internalBuilder);
+  const bundle = await readDraftBundle(draft, deps);
+  const files = [] as Array<Record<string, unknown>>;
+  for (const file of bundle.files.slice(0, MAX_CONTEXT_FILES)) {
+    const bytes = decodeBase64(file.content);
+    const digest = await digestBytes(bytes);
+    const kind = builderFileKind(file.path, bytes);
+    files.push({
+      path: file.path,
+      sizeBytes: bytes.byteLength,
+      digest,
+      kind,
+      contentAvailable: kind === 'text' && bytes.byteLength <= MAX_MODEL_FILE_BYTES,
+    });
+  }
+  return jsonResponse({ ...binding, organizationId: deps.config.organizationId, files }, 200, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function builderFile(
+  url: URL,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+  internalBuilder: boolean,
+): Promise<Response> {
+  const binding = parseBuilderBinding(url, draftId);
+  const path = url.searchParams.get('path');
+  if (!path || url.searchParams.getAll('path').length !== 1) throw new AuthoringApiError('INVALID_REQUEST', 'path is required once', 400);
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findBuilderDraft(state, binding, principal, deps.config.organizationId, internalBuilder);
+  const bundle = await readDraftBundle(draft, deps);
+  const file = bundle.files.find((candidate) => candidate.path === path);
+  if (!file) throw unavailableDraft();
+  const bytes = decodeBase64(file.content);
+  if (builderFileKind(file.path, bytes) !== 'text' || bytes.byteLength > MAX_MODEL_FILE_BYTES) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'Only selected bounded text files may be read', 409);
+  }
+  let content: string;
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new AuthoringApiError('INVALID_REQUEST', 'The selected file is not UTF-8 text', 409);
+  }
+  return jsonResponse({ ...binding, path, contentDigest: await digestBytes(bytes), content }, 200, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function createBuilderProposal(
+  request: Request,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const body = await readJson(request, normalizeBodyLimit(deps.config.maxBodyBytes));
+  const binding = parseBuilderBodyBinding(body, draftId);
+  const sessionId = requireSafeBuilderId(body.sessionId, 'sessionId');
+  const idempotencyKey = requireBuilderRequestKey(request);
+  const operations = parseBuilderOperations(body.operations);
+  const stateBefore = await deps.repository.read(deps.config.organizationId);
+  const draft = findBuilderDraft(stateBefore, binding, principal, deps.config.organizationId, true);
+  const session = findBuilderSession(stateBefore, draftId, sessionId, deps.config.organizationId);
+  if (!session || session.draftRevision !== binding.revision || session.draftDigest !== binding.digest) {
+    throw new AuthoringApiError('DRAFT_CONFLICT', 'Builder session is not bound to this draft revision', 409);
+  }
+  const before = await readDraftBundle(draft, deps);
+  const after = applyBuilderOperations(before, operations);
+  const proposedDigest = await digestBytes(encodeBundle(after));
+  const now = new Date().toISOString();
+  const proposal: SkillBuilderProposalRecord = {
+    id: randomId('proposal'),
+    idempotencyKey,
+    organizationId: deps.config.organizationId,
+    draftId,
+    subject: session.subject,
+    sessionId,
+    baseRevision: binding.revision,
+    baseDigest: binding.digest,
+    proposedDigest,
+    operations: operations.map((operation) => ({ ...operation })) as SkillBuilderPatchOperation[],
+    state: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const currentSession = findBuilderSession(state, draftId, sessionId, deps.config.organizationId);
+    if (!currentSession || currentSession.subject !== session.subject) throw unavailableDraft();
+    const existing = currentSession.proposals.find((candidate) => candidate.idempotencyKey === idempotencyKey);
+    if (existing) return { proposal: existing, idempotent: true };
+    if (currentSession.draftRevision !== binding.revision || currentSession.draftDigest !== binding.digest) {
+      throw revisionConflict(currentSession.draftRevision);
+    }
+    currentSession.proposals = [...currentSession.proposals.slice(-(MAX_BUILDER_PROPOSALS - 1)), proposal];
+    currentSession.updatedAt = now;
+    return { proposal, idempotent: false };
+  });
+  return jsonResponse({ proposal: publicBuilderProposal(result.proposal, before) }, result.idempotent ? 200 : 201, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function listBuilderProposals(
+  url: URL,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const binding = parseBuilderBinding(url, draftId);
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findBuilderDraft(state, binding, principal, deps.config.organizationId, false);
+  const proposals = (state.builderSessions ?? [])
+    .filter((session) => session.organizationId === deps.config.organizationId && session.draftId === draft.id && session.subject === principal.subject)
+    .flatMap((session) => session.proposals.filter((proposal) => proposal.baseRevision === binding.revision && proposal.baseDigest === binding.digest));
+  const bundle = await readDraftBundle(draft, deps);
+  return jsonResponse({ proposals: proposals.map((proposal) => publicBuilderProposal(proposal, bundle)) }, 200, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function applyBuilderProposal(
+  body: Record<string, unknown>,
+  request: Request,
+  draftId: string,
+  proposalId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const binding = parseBuilderBodyBinding(body, draftId);
+  const sessionId = requireSafeBuilderId(body.sessionId, 'sessionId');
+  const idempotencyKey = requireBuilderRequestKey(request);
+  const state = await deps.repository.read(deps.config.organizationId);
+  const session = findBuilderSession(state, draftId, sessionId, deps.config.organizationId);
+  const proposal = session?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
+  if (!session || !proposal || session.subject !== principal.subject) throw unavailableDraft();
+
+  // A successful apply advances the draft binding. An idempotent replay must
+  // therefore authenticate the old session/proposal first and then return the
+  // current authoritative draft instead of looking up the stale base revision.
+  if (proposal.state === 'applied') {
+    const currentDraft = state.drafts?.find((candidate) => candidate.id === draftId && candidate.organizationId === deps.config.organizationId);
+    if (!currentDraft || !canReadNamespace(principal, currentDraft.name)) throw unavailableDraft();
+    const currentBundle = await readDraftBundle(currentDraft, deps);
+    return jsonResponse({
+      proposal: publicBuilderProposal(proposal),
+      draft: toPublicDraft(currentDraft, currentBundle),
+    }, 200, { 'cache-control': 'private, no-store' });
+  }
+  if (proposal.state === 'rejected' || proposal.state === 'stale') throw new AuthoringApiError('DRAFT_CONFLICT', 'The builder proposal is no longer pending', 409);
+  const draft = findBuilderDraft(state, binding, principal, deps.config.organizationId, false);
+  if (proposal.baseRevision !== binding.revision || proposal.baseDigest !== binding.digest) throw revisionConflict(draft.revision);
+  const before = await readDraftBundle(draft, deps);
+  const after = applyBuilderOperations(before, proposal.operations);
+  let appliedProposal: SkillBuilderProposalRecord | undefined;
+  const written = await writeDraftRevision({
+    draftId,
+    expectedRevision: proposal.baseRevision,
+    files: after.files,
+    idempotencyKey,
+    principal,
+    deps,
+    kind: 'builder-proposal',
+    proposalId,
+    onCommit: (mutable, updatedDraft) => {
+      const currentSession = findBuilderSession(mutable, draftId, sessionId, deps.config.organizationId);
+      const currentProposal = currentSession?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
+      if (!currentSession || currentSession.subject !== principal.subject || !currentProposal) throw unavailableDraft();
+      if (
+        currentProposal.state !== 'pending' ||
+        currentSession.draftRevision !== binding.revision ||
+        currentSession.draftDigest !== binding.digest ||
+        updatedDraft.revision !== binding.revision + 1 ||
+        updatedDraft.digest !== currentProposal.proposedDigest
+      ) {
+        throw new AuthoringApiError('DRAFT_CONFLICT', 'The builder proposal is no longer pending for this draft revision', 409);
+      }
+      currentProposal.state = 'applied';
+      currentProposal.updatedAt = new Date().toISOString();
+      // Preserve the durable Eve conversation while rebinding it to the exact
+      // revision produced by this human apply. Historical proposal records
+      // retain their original base, so no old operation can be silently
+      // rebased onto the new bytes.
+      currentSession.draftRevision = updatedDraft.revision;
+      currentSession.draftDigest = updatedDraft.digest;
+      currentSession.updatedAt = currentProposal.updatedAt;
+      appliedProposal = currentProposal;
+    },
+  });
+  let updated = appliedProposal;
+  if (!updated) {
+    const refreshed = await deps.repository.read(deps.config.organizationId);
+    const refreshedSession = findBuilderSession(refreshed, draftId, sessionId, deps.config.organizationId);
+    const refreshedProposal = refreshedSession?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
+    if (!refreshedProposal || refreshedProposal.state !== 'applied') {
+      throw new AuthoringApiError('DRAFT_CONFLICT', 'The builder proposal could not be confirmed as applied', 409);
+    }
+    updated = refreshedProposal;
+  }
+  return jsonResponse({
+    proposal: publicBuilderProposal(updated, before),
+    draft: toPublicDraft(written.draft, written.bundle),
+  }, 200, { 'cache-control': 'private, no-store' });
+}
+
+async function rejectBuilderProposal(
+  body: Record<string, unknown>,
+  request: Request,
+  draftId: string,
+  proposalId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const binding = parseBuilderBodyBinding(body, draftId);
+  const sessionId = requireSafeBuilderId(body.sessionId, 'sessionId');
+  requireBuilderRequestKey(request);
+  const updated = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const draft = findBuilderDraft(state, binding, principal, deps.config.organizationId, false);
+    const session = findBuilderSession(state, draftId, sessionId, deps.config.organizationId);
+    const proposal = session?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
+    if (!session || !proposal) throw unavailableDraft();
+    if (proposal.state === 'pending') {
+      proposal.state = 'rejected';
+      proposal.updatedAt = new Date().toISOString();
+      session.updatedAt = proposal.updatedAt;
+    }
+    return proposal;
+  });
+  return jsonResponse({ proposal: publicBuilderProposal(updated) }, 200, { 'cache-control': 'private, no-store' });
+}
+
+function parseBuilderBinding(url: URL, draftId: string): DraftBinding {
+  return parseBuilderBodyBinding({ draftId, revision: url.searchParams.get('revision'), digest: url.searchParams.get('digest') }, draftId);
+}
+
+function parseBuilderBodyBinding(body: Record<string, unknown>, draftId: string): DraftBinding {
+  try {
+    const rawRevision = body.revision ?? body.draftRevision;
+    const revision = typeof rawRevision === 'string' ? Number(rawRevision) : rawRevision;
+    const value = { draftId: body.draftId ?? draftId, revision, digest: body.digest ?? body.draftDigest };
+    const binding = validateDraftBinding(value);
+    if (binding.draftId !== draftId) throw new Error('draft binding does not match the path');
+    return binding;
+  } catch {
+    throw new AuthoringApiError('INVALID_REQUEST', 'draftId, revision, and digest must identify one saved revision', 400);
+  }
+}
+
+function findBuilderDraft(
+  state: RegistryState,
+  binding: DraftBinding,
+  principal: Principal,
+  organizationId: string,
+  internalBuilder: boolean,
+): SkillDraft {
+  const draft = state.drafts?.find((candidate) => candidate.id === binding.draftId && candidate.organizationId === organizationId);
+  if (!draft || (!internalBuilder && !canReadNamespace(principal, draft.name))) throw unavailableDraft();
+  if (draft.revision !== binding.revision || draft.digest !== binding.digest || draft.status !== 'open') throw revisionConflict(draft.revision);
+  return draft;
+}
+
+function findBuilderSession(state: RegistryState, draftId: string, sessionId: string, organizationId: string): SkillBuilderSessionRecord | undefined {
+  return (state.builderSessions ?? []).find((candidate) => candidate.id === sessionId && candidate.organizationId === organizationId && candidate.draftId === draftId);
+}
+
+function parseBuilderOperations(value: unknown): PatchOperation[] {
+  try {
+    return validatePatchOperations(value);
+  } catch (error) {
+    throw new AuthoringApiError('INVALID_REQUEST', error instanceof Error ? error.message : 'operations are invalid', 400);
+  }
+}
+
+function applyBuilderOperations(bundle: ReturnType<typeof decodeBundle>, operations: readonly PatchOperation[]): ReturnType<typeof decodeBundle> {
+  const files = bundle.files.map((file) => ({ ...file }));
+  for (const operation of operations) {
+    const index = files.findIndex((file) => file.path === operation.path);
+    if (operation.op === 'add') {
+      if (index >= 0) throw new AuthoringApiError('DRAFT_CONFLICT', `Cannot add existing path ${operation.path}`, 409);
+      files.push({ path: operation.path, content: encodeBase64(new TextEncoder().encode(operation.content)) });
+    } else if (operation.op === 'edit') {
+      if (index < 0) throw new AuthoringApiError('DRAFT_CONFLICT', `Cannot edit missing path ${operation.path}`, 409);
+      if (builderFileKind(files[index]!.path, decodeBase64(files[index]!.content)) !== 'text') throw new AuthoringApiError('DRAFT_CONFLICT', `Cannot edit non-text path ${operation.path}`, 409);
+      files[index] = { ...files[index]!, content: encodeBase64(new TextEncoder().encode(operation.content)) };
+    } else if (operation.op === 'rename') {
+      if (index < 0 || files.some((file) => file.path === operation.newPath)) throw new AuthoringApiError('DRAFT_CONFLICT', `Cannot rename path ${operation.path}`, 409);
+      files[index] = { ...files[index]!, path: operation.newPath };
+    } else {
+      if (index < 0) throw new AuthoringApiError('DRAFT_CONFLICT', `Cannot delete missing path ${operation.path}`, 409);
+      files.splice(index, 1);
+    }
+  }
+  try {
+    return decodeBundle(encodeBundle(validateBundle({ format: 'pskills-bundle-v1', files })));
+  } catch {
+    throw new AuthoringApiError('INVALID_BUNDLE', 'Builder operations do not produce a safe canonical bundle', 400);
+  }
+}
+
+function publicBuilderProposal(proposal: SkillBuilderProposalRecord, before?: ReturnType<typeof decodeBundle>): Record<string, unknown> {
+  const files = new Map((before?.files ?? []).map((file) => [file.path, file]));
+  return {
+    id: proposal.id,
+    draftId: proposal.draftId,
+    baseRevision: proposal.baseRevision,
+    baseDigest: proposal.baseDigest,
+    proposedDigest: proposal.proposedDigest,
+    state: proposal.state,
+    sessionId: proposal.sessionId,
+    createdAt: proposal.createdAt,
+    operations: proposal.operations.map((operation) => ({
+      op: operation.op,
+      path: operation.path,
+      ...(operation.op === 'rename' ? { newPath: operation.newPath } : {}),
+      ...(operation.op === 'add' || operation.op === 'edit' ? { contentBytes: new TextEncoder().encode(operation.content).byteLength } : {}),
+      ...(before ? builderPreviews(operation, files) : {}),
+    })),
+  };
+}
+
+function builderPreviews(operation: SkillBuilderPatchOperation, files: Map<string, BundleFile>): Record<string, unknown> {
+  const oldFile = files.get(operation.path);
+  const before = oldFile ? boundedPreview(oldFile.content) : null;
+  const after = operation.op === 'delete' ? null : operation.op === 'rename'
+    ? boundedPreview(oldFile?.content)
+    : operation.content;
+  return { before, after: typeof after === 'string' ? after.slice(0, MAX_BUILDER_PREVIEW_BYTES) : after };
+}
+
+function boundedPreview(encodedContent: string | undefined): string | null {
+  if (!encodedContent) return null;
+  try {
+    const bytes = decodeBase64(encodedContent);
+    if (builderFileKind('', bytes) !== 'text' || bytes.byteLength > MAX_BUILDER_PREVIEW_BYTES) return null;
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes).slice(0, MAX_BUILDER_PREVIEW_BYTES);
+  } catch {
+    return null;
+  }
+}
+
+function builderFileKind(path: string, bytes: Uint8Array): 'text' | 'binary' | 'oversize' {
+  if (bytes.byteLength > MAX_MODEL_FILE_BYTES) return 'oversize';
+  if (bytes.includes(0)) return 'binary';
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return 'text';
+  } catch {
+    return 'binary';
+  }
+}
+
+function requireBuilderRequestKey(request: Request): string {
+  const key = request.headers.get('idempotency-key')?.trim();
+  if (!key || key.length > MAX_BUILDER_REQUEST_KEY_BYTES || /[\u0000-\u001f\u007f]/u.test(key)) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'Idempotency-Key is required', 400);
+  }
+  return key;
+}
+
+function requireSafeBuilderId(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\u0000-\u001f\u007f/\\]/u.test(value)) {
+    throw new AuthoringApiError('INVALID_REQUEST', `${field} is invalid`, 400);
+  }
+  return value;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 async function createDraft(
@@ -564,6 +1037,7 @@ export async function writeDraftRevision(
       input.deps.config.organizationId,
       kind === 'builder-proposal' ? { source: 'builder-proposal', proposalId } : {},
     );
+    if (kind === 'builder-proposal' && input.onCommit) input.onCommit(state, current);
     return { draft: current, idempotent: false };
   });
 

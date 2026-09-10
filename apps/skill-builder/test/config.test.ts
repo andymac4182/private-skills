@@ -35,6 +35,19 @@ describe("skill-builder configuration", () => {
     expect(status.eveConfigured).toBe(true);
   });
 
+  it("accepts a bounded production-sized Vercel OIDC JWT", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PSKILLS_BUILDER_AI_ENABLED", "true");
+    vi.stubEnv("VERCEL_OIDC_TOKEN", `header.${"x".repeat(700)}.signature`);
+    vi.stubEnv("PSKILLS_BUILDER_REGISTRY_API_URL", "https://registry.example.test");
+    vi.stubEnv("PSKILLS_BUILDER_REGISTRY_TOKEN", "registry-token");
+    vi.stubEnv("PSKILLS_BUILDER_SERVICE_TOKEN", "service-token");
+    vi.stubEnv("PSKILLS_BUILDER_EVE_API_TOKEN", "eve-token");
+    const status = builderStatus();
+    expect(status.enabled).toBe(true);
+    expect(status.gatewayConfigured).toBe(true);
+  });
+
   it("rejects malformed model identifiers", () => {
     vi.stubEnv("PSKILLS_BUILDER_MODEL", "openai/no spaces");
     expect(() => builderModel()).toThrow(/provider\/model/u);
