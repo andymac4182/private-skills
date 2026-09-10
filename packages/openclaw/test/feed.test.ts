@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  OPENCLAW_MAX_JSON_DEPTH,
   OPENCLAW_OFFICIAL_FEED_ID,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
@@ -202,6 +203,18 @@ describe("OpenClaw hosted feed v1", () => {
     })).toThrow("valid JSON");
   });
 
+  it("bounds bytes and JSON nesting before deep parsing", () => {
+    expect(() => parseOpenClawFeed("{".repeat(17), { maxBytes: 16 })).toThrow(
+      "feed body exceeds",
+    );
+    const nested = "[".repeat(OPENCLAW_MAX_JSON_DEPTH + 1)
+      + "0"
+      + "]".repeat(OPENCLAW_MAX_JSON_DEPTH + 1);
+    expect(() => parseOpenClawFeed(nested, { checkExpiry: false })).toThrow(
+      `feed JSON nesting exceeds ${OPENCLAW_MAX_JSON_DEPTH}`,
+    );
+  });
+
   it("defaults production output to private tenant scope and reserves the official id", async () => {
     const produced = await produceOpenClawFeed({
       id: "private/acme",
@@ -239,4 +252,3 @@ describe("OpenClaw hosted feed v1", () => {
     ).resolves.toMatchObject({ visibility: "private", tenantId: "tenant-acme" });
   });
 });
-

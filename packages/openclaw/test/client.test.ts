@@ -143,6 +143,124 @@ describe("OpenClaw feed transport and cache", () => {
     expect(rejected.error).toBe("digest-mismatch");
   });
 
+  it("does not return a prior snapshot for an invalid or changed cache identity", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const base = {
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body),
+    } as const;
+    const accepted = await cache.refresh({
+      ...base,
+      url: "https://feeds.example.test/feed",
+    });
+    expect(accepted.kind).toBe("accepted");
+
+    const changedUrl = await cache.refresh({
+      ...base,
+      url: "https://feeds.example.test/other-feed",
+    });
+    expect(changedUrl.kind).toBe("rejected");
+    if (changedUrl.kind !== "rejected") throw new Error("expected rejected changed identity");
+    expect(changedUrl.error).toBe("invalid-url");
+    expect(changedUrl.snapshot).toBeUndefined();
+
+    const invalidUrl = await cache.refresh({
+      ...base,
+      url: "https://feeds.example.test/feed?unexpected=1",
+    });
+    expect(invalidUrl.kind).toBe("rejected");
+    if (invalidUrl.kind !== "rejected") throw new Error("expected rejected invalid url");
+    expect(invalidUrl.error).toBe("invalid-url");
+    expect(invalidUrl.snapshot).toBeUndefined();
+  });
+
+  it("does not reuse a cached snapshot when a 304 violates the current payload pin", async () => {
+    const body = serializeOpenClawFeed(feed());
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async (): Promise<Response> => {
+        calls += 1;
+        return calls === 1 ? response(body) : new Response(null, { status: 304 });
+      },
+    } as const;
+    const first = await cache.refresh(request);
+    expect(first.kind).toBe("accepted");
+    const second = await cache.refresh({ ...request, expectedSha256: "0".repeat(64) });
+    expect(second.kind).toBe("rejected");
+    if (second.kind !== "rejected") throw new Error("expected rejected pin mismatch");
+    expect(second.error).toBe("digest-mismatch");
+    expect(second.status).toBe(304);
+    expect(second.snapshot).toBeUndefined();
+  });
+
+  it("serializes refreshes so an older response cannot commit after a newer response", async () => {
+    const firstBody = serializeOpenClawFeed(feed({ sequence: 2 }));
+    const secondBody = serializeOpenClawFeed(feed({ sequence: 3 }));
+    let calls = 0;
+    let activeBodies = 0;
+    let maxActiveBodies = 0;
+    const fetcher = async (): Promise<Response> => {
+      calls += 1;
+      const body = calls === 1 ? firstBody : secondBody;
+      const delay = calls === 1 ? 20 : 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            activeBodies += 1;
+            maxActiveBodies = Math.max(maxActiveBodies, activeBodies);
+            setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode(body));
+              controller.close();
+              activeBodies -= 1;
+            }, delay);
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher,
+    } as const;
+    const [first, second] = await Promise.all([cache.refresh(request), cache.refresh(request)]);
+    expect(first.kind).toBe("accepted");
+    expect(second.kind).toBe("accepted");
+    expect(maxActiveBodies).toBe(1);
+    expect(cache.getSnapshot()?.feed.sequence).toBe(3);
+  });
+
+  it("rejects redirects before consuming a response body", async () => {
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async (_input, init) => {
+        calls += 1;
+        expect(init?.redirect).toBe("error");
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.example.test/feed" },
+        });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.kind).toBe("rejected");
+    if (result.kind !== "rejected") throw new Error("expected rejected redirect");
+    expect(result.error).toBe("redirected");
+    expect(result.status).toBe(302);
+  });
+
   it("fails closed on URL credentials, query strings, non-HTTPS, and non-allowlisted origins", () => {
     expect(() => validateOpenClawFeedUrl("https://feeds.example.test/feed?token=secret", ["https://feeds.example.test"])).toThrow();
     expect(() => validateOpenClawFeedUrl("http://feeds.example.test/feed", ["http://feeds.example.test"])).toThrow();

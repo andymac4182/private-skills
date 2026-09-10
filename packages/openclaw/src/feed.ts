@@ -3,6 +3,7 @@ import {
   OPENCLAW_FEED_SCHEMA_VERSION,
   OPENCLAW_MAX_ENTRIES,
   OPENCLAW_MAX_BODY_BYTES,
+  OPENCLAW_MAX_JSON_DEPTH,
   OPENCLAW_OFFICIAL_FEED_ID,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
@@ -79,13 +80,20 @@ export function parseOpenClawFeed(
   let raw: unknown;
   if (typeof input === "string") {
     body = input;
+    assertBodyLimit(body, maxBytes);
+    assertJsonDepth(body);
     try {
       raw = JSON.parse(body) as unknown;
     } catch {
       throw new OpenClawValidationError("feed body is not valid JSON");
     }
   } else if (input instanceof Uint8Array) {
+    if (input.byteLength > maxBytes) {
+      throw new OpenClawValidationError(`feed body exceeds ${maxBytes} bytes`);
+    }
     body = decodeUtf8(input);
+    assertBodyLimit(body, maxBytes);
+    assertJsonDepth(body);
     try {
       raw = JSON.parse(body) as unknown;
     } catch {
@@ -100,11 +108,9 @@ export function parseOpenClawFeed(
     if (body === undefined) {
       throw new OpenClawValidationError("feed value is not serializable");
     }
+    assertBodyLimit(body, maxBytes);
+    assertJsonDepth(body);
     raw = input;
-  }
-  const bodyBytes = utf8Bytes(body);
-  if (bodyBytes.byteLength > maxBytes) {
-    throw new OpenClawValidationError(`feed body exceeds ${maxBytes} bytes`);
   }
 
   const feed = parseFeedRecord(raw);
@@ -139,7 +145,7 @@ export function serializeOpenClawFeed(feed: OpenClawFeed): string {
     maxBytes: OPENCLAW_DEFAULT_MAX_BODY_BYTES,
   });
   const entries = [...parsed.entries]
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => compareStable(left.id, right.id))
     .map(serializeEntry);
   const output: Record<string, unknown> = {
     schemaVersion: parsed.schemaVersion,
@@ -533,11 +539,10 @@ function serializeEntry(entry: OpenClawFeedEntry): Record<string, unknown> {
     install: {
       candidates: [...entry.install.candidates]
         .sort((left, right) =>
-          [left.sourceRef, left.package, left.version, left.integrity]
-            .join("\u0000")
-            .localeCompare(
-              [right.sourceRef, right.package, right.version, right.integrity].join("\u0000"),
-            ),
+          compareStable(
+            [left.sourceRef, left.package, left.version, left.integrity].join("\u0000"),
+            [right.sourceRef, right.package, right.version, right.integrity].join("\u0000"),
+          ),
         )
         .map((candidate) => ({
           sourceRef: candidate.sourceRef,
@@ -648,4 +653,52 @@ function boundedMaxBodyBytes(value: number | undefined): number {
     throw new OpenClawValidationError("feed body limit is outside the supported bounds");
   }
   return max;
+}
+
+function compareStable(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function assertBodyLimit(body: string, maxBytes: number): void {
+  if (utf8Bytes(body).byteLength > maxBytes) {
+    throw new OpenClawValidationError(`feed body exceeds ${maxBytes} bytes`);
+  }
+}
+
+/**
+ * Bound nesting before JSON.parse allocates a deeply nested object graph.
+ * This is deliberately a lexical guard; JSON.parse remains responsible for
+ * rejecting malformed delimiter/string syntax.
+ */
+function assertJsonDepth(body: string): void {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < body.length; index += 1) {
+    const code = body.charCodeAt(index);
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (code === 92) {
+        escaped = true;
+      } else if (code === 34) {
+        inString = false;
+      }
+      continue;
+    }
+    if (code === 34) {
+      inString = true;
+    } else if (code === 123 || code === 91) {
+      depth += 1;
+      if (depth > OPENCLAW_MAX_JSON_DEPTH) {
+        throw new OpenClawValidationError(
+          `feed JSON nesting exceeds ${OPENCLAW_MAX_JSON_DEPTH}`,
+        );
+      }
+    } else if (code === 125 || code === 93) {
+      depth = Math.max(0, depth - 1);
+    }
+  }
 }

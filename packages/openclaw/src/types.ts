@@ -30,6 +30,7 @@ export const CATALOG_FEED_GITHUB_SOURCE_REF = OPENCLAW_SOURCE_GITHUB;
 export const OPENCLAW_MAX_ENTRIES = 1_000;
 export const OPENCLAW_DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
 export const OPENCLAW_MAX_BODY_BYTES = 16 * 1024 * 1024;
+export const OPENCLAW_MAX_JSON_DEPTH = 64;
 export const OPENCLAW_DEFAULT_TIMEOUT_MS = 5_000;
 export const OPENCLAW_MAX_TIMEOUT_MS = 30_000;
 export const OPENCLAW_DEFAULT_MAX_STALE_MS = 24 * 60 * 60 * 1_000;
@@ -254,6 +255,7 @@ export type OpenClawFeedErrorCode =
   | "invalid-utf8"
   | "no-cache"
   | "replay"
+  | "redirected"
   | "timeout"
   | "unexpected-status"
   | "webcrypto-unavailable";

@@ -45,6 +45,7 @@ export class OpenClawFeedCache {
   private readonly now: () => number;
   private snapshotValue: OpenClawCacheSnapshot | undefined;
   private cacheKey: string | undefined;
+  private refreshTail: Promise<void> = Promise.resolve();
 
   constructor(options: OpenClawFeedCacheOptions = {}) {
     this.maxBodyBytes = boundedBodyLimit(options.maxBodyBytes);
@@ -61,7 +62,18 @@ export class OpenClawFeedCache {
     this.cacheKey = undefined;
   }
 
-  async refresh(request: OpenClawFeedRefreshRequest): Promise<OpenClawRefreshResult> {
+  refresh(request: OpenClawFeedRefreshRequest): Promise<OpenClawRefreshResult> {
+    const run = this.refreshTail.then(() => this.refreshInternal(request));
+    this.refreshTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async refreshInternal(
+    request: OpenClawFeedRefreshRequest,
+  ): Promise<OpenClawRefreshResult> {
     const now = this.now();
     const maxBodyBytes = boundedBodyLimit(
       Math.min(request.maxBodyBytes ?? this.maxBodyBytes, this.maxBodyBytes),
@@ -71,14 +83,14 @@ export class OpenClawFeedCache {
     try {
       url = validateFeedUrl(request.url, request.allowedOrigins);
     } catch {
-      return this.rejected("invalid-url", now);
+      return this.rejectWithoutSnapshot("invalid-url");
     }
     if (!request.expectedFeedId || request.expectedFeedId.trim() === "") {
-      return this.rejected("invalid-url", now);
+      return this.rejectWithoutSnapshot("invalid-url");
     }
     const key = `${request.expectedFeedId}\u0000${url.href}`;
     if (this.cacheKey !== undefined && this.cacheKey !== key) {
-      return this.rejected("invalid-url", now);
+      return this.rejectWithoutSnapshot("invalid-url");
     }
     this.cacheKey ??= key;
 
@@ -105,15 +117,27 @@ export class OpenClawFeedCache {
       const response = await raceRequest(
         fetcher,
         url,
-        { method: "GET", headers, signal: controller.signal },
+        { method: "GET", headers, redirect: "error", signal: controller.signal },
         request.signal,
         controller,
         deadline,
       );
+      if (
+        response.redirected ||
+        (response.status >= 300 && response.status < 400 && response.status !== 304)
+      ) {
+        return this.fallback("redirected", now, response.status);
+      }
       if (response.status === 304) {
         const cached = this.usableSnapshot(now);
         if (!cached) {
           return this.rejected("no-cache", now, 304);
+        }
+        if (
+          request.expectedSha256 !== undefined &&
+          !matchesExpectedSha256(cached.sha256, request.expectedSha256)
+        ) {
+          return this.rejectWithoutSnapshot("digest-mismatch", 304);
         }
         return { kind: "not-modified", status: 304, snapshot: cached };
       }
@@ -148,7 +172,7 @@ export class OpenClawFeedCache {
         return this.fallback("webcrypto-unavailable", now, 200);
       }
       if (request.expectedSha256 !== undefined && !matchesExpectedSha256(digest, request.expectedSha256)) {
-        return this.fallback("digest-mismatch", now, 200);
+        return this.rejectWithoutSnapshot("digest-mismatch", 200);
       }
       const suppliedEtag = response.headers.get("etag");
       if (suppliedEtag !== null && suppliedEtag !== `"${digest}"`) {
@@ -221,6 +245,17 @@ export class OpenClawFeedCache {
       kind: "rejected",
       ...(status === undefined ? {} : { status }),
       ...(snapshot === undefined ? {} : { snapshot }),
+      error,
+    };
+  }
+
+  private rejectWithoutSnapshot(
+    error: OpenClawFeedErrorCode,
+    status?: number,
+  ): OpenClawRefreshResult {
+    return {
+      kind: "rejected",
+      ...(status === undefined ? {} : { status }),
       error,
     };
   }
