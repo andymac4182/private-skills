@@ -62,6 +62,7 @@ interface Fixture {
   bundle: SkillBundle;
   handler: ReturnType<typeof createDraftHandler>;
   setPrincipal(value: Principal | null): void;
+  setAdmission(value: boolean): void;
 }
 
 async function fixture(): Promise<Fixture> {
@@ -96,13 +97,14 @@ async function fixture(): Promise<Fixture> {
   state.skills.push(release);
   const repository = createMemoryStateRepository({ initial: { [ORGANIZATION]: state } });
   let current: Principal | null = user();
+  let admitted = true;
   const auth: Authenticator = { authenticate: async () => current };
   const deps: AuthoringHandlerDependencies = {
     repository,
     blobs,
     auth,
     config: { organizationId: ORGANIZATION, maxBodyBytes: 1024 * 1024 },
-    releaseAdmission: async () => true,
+    releaseAdmission: async () => admitted,
   };
   return {
     repository,
@@ -112,6 +114,9 @@ async function fixture(): Promise<Fixture> {
     handler: createDraftHandler(deps),
     setPrincipal(value) {
       current = value;
+    },
+    setAdmission(value) {
+      admitted = value;
     },
   };
 }
@@ -138,6 +143,14 @@ function updateRequest(
     method: 'PUT',
     headers: { 'content-type': 'application/json', 'idempotency-key': key },
     body: JSON.stringify({ expectedRevision, files }),
+  });
+}
+
+function publishRequest(draftId: string, key: string, expectedRevision: number, version: string): Request {
+  return new Request(`${ORIGIN}/v1/drafts/${draftId}/publish`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'idempotency-key': key },
+    body: JSON.stringify({ expectedRevision, version }),
   });
 }
 
@@ -255,5 +268,74 @@ describe('durable skill drafts', () => {
     expect(response.status).toBe(409);
     expect((await json(response)).error.code).toBe('DIGEST_MISMATCH');
     expect((await test.repository.read(ORGANIZATION)).drafts ?? []).toEqual([]);
+  });
+
+  it('queues an immutable scanner job for publication and retries idempotently', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const firstResponse = await test.handler(publishRequest(created.draft.id, 'publish-1', 1, '1.1.0'));
+    expect(firstResponse.status).toBe(202);
+    const first = await json(firstResponse);
+    expect(first).toMatchObject({
+      idempotent: false,
+      operation: {
+        state: 'queued',
+        version: '1.1.0',
+        revision: 1,
+        digest: created.draft.digest,
+        scanRequired: true,
+      },
+    });
+
+    const state = await test.repository.read(ORGANIZATION);
+    expect(state.skills).toHaveLength(2);
+    const published = state.skills.find((skill) => skill.id === first.operation.resourceId);
+    expect(published).toMatchObject({
+      name: test.release.name,
+      version: '1.1.0',
+      state: 'pending',
+      policyRevision: state.policy.revision,
+      fileCount: test.bundle.files.length,
+      authoring: {
+        baseResourceId: test.release.id,
+        baseDigest: test.release.artifact.digest,
+        draftId: created.draft.id,
+        draftRevision: 1,
+        actor: 'publisher',
+      },
+    });
+    expect(published?.artifact).toEqual(state.drafts![0]!.artifact);
+    expect(state.jobs).toHaveLength(1);
+    expect(state.jobs[0]).toMatchObject({
+      id: first.operation.id,
+      kind: 'scan',
+      state: 'queued',
+      resourceId: first.operation.resourceId,
+      artifact: published?.artifact,
+      policyRevision: state.policy.revision,
+    });
+    expect(state.drafts![0]!.publications).toHaveLength(1);
+    expect(state.drafts![0]!.status).toBe('open');
+    expect(state.skills[0]!.artifact).toEqual(test.release.artifact);
+
+    const retryResponse = await test.handler(publishRequest(created.draft.id, 'publish-1', 1, '1.1.0'));
+    expect(retryResponse.status).toBe(200);
+    expect(await json(retryResponse)).toEqual({ operation: first.operation, idempotent: true });
+    expect((await test.repository.read(ORGANIZATION)).jobs).toHaveLength(1);
+  });
+
+  it('rejects publication when the base release loses admission or the CAS revision is stale', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    test.setAdmission(false);
+    const denied = await test.handler(publishRequest(created.draft.id, 'publish-denied', 1, '1.1.0'));
+    expect(denied.status).toBe(404);
+    expect((await json(denied)).error.code).toBe('NOT_FOUND');
+    expect((await test.repository.read(ORGANIZATION)).jobs).toHaveLength(0);
+
+    test.setAdmission(true);
+    const stale = await test.handler(publishRequest(created.draft.id, 'publish-stale', 2, '1.1.0'));
+    expect(stale.status).toBe(409);
+    expect((await json(stale)).error.code).toBe('DRAFT_CONFLICT');
   });
 });

@@ -89,7 +89,8 @@ export interface ExternalProvenance {
   frontmatterName?: string;
   frontmatterDescription?: string;
 }
-export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; }
+export interface SkillReleaseAuthoring { baseResourceId: string; baseDigest: Digest; draftId: string; draftRevision: number; actor: string; }
+export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; authoring?: SkillReleaseAuthoring; }
 export type SkillDraftStatus = 'open' | 'publishing' | 'published' | 'discarded';
 export interface SkillDraftIdempotencyRecord {
   key: string;
@@ -101,12 +102,24 @@ export interface SkillDraftIdempotencyRecord {
   files: BundleFile[];
   updatedAt: string;
 }
+export interface SkillDraftPublicationRecord {
+  key: string;
+  subject: string;
+  requestDigest: Digest;
+  revision: number;
+  digest: Digest;
+  version: string;
+  resourceId: string;
+  jobId: string;
+  createdAt: string;
+}
 /** Tenant-scoped mutable authoring state; the referenced artifact is always a fresh sealed object. */
 export interface SkillDraft {
   id: string;
   organizationId: string;
   name: string;
   skillName: string;
+  description: string;
   baseResourceId: string;
   baseDigest: Digest;
   revision: number;
@@ -119,6 +132,7 @@ export interface SkillDraft {
   updatedAt: string;
   createIdempotency?: SkillDraftIdempotencyRecord;
   idempotency?: SkillDraftIdempotencyRecord[];
+  publications?: SkillDraftPublicationRecord[];
 }
 export interface PackMember { resourceId: string; name: string; version: string; digest: Digest; }
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }

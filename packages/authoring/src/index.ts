@@ -102,8 +102,10 @@ export class AuthoringApiError extends Error {
  *
  * The selected release is authorized before its sealed object is read. The
  * object is independently hashed and decoded through the canonical bundle
- * validator; the route never creates state, drafts, transfer grants, or audit
- * events and never returns storage keys or scanner details.
+ * validator; the route never creates drafts, transfer grants, releases, or
+ * audit events and never returns storage keys or scanner details. A concrete
+ * repository may bootstrap an empty tenant on read as part of its existing
+ * persistence contract; this adapter performs no authoring mutation.
  */
 export function createReleaseFilesHandler(deps: AuthoringHandlerDependencies): AuthoringHandler {
   const maxTextPreviewBytes = normalizePreviewLimit(deps.config.maxTextPreviewBytes);

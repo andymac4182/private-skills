@@ -1,10 +1,12 @@
 import type {
   BundleFile,
   Digest,
+  Job,
   Principal,
   RegistryState,
   SkillDraft,
   SkillDraftIdempotencyRecord,
+  SkillDraftPublicationRecord,
   SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
@@ -32,6 +34,7 @@ export interface PublicSkillDraft {
   id: string;
   name: string;
   skillName: string;
+  description: string;
   baseResourceId: string;
   baseDigest: Digest;
   revision: number;
@@ -42,17 +45,19 @@ export interface PublicSkillDraft {
   actor: string;
   createdAt: string;
   updatedAt: string;
+  publications?: SkillDraftPublicationRecord[];
 }
 
 /**
- * Create the explicit draft routes. The handler intentionally owns no
- * publication transition: saving a draft only creates a fresh sealed object
- * and changes the tenant's draft record.
+ * Create the explicit draft routes. Saving a draft only creates a fresh
+ * sealed object and changes the tenant's draft record; publication queues a
+ * separate immutable scanner job and never marks the draft release-approved.
  *
  * Routes:
  *   POST /v1/skills/:resourceId/drafts
  *   GET  /v1/drafts/:draftId
  *   PUT  /v1/drafts/:draftId
+ *   POST /v1/drafts/:draftId/publish
  */
 export function createDraftHandler(deps: AuthoringHandlerDependencies): AuthoringHandler {
   const maxBodyBytes = normalizeBodyLimit(deps.config.maxBodyBytes);
@@ -89,6 +94,17 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
           return await updateDraft(body, request, draftId, principal, deps);
         }
         throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET and PUT are supported', 405);
+      }
+
+      if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'publish') {
+        if (request.method.toUpperCase() !== 'POST') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+        }
+        const draftId = decodePathPart(segments[2]);
+        if (!isSafeId(draftId)) throw unavailableDraft();
+        assertPublisher(principal);
+        const body = await readJson(request, maxBodyBytes);
+        return await publishDraft(body, request, draftId, principal, deps);
       }
 
       throw new AuthoringApiError('NOT_FOUND', 'Route not found', 404);
@@ -147,6 +163,7 @@ async function createDraft(
     organizationId: deps.config.organizationId,
     name: snapshot.release.name,
     skillName: snapshot.release.skillName,
+    description: snapshot.release.description,
     baseResourceId: snapshot.release.id,
     baseDigest,
     revision: 1,
@@ -280,6 +297,176 @@ async function updateDraft(
   });
 }
 
+interface DraftPublishOperation {
+  id: string;
+  resourceId: string;
+  state: 'queued';
+  version: string;
+  revision: number;
+  digest: Digest;
+  scanRequired: true;
+}
+
+async function publishDraft(
+  body: Record<string, unknown>,
+  request: Request,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const idempotencyKey = requireIdempotencyKey(request);
+  const expectedRevision = requireRevision(body.expectedRevision);
+  const version = requireVersion(body.version);
+  const requestDigest = await digestText(JSON.stringify({ draftId, expectedRevision, version }));
+  const stateBefore = await deps.repository.read(deps.config.organizationId);
+  const before = findDraft(stateBefore, draftId, principal, deps.config.organizationId);
+  const prior = findPublication(before, idempotencyKey, principal.subject);
+  if (prior) {
+    if (prior.requestDigest !== requestDigest) throw idempotencyConflict();
+    return jsonResponse({ operation: operationFromPublication(prior), idempotent: true }, 200, {
+      'cache-control': 'private, no-store',
+    });
+  }
+  if (before.revision !== expectedRevision) throw revisionConflict(before.revision);
+  if (before.status !== 'open') {
+    throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+  }
+
+  // The draft bytes are re-read and verified before the job is queued. This
+  // binds the scanner job to the exact revision/digest being published.
+  await readDraftBundle(before, deps);
+  const base = await assertCurrentPublishableBase(stateBefore, before, principal, deps);
+  const policy = clonePolicy(stateBefore.policy);
+  const now = new Date().toISOString();
+  const resourceId = randomId('skill');
+  const jobId = randomId('job');
+  const skill: SkillVersion = {
+    id: resourceId,
+    organizationId: deps.config.organizationId,
+    name: before.name,
+    skillName: before.skillName,
+    version,
+    description: before.description ?? '',
+    artifact: before.artifact,
+    state: 'pending',
+    policyRevision: policy.revision,
+    createdAt: now,
+    provenance: { ...base.provenance },
+    fileCount: before.files.length,
+    scanIds: [],
+    authoring: {
+      baseResourceId: before.baseResourceId,
+      baseDigest: before.baseDigest,
+      draftId: before.id,
+      draftRevision: before.revision,
+      actor: principal.subject,
+    },
+  };
+  const job: Job = {
+    id: jobId,
+    organizationId: deps.config.organizationId,
+    kind: 'scan',
+    state: 'queued',
+    resourceId,
+    artifact: before.artifact,
+    policyRevision: policy.revision,
+    policy,
+    createdAt: now,
+    updatedAt: now,
+    attempts: 0,
+  };
+  const publication: SkillDraftPublicationRecord = {
+    key: idempotencyKey,
+    subject: principal.subject,
+    requestDigest,
+    revision: expectedRevision,
+    digest: before.digest,
+    version,
+    resourceId,
+    jobId,
+    createdAt: now,
+  };
+
+  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const current = findDraft(state, draftId, principal, deps.config.organizationId);
+    const concurrent = findPublication(current, idempotencyKey, principal.subject);
+    if (concurrent) {
+      if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
+      return { operation: operationFromPublication(concurrent), idempotent: true };
+    }
+    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+    if (current.status !== 'open') {
+      throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+    }
+    const currentBase = state.skills.find((candidate) => candidate.id === current.baseResourceId);
+    if (!currentBase || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+      throw unavailableDraft();
+    }
+    if (state.policy.revision !== policy.revision) {
+      throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
+    }
+    if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
+      throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
+    }
+    state.skills.push(skill);
+    state.jobs.push(job);
+    current.publications = [...(current.publications ?? []), publication];
+    appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
+      digest: publication.digest,
+      version,
+      resourceId,
+      jobId,
+      draftRevision: expectedRevision,
+      scanRequired: true,
+    });
+    return { operation: operationFromPublication(publication), idempotent: false };
+  });
+
+  return jsonResponse(result, result.idempotent ? 200 : 202, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+function operationFromPublication(publication: SkillDraftPublicationRecord): DraftPublishOperation {
+  return {
+    id: publication.jobId,
+    resourceId: publication.resourceId,
+    state: 'queued',
+    version: publication.version,
+    revision: publication.revision,
+    digest: publication.digest,
+    scanRequired: true,
+  };
+}
+
+function findPublication(
+  draft: SkillDraft,
+  key: string,
+  subject: string,
+): SkillDraftPublicationRecord | undefined {
+  return (draft.publications ?? []).find((publication) => publication.key === key && publication.subject === subject);
+}
+
+async function assertCurrentPublishableBase(
+  state: RegistryState,
+  draft: SkillDraft,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<SkillVersion> {
+  const base = state.skills.find((candidate) => candidate.id === draft.baseResourceId);
+  if (!base || base.organizationId !== deps.config.organizationId || !sameReadableBase(base, base, state, principal, draft.baseDigest)) {
+    throw unavailableDraft();
+  }
+  let admitted = false;
+  try {
+    admitted = await deps.releaseAdmission(state, base, principal);
+  } catch {
+    throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified', 503);
+  }
+  if (!admitted) throw unavailableDraft();
+  return base;
+}
+
 function findDraft(state: RegistryState, draftId: string, principal: Principal, organizationId: string): SkillDraft {
   const draft = state.drafts?.find(
     (candidate) => candidate.id === draftId && candidate.organizationId === organizationId && canReadNamespace(principal, candidate.name),
@@ -317,6 +504,7 @@ function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1';
     id: draft.id,
     name: draft.name,
     skillName: draft.skillName,
+    description: draft.description ?? '',
     baseResourceId: draft.baseResourceId,
     baseDigest: draft.baseDigest,
     revision: draft.revision,
@@ -327,6 +515,7 @@ function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1';
     actor: draft.actor,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+    ...(draft.publications ? { publications: draft.publications.map((publication) => ({ ...publication })) } : {}),
   };
 }
 
@@ -377,7 +566,14 @@ function ensureDrafts(state: RegistryState): void {
   state.drafts ??= [];
 }
 
-function appendDraftAudit(state: RegistryState, principal: Principal, action: string, draft: SkillDraft, organizationId: string): void {
+function appendDraftAudit(
+  state: RegistryState,
+  principal: Principal,
+  action: string,
+  draft: SkillDraft,
+  organizationId: string,
+  extra: Record<string, unknown> = {},
+): void {
   state.audit.push({
     id: randomId('audit'),
     organizationId,
@@ -390,6 +586,7 @@ function appendDraftAudit(state: RegistryState, principal: Principal, action: st
       baseDigest: draft.baseDigest,
       revision: draft.revision,
       digest: draft.digest,
+      ...extra,
     },
   });
 }
@@ -431,6 +628,17 @@ function requireRevision(value: unknown): number {
     throw new AuthoringApiError('INVALID_REQUEST', 'expectedRevision must be a positive integer', 400);
   }
   return value;
+}
+
+function requireVersion(value: unknown): string {
+  if (typeof value !== 'string' || !/^(?:0|[1-9]\d*)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value)) {
+    throw new AuthoringApiError('INVALID_VERSION', 'Version must be SemVer', 400);
+  }
+  return value;
+}
+
+function clonePolicy(policy: RegistryState['policy']): RegistryState['policy'] {
+  return JSON.parse(JSON.stringify(policy)) as RegistryState['policy'];
 }
 
 async function readJson(request: Request, maxBodyBytes: number): Promise<Record<string, unknown>> {
