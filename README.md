@@ -17,7 +17,7 @@ is not represented as a published release.
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
 | Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | Directory lookups are bounded; workers acquire and scan release artifacts, and uploaded content is never executed |
-| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; the E7 directory deployment verifies server-side skills.sh Vercel project OIDC for that deployment, while the later transparent-feed fixture is loopback-only; device flow/interactive identity providers are not part of this baseline |
+| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; the historical E7 directory deployment verified server-side skills.sh Vercel project OIDC for that deployment, while the current rollout only has authenticated read-only checks and no configured feed; device flow/interactive identity providers are not part of this baseline |
 | Artifacts | Implemented bounded canonical `pskills-bundle-v1` JSON, digest checks, private sealed-object storage, and transfer grants | Bundle content is data; the registry never runs skill scripts or install hooks |
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
@@ -25,39 +25,49 @@ is not represented as a published release.
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| CLI | Implemented Rust package and binary named `pskills`; historical native checks are recorded | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; the later transparent-feed CLI evidence is a loopback fixture run, not current CI or release evidence |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented at E7 source `0f9da75`; the corresponding READY deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` | The E7 read-only API probe verifies list/search, fail-closed auth, and fresh-canonical Topics. The later transparent-feed source path has local fixture evidence only; current browser proof, selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe is retained as stale-canonical regression evidence, and `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` proves metadata-only pagination across 9,738 rows and 20 pages |
+| CLI | Implemented Rust package and binary named `pskills`; historical native checks are recorded | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; the later transparent-feed CLI evidence is a loopback fixture run, not current CI or release evidence, and GitHub billing currently blocks a fresh native job |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented in the current source checkpoint `8c8e41e`; the historical E7 source `0f9da75` has its own hosted evidence | The current prebuilt rollout proves only authenticated read-only health, `/me`, policy, feeds, and list checks (`feedCount=0`, `total=9738`); no production feed setup/import/CLI test has run. The loopback fixture and historical E7 Topics/security/pagination evidence are kept separate; selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe remains stale-canonical regression evidence |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The current registry checkpoint is deployed at
-[`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
-with Neon PostgreSQL/pgvector, private Blob storage, and required SkillsGuard
-scanning. The current READY deployment is
-`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with output fingerprint
-`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`.
-Its Cloudflare build fingerprint is
-`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` with
-35 server files and no executable SDK references. The checked-in all-time
-pagination record is from the earlier `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC`;
-OIDC/ComputeSDK and browser evidence also remains identified by its own
-deployment in the v0.3.0 verification record. The E7 source review at
-`0f9da75` reports 286 tests passed and two environment-dependent skips,
-TypeScript and the edge bundle checks pass, and two independent review
-approvals are recorded. The later transparent-feed implementation has a
-separate [loopback-only local acceptance record](work/transparent-proxy-cli-final-evidence-1789011005495.json)
-using source/runtime and CLI build `8c8e41eb4ad172fc033bc5593f400874095ec656`; it is not a new deployment or current
-CI/native-release result. The
-previous deployment's [sanitized API probe](work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
+The current prebuilt registry rollout is
+[`dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z`](https://private-skills-theta.vercel.app),
+at the stable alias [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app)
+and unique URL
+`https://private-skills-nyfgk0kyh-andrewmcclenaghan-6046s-projects.vercel.app`.
+It is the prebuilt artifact for merged main `0efd3583bb5902a77c48cbf98f6b7bff88338bcf`
+and code artifact `8c8e41eb4ad172fc033bc5593f400874095ec656`, with output
+fingerprint `fd71b9627eb0fd1a3bcd8d17ebbf867992516c14cb5f61327a9a1ff292a1169a`.
+The artifact contains 2,057 regular files, 27 symlinks, and 19,585,540 bytes;
+no Git-triggered deployment was found. The sanitized
+[rollout evidence](work/production-rollout-evidence-dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z.json)
+records authenticated read-only `health`, `/v1/me`, `/v1/policy`, `/v1/feeds`,
+and directory-list checks. The policy is fail-closed (`allowUnscanned=false`),
+the feed registry is empty, and the list check returned two of 9,738 rows with
+more available. No production feed setup, source import, or CLI installation was
+exercised.
+
+The Vercel project API returned `link: null` (shown in the sanitized evidence
+as `linkedRepository: null`). A documented `vercel git connect` attempt for
+`andymac4182/private-skills` failed with `Make sure there aren’t any typos and
+that you have access to the repository if it’s private`. Repository access
+setup still needs owner attention.
+
+The historical E7 deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` and source
+`0f9da75` retain their own OIDC, Topics, security, pagination, and browser
+evidence in the v0.3.0 record; they are not evidence for the current prebuilt
+rollout. The later transparent-feed implementation has a separate
+[loopback-only local acceptance record](work/transparent-proxy-cli-final-evidence-1789011005495.json)
+using source/runtime and CLI build `8c8e41eb4ad172fc033bc5593f400874095ec656`;
+it is not current CI, native-release, hosted-feed, or production-scanner evidence.
+The earlier
+[sanitized API probe](work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
 records safe list/search and credential-negative behavior but stale-canonical
-Topics. The [current API probe](work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
-is verified for health, authenticated `/me`, policy, list, fuzzy search, fresh
-canonical React and Marketing Topics, and unauthenticated Topics rejection;
-current browser proof for the new deployment is still pending. The
-recorded authenticated publishing,
-search, CLI pack installation, analytics, and Eve review flows are
-carried forward from the verified private-registry evidence. The separate reviewer runs at
+Topics. Previously recorded authenticated publishing, search, CLI pack
+installation, analytics, and Eve review flows remain evidence from the verified
+private-registry run; they were not re-exercised by this read-only rollout. The
+separate reviewer runs at
 [`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
 with a registered daily `0 22 * * *` UTC schedule (22:00 UTC, subject to the
 hosting execution window). The sanitized [production cron evidence](work/reviewer-cron-completion-evidence.json)
@@ -75,20 +85,19 @@ See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 The v0.3.0 E7 checkpoint adds the external directory and ComputeSDK integration.
 Its source `0f9da75` has the Topics canonical-page parser, bounded metadata
 cache, conflict-aware enumeration, and credential-negative tests; its review
-reports 286 tests passed and two environment-dependent skips. The current READY
-deployment carries the enabled directory and ComputeSDK configuration;
-earlier deployment artifacts verify the authenticated directory endpoints, scan,
-pagination, and captured 390px/1280px browser surfaces. Full C1 acceptance
+reports 286 tests passed and two environment-dependent skips. Those hosted
+directory, scan, pagination, and captured 390px/1280px browser results remain
+historical deployment-specific evidence. The current prebuilt rollout has only
+the read-only checks listed above: no production feed is configured, and no
+selected import or CLI production install has been exercised. Full C1 acceptance
 remains open while current browser proof, selected import, nested detail, Packs
-preview, and tenant/secrecy checks are completed; the earlier deployment's
-stale-canonical Topics result remains preserved as regression evidence, while the
-current API result is verified. The historical
-disconnected deployment and the prior ComputeSDK pre-analysis failure remain
-preserved in the verification record. The later transparent-feed source and
-CLI/UI pinning changes are covered by the explicitly identified local fixture
-and source/build evidence only; browser checks, current GitHub CI, native
-release, hosted deployment, and production scanner verification for that later
-work remain open.
+preview, and tenant/secrecy checks are completed. The historical disconnected
+deployment, prior ComputeSDK pre-analysis failure, and stale-canonical Topics
+result remain preserved in the verification record. The later transparent-feed
+source and CLI/UI pinning changes are covered by the explicitly identified local
+fixture and source/build evidence only; current GitHub CI, native release,
+hosted-feed behavior, and production scanner verification for that later work
+remain open.
 See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.
