@@ -54,7 +54,7 @@ function principal(
   subject: string,
   namespaces: string[],
   roles: Principal['roles'] = ['publisher', 'reader'],
-  scopes: string[] = ['skills:read', 'registry:read', 'skills:write', 'skills:publish'],
+  scopes: string[] = ['skills:read', 'registry:read', 'skills:write', 'skills:publish', 'skills:builder'],
 ): Principal {
   return {
     organizationId: ORGANIZATION,
@@ -68,6 +68,7 @@ function principal(
 const PUBLISHER = principal('publisher', ['@team']);
 const OTHER_PUBLISHER = principal('other-publisher', ['@other']);
 const READER = principal('reader', ['@team'], ['reader'], ['registry:read', 'skills:read']);
+const SPOOF_PUBLISHER = principal('spoof-publisher', ['@team'], ['publisher', 'reader'], ['skills:read', 'registry:read', 'skills:write', 'skills:publish']);
 
 interface RecordedCall {
   url: string;
@@ -155,6 +156,7 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
     ['publisher-token', PUBLISHER],
     ['other-token', OTHER_PUBLISHER],
     ['reader-token', READER],
+    ['spoof-token', SPOOF_PUBLISHER],
   ]);
   const auth: Authenticator = {
     authenticate: async (request) => {
@@ -294,6 +296,10 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
 
 async function json(response: Response): Promise<Record<string, any>> {
   return await response.json() as Record<string, any>;
+}
+
+function errorCode(body: Record<string, any>): unknown {
+  return body.code ?? body.error?.code;
 }
 
 async function request(
@@ -523,7 +529,7 @@ describe('builder BFF draft contract', () => {
       body: { revision: draft.revision, digest: draft.digest, requestId: 'cookie-no-origin' },
     });
     expect(missingOrigin.status).toBe(403);
-    expect((await json(missingOrigin)).code).toBe('CSRF_DENIED');
+    expect(errorCode(await json(missingOrigin))).toBe('CSRF_DENIED');
 
     const crossOrigin = await request(fixture, `/v1/drafts/${draft.id}/builder/session?${bindingQuery(draft)}`, {
       method: 'POST',
@@ -535,8 +541,34 @@ describe('builder BFF draft contract', () => {
       body: { revision: draft.revision, digest: draft.digest, requestId: 'cross-origin' },
     });
     expect(crossOrigin.status).toBe(403);
-    expect((await json(crossOrigin)).code).toBe('CSRF_DENIED');
+    expect(errorCode(await json(crossOrigin))).toBe('CSRF_DENIED');
     expect((await fixture.repository.read(ORGANIZATION)).builderSessions ?? []).toHaveLength(0);
+  });
+
+  it('does not treat an unprivileged publisher tool header as the builder service', async () => {
+    const fixture = await makeFixture();
+    const draft = await createReleaseDraft(fixture, 'spoof-draft');
+    const session = await createSession(fixture, draft, 'spoof-session');
+    const spoofed = await fixture.handler(new Request(`${ORIGIN}/v1/drafts/${draft.id}/proposals`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer spoof-token',
+        'content-type': 'application/json',
+        'idempotency-key': 'spoof-proposal',
+        'x-pskills-tool-identity': 'skill-builder',
+      },
+      body: JSON.stringify({
+        draftId: draft.id,
+        revision: draft.revision,
+        digest: draft.digest,
+        sessionId: session.id,
+        operations: [{ op: 'edit', path: 'SKILL.md', content: '# spoof\n' }],
+      }),
+    }));
+    expect(spoofed.status).toBe(403);
+    const spoofedBody = await json(spoofed);
+    expect(spoofedBody.error?.code ?? spoofedBody.code).toBe('FORBIDDEN');
+    expect((await fixture.repository.read(ORGANIZATION)).builderSessions?.[0]?.proposals).toHaveLength(0);
   });
 
   it('fails closed on malformed or oversized provider session identifiers before opening Eve streams', async () => {
