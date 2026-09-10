@@ -786,11 +786,13 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
 }
 
 function publicPrincipal(principal: Principal): Principal {
+  const scopes = principalScopes(principal);
   return {
     organizationId: principal.organizationId,
     subject: principal.subject,
     roles: [...principal.roles],
     namespaces: principal.namespaces ? [...principal.namespaces] : undefined,
+    ...(scopes === undefined ? {} : { scopes: [...scopes] }),
   };
 }
 
