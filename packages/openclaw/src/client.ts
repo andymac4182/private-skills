@@ -132,6 +132,19 @@ export class OpenClawFeedCache {
         if (!cached) {
           return this.rejected("no-cache", now, 304);
         }
+        const responseEtag = response.headers.get("etag");
+        if (responseEtag !== null && responseEtag !== cached.etag) {
+          return this.fallback("invalid-etag", now, 304);
+        }
+        const responseLastModified = readBoundedHeader(response.headers.get("last-modified"));
+        if (
+          responseLastModified === "invalid" ||
+          (responseLastModified !== undefined &&
+            cached.lastModified !== undefined &&
+            responseLastModified !== cached.lastModified)
+        ) {
+          return this.fallback("invalid-feed", now, 304);
+        }
         if (
           request.expectedSha256 !== undefined &&
           !matchesExpectedSha256(cached.sha256, request.expectedSha256)

@@ -118,6 +118,51 @@ describe("OpenClaw feed transport and cache", () => {
     expect(opaque.error).toBe("invalid-etag");
   });
 
+  it("does not accept a 304 with conflicting response validators", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const digest = await sha256(new TextEncoder().encode(body));
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async (): Promise<Response> => {
+        calls += 1;
+        if (calls === 1) {
+          return response(body, {
+            headers: {
+              etag: `"${digest}"`,
+              "last-modified": "Tue, 01 Jan 2030 00:00:00 GMT",
+            },
+          });
+        }
+        if (calls === 2) {
+          return new Response(null, {
+            status: 304,
+            headers: { etag: `"sha256:${"0".repeat(64)}"` },
+          });
+        }
+        return new Response(null, {
+          status: 304,
+          headers: {
+            etag: `"${digest}"`,
+            "last-modified": "Wed, 02 Jan 2030 00:00:00 GMT",
+          },
+        });
+      },
+    } as const;
+    expect((await cache.refresh(request)).kind).toBe("accepted");
+    const conflictingEtag = await cache.refresh(request);
+    expect(conflictingEtag.kind).toBe("stale");
+    if (conflictingEtag.kind !== "stale") throw new Error("expected stale ETag conflict");
+    expect(conflictingEtag.error).toBe("invalid-etag");
+    const conflictingLastModified = await cache.refresh(request);
+    expect(conflictingLastModified.kind).toBe("stale");
+    if (conflictingLastModified.kind !== "stale") throw new Error("expected stale Last-Modified conflict");
+    expect(conflictingLastModified.error).toBe("invalid-feed");
+  });
+
   it("does not replace the cache with malformed, wrong-identity, or oversized responses", async () => {
     const body = serializeOpenClawFeed(feed());
     let call = 0;
