@@ -14,6 +14,11 @@ import {
   SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
+import {
+  OpenClawPublicationManager,
+  StateRepositoryOpenClawPublicationStore,
+  type OpenClawTrustedFeedProfile,
+} from '../../../packages/openclaw-adapter/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -50,6 +55,24 @@ async function createRuntime(env: RuntimeEnvironment) {
     officialTokenProvider: infrastructure.directoryOfficialTokenProvider,
   });
   const auth = await createAuthenticatorFromEnv(env);
+  const openClawFeedId = env.PSKILLS_OPENCLAW_FEED_ID?.trim();
+  const openClawFeedUrl = env.PSKILLS_OPENCLAW_FEED_URL?.trim() || `${config.publicOrigin}/v1/feeds/skills`;
+  const openClawTrustedFeed = createOpenClawTrustedFeedProfile(env);
+  // Publication persistence is always the injected StateRepository. The
+  // feed remains disabled unless an operator supplies a non-reserved feed ID;
+  // source-verifier candidates are supplied by the worker integration later.
+  // This construction is Web API-only and safe for Nitro edge composition.
+  const openClaw = openClawFeedId
+    ? {
+      enabled: true,
+      feedId: openClawFeedId,
+      feedUrl: openClawFeedUrl,
+      publicationManager: new OpenClawPublicationManager(
+        new StateRepositoryOpenClawPublicationStore(infrastructure.repository),
+      ),
+      ...(openClawTrustedFeed === undefined ? {} : { trustedFeed: openClawTrustedFeed }),
+    }
+    : undefined;
   // Directory access is an explicit server-side opt-in. The selected
   // infrastructure profile owns the credential callback: Node resolves the
   // official Vercel OIDC helper per request for skills.sh, while edge keeps
@@ -72,6 +95,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     directory,
     directoryPacks,
     directoryForBase,
+    openClaw,
   };
   const registry = createRegistryHandler(registryDependencies);
   const embeddingProvider = createEmbeddingProvider(env);
@@ -128,6 +152,22 @@ async function createRuntime(env: RuntimeEnvironment) {
     }
     return response;
   };
+}
+
+function createOpenClawTrustedFeedProfile(env: RuntimeEnvironment): OpenClawTrustedFeedProfile | undefined {
+  const raw = env.PSKILLS_OPENCLAW_TRUSTED_FEED_URL?.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return undefined;
+    return {
+      url: url.href,
+      expectedFeedId: env.PSKILLS_OPENCLAW_TRUSTED_FEED_ID?.trim() || 'clawhub-official',
+      allowedOrigins: [url.origin],
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 // A stable environment object is cached on Node; worker bindings are per-request.
