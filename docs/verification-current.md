@@ -33,6 +33,32 @@ The OpenClaw backend is shipped but its feed remains disabled pending review and
 explicit activation, with no live interoperability evidence. M6 and M7 remain
 outside the current C1 release gate.
 
+## Recorded local required-scan portability proof
+
+As of `2026-09-10T14:12:30Z`, source commit
+`9caf2c178e92821cb9f3176a91a8ff5dafe2942f` has a sanitized [local portability
+record](evidence/local-required-scan-portability-9caf.json). The Node
+development profile used file state and the Files SDK filesystem adapter. A
+local workerd/Wrangler edge profile used HTTP state/blob gateways backed by
+that same disposable Node gateway. Both authenticated install flows completed
+authorization, resolution, grant, and transfer checks with digest verification.
+Each required scan analyzed 2/2 files with 0 skipped or unsupported, used
+SkillsGuard `1.1.1`, produced no findings, and reached approval under
+`allowUnscanned=false` with SkillsGuard required; the recorded policy,
+artifact/source digests, scanner configuration, approvals, and transfers remain
+in the evidence file. The direct Wrangler `whoami` check was authenticated
+with exit 0 and no account mutation or deployment was attempted; the earlier
+wrapper label is an exit-127 timeout-wrapper failure, not an unauthenticated
+Wrangler result.
+
+This is local Node plus local workerd evidence only. It does not prove a hosted
+Cloudflare/container deployment, PostgreSQL/pgvector, production object
+storage, or positive semantic search. The edge run used development mode for
+the loopback HTTP gateway because production runtime guards reject that path;
+the inert synthetic fixture demonstrates required-scan coverage and clean
+policy evaluation, not malicious-pattern detection breadth. OpenClaw remains
+disabled, and no secrets or artifact contents were retained.
+
 ## Recorded Git-triggered M6 read-only release-file checkpoint
 
 The earlier READY registry deployment `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` was

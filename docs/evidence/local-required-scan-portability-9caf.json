@@ -1,0 +1,338 @@
+{
+  "builds": {
+    "edge": {
+      "command": "vite build --config apps/web/vite.config.ts",
+      "nitroPreset": "cloudflare_module",
+      "result": "passed",
+      "runtimeProfile": "edge",
+      "serverArtifactSha256": "5b60eff6c968c8cae5399162d5ca343a30fe2a7b3f14be41bc189c0263618238",
+      "stateProvider": "http",
+      "storageProvider": "http"
+    },
+    "node": {
+      "command": "vite build --config apps/web/vite.config.ts",
+      "result": "passed",
+      "runtimeProfile": "node",
+      "storageBuildProfile": "filesystem"
+    },
+    "nodeVersion": "v24.20.0",
+    "wranglerVersion": "4.130.0"
+  },
+  "capturedAt": "2026-09-10T14:12:30.804726+00:00",
+  "cloudflareCli": {
+    "accountMutationAttempted": false,
+    "deploymentOrProvisioningAttempted": false,
+    "discrepancyNote": "An earlier wrapper invocation exited 127 because macOS /usr/bin/timeout was unavailable; Wrangler did not run in that attempt. The subsequent direct whoami invocation exited 0 and was classified authenticated from redacted output.",
+    "identity": "redacted",
+    "whoami": "authenticated",
+    "whoamiExitCode": 0,
+    "wranglerInstalled": true
+  },
+  "edgeFlow": {
+    "authenticatedInstall": {
+      "authorizationHttpStatus": 201,
+      "bytes": 383,
+      "capabilitiesHttpStatus": 200,
+      "digest": "sha256:7ea725f453a83bb1974ef5ddeb433e09c33e69558822001a581b781ae22a6f66",
+      "digestVerified": true,
+      "grantHttpStatus": 200,
+      "healthHttpStatus": 200,
+      "meHttpStatus": 200,
+      "resolveHttpStatus": 200,
+      "transferHttpStatus": 200
+    },
+    "gatewayBoundary": "edge app used HTTP state/blob endpoints backed by the disposable Node Files SDK filesystem gateway",
+    "publish": {
+      "artifact": {
+        "digest": "sha256:7ea725f453a83bb1974ef5ddeb433e09c33e69558822001a581b781ae22a6f66",
+        "size": 383
+      },
+      "attempts": 0,
+      "createdAt": "2026-09-10T14:07:41.383Z",
+      "id": "job_17481878-1e2a-4796-b5ea-481785405932",
+      "kind": "scan",
+      "organizationId": "required-scan-proof",
+      "policy": {
+        "allowUnscanned": false,
+        "evidenceMaxAgeSeconds": 86400,
+        "hooks": [],
+        "revision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+        "scanners": [
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "cisco-skill-scanner",
+            "mode": "disabled",
+            "timeoutSeconds": 120
+          },
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "nvidia-skillspector",
+            "mode": "disabled",
+            "timeoutSeconds": 120
+          },
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "skillsguard",
+            "mode": "required",
+            "timeoutSeconds": 120
+          }
+        ]
+      },
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "resourceId": "skill_8e034852-b1f9-4022-9110-5c065bf1c3a2",
+      "state": "queued",
+      "updatedAt": "2026-09-10T14:07:41.383Z"
+    },
+    "scan": {
+      "artifactDigest": "sha256:7ea725f453a83bb1974ef5ddeb433e09c33e69558822001a581b781ae22a6f66",
+      "configurationHash": "sha256:112b554175b7b930e5f829c67120ab274910b27d057d29ef0619448900bdc859",
+      "coverage": {
+        "externalDestinations": [],
+        "filesAnalyzed": 2,
+        "filesEnumerated": 2,
+        "filesSkipped": 0,
+        "filesUnsupported": 0,
+        "limitations": [
+          "SkillsGuard --no-config disables automatic config loading but inline markdown-context suppression behavior remains upstream-controlled",
+          "SkillsGuard is pattern/decode-based static analysis and does not observe runtime behavior"
+        ]
+      },
+      "createdAt": "2026-09-10T14:07:42.581Z",
+      "durationMs": 1018,
+      "engineVersion": "1.1.1",
+      "findings": [],
+      "id": "c895a1bb-40f2-450a-a3cf-603b1881a701",
+      "jobId": "job_17481878-1e2a-4796-b5ea-481785405932",
+      "organizationId": "required-scan-proof",
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+      "scannerId": "skillsguard",
+      "status": "completed"
+    },
+    "skill": {
+      "approvedAt": "2026-09-10T14:07:42.585Z",
+      "artifact": {
+        "digest": "sha256:7ea725f453a83bb1974ef5ddeb433e09c33e69558822001a581b781ae22a6f66",
+        "size": 383
+      },
+      "fileCount": 2,
+      "id": "skill_8e034852-b1f9-4022-9110-5c065bf1c3a2",
+      "name": "@proof/edge-required-scan",
+      "organizationId": "required-scan-proof",
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "scanIds": [
+        "c895a1bb-40f2-450a-a3cf-603b1881a701"
+      ],
+      "skillName": "edge-required-scan",
+      "state": "approved",
+      "version": "1.0.0"
+    }
+  },
+  "implementationRefs": [
+    "apps/web/server/runtime-node.ts:262-308",
+    "apps/web/server/runtime-edge.ts:22-34",
+    "workers/runner/src/worker.ts:170-189",
+    "packages/core/src/index.ts:5540-5572",
+    "workers/images/README.md:18-24"
+  ],
+  "limitations": [
+    "This is local Node plus local workerd evidence, not a hosted Cloudflare deployment proof.",
+    "The fixture is inert and synthetic; it demonstrates required scanner coverage and clean policy evaluation, not malicious-pattern detection breadth.",
+    "Production-mode loopback HTTP blob endpoints remain rejected by runtime guards; the edge loopback run used development mode with allowUnscanned still false and SkillsGuard required.",
+    "Semantic positive embedding/reindex/search remains unverified pending an explicitly supplied/approved AI Gateway credential."
+  ],
+  "localRuntime": {
+    "edge": {
+      "cloudflareAccountOrDeployment": false,
+      "origin": "http://127.0.0.1:8787",
+      "runtime": "local workerd/wrangler",
+      "stateProvider": "http",
+      "storageProvider": "http"
+    },
+    "node": {
+      "environment": "development",
+      "origin": "http://127.0.0.1:3310",
+      "singleProcess": true,
+      "stateProvider": "file",
+      "storageProvider": "filesystem"
+    },
+    "scannerImage": {
+      "imageId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+      "platform": "linux/arm64",
+      "tag": "private-skills/skillsguard:1.1.1"
+    }
+  },
+  "nodeFlow": {
+    "authenticatedInstall": {
+      "authorization": "passed",
+      "bytes": 399,
+      "digest": "sha256:c5f2ff1a2d45a0eef24a137df787b28ad4274fb3fc12bee3ec458e8f0d3fecd3",
+      "digestVerified": true,
+      "grantHttpStatus": 200,
+      "resolve": "passed",
+      "transferHttpStatus": 200
+    },
+    "publish": {
+      "artifact": {
+        "digest": "sha256:c5f2ff1a2d45a0eef24a137df787b28ad4274fb3fc12bee3ec458e8f0d3fecd3",
+        "size": 399
+      },
+      "attempts": 0,
+      "createdAt": "2026-09-10T14:03:12.499Z",
+      "id": "job_6d022f5a-31d8-49b7-9778-417b4c85a81b",
+      "kind": "scan",
+      "organizationId": "required-scan-proof",
+      "policy": {
+        "allowUnscanned": false,
+        "evidenceMaxAgeSeconds": 86400,
+        "hooks": [],
+        "revision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+        "scanners": [
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "cisco-skill-scanner",
+            "mode": "disabled",
+            "timeoutSeconds": 120
+          },
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "nvidia-skillspector",
+            "mode": "disabled",
+            "timeoutSeconds": 120
+          },
+          {
+            "blockSeverities": [
+              "high",
+              "critical"
+            ],
+            "id": "skillsguard",
+            "mode": "required",
+            "timeoutSeconds": 120
+          }
+        ]
+      },
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "resourceId": "skill_2a8b351c-d340-4b00-84b7-d68dd1b686fd",
+      "state": "queued",
+      "updatedAt": "2026-09-10T14:03:12.499Z"
+    },
+    "scan": {
+      "artifactDigest": "sha256:c5f2ff1a2d45a0eef24a137df787b28ad4274fb3fc12bee3ec458e8f0d3fecd3",
+      "configurationHash": "sha256:112b554175b7b930e5f829c67120ab274910b27d057d29ef0619448900bdc859",
+      "coverage": {
+        "externalDestinations": [],
+        "filesAnalyzed": 2,
+        "filesEnumerated": 2,
+        "filesSkipped": 0,
+        "filesUnsupported": 0,
+        "limitations": [
+          "SkillsGuard --no-config disables automatic config loading but inline markdown-context suppression behavior remains upstream-controlled",
+          "SkillsGuard is pattern/decode-based static analysis and does not observe runtime behavior"
+        ]
+      },
+      "createdAt": "2026-09-10T14:03:15.168Z",
+      "durationMs": 1837,
+      "engineVersion": "1.1.1",
+      "findings": [],
+      "id": "09b3df43-5531-4f29-82b6-a48e9e90a967",
+      "jobId": "job_6d022f5a-31d8-49b7-9778-417b4c85a81b",
+      "organizationId": "required-scan-proof",
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+      "scannerId": "skillsguard",
+      "status": "completed"
+    },
+    "skill": {
+      "approvedAt": "2026-09-10T14:03:15.172Z",
+      "artifact": {
+        "digest": "sha256:c5f2ff1a2d45a0eef24a137df787b28ad4274fb3fc12bee3ec458e8f0d3fecd3",
+        "size": 399
+      },
+      "fileCount": 2,
+      "id": "skill_2a8b351c-d340-4b00-84b7-d68dd1b686fd",
+      "name": "@proof/required-scan",
+      "organizationId": "required-scan-proof",
+      "policyRevision": "policy_b423e0b0-4c40-4fd6-9b6b-856332c57b2b",
+      "scanIds": [
+        "09b3df43-5531-4f29-82b6-a48e9e90a967"
+      ],
+      "skillName": "proof-required-scan",
+      "state": "approved",
+      "version": "1.0.0"
+    }
+  },
+  "policy": {
+    "allowUnscanned": false,
+    "evidenceMaxAgeSeconds": 86400,
+    "hooks": [],
+    "revision": "local-proof-request",
+    "scanners": [
+      {
+        "blockSeverities": [
+          "high",
+          "critical"
+        ],
+        "id": "cisco-skill-scanner",
+        "mode": "disabled",
+        "timeoutSeconds": 120
+      },
+      {
+        "blockSeverities": [
+          "high",
+          "critical"
+        ],
+        "id": "nvidia-skillspector",
+        "mode": "disabled",
+        "timeoutSeconds": 120
+      },
+      {
+        "blockSeverities": [
+          "high",
+          "critical"
+        ],
+        "id": "skillsguard",
+        "mode": "required",
+        "timeoutSeconds": 120
+      }
+    ]
+  },
+  "proofWindow": {
+    "edgeApproval": "2026-09-10T14:07:42.585Z",
+    "edgePublish": "2026-09-10T14:07:41.383Z",
+    "firstNodeApproval": "2026-09-10T14:03:15.172Z",
+    "firstObservableEvent": "2026-09-10T14:03:12.499Z",
+    "lastMetadataCapture": "2026-09-10T14:12:30.804726+00:00",
+    "processBootAndShutdown": "not timestamped in retained evidence"
+  },
+  "secretsOrArtifactBytes": "excluded",
+  "semanticSearch": {
+    "attempted": false,
+    "reason": "No explicitly approved AI Gateway credential was available; no credential was read from deployment files."
+  },
+  "source": {
+    "commit": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f",
+    "openclaw": "disabled",
+    "repository": "private-skills"
+  },
+  "topologyLimits": [
+    "Node origin was local loopback 127.0.0.1:3310 with file state and direct Files SDK filesystem storage in development mode.",
+    "Edge origin was local Wrangler/workerd loopback 127.0.0.1:8787; its HTTP state/blob endpoints pointed to the disposable Node gateway at 127.0.0.1:3310.",
+    "The host worker was a local Node process using the existing linux/arm64 SkillsGuard image; no hosted worker, Cloudflare deployment, Postgres/pgvector service, or production object store was exercised.",
+    "Loopback HTTP blob access is a development-only allowance; production runtime guards were not bypassed."
+  ]
+}
