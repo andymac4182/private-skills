@@ -1,0 +1,71 @@
+{
+  "merge": {
+    "pr": 34,
+    "approvedHead": "bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b",
+    "mergeSha": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+    "mergedAt": "2026-09-10T15:02:13Z",
+    "openPrs": 0
+  },
+  "validation": {
+    "localTests": 129,
+    "typecheck": "passed",
+    "diffCheck": "passed",
+    "vercelPreviews": {
+      "registry": "success",
+      "builder": "success",
+      "uploadReviewer": "success"
+    },
+    "nativeCi": {
+      "status": "failed before runner steps",
+      "reason": "provider/account billing admission failure",
+      "bypassUsed": false
+    }
+  },
+  "deployments": [
+    {
+      "project": "private-skills",
+      "id": "dpl_4FzZv5NCP2vWiUhGApxkivhZr23g",
+      "url": "private-skills-kum8wygw2-andrewmcclenaghan-6046s-projects.vercel.app",
+      "stableAlias": "private-skills-theta.vercel.app",
+      "target": "production",
+      "readyState": "READY",
+      "source": {
+        "type": "git",
+        "commit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+        "ref": "main"
+      }
+    },
+    {
+      "project": "private-skills-builder",
+      "id": "dpl_DTwRfuM5q2ZYarG96cYs5pmRWuzC",
+      "url": "private-skills-builder-o1rf3y1os.vercel.app",
+      "stableAlias": "private-skills-builder.vercel.app",
+      "target": "production",
+      "readyState": "READY",
+      "source": {
+        "type": "git",
+        "commit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+        "ref": "main"
+      }
+    },
+    {
+      "project": "private-skills-upload-reviewer",
+      "id": "dpl_44wyAg2imi32P76wppukbHmJt97J",
+      "url": "private-skills-upload-reviewer-h0tdhmw4l.vercel.app",
+      "stableAlias": "private-skills-upload-reviewer.vercel.app",
+      "target": "production",
+      "readyState": "READY",
+      "source": {
+        "type": "git",
+        "commit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+        "ref": "main"
+      }
+    }
+  ],
+  "scope": {
+    "openclawActivationChanged": false,
+    "environmentChanged": false,
+    "importsPerformed": false,
+    "modelJobsStarted": false
+  }
+}

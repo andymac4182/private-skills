@@ -1,0 +1,151 @@
+{
+  "auth": {
+    "cookieCount": 1,
+    "credentialValuesEmitted": false,
+    "method": "POST /auth/session",
+    "principalRole": "owner",
+    "principalScopes": [
+      "*"
+    ],
+    "redirected": false,
+    "stateFileMode": "600",
+    "status": 200
+  },
+  "checks": {
+    "authoringMutations": false,
+    "consoleMessages": [],
+    "desktop": {
+      "bodyScrollWidth": 1280,
+      "documentScrollWidth": 1280,
+      "screenshotInspected": true,
+      "viewport": [
+        1280,
+        900
+      ]
+    },
+    "imports": false,
+    "keyboard": {
+      "nextTabReachedSelectedTreeitem": true,
+      "tabReachedOpenDraftButton": true,
+      "treeitemRole": "treeitem",
+      "treeitemTabIndex": 0
+    },
+    "mobile": {
+      "bodyScrollWidth": 390,
+      "documentScrollWidth": 390,
+      "innerCodeScroller": {
+        "clientWidth": 322,
+        "maxScrollLeft": 1271,
+        "overflowX": "scroll",
+        "scrollWidth": 1593,
+        "sourceUrlIntersectsAtScrollLeft550": true
+      },
+      "screenshotInspected": true,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    "modelCalls": false,
+    "pageErrors": [],
+    "productionWrites": false,
+    "publication": false,
+    "screenreaderClaim": false
+  },
+  "deploymentAttribution": {
+    "basis": "Deployment/source IDs independently verified by release coordinator; response headers below are this browser run.",
+    "builderDeployment": "dpl_DTwRfuM5q2ZYarG96cYs5pmRWuzC",
+    "registryDeployment": "dpl_4FzZv5NCP2vWiUhGApxkivhZr23g",
+    "sourceCommit": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2",
+    "sourceRef": "main",
+    "uploadReviewerDeployment": "dpl_44wyAg2imi32P76wppukbHmJt97J"
+  },
+  "draftRecoveryReadOnly": {
+    "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+    "directCatalogQueryHydratedGET": true,
+    "gap": "PublishView keeps uploadDraft in memory; catalog release query is not a compatible upload-draft resume route. Existing draft was not changed.",
+    "knownGETStatus": 200,
+    "name": "@acme/m6-inert-builder-fixture",
+    "noMutation": true,
+    "origin": "upload",
+    "revision": 1,
+    "settledEditorVisible": false
+  },
+  "environment": {
+    "agentBrowser": "0.37.1",
+    "engine": "chrome",
+    "origin": "https://private-skills-theta.vercel.app",
+    "stableRoute": "/app/catalog"
+  },
+  "limitations": [
+    "This is authenticated browser evidence for the stable hosted alias and the named production deployment attribution; it is not synthetic-fixture evidence.",
+    "Eve builder/model prompt and pending proposal are owned by e2e_tests and are not claimed here.",
+    "Headless DOM/style checks do not constitute a screenreader acceptance test."
+  ],
+  "recordedAt": "2026-09-10T15:21:24.703166Z",
+  "release": {
+    "artifactDigest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+    "canonicalSource": "@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines",
+    "fileCount": 1,
+    "identity": "@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines@0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982",
+    "scan": "skillsguard COMPLETED, 0 findings, 1/1 files analyzed",
+    "source": "skills-sh · vercel-labs/agent-skills",
+    "state": "APPROVED",
+    "version": "0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982"
+  },
+  "renderer": {
+    "customElements": [
+      "file-tree-container",
+      "diffs-container"
+    ],
+    "diffsAdditionCssVariablePresent": true,
+    "diffsShadowRootChildren": [
+      "DIV",
+      "svg",
+      "PRE",
+      "STYLE"
+    ],
+    "genuinePierre": true,
+    "noActiveHtmlClaim": "Content rendered in a shadow PRE/CODE surface; no iframe or active HTML execution observed.",
+    "noFallbackOnlyClaim": true,
+    "selectedTreeitem": {
+      "ariaSelected": "true",
+      "role": "treeitem",
+      "tabIndex": 0
+    }
+  },
+  "schema": "m6-hosted-browser-evidence/v1",
+  "screenshots": [
+    {
+      "inspected": true,
+      "sha256": "a198a2d127e0889d7281f608bd050c99738ff32f18c1154edd6cb2a46b63b0dc",
+      "viewport": [
+        1280,
+        900
+      ]
+    },
+    {
+      "inspected": true,
+      "sha256": "e64f37c33d3198c2059e1e1c40d0924243dc6a5c7067bb23bcbac59ddf0d6c6f",
+      "viewport": [
+        390,
+        844
+      ]
+    }
+  ],
+  "selectedFile": {
+    "browserComputedSha256": "sha256:f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+    "contentDigest": "sha256:f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+    "digestMatches": true,
+    "frontmatterAndHeadingMarkers": true,
+    "path": "SKILL.md",
+    "previewState": "text",
+    "size": 1231
+  },
+  "stableAliasResponse": {
+    "cache": "MISS",
+    "date": "Thu, 10 Sep 2026 15:11:51 GMT",
+    "server": "Vercel",
+    "status": "HTTP/2 200"
+  }
+}

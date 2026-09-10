@@ -15,36 +15,32 @@ is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
 [`docs/verification-current.md`](docs/verification-current.md). The latest
-verified production deployment checkpoint is PR32 source SHA
-`fa13c5689380ab2e71784f72a36b7cac7296bbc8`, captured at
-`2026-09-10T13:59:48Z`. Its Git-triggered registry, builder, and upload-reviewer
-deployments are READY as `dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`,
-`dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and `dpl_5towM6j191dG7rPGzefwhh68uYm6`.
-The sanitized [activation readback](docs/evidence/production-activation-readback-fa13c568.json)
-records seven bounded GET checks, the fail-closed callback method boundary,
-zero registry writes, and no model session. The sanitized [builder callback
-preflight](docs/evidence/builder-callback-auth-preflight-fa13c568.json)
-records the enabled service, its non-worker `skills:builder` principal, and no
-mutating request, draft context, or model session. These records are an
-as-of/source-scoped deployment checkpoint; a later source commit requires a new
-readback. The earlier [M6 read-only release-file evidence](docs/evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-retains its own production provenance. The editor API and authoring source are
-shipped. A local synthetic [editor-browser record](docs/evidence/m6-editor-browser-local-29f7.json)
-from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
-draft flow, reload, stale-CAS, binary/oversize, keyboard, guard, and overflow
-checks; it does not prove hosted UI behavior, a live Eve/model session, or
-screenreader/contrast/reduced-motion acceptance. Earlier browser and Git-main
-records retain their own deployment provenance. One snapshot-only production
-candidate also has recorded required-scan admission, isolated CLI install/repeat,
-and analytics evidence. Physical GitHub/well-known resolution, direct
-zero-upstream instrumentation, and native CI remain pending. A bounded hosted
-Neon/object-storage logical restore is recorded in the [sanitized restore
-evidence](docs/evidence/hosted-restore-20260910.json); it verifies an exact
-target revision and digest-checked objects but does not claim a provider
-lifecycle guarantee or restored-origin health/scanner run. OpenClaw source work
-is present in the checkpoint's source lineage, but its feed remains disabled
-pending review and explicit activation, with no live interoperability evidence.
-M6 and M7 remain outside the current C1 release gate.
+verified production release checkpoint is PR34, merged as
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2` from approved head
+`bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b`. Its three Git-triggered registry,
+builder, and upload-reviewer deployments are READY; the sanitized [release
+evidence](docs/evidence/production-release-checkpoint-34e4f56.json) records zero
+open PRs at capture, 129 local tests, passing typecheck/diff checks and Vercel
+previews, and native CI stopped before runner steps for provider/account billing
+admission without a bypass. The authenticated [hosted M6 viewer evidence](docs/evidence/production-m6-hosted-viewer-34e4f56.json)
+records auth 200, genuine Pierre rendering, exact selected-file digest and
+1231-byte size, keyboard tree focus, desktop/mobile overflow checks, inner code
+scrolling, and zero console/page errors. It is read-only viewer evidence and
+does not prove the M6 model/apply/review/scan workflow, durable upload-draft
+resume, screenreader, contrast, or reduced-motion acceptance. The editor API
+and authoring source are shipped, while the local synthetic [editor-browser
+record](docs/evidence/m6-editor-browser-local-29f7.json) retains its own
+source-scoped checks. One snapshot-only production candidate has required-scan
+admission, isolated CLI install/repeat, and analytics evidence. Physical
+GitHub/well-known resolution, direct zero-upstream instrumentation, and native
+CI remain pending. A bounded hosted Neon/object-storage logical restore is
+recorded in the [sanitized restore evidence](docs/evidence/hosted-restore-20260910.json);
+it verifies an exact target revision and digest-checked objects but does not
+claim a provider lifecycle guarantee or restored-origin health/scanner run.
+OpenClaw remains disabled pending review and explicit activation; its public
+metadata probe is interoperability evidence only and does not prove hosted
+artifact import or private publication. M6 and M7 remain outside the current
+C1 release gate.
 
 The current unfinished product inventory has three areas: builder Eve,
 upload/edit Eve, and OpenClaw feed interoperability. Seven later product bundles
@@ -68,7 +64,7 @@ milestone complete.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The latest verified PR32 checkpoint records the READY registry/builder/reviewer deployment set, bounded authenticated service checks, the narrow callback method boundary, and zero registry writes; the earlier `dpl_39j65…` probe proves authenticated release metadata/file retrieval and OpenClaw-disabled behavior. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Local synthetic editor/browser acceptance is recorded, while hosted UI, live Eve/model, screenreader, contrast, and reduced-motion acceptance remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The latest verified PR34 release checkpoint records READY registry/builder/reviewer deployments and the authenticated hosted read-only M6 viewer evidence records selected-file digest, keyboard focus, responsive overflow, and zero console/page errors; the earlier `dpl_39j65…` probe retains authenticated release metadata/file retrieval and OpenClaw-disabled behavior. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Local synthetic editor/browser acceptance and hosted viewer acceptance are recorded, while live Eve/model, durable upload-draft resume, screenreader, contrast, and reduced-motion acceptance remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.

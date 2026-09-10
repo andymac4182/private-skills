@@ -1,38 +1,46 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-10T13:59:48Z
+**As of:** 2026-09-10T15:21:24Z
 
-**Latest verified deployment checkpoint:** PR32 source SHA
-`fa13c5689380ab2e71784f72a36b7cac7296bbc8` has Git-triggered READY registry,
-builder, and upload-reviewer deployments
-`dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`, `dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and
-`dpl_5towM6j191dG7rPGzefwhh68uYm6`. The sanitized [activation readback](evidence/production-activation-readback-fa13c568.json)
-records seven bounded GET checks, the fail-closed callback method boundary,
-zero registry writes, and no model session. The sanitized [builder callback
-preflight](evidence/builder-callback-auth-preflight-fa13c568.json) records an
-enabled builder service, the non-worker `skills:builder` principal, and no
-mutating request, draft context, or model session. This is an
-as-of/source-scoped deployment record; it does not stand in for a later source
-commit's deployment. The earlier [M6 read-only release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
-retains its own source/deployment provenance. The editor API and authoring
-source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
-from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
-draft flow, reload, stale-CAS, binary/oversize, keyboard, guard, and overflow
-checks; it does not prove hosted UI behavior, a live Eve/model session, or
-screenreader/contrast/reduced-motion acceptance. One snapshot-only production
-candidate still has recorded required-scan admission, isolated CLI
-install/repeat, and install analytics. Physical GitHub/well-known source
-resolution, direct upstream-zero instrumentation, and native CI remain pending.
-A bounded hosted Neon/object-storage logical restore is verified in the
-sanitized [restore evidence](evidence/hosted-restore-20260910.json): source
-revision 114, five referenced objects totaling 10,381 bytes, exact target
-revision 114, five digest/size-verified target objects, and post-restore target
-cleanup. The copy window uses operator-quiescence attestation and does not
-claim a provider lifecycle guarantee or a restored-origin health/scanner run.
-The OpenClaw backend is shipped but its feed remains disabled pending review and
-explicit activation. There is no hosted registry artifact import or private
-publication acceptance; the recorded public metadata acceptance is scoped to
-the separate probe below. M6 and M7 remain outside the current C1 release gate.
+**Latest verified production release checkpoint:** PR34 was merged at
+`2026-09-10T15:02:13Z` with approved head
+`bdc793905ba10eaa3a7f34bbd09bcf2e77d5e52b` and merge SHA
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`. The Git-triggered registry,
+builder, and upload-reviewer production deployments are all READY. Their
+sanitized [release checkpoint](evidence/production-release-checkpoint-34e4f56.json)
+records the deployment identities, zero open PRs at capture, 129 local tests,
+passing typecheck/diff checks and Vercel previews, and native CI stopped before
+runner steps because of provider/account billing admission without a bypass.
+The release scope recorded no OpenClaw activation or environment change,
+registry import, or model job.
+
+The authenticated [hosted M6 viewer checkpoint](evidence/production-m6-hosted-viewer-34e4f56.json)
+used the stable production alias and the named deployment from this release.
+It returned auth 200 and rendered the genuine Pierre viewer. The selected
+`SKILL.md` was 1,231 bytes and its browser-computed digest matched the release
+digest; keyboard tree focus, desktop 1280px/mobile 390px no-overflow behavior,
+and inner code scrolling were observed, with no console or page errors. This is
+read-only viewer evidence: it records no production writes, model calls, or
+publication, and does not prove the M6 model/apply/review/scan workflow,
+screenreader, contrast, or reduced-motion acceptance. The upload-draft resume
+gap remains active because `PublishView` keeps an upload draft in memory while
+the catalog release query is not a compatible upload-draft resume route. The
+OpenClaw feed remains disabled pending review and explicit activation, and
+native CI remains open. This checkpoint does not claim all G0, C1, or M6
+criteria complete.
+
+The editor API and authoring source remain shipped, the local synthetic
+[editor-browser record](evidence/m6-editor-browser-local-29f7.json) retains its
+own source-scoped checks, and physical GitHub/well-known source resolution plus
+direct upstream-zero instrumentation remain pending. A bounded hosted
+Neon/object-storage logical restore is verified in the sanitized [restore
+evidence](evidence/hosted-restore-20260910.json): source revision 114, five
+referenced objects totaling 10,381 bytes, exact target revision 114, five
+digest/size-verified target objects, and post-restore target cleanup. The copy
+window uses operator-quiescence attestation and does not claim a provider
+lifecycle guarantee or restored-origin health/scanner run. The earlier PR32
+activation and PR30 read-only records retain their own source/deployment
+provenance below.
 
 ## Recorded local required-scan portability proof
 
@@ -146,11 +154,11 @@ file's server-reported digest matched its transiently read contents, response
 bodies and credentials were not retained, and the pass recorded zero
 private-registry writes. This is production HTTP/API evidence for the M6
 read-only release-file slice; it does not prove the full editor/reviewer/builder
-workflow or browser acceptance. The latest verified PR32 registry, builder, and
-upload-reviewer deployment set is recorded in the [activation readback](evidence/production-activation-readback-fa13c568.json)
-and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json);
-the checkpoint records enabled services and authenticated boundaries, but no
-live model session or draft context has started.
+workflow or browser acceptance. The earlier PR32 registry, builder, and
+upload-reviewer deployment set is retained in the [activation readback](evidence/production-activation-readback-fa13c568.json)
+and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json)
+as historical source/deployment evidence; it records enabled services and
+authenticated boundaries, but no live model session or draft context started.
 
 ## Recorded M6 local editor/browser checkpoint
 
@@ -302,9 +310,10 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   next 22:00 UTC Eve run still needs an explicit causal scheduler/session
   identifier; the earlier cron record is only deployment-scoped temporal
   correlation.
-- M7 OpenClaw backend code is shipped, but the feed remains disabled. Keep it
-  disabled until its explicit feed/trust configuration and bounded producer /
-  consumer interoperability evidence are ready.
+- M7 OpenClaw backend code is shipped, but the feed remains disabled. The public
+  metadata probe above is interoperability evidence only; keep the feed disabled
+  until its explicit feed/trust configuration, bounded producer/consumer
+  interoperability, artifact import, and private publication evidence are ready.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
@@ -316,5 +325,7 @@ context, M5 organization-wide visibility/automation, CLI parity, and external
 pack migration. This feature count is separate from the G0, C1, M6, and M7
 verification gates. M6's local synthetic browser proof passes, but its hosted,
 model, and accessibility gates remain incomplete. M7's source slices are
-current, but its OpenClaw feed remains disabled and has no live interoperability
-evidence. Both remain outside the current release gates here.
+current, but its OpenClaw feed remains disabled. The public metadata probe above
+is interoperability evidence only; hosted artifact import, private publication,
+and feed activation remain unproven. Both remain outside the current release
+gates here.
