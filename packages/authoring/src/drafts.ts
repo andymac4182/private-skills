@@ -276,8 +276,10 @@ function isBuilderInternalRoute(segments: string[]): boolean {
 
 function isBuilderServiceRequest(request: Request, principal: Principal): boolean {
   const identity = (principal as Principal & { identity?: unknown }).identity;
+  const scopes = principal.scopes;
   return identity !== 'worker' && !principal.roles.includes('worker') &&
     (principal.roles.includes('publisher') || principal.roles.includes('admin') || principal.roles.includes('owner')) &&
+    Array.isArray(scopes) && scopes.includes('skills:builder') &&
     request.headers.get('x-pskills-tool-identity') === 'skill-builder';
 }
 
@@ -398,10 +400,18 @@ async function createBuilderProposal(
   const before = await readDraftBundle(draft, deps);
   const after = applyBuilderOperations(before, operations);
   const proposedDigest = await digestBytes(encodeBundle(after));
+  const requestDigest = await digestText(JSON.stringify({
+    draftId,
+    revision: binding.revision,
+    digest: binding.digest,
+    sessionId,
+    operations,
+  }));
   const now = new Date().toISOString();
   const proposal: SkillBuilderProposalRecord = {
     id: randomId('proposal'),
     idempotencyKey,
+    requestDigest,
     organizationId: deps.config.organizationId,
     draftId,
     subject: session.subject,
@@ -418,7 +428,10 @@ async function createBuilderProposal(
     const currentSession = findBuilderSession(state, draftId, sessionId, deps.config.organizationId);
     if (!currentSession || currentSession.subject !== session.subject) throw unavailableDraft();
     const existing = currentSession.proposals.find((candidate) => candidate.idempotencyKey === idempotencyKey);
-    if (existing) return { proposal: existing, idempotent: true };
+    if (existing) {
+      if (existing.requestDigest !== requestDigest) throw idempotencyConflict();
+      return { proposal: existing, idempotent: true };
+    }
     if (currentSession.draftRevision !== binding.revision || currentSession.draftDigest !== binding.digest) {
       throw revisionConflict(currentSession.draftRevision);
     }

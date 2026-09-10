@@ -147,6 +147,8 @@ export type SkillBuilderProposalState = 'pending' | 'applied' | 'rejected' | 'st
 export interface SkillBuilderProposalRecord {
   id: string;
   idempotencyKey: string;
+  /** Digest of the canonical proposal request (binding, session, operations). */
+  requestDigest: Digest;
   organizationId: string;
   draftId: string;
   subject: string;
@@ -159,9 +161,11 @@ export interface SkillBuilderProposalRecord {
   createdAt: string;
   updatedAt: string;
 }
-export type SkillBuilderRequestState = 'accepted' | 'completed' | 'failed';
+export type SkillBuilderRequestState = 'accepted' | 'completed' | 'failed' | 'uncertain';
 export interface SkillBuilderRequestRecord {
   id: string;
+  /** Digest of the exact prompt request bound to this request id. */
+  requestDigest: Digest;
   state: SkillBuilderRequestState;
   proposalId?: string;
   createdAt: string;
@@ -179,6 +183,8 @@ export interface SkillBuilderSessionRecord {
   eveSessionId: string;
   /** Last provider turn observed for this session; used to scope cancellation. */
   activeTurnId?: string;
+  /** Durable single-flight fence for a prompt awaiting provider settlement. */
+  activeRequestId?: string;
   state: 'ready' | 'running' | 'stopped' | 'failed' | 'completed';
   requests: SkillBuilderRequestRecord[];
   proposals: SkillBuilderProposalRecord[];

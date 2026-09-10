@@ -14,6 +14,7 @@ import {
   type AuthoringHandlerDependencies,
 } from '../../authoring/src/index.js';
 import { writeDraftRevision } from '../../authoring/src/drafts.js';
+import { digestBytes } from '../../storage/src/index.js';
 import { validateDraftBinding, type DraftBinding } from '../../skill-builder/src/index.js';
 
 const MAX_BODY_BYTES = 96 * 1024;
@@ -24,6 +25,7 @@ const MAX_SESSION_ID_LENGTH = 256;
 const MAX_PROMPT_BYTES = 8_000;
 const MAX_REQUEST_ID_BYTES = 256;
 const MAX_EVE_STREAM_BYTES = 2 * 1024 * 1024;
+const UPSTREAM_TIMEOUT_MS = 20_000;
 
 export interface BuilderBffRuntime {
   /** Origin of the separate Eve service, without credentials or path. */
@@ -94,7 +96,8 @@ export function createBuilderBffHandler(deps: BuilderBffDependencies): (request:
         return methodNotAllowed(['GET', 'POST']);
       }
       if (parsed.operation === 'sessionId') {
-        if (request.method.toUpperCase() === 'GET' && parsed.action === 'stream') return await streamSession(deps, fetchImpl, parsed.draftId, principal, binding, parsed.sessionId!, request);
+        if (parsed.sessionId !== undefined) boundedSessionId(parsed.sessionId);
+        if (request.method.toUpperCase() === 'GET' && parsed.action === 'stream') return await streamSession(deps, fetchImpl, parsed.draftId, principal, binding, parsed.sessionId!);
         if (request.method.toUpperCase() === 'GET') return await loadSession(deps, fetchImpl, parsed.draftId, principal, binding, parsed.sessionId);
         if (request.method.toUpperCase() === 'POST' && parsed.action === 'prompt') return await sendPrompt(deps, fetchImpl, parsed.draftId, principal, binding, parsed.sessionId, request);
         if (request.method.toUpperCase() === 'POST' && parsed.action === 'stop' && parsed.sessionId) return await stopSession(deps, fetchImpl, parsed.draftId, principal, binding, parsed.sessionId, request);
@@ -109,7 +112,7 @@ export function createBuilderBffHandler(deps: BuilderBffDependencies): (request:
 
 async function availability(fetchImpl: typeof fetch, runtime: BuilderBffRuntime): Promise<Response> {
   try {
-    const response = await fetchImpl(`${runtime.appOrigin}/internal/builder/status`, {
+    const response = await fetchWithTimeout(fetchImpl, `${runtime.appOrigin}/internal/builder/status`, {
       method: 'GET',
       headers: { authorization: `Bearer ${runtime.serviceToken}`, accept: 'application/json' },
       redirect: 'error',
@@ -184,17 +187,34 @@ async function sendPrompt(
   assertBodyBinding(body, binding, draftId);
   const prompt = boundedText(body.prompt, 'prompt', MAX_PROMPT_BYTES);
   const requestId = boundedText(body.requestId, 'requestId', MAX_REQUEST_ID_BYTES);
+  const selectedPath = optionalSelectedPath(body.selectedPath);
   const state = await deps.repository.read(deps.config.organizationId);
   const candidate = requestedSessionId === undefined
     ? (state.builderSessions ?? []).find((session) => session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId && session.draftRevision === binding.revision && session.draftDigest === binding.digest)
     : (state.builderSessions ?? []).find((session) => session.id === requestedSessionId && session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId);
   let record: SkillBuilderSessionRecord;
   if (candidate) {
-    assertSessionBinding(candidate, principal, binding);
-    record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding);
+    // A local session has no Eve id until the first prompt is accepted.
+    assertSessionBinding(candidate, principal, binding, false);
+    record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding, await digestBuilderRequest({
+      draftId,
+      revision: binding.revision,
+      digest: binding.digest,
+      sessionId: candidate.id,
+      prompt,
+      ...(selectedPath === undefined ? {} : { selectedPath }),
+    }));
   } else {
     if (requestedSessionId !== undefined) throw builderError('BUILDER_SESSION_NOT_FOUND', 'Builder session is unavailable', 404);
     record = await createPendingSession(deps.repository, principal, binding);
+    record = await reserveRequest(deps.repository, record.id, principal, requestId, binding, await digestBuilderRequest({
+      draftId,
+      revision: binding.revision,
+      digest: binding.digest,
+      sessionId: record.id,
+      prompt,
+      ...(selectedPath === undefined ? {} : { selectedPath }),
+    }));
   }
 
   if (record.requests.find((candidate) => candidate.id === requestId)?.state === 'completed' && record.eveSessionId) {
@@ -208,10 +228,13 @@ async function sendPrompt(
     revision: binding.revision,
     digest: binding.digest,
     message: prompt,
+    requestId,
+    requestDigest: record.requests.find((candidate) => candidate.id === requestId)?.requestDigest,
+    ...(selectedPath === undefined ? {} : { selectedPath }),
   };
   let accepted: Record<string, unknown>;
   try {
-    const response = await fetchImpl(`${deps.runtime.appOrigin}/internal/builder/sessions`, {
+    const response = await fetchWithTimeout(fetchImpl, `${deps.runtime.appOrigin}/internal/builder/sessions`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${deps.runtime.serviceToken}`,
@@ -223,9 +246,19 @@ async function sendPrompt(
     });
     const value = await boundedJson(response, 64 * 1024);
     if (!response.ok || !isRecord(value) || typeof value.sessionId !== 'string') throw builderError('BUILDER_UPSTREAM', 'The skill builder could not accept the prompt', 502);
-    accepted = value;
+    accepted = { ...value, sessionId: boundedAcceptedSessionId(value.sessionId) };
   } catch (error) {
-    await markRequest(deps.repository, deps.config.organizationId, record.id, requestId, 'failed');
+    // A transport or response failure is ambiguous: Eve may have accepted the
+    // durable turn before the registry observed the response.  Keep the
+    // request fenced until a later reconciliation can resolve the Eve id.
+    await markRequest(
+      deps.repository,
+      deps.config.organizationId,
+      record.id,
+      requestId,
+      record.requests.find((candidate) => candidate.id === requestId)?.requestDigest ?? await digestBuilderRequest({ draftId, revision: binding.revision, digest: binding.digest, sessionId: record.id, prompt, ...(selectedPath === undefined ? {} : { selectedPath }) }),
+      'uncertain',
+    );
     throw error;
   }
   record = await bindAcceptedSession(deps.repository, deps.config.organizationId, record.id, requestId, binding, String(accepted.sessionId));
@@ -252,7 +285,15 @@ async function stopSession(
   const record = findOwnedSession(state, draftId, sessionId, principal);
   assertSessionBinding(record, principal, binding);
   if (record.state !== 'running') throw builderError('BUILDER_NOT_ACTIVE', 'The builder session has no active prompt', 409);
-  await fetchEve(fetchImpl, deps.runtime, `/eve/v1/session/${encodeURIComponent(record.eveSessionId)}/cancel`, {
+  const stopRequestDigest = await digestBuilderRequest({
+    kind: 'stop',
+    draftId,
+    revision: binding.revision,
+    digest: binding.digest,
+    sessionId,
+    requestId,
+  });
+  await fetchEve(fetchImpl, deps.runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(record.eveSessionId))}/cancel`, {
     method: 'POST',
     body: JSON.stringify(record.activeTurnId ? { turnId: record.activeTurnId } : {}),
     headers: { 'content-type': 'application/json' },
@@ -260,7 +301,8 @@ async function stopSession(
   await updateSession(deps.repository, deps.config.organizationId, record.id, (current) => {
     current.state = 'stopped';
     delete current.activeTurnId;
-    rememberRequest(current, requestId, 'completed');
+    delete current.activeRequestId;
+    rememberRequest(current, requestId, stopRequestDigest, 'completed');
   });
   return new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } });
 }
@@ -272,23 +314,19 @@ async function streamSession(
   principal: Principal,
   binding: DraftBinding,
   sessionId: string,
-  request: Request,
 ): Promise<Response> {
   const state = await deps.repository.read(deps.config.organizationId);
   const record = findOwnedSession(state, draftId, sessionId, principal);
   assertSessionBinding(record, principal, binding);
-  const url = new URL(request.url);
-  const startIndex = parseStartIndex(url.searchParams.get('startIndex'));
-  const query = startIndex === undefined ? '' : `?startIndex=${encodeURIComponent(String(startIndex))}`;
-  const response = await fetchEve(fetchImpl, deps.runtime, `/eve/v1/session/${encodeURIComponent(record.eveSessionId)}/stream${query}`, { method: 'GET' });
-  return new Response(response.body, {
-    status: response.status,
-    headers: {
-      'cache-control': 'no-store',
-      'content-type': response.headers.get('content-type') ?? 'application/x-ndjson',
-      ...(response.headers.get('x-eve-stream-version') ? { 'x-eve-stream-version': response.headers.get('x-eve-stream-version')! } : {}),
-    },
-  });
+  // Keep the registry facade sanitized.  Eve's raw stream includes tool,
+  // tracing, and provider events that are server-internal; the browser gets
+  // the same bounded turn DTO as the session routes.
+  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, boundedSessionId(record.eveSessionId));
+  await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
+  if (snapshot.lifecycle) record.state = snapshot.lifecycle;
+  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
+  else if (snapshot.activeTurnId) record.activeTurnId = snapshot.activeTurnId;
+  return json({ session: toSessionDto(record, snapshot.events) }, 200);
 }
 
 async function createPendingSession(repository: StateRepository, principal: Principal, binding: DraftBinding): Promise<SkillBuilderSessionRecord> {
@@ -319,14 +357,31 @@ async function createPendingSession(repository: StateRepository, principal: Prin
   });
 }
 
-async function reserveRequest(repository: StateRepository, sessionId: string, principal: Principal, requestId: string, binding: DraftBinding): Promise<SkillBuilderSessionRecord> {
+async function reserveRequest(
+  repository: StateRepository,
+  sessionId: string,
+  principal: Principal,
+  requestId: string,
+  binding: DraftBinding,
+  requestDigest: Digest,
+): Promise<SkillBuilderSessionRecord> {
   return await repository.transaction(principal.organizationId, (state) => {
     const record = findOwnedSession(state, binding.draftId, sessionId, principal);
-    assertSessionBinding(record, principal, binding);
+    assertSessionBinding(record, principal, binding, false);
     const existing = record.requests.find((candidate) => candidate.id === requestId);
+    if (existing && existing.requestDigest !== requestDigest) {
+      throw builderError('IDEMPOTENCY_CONFLICT', 'That request id was already used with different prompt data', 409);
+    }
     if (existing?.state === 'completed') return record;
-    if (existing?.state === 'accepted') throw builderError('BUILDER_BUSY', 'That prompt is already being processed', 409);
-    rememberRequest(record, requestId, 'accepted');
+    const unresolved = record.requests.find((candidate) => candidate.state === 'uncertain');
+    if (unresolved && unresolved.id !== requestId) {
+      throw builderError('BUILDER_RECONCILIATION_REQUIRED', 'The previous prompt has an unresolved provider result', 409);
+    }
+    const activeRequest = record.activeRequestId ?? record.requests.find((candidate) => candidate.state === 'accepted')?.id;
+    if (activeRequest && activeRequest !== requestId) throw builderError('BUILDER_BUSY', 'That builder session is already processing a prompt', 409);
+    if (existing?.state === 'accepted' || record.state === 'running') throw builderError('BUILDER_BUSY', 'That builder session is already processing a prompt', 409);
+    record.activeRequestId = requestId;
+    rememberRequest(record, requestId, requestDigest, 'accepted');
     return record;
   });
 }
@@ -338,18 +393,34 @@ async function bindAcceptedSession(repository: StateRepository, organizationId: 
     if (record.eveSessionId && record.eveSessionId !== eveSessionId) throw builderError('BUILDER_UPSTREAM', 'Builder session identity changed', 502);
     record.eveSessionId = eveSessionId;
     record.state = 'running';
-    rememberRequest(record, requestId, 'completed');
+    const request = record.requests.find((candidate) => candidate.id === requestId);
+    if (!request) throw builderError('BUILDER_UPSTREAM', 'Builder request record is missing', 502);
+    rememberRequest(record, requestId, request.requestDigest, 'completed');
     record.updatedAt = new Date().toISOString();
     return record;
   });
 }
 
-async function markRequest(repository: StateRepository, organizationId: string, sessionId: string, requestId: string, status: 'accepted' | 'completed' | 'failed'): Promise<void> {
+async function markRequest(
+  repository: StateRepository,
+  organizationId: string,
+  sessionId: string,
+  requestId: string,
+  requestDigest: Digest,
+  status: 'accepted' | 'completed' | 'failed' | 'uncertain',
+): Promise<void> {
   // A failed upstream request must still be durable so a retry can use a new
   // request id while an identical retry remains replay-safe.
   await repository.transaction(organizationId, (state) => {
     const record = (state.builderSessions ?? []).find((candidate) => candidate.id === sessionId);
-    if (record) rememberRequest(record, requestId, status);
+    if (record) {
+      rememberRequest(record, requestId, requestDigest, status);
+      if ((status === 'failed' || status === 'uncertain') && record.activeRequestId === requestId) {
+        // An uncertain request remains represented in the request log but no
+        // longer blocks reconciliation from claiming the provider session.
+        delete record.activeRequestId;
+      }
+    }
   });
 }
 
@@ -363,14 +434,15 @@ async function updateSession(repository: StateRepository, organizationId: string
   });
 }
 
-function rememberRequest(record: SkillBuilderSessionRecord, id: string, state: 'accepted' | 'completed' | 'failed'): void {
+function rememberRequest(record: SkillBuilderSessionRecord, id: string, requestDigest: Digest, state: 'accepted' | 'completed' | 'failed' | 'uncertain'): void {
   const now = new Date().toISOString();
   const current = record.requests.find((candidate) => candidate.id === id);
   if (current) {
+    if (current.requestDigest !== requestDigest) throw builderError('IDEMPOTENCY_CONFLICT', 'That request id was already used with different prompt data', 409);
     current.state = state;
     current.updatedAt = now;
   } else {
-    record.requests = [...record.requests.slice(-(MAX_REQUESTS - 1)), { id, state, createdAt: now, updatedAt: now }];
+    record.requests = [...record.requests.slice(-(MAX_REQUESTS - 1)), { id, requestDigest, state, createdAt: now, updatedAt: now }];
   }
 }
 
@@ -404,13 +476,16 @@ async function reconcileSnapshot(
   await updateSession(repository, organizationId, record.id, (current) => {
     if (current.state === 'stopped') return;
     if (snapshot.lifecycle) current.state = snapshot.lifecycle;
-    if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') delete current.activeTurnId;
+    if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') {
+      delete current.activeTurnId;
+      delete current.activeRequestId;
+    }
     else if (snapshot.activeTurnId) current.activeTurnId = snapshot.activeTurnId;
   });
 }
 
 async function fetchSessionSnapshot(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, eveSessionId: string): Promise<{ events: BuilderEvent[]; activeTurnId?: string; lifecycle?: BuilderSessionLifecycle }> {
-  const response = await fetchEve(fetchImpl, runtime, `/eve/v1/session/${encodeURIComponent(eveSessionId)}/stream?startIndex=0&includeTailIndex=1`, { method: 'GET' });
+  const response = await fetchEve(fetchImpl, runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(eveSessionId))}/stream?startIndex=0&includeTailIndex=1`, { method: 'GET' });
   const text = await boundedTextResponse(response, MAX_EVE_STREAM_BYTES);
   const events: BuilderEvent[] = [];
   for (const line of text.split('\n')) {
@@ -539,7 +614,7 @@ async function fetchEve(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, pat
     const headers = new Headers(init.headers);
     headers.set('authorization', `Bearer ${runtime.eveToken}`);
     headers.set('accept', 'application/json, application/x-ndjson');
-    const response = await fetchImpl(`${runtime.appOrigin}${path}`, { ...init, headers, redirect: 'error' });
+    const response = await fetchWithTimeout(fetchImpl, `${runtime.appOrigin}${path}`, { ...init, headers, redirect: 'error' });
     if (!response.ok) {
       try { await response.body?.cancel(); } catch { /* release an upstream error body without exposing it */ }
       throw builderError('BUILDER_UPSTREAM', 'The builder service could not complete the request', 502);
@@ -550,6 +625,13 @@ async function fetchEve(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, pat
   }
 }
 
+async function fetchWithTimeout(fetchImpl: typeof fetch, input: string, init: RequestInit): Promise<Response> {
+  const signal = typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    : undefined;
+  return await fetchImpl(input, { ...init, ...(signal ? { signal } : {}) });
+}
+
 async function boundedJson(response: Response, maximum: number): Promise<unknown> {
   const text = await boundedTextResponse(response, maximum);
   try { return JSON.parse(text) as unknown; } catch { return undefined; }
@@ -558,9 +640,39 @@ async function boundedJson(response: Response, maximum: number): Promise<unknown
 async function boundedTextResponse(response: Response, maximum: number): Promise<string> {
   const declared = response.headers.get('content-length');
   if (declared && Number.isSafeInteger(Number(declared)) && Number(declared) > maximum) throw builderError('BUILDER_UPSTREAM', 'Builder response is too large', 502);
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > maximum) throw builderError('BUILDER_UPSTREAM', 'Builder response is too large', 502);
-  return text;
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maximum) throw builderError('BUILDER_UPSTREAM', 'Builder response is too large', 502);
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maximum) {
+        await reader.cancel();
+        throw builderError('BUILDER_UPSTREAM', 'Builder response is too large', 502);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw builderError('BUILDER_UPSTREAM', 'Builder response is not valid UTF-8', 502);
+  }
 }
 
 async function readBoundedJson(request: Request): Promise<Record<string, unknown>> {
@@ -597,18 +709,37 @@ function compareUpdated(left: SkillBuilderSessionRecord, right: SkillBuilderSess
   return left.updatedAt.localeCompare(right.updatedAt);
 }
 
-function parseStartIndex(value: string | null): number | undefined {
-  if (value === null || value.trim() === '') return undefined;
-  if (!/^\d+$/u.test(value)) throw builderError('INVALID_REQUEST', 'startIndex is invalid', 400);
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 10_000_000) throw builderError('INVALID_REQUEST', 'startIndex is invalid', 400);
-  return parsed;
+function boundedSessionId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SESSION_ID_LENGTH || /[\u0000-\u001f\u007f/\\]/u.test(value)) {
+    throw builderError('INVALID_REQUEST', 'session id is invalid', 400);
+  }
+  return value;
+}
+
+function boundedAcceptedSessionId(value: unknown): string {
+  if (typeof value !== 'string') throw builderError('BUILDER_UPSTREAM', 'The builder returned an invalid session id', 502);
+  return boundedSessionId(value);
+}
+
+function optionalSelectedPath(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw builderError('INVALID_REQUEST', 'selectedPath is invalid', 400);
+  }
+  return value;
+}
+
+async function digestBuilderRequest(value: unknown): Promise<Digest> {
+  return await digestBytes(new TextEncoder().encode(JSON.stringify(value)));
 }
 
 function assertSameOriginMutation(request: Request, publicOrigin: string): void {
   if (request.headers.get('sec-fetch-site')?.toLowerCase() === 'cross-site') throw builderError('CSRF_DENIED', 'Cross-site builder mutations are not allowed', 403);
   const origin = request.headers.get('origin');
-  if (!origin) return;
+  if (!origin) {
+    if (request.headers.get('cookie')) throw builderError('CSRF_DENIED', 'Origin is required for cookie builder mutations', 403);
+    return;
+  }
   try {
     if (new URL(origin).origin !== new URL(publicOrigin).origin) throw new Error('origin mismatch');
   } catch {

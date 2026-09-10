@@ -400,6 +400,10 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
       requireRouteScopes(principal, scopesForRoute(method, path, segments));
 
       if (builderBff && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'builder') {
+        // Builder POSTs are browser mutations as well as bearer-compatible
+        // server calls.  Reuse the shared cookie-aware Origin policy so a
+        // browser session cannot omit Origin, while CLI bearer callers may.
+        if (method === 'POST') assertSessionRequestSafe(request, config, method);
         const response = await builderBff(request, principal);
         if (response) return response;
       }

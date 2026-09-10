@@ -43,7 +43,7 @@ present and valid:
 - `PSKILLS_BUILDER_SERVICE_TOKEN` protects the internal session/status routes.
 - `PSKILLS_BUILDER_REGISTRY_API_URL` and
   `PSKILLS_BUILDER_REGISTRY_TOKEN` reach the authoring BFF with the
-  `skill-builder` tool identity.
+  `skill-builder` tool identity and the dedicated `skills:builder` scope.
 - `AI_GATEWAY_API_KEY` or a Vercel OIDC token authenticates the configured AI
   Gateway. `PSKILLS_AI_GATEWAY_BASE_URL` and
   `PSKILLS_AI_GATEWAY_TEAM_ID` are optional bounded configuration.
