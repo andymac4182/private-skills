@@ -47,6 +47,7 @@ const RENAMED_LARGE_FILE_PATH = 'assets/renamed.bin';
 
 type DraftFileReference = {
   path: string;
+  sourcePath?: string;
   digest: `sha256:${string}`;
 };
 
