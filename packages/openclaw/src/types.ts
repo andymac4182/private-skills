@@ -16,7 +16,9 @@ export const OPENCLAW_GITHUB_SKILLS_SPEC_URL =
   "https://github.com/openclaw/clawhub/blob/694ff719e9b161ea770fe2abfdc43f2ff5401fe4/specs/github-backed-skills.md" as const;
 export const OPENCLAW_GITHUB_SKILLS_SPEC_BLOB = "33f89b51815b4b6a188f2dc6a3e83afcb2835585" as const;
 export const OPENCLAW_OFFICIAL_FEED_ID = "clawhub-official" as const;
-export const OPENCLAW_SKILLS_FEED_ID = "clawhub-official-skills" as const;
+// The skills route is the official ClawHub feed; the route does not use a
+// second `-skills` identity.
+export const OPENCLAW_SKILLS_FEED_ID = OPENCLAW_OFFICIAL_FEED_ID;
 export const OPENCLAW_FEED_ROUTE = "/v1/feeds/skills" as const;
 export const OPENCLAW_SOURCE_CLAWHUB = "public-clawhub" as const;
 export const OPENCLAW_SOURCE_GITHUB = "public-github" as const;
@@ -248,6 +250,7 @@ export type OpenClawFeedErrorCode =
   | "aborted"
   | "body-too-large"
   | "digest-mismatch"
+  | "equivocation"
   | "fetch-failed"
   | "invalid-etag"
   | "invalid-feed"

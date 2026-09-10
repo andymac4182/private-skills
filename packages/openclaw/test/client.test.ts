@@ -91,6 +91,33 @@ describe("OpenClaw feed transport and cache", () => {
     expect(cache.getSnapshot()!.feed.entries[0]!.title).toBe("Demo");
   });
 
+  it("accepts only the pinned digest ETag for a 200 hosted-feed response", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const digest = await sha256(new TextEncoder().encode(body));
+    const matching = new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    });
+    const accepted = await matching.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body, { headers: { etag: `"${digest}"` } }),
+    });
+    expect(accepted.kind).toBe("accepted");
+
+    const opaque = await new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    }).refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body, { headers: { etag: '"opaque-revision-7"' } }),
+    });
+    expect(opaque.kind).toBe("rejected");
+    if (opaque.kind !== "rejected") throw new Error("expected opaque ETag rejection");
+    expect(opaque.error).toBe("invalid-etag");
+  });
+
   it("does not replace the cache with malformed, wrong-identity, or oversized responses", async () => {
     const body = serializeOpenClawFeed(feed());
     let call = 0;
@@ -197,6 +224,32 @@ describe("OpenClaw feed transport and cache", () => {
     expect(second.error).toBe("digest-mismatch");
     expect(second.status).toBe(304);
     expect(second.snapshot).toBeUndefined();
+  });
+
+  it("accepts an identical same-sequence body but rejects same-sequence equivocation", async () => {
+    const identicalBody = serializeOpenClawFeed(feed({ sequence: 4 }));
+    const changedBody = serializeOpenClawFeed(
+      feed({ sequence: 4, entries: [{ ...skillEntry(), title: "Changed" }] }),
+    );
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => Date.parse("2029-12-01T00:00:00.000Z") });
+    const fetcher = async (): Promise<Response> => {
+      calls += 1;
+      return response(calls <= 2 ? identicalBody : changedBody);
+    };
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher,
+    } as const;
+    expect((await cache.refresh(request)).kind).toBe("accepted");
+    expect((await cache.refresh(request)).kind).toBe("accepted");
+    const equivocation = await cache.refresh(request);
+    expect(equivocation.kind).toBe("stale");
+    if (equivocation.kind !== "stale") throw new Error("expected stale equivocation result");
+    expect(equivocation.error).toBe("equivocation");
+    expect(equivocation.snapshot.feed.entries[0]?.title).toBe("Demo");
   });
 
   it("serializes refreshes so an older response cannot commit after a newer response", async () => {

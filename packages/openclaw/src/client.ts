@@ -21,7 +21,6 @@ import {
   type OpenClawRefreshResult,
 } from "./types.ts";
 
-const ETAG_RE = /^"(sha256:[0-9a-f]{64})"$/u;
 const MAX_HEADER_BYTES = 8 * 1024;
 
 export class OpenClawRequestError extends Error {
@@ -156,7 +155,6 @@ export class OpenClawFeedCache {
       try {
         feed = parseOpenClawFeed(rawBody.bytes, {
           expectedFeedId: request.expectedFeedId,
-          previousSequence: this.snapshotValue?.feed.sequence,
           now,
           checkExpiry: true,
           maxBytes: maxBodyBytes,
@@ -175,8 +173,19 @@ export class OpenClawFeedCache {
         return this.rejectWithoutSnapshot("digest-mismatch", 200);
       }
       const suppliedEtag = response.headers.get("etag");
+      // The pinned ClawHub hosted-feed contract defines ETag as the quoted
+      // payload SHA-256, so an opaque validator is not interchangeable here.
       if (suppliedEtag !== null && suppliedEtag !== `"${digest}"`) {
         return this.fallback("invalid-etag", now, 200);
+      }
+      const previous = this.snapshotValue;
+      if (previous !== undefined) {
+        if (feed.sequence < previous.feed.sequence) {
+          return this.fallback("replay", now, 200);
+        }
+        if (feed.sequence === previous.feed.sequence && digest !== previous.sha256) {
+          return this.fallback("equivocation", now, 200);
+        }
       }
       const lastModified = readBoundedHeader(response.headers.get("last-modified"));
       if (lastModified === "invalid") {

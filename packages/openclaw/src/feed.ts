@@ -23,6 +23,7 @@ import {
 const MAX_STRING_BYTES = 64 * 1024;
 const MAX_CANDIDATES_PER_ENTRY = 32;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
+const SHA256_DIGEST_RE = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT_RE = /^[0-9a-f]{40}$/u;
 
 const textEncoder = new TextEncoder();
@@ -248,6 +249,11 @@ export function normalizeOpenClawCandidate(
     if (candidate.github !== undefined) {
       throw new OpenClawValidationError("ClawHub candidates cannot carry GitHub source metadata");
     }
+    if (!SHA256_DIGEST_RE.test(candidate.integrity)) {
+      throw new OpenClawValidationError(
+        "ClawHub candidate integrity must be sha256:<64 lowercase hex characters>",
+      );
+    }
     return {
       entryId: entry.id,
       entryType: entry.type,
@@ -268,6 +274,11 @@ export function normalizeOpenClawCandidate(
       throw new OpenClawValidationError("GitHub candidates require exact source metadata");
     }
     validateGithubSource(candidate.github);
+    if (!SHA256_HEX_RE.test(candidate.github.contentHash)) {
+      throw new OpenClawValidationError(
+        "GitHub source contentHash must be 64 lowercase SHA-256 hex characters",
+      );
+    }
     if (candidate.version !== candidate.github.commit) {
       throw new OpenClawValidationError("GitHub candidate version must be its immutable commit");
     }

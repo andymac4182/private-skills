@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CATALOG_SKILLS_FEED_ID,
   OPENCLAW_MAX_JSON_DEPTH,
   OPENCLAW_OFFICIAL_FEED_ID,
+  OPENCLAW_SKILLS_FEED_ID,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
   createOpenClawTenantFeedPreview,
@@ -54,6 +56,11 @@ function feed(overrides: Partial<OpenClawFeed> = {}): OpenClawFeed {
 }
 
 describe("OpenClaw hosted feed v1", () => {
+  it("uses the pinned official identity for the skills feed", () => {
+    expect(OPENCLAW_SKILLS_FEED_ID).toBe(OPENCLAW_OFFICIAL_FEED_ID);
+    expect(CATALOG_SKILLS_FEED_ID).toBe(OPENCLAW_OFFICIAL_FEED_ID);
+  });
+
   it("round-trips the exact schema-v1 envelope with deterministic ordering", () => {
     const value = feed({
       entries: [skillEntry(), { ...skillEntry(), id: "@acme/alpha", title: "Alpha" }],
@@ -83,7 +90,7 @@ describe("OpenClaw hosted feed v1", () => {
           }),
         ),
         {
-        now: Date.parse("2029-12-01T00:00:00.000Z"),
+          now: Date.parse("2029-12-01T00:00:00.000Z"),
         },
       ),
     ).toThrow("feed has expired");
@@ -108,13 +115,13 @@ describe("OpenClaw hosted feed v1", () => {
             sourceRef: OPENCLAW_SOURCE_GITHUB,
             package: "@nvidia/aiq-deploy",
             version: "1111111111111111111111111111111111111111",
-            integrity: "sha256:folder-hash",
-              github: {
-                repo: "NVIDIA/skills",
-                path: "skills/aiq-deploy",
-                commit: "1111111111111111111111111111111111111111",
-                contentHash: "folder-hash",
-              },
+            integrity: `sha256:${"a".repeat(64)}`,
+            github: {
+              repo: "NVIDIA/skills",
+              path: "skills/aiq-deploy",
+              commit: "1111111111111111111111111111111111111111",
+              contentHash: "a".repeat(64),
+            },
           },
         ],
       },
@@ -125,7 +132,7 @@ describe("OpenClaw hosted feed v1", () => {
         repo: "NVIDIA/skills",
         path: "skills/aiq-deploy",
         commit: "1111111111111111111111111111111111111111",
-        contentHash: "folder-hash",
+        contentHash: "a".repeat(64),
       },
     });
     expect(() =>
@@ -134,6 +141,13 @@ describe("OpenClaw hosted feed v1", () => {
         integrity: "sha256:other",
       }),
     ).toThrow("integrity");
+    expect(() =>
+      normalizeOpenClawCandidate(entry, {
+        ...entry.install.candidates[0]!,
+        github: { ...entry.install.candidates[0]!.github!, contentHash: "folder-hash" },
+        integrity: "sha256:folder-hash",
+      }),
+    ).toThrow("contentHash");
     const normalized = normalizeOpenClawCandidate(entry, entry.install.candidates[0]!);
     expect(() => verifyOpenClawGithubContentHash(normalized.source, "changed-hash")).toThrow(
       "digest",
@@ -160,6 +174,20 @@ describe("OpenClaw hosted feed v1", () => {
         },
       ).source,
     ).toMatchObject({ path: "" });
+  });
+
+  it("requires SHA-256 integrity for hosted candidates during normalization", () => {
+    const entry = skillEntry();
+    expect(() => normalizeOpenClawCandidate(entry, entry.install.candidates[0]!)).toThrow(
+      "sha256:<64 lowercase hex characters>",
+    );
+    const valid = {
+      ...entry.install.candidates[0]!,
+      integrity: `sha256:${"b".repeat(64)}`,
+    };
+    expect(normalizeOpenClawCandidate({ ...entry, install: { candidates: [valid] } }, valid).source).toMatchObject({
+      artifactDigest: valid.integrity,
+    });
   });
 
   it("verifies hosted bytes independently from the feed entry", async () => {
