@@ -4750,7 +4750,10 @@ function normalizeSkillsShEvidence(
   if (externalDigest !== undefined && !isDigest(externalDigest)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external digest is invalid', 409);
   }
-  const skillPath = optionalProvenanceString(nested?.skillPath ?? raw.skillPath, 'skillPath', 4_096);
+  const rawSkillPath = nested?.skillPath ?? raw.skillPath;
+  const skillPath = rawSkillPath === ''
+    ? ''
+    : optionalProvenanceString(rawSkillPath, 'skillPath', 4_096);
   const requestedRef = optionalProvenanceString(nested?.requestedRef ?? raw.requestedRef, 'requestedRef', 256);
   const resolvedCommit = optionalProvenanceString(nested?.resolvedCommit ?? raw.resolvedCommit, 'resolvedCommit', 128);
   const resolvedTree = optionalProvenanceString(nested?.resolvedTree ?? raw.resolvedTree, 'resolvedTree', 128);
@@ -4759,6 +4762,20 @@ function normalizeSkillsShEvidence(
   }
   if (resolvedTree !== undefined && !/^[0-9a-f]{40}$/iu.test(resolvedTree)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved tree is invalid', 409);
+  }
+  if (skillPath === '' && (
+    sourceResolutionKind !== 'github' ||
+    nestedSourceType !== 'github' ||
+    verifiedSourceOrigin(sourceProviderOrigin) !== 'github.com' ||
+    !isCommit(resolvedCommit) ||
+    !isSafeRepository(repository) ||
+    externalId === undefined ||
+    nestedSource !== repository ||
+    nestedSlug === undefined ||
+    externalId !== `${nestedSource}/${nestedSlug}` ||
+    nestedSourceUrl === undefined
+  )) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'An empty GitHub skill path requires verified repository-root evidence', 409);
   }
   const wellKnownIndexUrl = optionalProvenanceString(nested?.wellKnownIndexUrl ?? raw.wellKnownIndexUrl, 'wellKnownIndexUrl', 4_096);
   const wellKnownEntryName = optionalProvenanceString(nested?.wellKnownEntryName ?? raw.wellKnownEntryName, 'wellKnownEntryName', 2_048);

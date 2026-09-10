@@ -300,13 +300,15 @@ async function completeSnapshot(
         path: test.directory.externalId,
         revision: options.revision ?? 'snapshot-1',
         externalId: test.directory.externalId,
+        source: test.directory.source,
+        slug: test.directory.slug,
         externalSourceType: options.externalSourceType ?? 'github',
         externalSnapshotHash: test.directory.hash,
         sourceResolutionKind: options.sourceResolutionKind ?? 'snapshot',
         sourceProviderOrigin: options.sourceProviderOrigin ?? 'https://skills.sh',
         ...(options.sourceUrl ? { sourceUrl: options.sourceUrl } : {}),
         ...(options.wellKnownIndexUrl ? { wellKnownIndexUrl: options.wellKnownIndexUrl } : {}),
-        ...(options.skillPath ? { skillPath: options.skillPath } : {}),
+        ...(options.skillPath === undefined ? {} : { skillPath: options.skillPath }),
         ...(options.wellKnownEntryName ? { wellKnownEntryName: options.wellKnownEntryName } : {}),
         ...(options.resolvedCommit ? { resolvedCommit: options.resolvedCommit } : {}),
         ...(options.externalDigest ? { externalDigest: options.externalDigest } : {}),
@@ -658,6 +660,58 @@ describe('transparent directory pull-through', () => {
     expect(body.reference).toBe('@github/acme/repo/skills/my-skill');
     expect(body.reference).not.toContain('skills.sh');
     expect(body.source).toMatchObject({ host: 'github.com', repository: SOURCE, path: 'skills/my-skill' });
+  });
+
+  it('accepts an empty skillPath only for a verified GitHub repository root', async () => {
+    const test = setup({ slug: 'root-skill' });
+    await createFeed(test);
+    test.directory.hash = null;
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: test.directory.externalId }),
+    }));
+    expect(queued.status).toBe(202);
+    const job = await claimJob(test);
+    const commit = 'b'.repeat(40);
+    expect((await completeSnapshot(test, job, {
+      revision: commit,
+      sourceResolutionKind: 'github',
+      sourceProviderOrigin: 'https://github.com',
+      sourceUrl: 'https://github.com/acme/repo',
+      skillPath: '',
+      resolvedCommit: commit,
+    })).status).toBe(200);
+
+    const warm = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: test.directory.externalId }),
+    }));
+    expect(warm.status).toBe(200);
+    expect(await responseJson<{ reference: string }>(warm)).toMatchObject({ reference: '@github/acme/repo' });
+  });
+
+  it('rejects an empty skillPath without immutable GitHub proof', async () => {
+    const test = setup({ slug: 'root-skill' });
+    await createFeed(test);
+    test.directory.hash = null;
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: test.directory.externalId }),
+    }));
+    expect(queued.status).toBe(202);
+    const job = await claimJob(test);
+    const response = await completeSnapshot(test, job, {
+      revision: 'snapshot-1',
+      sourceResolutionKind: 'snapshot',
+      sourceProviderOrigin: 'https://github.com',
+      sourceUrl: 'https://github.com/acme/repo',
+      skillPath: '',
+    });
+    expect(response.status).toBe(409);
+    expect(await responseJson<{ error: { code: string } }>(response)).toMatchObject({ error: { code: 'PROVENANCE_CONFLICT' } });
   });
 
   it('returns a scoped well-known v2 source reference with its verified entry origin', async () => {
