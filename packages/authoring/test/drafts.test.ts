@@ -624,7 +624,7 @@ describe('durable skill drafts', () => {
   });
 
   it('fails clearly when a valid metadata manifest cannot fit the response bound', async () => {
-    const test = await fixture({ maxBodyBytes: 8 * 1024 * 1024 });
+    const test = await fixture({ withReview: true, maxBodyBytes: 8 * 1024 * 1024 });
     const segment = 'a'.repeat(255);
     const files: SkillBundle['files'] = Array.from({ length: 2_000 }, (_, index) => ({
       path: `${Array.from({ length: 10 }, () => segment).join('/')}/${index}`,
@@ -633,7 +633,58 @@ describe('durable skill drafts', () => {
     const response = await test.handler(uploadCreateRequest('@team/large-manifest', 'large-manifest', files));
     expect(response.status).toBe(413);
     expect((await json(response)).error).toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
-    expect((await test.repository.read(ORGANIZATION)).drafts).toHaveLength(1);
+    let state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: unknown[]; uploadReviewResults?: unknown[] };
+    expect(state.drafts ?? []).toHaveLength(0);
+    expect(state.audit).toHaveLength(0);
+    expect(state.builderSessions ?? []).toHaveLength(0);
+    expect(state.uploadReviewJobs ?? []).toHaveLength(0);
+    expect(state.uploadReviewResults ?? []).toHaveLength(0);
+    expect(test.blobs.putCalls).toBe(1);
+
+    const retry = await test.handler(uploadCreateRequest('@team/large-manifest', 'large-manifest', files));
+    expect(retry.status).toBe(413);
+    state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: unknown[]; uploadReviewResults?: unknown[] };
+    expect(state.drafts ?? []).toHaveLength(0);
+    expect(state.audit).toHaveLength(0);
+    expect(state.uploadReviewJobs ?? []).toHaveLength(0);
+    expect(state.uploadReviewResults ?? []).toHaveLength(0);
+    expect(test.blobs.putCalls).toBe(1);
+
+    const smallDraft = await create(test, 'preflight-write-base');
+    state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: unknown[]; uploadReviewResults?: unknown[] };
+    expect(state.drafts ?? []).toHaveLength(1);
+    expect(state.audit).toHaveLength(1);
+    expect(state.uploadReviewJobs ?? []).toHaveLength(1);
+    expect(test.blobs.putCalls).toBe(2);
+    await expect(writeDraftRevision({
+      draftId: smallDraft.draft.id,
+      expectedRevision: 1,
+      expectedDigest: smallDraft.draft.digest,
+      files,
+      idempotencyKey: 'oversized-normal-save',
+      principal: user(),
+      deps: test.deps,
+    })).rejects.toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
+    await expect(writeDraftRevision({
+      draftId: smallDraft.draft.id,
+      expectedRevision: 1,
+      expectedDigest: smallDraft.draft.digest,
+      files,
+      idempotencyKey: 'oversized-builder-apply',
+      principal: user(),
+      deps: test.deps,
+      kind: 'builder-proposal',
+      proposalId: 'oversized-proposal',
+      onCommit: () => {
+        throw new Error('builder commit must not run after response preflight');
+      },
+    })).rejects.toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
+    state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: unknown[]; uploadReviewResults?: unknown[] };
+    expect(state.drafts?.[0]).toMatchObject({ revision: 1, digest: smallDraft.draft.digest });
+    expect(state.audit).toHaveLength(1);
+    expect(state.uploadReviewJobs ?? []).toHaveLength(1);
+    expect(state.uploadReviewResults ?? []).toHaveLength(0);
+    expect(test.blobs.putCalls).toBe(2);
   });
 
   it('returns an explicit conflict when the selected base digest is stale', async () => {

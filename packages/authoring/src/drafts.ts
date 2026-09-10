@@ -533,6 +533,32 @@ async function applyBuilderProposal(
   if (proposal.baseRevision !== binding.revision || proposal.baseDigest !== binding.digest) throw revisionConflict(draft.revision);
   const before = await readDraftBundle(draft, deps);
   const after = applyBuilderOperations(before, proposal.operations);
+  const afterEncoded = encodeBundle(after);
+  const afterDigest = await digestBytes(afterEncoded);
+  const preflightArtifact = responsePreflightArtifact(afterDigest, afterEncoded.byteLength);
+  const preflightRecord: SkillDraftIdempotencyRecord = {
+    key: '__draft-response-preflight__',
+    subject: principal.subject,
+    requestDigest: afterDigest,
+    revision: binding.revision + 1,
+    digest: afterDigest,
+    artifact: preflightArtifact,
+    manifest: await compactManifest(after.files),
+    updatedAt: new Date().toISOString(),
+  };
+  const preflightDraft: SkillDraft = {
+    ...draft,
+    revision: binding.revision + 1,
+    digest: afterDigest,
+    artifact: preflightArtifact,
+    files: after.files,
+    updatedAt: preflightRecord.updatedAt,
+    idempotency: [...(draft.idempotency ?? []), preflightRecord],
+  };
+  await assertDraftEnvelopeFits(preflightDraft, after, (publicDraft) => ({
+    proposal: publicBuilderProposal({ ...proposal, state: 'applied' }, before),
+    draft: publicDraft,
+  }));
   let appliedProposal: SkillBuilderProposalRecord | undefined;
   const written = await writeDraftRevision({
     draftId,
@@ -788,8 +814,10 @@ async function createDraft(
     // advisory queue write. Reconcile only when this create record still
     // describes the current revision; syncDraftReview's binding guard makes a
     // historical replay a no-op.
+    const publicDraft = await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files });
+    assertDraftResponseSize({ draft: publicDraft, idempotent: true });
     await syncDraftReview(existingDraft, existingDraft.files, deps, false);
-    return draftResponse({ draft: await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
+    return draftResponse({ draft: publicDraft, idempotent: true }, 200, {
       'cache-control': 'private, no-store',
     });
   }
@@ -797,16 +825,16 @@ async function createDraft(
   if (snapshot.release.artifact.digest !== baseDigest) {
     throw new AuthoringApiError('DIGEST_MISMATCH', 'The selected release digest changed', 409);
   }
-  const stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
   const now = new Date().toISOString();
   const draftId = randomId('draft');
+  const preflightArtifact = responsePreflightArtifact(snapshot.release.artifact.digest, snapshot.bytes.byteLength);
   const record: SkillDraftIdempotencyRecord = {
     key: idempotencyKey,
     subject: principal.subject,
     requestDigest,
     revision: 1,
     digest: snapshot.release.artifact.digest,
-    artifact: stored,
+    artifact: preflightArtifact,
     manifest: await compactManifest(snapshot.bundle.files),
     updatedAt: now,
   };
@@ -821,7 +849,7 @@ async function createDraft(
     baseDigest,
     revision: 1,
     digest: snapshot.release.artifact.digest,
-    artifact: stored,
+    artifact: preflightArtifact,
     files: snapshot.bundle.files,
     status: 'open',
     actor: principal.subject,
@@ -830,6 +858,10 @@ async function createDraft(
     createIdempotency: record,
     idempotency: [],
   };
+  await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: snapshot.bundle.files });
+  const stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
+  record.artifact = stored;
+  draft.artifact = stored;
 
   const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
     ensureDrafts(state);
@@ -898,24 +930,26 @@ async function createUploadDraft(
       throw idempotencyConflict();
     }
     const existingDraft = await draftFromCreateRecord(existing, deps);
+    const publicDraft = await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files });
+    assertDraftResponseSize({ draft: publicDraft, idempotent: true });
     await syncDraftReview(existingDraft, existingDraft.files, deps, false);
     return draftResponse({
-      draft: await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }),
+      draft: publicDraft,
       idempotent: true,
     }, 200, { 'cache-control': 'private, no-store' });
   }
 
   const metadata = draftMetadataOrEmpty(bundle);
-  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
   const now = new Date().toISOString();
   const draftId = randomId('draft');
+  const preflightArtifact = responsePreflightArtifact(digest, encoded.byteLength);
   const record: SkillDraftIdempotencyRecord = {
     key: idempotencyKey,
     subject: principal.subject,
     requestDigest,
     revision: 1,
     digest,
-    artifact: stored,
+    artifact: preflightArtifact,
     manifest: await compactManifest(bundle.files),
     updatedAt: now,
   };
@@ -928,7 +962,7 @@ async function createUploadDraft(
     description: metadata.description,
     revision: 1,
     digest,
-    artifact: stored,
+    artifact: preflightArtifact,
     files: bundle.files,
     status: 'open',
     actor: principal.subject,
@@ -937,6 +971,10 @@ async function createUploadDraft(
     createIdempotency: record,
     idempotency: [],
   };
+  await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: bundle.files });
+  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  record.artifact = stored;
+  draft.artifact = stored;
 
   const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
     ensureDrafts(state);
@@ -1131,11 +1169,17 @@ export async function writeDraftRevision(
   if (prior) {
     if (prior.requestDigest !== identityDigest) throw idempotencyConflict();
     const replay = await draftFromIdempotency(before, prior, input.deps);
+    const replayBundle = { format: 'pskills-bundle-v1' as const, files: replay.files };
+    await assertDraftEnvelopeFits(
+      replay,
+      replayBundle,
+      kind === 'update' ? (publicDraft) => ({ draft: publicDraft, idempotent: true }) : undefined,
+    );
     // Recover a queue write lost after the draft transaction. The current
     // binding guard prevents an old revision's replay from staling or
     // re-enqueuing historical content.
     await syncDraftReview(replay, replay.files, input.deps, true);
-    return { draft: replay, bundle: { format: 'pskills-bundle-v1', files: replay.files }, idempotent: true };
+    return { draft: replay, bundle: replayBundle, idempotent: true };
   }
   if (before.revision !== expectedRevision) {
     throw revisionConflict(before.revision);
@@ -1160,18 +1204,34 @@ export async function writeDraftRevision(
     digest = await digestBytes(encoded);
   }
 
-  const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
   const now = new Date().toISOString();
+  const preflightArtifact = responsePreflightArtifact(digest!, encoded!.byteLength);
   const record: SkillDraftIdempotencyRecord = {
     key: idempotencyKey,
     subject: input.principal.subject,
     requestDigest: identityDigest,
     revision: expectedRevision + 1,
     digest: digest!,
-    artifact: stored,
+    artifact: preflightArtifact,
     manifest: await compactManifest(bundle!.files),
     updatedAt: now,
   };
+  const candidateDraft: SkillDraft = {
+    ...before,
+    revision: expectedRevision + 1,
+    digest: digest!,
+    artifact: preflightArtifact,
+    files: bundle!.files,
+    updatedAt: now,
+    idempotency: [...(before.idempotency ?? []), record],
+  };
+  await assertDraftEnvelopeFits(
+    candidateDraft,
+    { format: 'pskills-bundle-v1', files: bundle!.files },
+    kind === 'update' ? (publicDraft) => ({ draft: publicDraft, idempotent: false }) : undefined,
+  );
+  const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
+  record.artifact = stored;
 
   const result = await input.deps.repository.transaction(input.deps.config.organizationId, (state) => {
     const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
@@ -1207,6 +1267,11 @@ export async function writeDraftRevision(
     ? await draftFromIdempotency(result.draft, findIdempotency(result.draft, idempotencyKey, input.principal.subject)!, input.deps)
     : result.draft;
   const responseBundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
+  await assertDraftEnvelopeFits(
+    responseDraft,
+    responseBundle,
+    kind === 'update' ? (publicDraft) => ({ draft: publicDraft, idempotent: result.idempotent }) : undefined,
+  );
   await syncDraftReview(responseDraft, responseBundle.files, input.deps, true);
   return { draft: responseDraft, bundle: responseBundle, idempotent: result.idempotent };
 }
@@ -1685,7 +1750,7 @@ async function readDraftBundle(draft: SkillDraft, deps: AuthoringHandlerDependen
   return bundle;
 }
 
-function draftResponse(value: unknown, status: number, headers: Record<string, string> = {}): Response {
+function assertDraftResponseSize(value: unknown): void {
   const body = JSON.stringify(value);
   if (new TextEncoder().encode(body).byteLength > MAX_PUBLIC_DRAFT_RESPONSE_BYTES) {
     throw new AuthoringApiError(
@@ -1695,6 +1760,11 @@ function draftResponse(value: unknown, status: number, headers: Record<string, s
       { maxBytes: MAX_PUBLIC_DRAFT_RESPONSE_BYTES },
     );
   }
+}
+
+function draftResponse(value: unknown, status: number, headers: Record<string, string> = {}): Response {
+  const body = JSON.stringify(value);
+  assertDraftResponseSize(value);
   return new Response(body, {
     status,
     headers: {
@@ -1702,6 +1772,19 @@ function draftResponse(value: unknown, status: number, headers: Record<string, s
       ...headers,
     },
   });
+}
+
+function responsePreflightArtifact(digest: Digest, size: number): StoredBlob {
+  return { key: '__draft-response-preflight__', digest, size };
+}
+
+async function assertDraftEnvelopeFits(
+  draft: SkillDraft,
+  bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] },
+  envelope: (publicDraft: PublicSkillDraft) => unknown = (publicDraft) => ({ draft: publicDraft }),
+): Promise<void> {
+  const publicDraft = await toPublicDraft(draft, bundle);
+  assertDraftResponseSize(envelope(publicDraft));
 }
 
 export async function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): Promise<PublicSkillDraft> {
