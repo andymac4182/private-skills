@@ -236,6 +236,12 @@ as deployed, and no registry authenticated flow is implied by the reviewer
 probe. See [`docs/eve-reviewer.md`](eve-reviewer.md) for the complete tool,
 session, and build contract.
 
+The interactive skill-builder bridge in this web runtime is production-bound
+to `https://private-skills-builder.vercel.app`; its server-side credentials and
+authorized draft context are never exposed to the browser. The registry and
+core hosting contracts remain Nitro-portable, but alternate builder
+destinations are not supported or claimed by this runtime.
+
 Eve receives a bounded approved-skill snapshot through the two fixed internal
 routes. Its model can propose and submit a review suggestion, but it cannot
 merge or publish a release, edit source, authorize an install, or execute
