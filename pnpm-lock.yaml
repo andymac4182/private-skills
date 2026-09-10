@@ -149,6 +149,9 @@ importers:
 
   apps/skill-builder:
     dependencies:
+      '@vercel/oidc':
+        specifier: 3.2.0
+        version: 3.2.0
       ai:
         specifier: 7.0.94
         version: 7.0.94(zod@4.5.4)

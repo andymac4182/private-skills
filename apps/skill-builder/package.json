@@ -13,6 +13,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@vercel/oidc": "3.2.0",
     "ai": "7.0.94",
     "eve": "0.52.3",
     "zod": "4.5.4"

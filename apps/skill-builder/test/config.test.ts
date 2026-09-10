@@ -48,6 +48,34 @@ describe("skill-builder configuration", () => {
     expect(status.gatewayConfigured).toBe(true);
   });
 
+  it("accepts the hosted Vercel OIDC request-context credential", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PSKILLS_BUILDER_AI_ENABLED", "true");
+    vi.stubEnv("VERCEL_OIDC_TOKEN", "");
+    vi.stubEnv("PSKILLS_BUILDER_REGISTRY_API_URL", "https://registry.example.test");
+    vi.stubEnv("PSKILLS_BUILDER_REGISTRY_TOKEN", "registry-token");
+    vi.stubEnv("PSKILLS_BUILDER_SERVICE_TOKEN", "service-token");
+    vi.stubEnv("PSKILLS_BUILDER_EVE_API_TOKEN", "eve-token");
+
+    const symbol = Symbol.for("@vercel/request-context");
+    const previous = Object.getOwnPropertyDescriptor(globalThis, symbol);
+    const oidcToken = `header.${"x".repeat(700)}.signature`;
+    Object.defineProperty(globalThis, symbol, {
+      configurable: true,
+      value: {
+        get: () => ({ headers: { "x-vercel-oidc-token": oidcToken } }),
+      },
+    });
+    try {
+      const status = builderStatus();
+      expect(status.enabled).toBe(true);
+      expect(status.gatewayConfigured).toBe(true);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, symbol, previous);
+      else Reflect.deleteProperty(globalThis, symbol);
+    }
+  });
+
   it("rejects malformed model identifiers", () => {
     vi.stubEnv("PSKILLS_BUILDER_MODEL", "openai/no spaces");
     expect(() => builderModel()).toThrow(/provider\/model/u);

@@ -1,4 +1,5 @@
 import { createGateway, type LanguageModel } from "ai";
+import { getVercelOidcTokenSync } from "@vercel/oidc";
 import {
   SkillBuilderConfigurationError,
   SkillBuilderRegistryClient,
@@ -35,11 +36,6 @@ function nonEmptyEnv(name: string): string | undefined {
   return value && value.length <= 1024 ? value : undefined;
 }
 
-function boundedEnv(name: string, maximum: number): string | undefined {
-  const value = process.env[name]?.trim();
-  return value && value.length <= maximum ? value : undefined;
-}
-
 function isDevelopment(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.VERCEL_ENV !== "production";
 }
@@ -49,9 +45,24 @@ function validBoundedSecret(name: string): boolean {
   return Boolean(value && value.length <= 512 && !/\s/u.test(value));
 }
 
+/**
+ * Vercel injects OIDC into the request context in hosted functions. Keep the
+ * synchronous lookup here because configuration is also checked by Eve's
+ * synchronous dynamic-model hooks; the SDK's async lookup remains responsible
+ * for refresh behavior when a model request is made.
+ */
+function oidcCredential(): string | undefined {
+  try {
+    return getVercelOidcTokenSync();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Vercel OIDC JWTs are request credentials and may exceed short API-key bounds. */
 function validOidcCredential(): boolean {
-  const value = boundedEnv("VERCEL_OIDC_TOKEN", MAX_OIDC_TOKEN_LENGTH);
+  const value = oidcCredential()?.trim();
+  if (!value || value.length > MAX_OIDC_TOKEN_LENGTH) return false;
   return Boolean(value && !/\s/u.test(value));
 }
 
