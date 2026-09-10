@@ -142,6 +142,24 @@ new content and execution boundaries.
 - **P3: organization-wide visibility and automation.** Investigate activation
   telemetry, repository inventory, and a conversational operations agent only
   after privacy, retention, consent, and tenant boundaries are specified.
+- **COMMITTED FUTURE M5-SKILL-FEEDBACK — structured skill feedback.** Add a
+  later, opt-in feedback capability that lets authenticated CLI and MCP clients
+  submit structured reports for what worked well, did not work well, is broken,
+  or should improve. Bind each report to the canonical skill/source/version and
+  artifact digest, with optional agent/client/platform metadata, a summary,
+  expected-versus-actual outcome, and bounded reproduction or evidence. Scope
+  writes by tenant and principal, make retries idempotent and deduplicated, and
+  enforce rate and size bounds. Reports are untrusted observations, never
+  verified quality or scanner verdicts. Default collection excludes secrets,
+  raw prompts, and repository content; redacted diagnostics require explicit
+  configured consent and are never forwarded automatically to an upstream
+  vendor. Web skill detail needs safe feedback list/filter/triage/status views
+  plus an advisory Eve summary/pattern finder; feedback can never
+  autopublish, edit, or revoke a skill. CLI and MCP fixtures must prove exact
+  version binding, cross-tenant denial, duplicate/offline-retry preservation,
+  redaction, safe rendering, and reported outcomes kept separate from install
+  analytics. This is a committed later M5 requirement, not active
+  implementation and not a new current feature area.
 
 ## Skills.sh current delivery
 

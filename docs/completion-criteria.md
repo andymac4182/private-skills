@@ -564,6 +564,49 @@ Completion requires an approved threat model, an opt-in pilot, a clean disable
 path, and evidence that disabling the capability removes collection without
 breaking registry distribution.
 
+### COMMITTED FUTURE M5-SKILL-FEEDBACK — structured skill feedback
+
+This is a committed later requirement inside M5. It is future-only, not an
+active implementation milestone, a new current feature area, or a G0/C1/M6/M7
+release gate. It cross-links the future M1 MCP client/distribution contract and
+M2 quality review while keeping feedback separate from verified quality,
+scanner, and install outcomes. Completion requires:
+
+1. Authenticated CLI and MCP clients can submit a structured report classified
+   as worked well, did not work well, broken, or improvement, bound to the
+   canonical skill/source/version and artifact digest. The report may include
+   optional agent, client, and platform metadata, a concise summary,
+   expected-versus-actual outcome, and a bounded reproduction or evidence
+   reference.
+2. Submission is tenant- and principal-scoped, requires the applicable
+   feedback permission, and enforces request, field, evidence, and rate bounds.
+   An idempotency key and canonical request identity preserve one report across
+   duplicate submissions, offline retries, and response loss without merging
+   reports from different versions or tenants.
+3. Feedback is an untrusted observation. It never becomes a scanner verdict,
+   quality score, approval, release candidate, install authorization, or
+   provenance assertion; exact version/digest binding is rechecked on write and
+   read, and revoked or unauthorized resources cannot accept or reveal reports.
+4. Default collection excludes secrets, raw prompts, repository content,
+   credentials, and unrestricted logs. Optional diagnostics require explicit
+   configured consent, are redacted and bounded before persistence, and are
+   never forwarded automatically to an upstream vendor or model provider.
+5. Skill detail exposes safe feedback list, filter, triage, and status views,
+   with tenant/permission checks and bounded rendering. An Eve summary or
+   pattern finder is advisory only; feedback cannot autopublish, edit, revoke,
+   or otherwise mutate a skill, release, draft, or scanner decision.
+6. Real CLI and MCP acceptance fixtures cover valid submissions, exact
+   version/digest binding, changed or revoked versions, cross-tenant denial,
+   unauthorized reads, duplicate and offline-retry preservation, idempotency
+   conflicts, rate/size limits, diagnostic redaction and consent, and safe UI
+   rendering. Reported outcomes are measured and displayed separately from
+   install-receipt analytics.
+
+Evidence: authenticated CLI/MCP write/read fixtures, tenant and authorization
+matrix, retry/deduplication record, redaction/consent proof, safe browser
+rendering, and a review showing that no feedback path can trigger publication,
+editing, revocation, scanner bypass, or automatic vendor forwarding.
+
 ## M6 — full Diffs editor and upload/edit review (active implementation, incomplete; VIEW slice evidence delivered)
 
 M6 is the editor and upload/edit reviewer requested for the Private Skills web
