@@ -259,6 +259,30 @@ impl ApiClient {
         self.proxy_resolve_until(request, std::time::Instant::now() + Duration::from_secs(60))
     }
 
+    /// Resolve a canonical skills.sh identity through the registry.  The
+    /// registry selects the approved mapping and private release identity;
+    /// this client never derives or fetches the external source itself.
+    pub fn resolve_external(
+        &self,
+        external_id: &str,
+        refresh: bool,
+    ) -> Result<Resolution, ApiError> {
+        let external_id = external_id.trim();
+        if external_id.is_empty() {
+            return Err(ApiError::Response(
+                "external skills.sh identity must not be empty".into(),
+            ));
+        }
+        let request = ExternalResolveRequest {
+            external_id: external_id.into(),
+            refresh: refresh.then_some(true),
+        };
+        self.resolve_external_until(
+            &request,
+            std::time::Instant::now() + Duration::from_secs(60),
+        )
+    }
+
     fn proxy_resolve_until(
         &self,
         request: &ImportRequest,
@@ -276,6 +300,28 @@ impl ApiClient {
             let operation_value = parse_json(response.body)?;
             let operation_id = extract_operation_id(&operation_value)?;
             return self.wait_for_proxy_resolution(&operation_id, request, deadline);
+        }
+        ensure_success(&response)?;
+        extract_resolution(parse_json(response.body)?)
+    }
+
+    fn resolve_external_until(
+        &self,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<Resolution, ApiError> {
+        let url = self.endpoint(&["v1", "proxy", "resolve"])?;
+        let response = self.send(
+            self.http
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .json(request),
+            true,
+        )?;
+        if response.status == 202 {
+            let operation_value = parse_json(response.body)?;
+            let operation_id = extract_operation_id(&operation_value)?;
+            return self.wait_for_external_resolution(&operation_id, request, deadline);
         }
         ensure_success(&response)?;
         extract_resolution(parse_json(response.body)?)
@@ -527,6 +573,30 @@ impl ApiClient {
                 OperationPollAction::Resolution(resolution) => return Ok(resolution),
                 OperationPollAction::Completed => {
                     return self.proxy_resolve_until(request, deadline);
+                }
+                OperationPollAction::Pending => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ApiError::OperationTimeout(operation_id.into()));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(250)));
+        }
+    }
+
+    fn wait_for_external_resolution(
+        &self,
+        operation_id: &str,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<Resolution, ApiError> {
+        loop {
+            let value: Value =
+                self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
+            match inspect_operation(&value, "external import operation failed")? {
+                OperationPollAction::Resolution(resolution) => return Ok(resolution),
+                OperationPollAction::Completed => {
+                    return self.resolve_external_until(request, deadline);
                 }
                 OperationPollAction::Pending => {}
             }
@@ -926,6 +996,34 @@ mod tests {
                 "version": "1.2.3",
                 "upstreamId": "skills-sh"
             })
+        );
+    }
+
+    #[test]
+    fn external_resolve_serializes_only_registry_owned_identity_fields() {
+        let value = serde_json::to_value(ExternalResolveRequest {
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        })
+        .expect("external resolve JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "externalId": "vercel-labs/skills/find-skills",
+                "refresh": true
+            })
+        );
+        assert!(value.get("name").is_none());
+        assert!(value.get("version").is_none());
+        assert!(value.get("upstreamId").is_none());
+        let cached = serde_json::to_value(ExternalResolveRequest {
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: None,
+        })
+        .expect("cached external resolve JSON");
+        assert_eq!(
+            cached,
+            serde_json::json!({ "externalId": "vercel-labs/skills/find-skills" })
         );
     }
 

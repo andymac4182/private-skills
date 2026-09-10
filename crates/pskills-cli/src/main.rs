@@ -250,6 +250,33 @@ struct Context {
     frozen: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstallReference {
+    Native {
+        reference: String,
+        version: Option<String>,
+    },
+    SkillsSh {
+        external_id: String,
+    },
+}
+
+impl InstallReference {
+    fn display(&self) -> &str {
+        match self {
+            Self::Native { reference, .. } => reference,
+            Self::SkillsSh { external_id } => external_id,
+        }
+    }
+
+    fn external_id(&self) -> Option<&str> {
+        match self {
+            Self::Native { .. } => None,
+            Self::SkillsSh { external_id } => Some(external_id),
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = run(cli);
@@ -536,18 +563,46 @@ fn directory_identifier(value: &str) -> Result<&str, CliError> {
 }
 
 fn show(context: &Context, reference: &str) -> Result<(), CliError> {
-    let (reference, version) = split_reference(reference)?;
+    let parsed = parse_install_reference(reference)?;
     let client = client(context)?;
-    emit(
-        context.json,
-        serde_json::to_value(client.show_skill(&reference, version.as_deref())?)
-            .map_err(|e| CliError::Message(e.to_string()))?,
-    )
+    match parsed {
+        InstallReference::SkillsSh { external_id } => {
+            emit(context.json, client.directory_detail(&external_id)?)
+        }
+        InstallReference::Native { reference, version } => emit(
+            context.json,
+            serde_json::to_value(client.show_skill(&reference, version.as_deref())?)
+                .map_err(|e| CliError::Message(e.to_string()))?,
+        ),
+    }
 }
 
 fn versions(context: &Context, reference: &str) -> Result<(), CliError> {
-    let (reference, requested_version) = split_reference(reference)?;
+    let parsed = parse_install_reference(reference)?;
     let client = client(context)?;
+    if let InstallReference::SkillsSh { external_id } = parsed {
+        let resolution = client.resolve_external(&external_id, false)?;
+        let skill = resolution.members.first().ok_or_else(|| {
+            CliError::Message("external resolution did not contain a skill member".into())
+        })?;
+        return emit(
+            context.json,
+            json!([{
+                "version": resolution.version,
+                "state": skill.state,
+                "digest": resolution.digest,
+                "externalId": external_id,
+                "reference": resolution.name,
+            }]),
+        );
+    }
+    let InstallReference::Native {
+        reference,
+        version: requested_version,
+    } = parsed
+    else {
+        unreachable!("external references return above")
+    };
     let skills = client.search(&reference)?;
     let values: Vec<Value> = skills
         .into_iter()
@@ -647,31 +702,57 @@ fn install_skill(
     raw_reference: &str,
     owner_prefix: &str,
 ) -> Result<(), CliError> {
-    let (reference, requested_version) = split_reference(raw_reference)?;
+    install_skill_with_refresh(context, raw_reference, owner_prefix, false)
+}
+
+fn install_skill_with_refresh(
+    context: &Context,
+    raw_reference: &str,
+    owner_prefix: &str,
+    refresh_external: bool,
+) -> Result<(), CliError> {
+    let parsed = parse_install_reference(raw_reference)?;
     let registry = context
         .registry
         .as_ref()
         .ok_or_else(|| CliError::Message("install requires a registry".into()))?;
     let frozen_entry = if context.frozen {
-        Some(frozen_skill_entry(
-            context,
-            registry,
-            &reference,
-            requested_version.as_deref(),
-        )?)
+        Some(match &parsed {
+            InstallReference::Native { reference, version } => {
+                frozen_skill_entry(context, registry, reference, version.as_deref())?
+            }
+            InstallReference::SkillsSh { external_id } => {
+                frozen_external_skill_entry(context, registry, external_id)?
+            }
+        })
     } else {
         None
     };
-    let version = frozen_entry
-        .as_ref()
-        .map(|entry| entry.version.clone())
-        .or(requested_version.clone());
     let client = client(context)?;
-    let resolution = client.resolve(&ResolveRequest {
-        kind: "skill".into(),
-        reference: reference.clone(),
-        version,
-    })?;
+    let resolution = match &parsed {
+        InstallReference::Native { reference, version } => {
+            let version = frozen_entry
+                .as_ref()
+                .map(|entry| entry.version.clone())
+                .or_else(|| version.clone());
+            client.resolve(&ResolveRequest {
+                kind: "skill".into(),
+                reference: reference.clone(),
+                version,
+            })?
+        }
+        InstallReference::SkillsSh { external_id } => {
+            client.resolve_external(external_id, refresh_external && !context.frozen)?
+        }
+    };
+    if resolution.kind != "skill" {
+        return Err(CliError::Message(
+            "registry resolution did not contain a skill".into(),
+        ));
+    }
+    let display_reference = parsed.display().to_string();
+    let private_reference = resolution.name.clone();
+    let external_id = parsed.external_id().map(str::to_string);
     let skill = resolution.members.first().cloned();
     let skill_name = skill
         .as_ref()
@@ -697,8 +778,25 @@ fn install_skill(
             || skill_name != expected.skill_name
         {
             return Err(CliError::Message(format!(
-                "frozen lock entry for {reference} does not match the registry resolution"
+                "frozen lock entry for {display_reference} does not match the registry resolution"
             )));
+        }
+    }
+    if let Some(external_id) = external_id.as_deref() {
+        let resolved_external_id = skill
+            .as_ref()
+            .and_then(|member| member.provenance.external_id.as_deref())
+            .or_else(|| {
+                resolution
+                    .members
+                    .first()
+                    .and_then(|member| member.provenance.external_id.as_deref())
+            });
+        if resolved_external_id != Some(external_id) {
+            return Err(CliError::Message(
+                "registry resolution provenance does not match the requested skills.sh identity"
+                    .into(),
+            ));
         }
     }
     let authorization = client.authorize(&resolution)?;
@@ -715,7 +813,7 @@ fn install_skill(
         let actual_tree = tree_digest(&bundle).map_err(|e| CliError::Message(e.to_string()))?;
         if actual_tree != expected.tree_digest {
             return Err(CliError::Message(format!(
-                "frozen lock tree digest mismatch for {reference}: expected {}, received {actual_tree}",
+                "frozen lock tree digest mismatch for {display_reference}: expected {}, received {actual_tree}",
                 expected.tree_digest
             )));
         }
@@ -729,7 +827,11 @@ fn install_skill(
         ));
     }
     let state = local_state(&root, context.scope);
-    let owner = owner_for_reference(owner_prefix, registry, &reference);
+    // Keep the journal owner stable across server-owned private reference
+    // changes.  The generated registry name is an implementation detail; the
+    // external identity is the lifecycle identity the user supplied.
+    let owner_reference = external_id.as_deref().unwrap_or(&private_reference);
+    let owner = owner_for_reference(owner_prefix, registry, owner_reference);
     let plan = InstallPlan {
         root: root.clone(),
         skill_name: skill_name.clone(),
@@ -744,7 +846,7 @@ fn install_skill(
         &mut new_lock,
         registry,
         context,
-        &reference,
+        &private_reference,
         &skill_name,
         &resolution,
         &bundle,
@@ -756,10 +858,20 @@ fn install_skill(
         .next()
         .ok_or_else(|| CliError::Message("installer returned no result".into()))?;
     report_install_receipt(context, &client, &authorization.id, result.changed);
-    emit(
-        context.json,
-        json!({ "ok": true, "dryRun": context.dry_run, "reference": reference, "version": resolution.version, "digest": artifact_digest, "destination": result.destination, "changed": result.changed }),
-    )
+    let mut output = json!({
+        "ok": true,
+        "dryRun": context.dry_run,
+        "reference": display_reference,
+        "version": resolution.version,
+        "digest": artifact_digest,
+        "destination": result.destination,
+        "changed": result.changed,
+    });
+    if let Some(external_id) = external_id {
+        output["externalId"] = Value::String(external_id);
+        output["privateReference"] = Value::String(private_reference);
+    }
+    emit(context.json, output)
 }
 
 fn pack(context: &Context, command: PackCommand) -> Result<(), CliError> {
@@ -1080,18 +1192,43 @@ fn remove_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> {
 
 fn list_local(context: &Context) -> Result<(), CliError> {
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
-    let entries = local_state(&root, context.scope).entries()?;
-    emit(
-        context.json,
-        serde_json::to_value(entries).map_err(|e| CliError::Message(e.to_string()))?,
-    )
+    let state = local_state(&root, context.scope);
+    let lock = state.read_lock()?;
+    let entries = state.entries()?;
+    let values = entries
+        .into_iter()
+        .map(|entry| {
+            let mut value = serde_json::to_value(&entry)
+                .map_err(|error| CliError::Message(error.to_string()))?;
+            decorate_local_value(
+                &mut value,
+                &lock,
+                Some(&entry.skill_name),
+                Some(&entry.digest),
+                Some(&entry.tree_digest),
+            );
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+    emit(context.json, Value::Array(values))
 }
 
 fn verify_local(context: &Context) -> Result<(), CliError> {
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
-    let results = local_state(&root, context.scope).verify()?;
+    let state = local_state(&root, context.scope);
+    let lock = state.read_lock()?;
+    let results = state.verify()?;
     let ok = results.iter().all(|result| result.ok);
-    emit(context.json, json!({ "ok": ok, "entries": results }))?;
+    let entries = results
+        .into_iter()
+        .map(|result| {
+            let mut value = serde_json::to_value(&result)
+                .map_err(|error| CliError::Message(error.to_string()))?;
+            decorate_local_value(&mut value, &lock, None, None, None);
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+    emit(context.json, json!({ "ok": ok, "entries": entries }))?;
     if ok {
         Ok(())
     } else {
@@ -1101,12 +1238,68 @@ fn verify_local(context: &Context) -> Result<(), CliError> {
     }
 }
 
+fn decorate_local_value(
+    value: &mut Value,
+    lock: &LockFile,
+    skill_name: Option<&str>,
+    artifact_digest: Option<&str>,
+    tree_digest: Option<&str>,
+) {
+    let matching = if let (Some(skill_name), Some(artifact_digest), Some(tree_digest)) =
+        (skill_name, artifact_digest, tree_digest)
+    {
+        lock.skills.iter().find(|skill| {
+            skill.skill_name == skill_name
+                && skill.artifact_digest == artifact_digest
+                && skill.tree_digest == tree_digest
+        })
+    } else {
+        value.get("key").and_then(Value::as_str).and_then(|key| {
+            let (skill_name, digest_and_tree) = key.split_once('@')?;
+            let (artifact_digest, tree_digest) = digest_and_tree.split_once("|tree=")?;
+            lock.skills.iter().find(|skill| {
+                skill.skill_name == skill_name
+                    && skill.artifact_digest == artifact_digest
+                    && skill.tree_digest == tree_digest
+            })
+        })
+    };
+    let Some(skill) = matching else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let display_reference = skill
+        .provenance
+        .external_id
+        .as_deref()
+        .unwrap_or(&skill.reference);
+    object.insert(
+        "reference".into(),
+        Value::String(display_reference.to_string()),
+    );
+    object.insert(
+        "privateReference".into(),
+        Value::String(skill.reference.clone()),
+    );
+    if let Some(external_id) = &skill.provenance.external_id {
+        object.insert("externalId".into(), Value::String(external_id.clone()));
+    }
+}
+
 fn remove_local(
     context: &Context,
     raw_reference: &str,
     owner_prefix: &str,
 ) -> Result<(), CliError> {
-    let (reference, _) = split_reference(raw_reference)?;
+    let parsed = parse_install_reference(raw_reference)?;
+    if let InstallReference::SkillsSh { external_id } = parsed {
+        return remove_external_local(context, &external_id, owner_prefix);
+    }
+    let InstallReference::Native { reference, .. } = parsed else {
+        unreachable!("external references return above")
+    };
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     let state = local_state(&root, context.scope);
     let skill_name = last_name(&reference);
@@ -1169,9 +1362,93 @@ fn remove_local(
     )
 }
 
+fn remove_external_local(
+    context: &Context,
+    external_id: &str,
+    owner_prefix: &str,
+) -> Result<(), CliError> {
+    if owner_prefix != "direct" {
+        return Err(CliError::Message(
+            "external skills.sh identities can only be removed from direct installs".into(),
+        ));
+    }
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let state = local_state(&root, context.scope);
+    let mut lock = state.read_lock()?;
+    let matching = lock
+        .skills
+        .iter()
+        .filter(|skill| {
+            context
+                .registry
+                .as_ref()
+                .map(|registry| lock_registry_matches(&lock, &skill.registry, registry))
+                .unwrap_or(true)
+                && skill.provenance.external_id.as_deref() == Some(external_id)
+        })
+        .collect::<Vec<_>>();
+    let mut owners = matching
+        .iter()
+        .flat_map(|skill| skill.owners.iter())
+        .filter(|owner| owner.starts_with("direct:"))
+        .cloned()
+        .collect::<Vec<_>>();
+    owners.sort();
+    owners.dedup();
+    let owner = match owners.as_slice() {
+        [owner] => owner.clone(),
+        [] => {
+            return Err(CliError::Message(format!(
+                "skills.sh identity {external_id} is not installed"
+            )))
+        }
+        _ => {
+            return Err(CliError::Message(format!(
+                "skills.sh identity {external_id} is installed from multiple registries; pass --registry to remove one"
+            )))
+        }
+    };
+    let mut skill_names = matching
+        .into_iter()
+        .filter(|skill| skill.owners.iter().any(|candidate| candidate == &owner))
+        .map(|skill| skill.skill_name.clone())
+        .collect::<Vec<_>>();
+    skill_names.sort();
+    skill_names.dedup();
+    if skill_names.is_empty() {
+        return Err(CliError::Message(format!(
+            "skills.sh identity {external_id} has no removable direct owner"
+        )));
+    }
+    let old_lock = lock.clone();
+    for skill in &mut lock.skills {
+        if skill_names.iter().any(|name| name == &skill.skill_name) {
+            skill.owners.retain(|candidate| candidate != &owner);
+        }
+    }
+    lock.skills.retain(|skill| !skill.owners.is_empty());
+    let results = state.remove_owner_with_lock(
+        &owner,
+        &skill_names,
+        context.dry_run,
+        Some(&old_lock),
+        Some(&lock),
+    )?;
+    emit(
+        context.json,
+        json!({
+            "ok": true,
+            "dryRun": context.dry_run,
+            "reference": external_id,
+            "externalId": external_id,
+            "removed": results.iter().map(|result| result.skill_name.clone()).collect::<Vec<_>>(),
+        }),
+    )
+}
+
 fn update(context: &Context, reference: Option<&str>) -> Result<(), CliError> {
     if let Some(reference) = reference {
-        return install_skill(context, reference, "direct");
+        return install_skill_with_refresh(context, reference, "direct", true);
     }
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     let lock = local_state(&root, context.scope).read_lock()?;
@@ -1179,12 +1456,23 @@ fn update(context: &Context, reference: Option<&str>) -> Result<(), CliError> {
         .skills
         .iter()
         .filter(|skill| {
-            skill
-                .owners
-                .iter()
-                .any(|owner| owner.starts_with("direct:"))
+            context
+                .registry
+                .as_ref()
+                .map(|registry| lock_registry_matches(&lock, &skill.registry, registry))
+                .unwrap_or(false)
+                && skill
+                    .owners
+                    .iter()
+                    .any(|owner| owner.starts_with("direct:"))
         })
-        .map(|skill| skill.reference.clone())
+        .map(|skill| {
+            skill
+                .provenance
+                .external_id
+                .clone()
+                .unwrap_or_else(|| skill.reference.clone())
+        })
         .collect::<Vec<_>>();
     references.sort();
     references.dedup();
@@ -1192,7 +1480,7 @@ fn update(context: &Context, reference: Option<&str>) -> Result<(), CliError> {
         return emit(context.json, json!({ "ok": true, "updated": [] }));
     }
     for reference in references {
-        install_skill(context, &reference, "direct")?;
+        install_skill_with_refresh(context, &reference, "direct", true)?;
     }
     Ok(())
 }
@@ -1347,6 +1635,34 @@ fn update_lock_for_skill(
             ))
         });
     }
+    let key = format!("{}:{}@{}", registry.url, reference, resolution.version);
+    let resolved_external_id = resolution
+        .members
+        .first()
+        .and_then(|member| member.provenance.external_id.as_deref());
+    if let Some(external_id) = resolved_external_id {
+        let matching_registries = lock
+            .registries
+            .iter()
+            .filter(|(_, entry)| entry.url == registry.url)
+            .map(|(key, _)| key.as_str())
+            .chain(std::iter::once(registry.url.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        for existing in &mut lock.skills {
+            if matching_registries.contains(existing.registry.as_str())
+                && existing
+                    .provenance
+                    .external_id
+                    .as_deref()
+                    .is_some_and(|value| value == external_id)
+                && existing.key != key
+            {
+                existing
+                    .owners
+                    .retain(|existing_owner| existing_owner != owner);
+            }
+        }
+    }
     for existing in &mut lock.skills {
         if existing.registry == registry.url
             && existing.reference == reference
@@ -1358,7 +1674,6 @@ fn update_lock_for_skill(
         }
     }
     lock.skills.retain(|skill| !skill.owners.is_empty());
-    let key = format!("{}:{}@{}", registry.url, reference, resolution.version);
     if let Some(existing) = lock.skills.iter_mut().find(|skill| skill.key == key) {
         if existing.skill_name != skill_name {
             return Err(CliError::Message(format!(
@@ -1372,6 +1687,11 @@ fn update_lock_for_skill(
         existing.owners.push(owner.into());
         existing.artifact_digest = resolution.digest.clone();
         existing.tree_digest = tree;
+        existing.provenance = resolution
+            .members
+            .first()
+            .map(|member| member.provenance.clone())
+            .unwrap_or_default();
     } else {
         lock.skills.push(LockSkill {
             key,
@@ -1421,6 +1741,37 @@ fn frozen_skill_entry(
         }
     }
     Ok(entry)
+}
+
+fn frozen_external_skill_entry(
+    context: &Context,
+    registry: &RegistryConfig,
+    external_id: &str,
+) -> Result<LockSkill, CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    validate_frozen_target(&lock, context)?;
+    validate_frozen_registry(&lock, registry)?;
+    let owner = owner_for_reference("direct", registry, external_id);
+    let matches = lock
+        .skills
+        .iter()
+        .filter(|skill| {
+            lock_registry_matches(&lock, &skill.registry, registry)
+                && skill.provenance.external_id.as_deref() == Some(external_id)
+                && skill.owners.iter().any(|candidate| candidate == &owner)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [entry] => Ok(entry.clone()),
+        [] => Err(CliError::Message(format!(
+            "frozen lockfile has no entry for skills.sh identity {external_id}"
+        ))),
+        _ => Err(CliError::Message(format!(
+            "frozen lockfile has multiple entries for skills.sh identity {external_id}"
+        ))),
+    }
 }
 
 fn frozen_pack_entry(
@@ -1581,6 +1932,88 @@ fn normalize_skill_source(path: &Path) -> Result<PathBuf, CliError> {
             path.display()
         )))
     }
+}
+
+fn parse_install_reference(raw: &str) -> Result<InstallReference, CliError> {
+    if raw.starts_with('@') {
+        let (reference, version) = split_reference(raw)?;
+        return Ok(InstallReference::Native { reference, version });
+    }
+    if raw.contains("://") {
+        return Ok(InstallReference::SkillsSh {
+            external_id: parse_skills_sh_url(raw)?,
+        });
+    }
+    if raw.contains('/') {
+        return Ok(InstallReference::SkillsSh {
+            external_id: validate_external_id(raw)?,
+        });
+    }
+    Err(CliError::Message(format!(
+        "invalid reference `{raw}`; expected @namespace/skill[@version], a skills.sh source/slug, or an https://skills.sh/<source/slug> URL"
+    )))
+}
+
+fn parse_skills_sh_url(raw: &str) -> Result<String, CliError> {
+    let url = url::Url::parse(raw).map_err(|error| {
+        CliError::Message(format!(
+            "invalid skills.sh URL `{raw}`: {error}; expected https://skills.sh/<source/slug>"
+        ))
+    })?;
+    if url.scheme() != "https"
+        || !matches!(url.host_str(), Some("skills.sh" | "www.skills.sh"))
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(CliError::Message(
+            "skills.sh URL must use the HTTPS skills.sh or www.skills.sh origin without credentials, a port, query, or fragment".into(),
+        ));
+    }
+    let path = url.path();
+    if path.contains('%') {
+        return Err(CliError::Message(
+            "skills.sh URL must contain an unencoded canonical source/slug path".into(),
+        ));
+    }
+    let path = path.strip_prefix('/').unwrap_or(path);
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if path.is_empty() || path.ends_with('/') || path == "p" || path.starts_with("p/") {
+        return Err(CliError::Message(
+            "skills.sh URL must identify a skill source/slug, not a pack or collection".into(),
+        ));
+    }
+    validate_external_id(path)
+}
+
+fn validate_external_id(value: &str) -> Result<String, CliError> {
+    if value.is_empty()
+        || value.len() > 2 * 1024
+        || value.trim() != value
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '?' | '#' | '%' | '\\'))
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains("//")
+    {
+        return Err(CliError::Message(
+            "skills.sh external id must be a bounded source/slug path without controls, query syntax, encoding, or traversal".into(),
+        ));
+    }
+    let parts = value.split('/').collect::<Vec<_>>();
+    if !(2..=64).contains(&parts.len())
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == ".." || part.len() > 512)
+    {
+        return Err(CliError::Message(
+            "skills.sh external id must contain 2 to 64 non-empty path segments (each at most 512 bytes)".into(),
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn split_reference(raw: &str) -> Result<(String, Option<String>), CliError> {
@@ -1784,5 +2217,72 @@ mod tests {
         assert!(directory_query("a").is_err());
         assert!(directory_owner("   ").is_err());
         assert!(directory_identifier(" \n ").is_err());
+    }
+
+    #[test]
+    fn install_reference_preserves_native_and_external_identity_forms() {
+        assert_eq!(
+            parse_install_reference("@team/review@1.2.3").expect("native reference"),
+            InstallReference::Native {
+                reference: "@team/review".into(),
+                version: Some("1.2.3".into()),
+            }
+        );
+        assert_eq!(
+            parse_install_reference("vercel-labs/skills/find-skills")
+                .expect("bare skills.sh identity"),
+            InstallReference::SkillsSh {
+                external_id: "vercel-labs/skills/find-skills".into(),
+            }
+        );
+        assert_eq!(
+            parse_install_reference("https://www.skills.sh/vercel-labs/skills/find-skills/")
+                .expect("skills.sh URL"),
+            InstallReference::SkillsSh {
+                external_id: "vercel-labs/skills/find-skills".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn install_reference_rejects_unsafe_or_ambiguous_external_forms() {
+        for value in [
+            "http://skills.sh/vercel-labs/skills/find-skills",
+            "https://github.com/vercel-labs/skills/find-skills",
+            "https://user@skills.sh/vercel-labs/skills/find-skills",
+            "https://skills.sh/vercel-labs/skills/find-skills?raw=1",
+            "https://skills.sh/vercel-labs/skills/find%2Fskills",
+            "https://skills.sh/vercel-labs/../find-skills",
+            "https://skills.sh/p/example",
+            "vercel-labs//find-skills",
+            "vercel-labs/../find-skills",
+            "vercel-labs",
+        ] {
+            assert!(
+                parse_install_reference(value).is_err(),
+                "expected `{value}` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn install_accepts_absolute_directory_and_universal_agent() {
+        let cli = Cli::try_parse_from([
+            "pskills",
+            "--directory",
+            "/tmp/private-skills",
+            "--agent",
+            "universal",
+            "install",
+            "vercel-labs/skills/find-skills",
+        ])
+        .expect("transparent install arguments");
+        assert_eq!(cli.directory, Some(PathBuf::from("/tmp/private-skills")));
+        assert!(matches!(cli.agent, AgentArg::Universal));
+        assert!(matches!(
+            cli.command,
+            Command::Install(InstallArgs { reference })
+                if reference == "vercel-labs/skills/find-skills"
+        ));
     }
 }

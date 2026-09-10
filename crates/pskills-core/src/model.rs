@@ -411,6 +411,7 @@ pub struct HealthResponse {
     pub service: String,
     pub version: String,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorResponse {
     #[serde(default)]
@@ -434,6 +435,17 @@ pub struct ResolveRequest {
     pub reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+}
+
+/// A transparent external-directory resolution request.  The registry owns
+/// source mapping, private release naming, versioning, and snapshot identity;
+/// the CLI deliberately sends no guessed private reference or upstream data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalResolveRequest {
+    pub external_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<bool>,
 }
 
 /// A registry controlled pull-through request.  The CLI sends this only to

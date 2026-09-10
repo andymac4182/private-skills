@@ -109,6 +109,40 @@ The same commands on Windows use the same flags and a Windows absolute path:
 .\pskills.exe --directory 'C:\Users\<you>\private-skills' --agent universal remove '@team/review'
 ```
 
+## Transparent skills.sh identities
+
+The install command also accepts a canonical skills.sh identity such as
+`vercel-labs/skills/find-skills`, or its HTTPS page URL. The CLI sends that
+identity to the configured registry's proxy endpoint. The registry selects
+the approved source mapping, scans and authorizes the bytes, and chooses its
+private release name; the CLI never fetches skills.sh or GitHub directly and
+does not guess an upstream mapping.
+
+Use the same absolute root for the full lifecycle:
+
+```console
+# The bare identity and the HTTPS page URL resolve to the same external ID.
+pskills --directory /Users/<you>/private-skills --agent universal install vercel-labs/skills/find-skills
+pskills --directory /Users/<you>/private-skills --agent universal show vercel-labs/skills/find-skills
+pskills --directory /Users/<you>/private-skills --agent universal update vercel-labs/skills/find-skills
+pskills --directory /Users/<you>/private-skills --agent universal remove vercel-labs/skills/find-skills
+```
+
+`update` requests a fresh registry snapshot. `remove`, `list`, and `verify`
+use the original external identity recorded in provenance; users do not need
+to know the server-generated private reference. The lock retains both values
+so a frozen install can verify the approved private resolution and transferred
+tree without changing the skills.sh identity:
+
+```console
+pskills --directory /Users/<you>/private-skills --agent universal install vercel-labs/skills/find-skills
+pskills --directory /Users/<you>/private-skills --agent universal --frozen-lockfile install vercel-labs/skills/find-skills
+```
+
+The registry remains the source of truth for external identity, revision,
+scanner admission, and release naming. A registry error or scanner failure is
+returned by the CLI before any local activation.
+
 ## Frozen lockfile installs
 
 `--frozen-lockfile` prevents selecting a new version. It requires a matching
