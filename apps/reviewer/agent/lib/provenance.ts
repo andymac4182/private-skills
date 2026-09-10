@@ -5,10 +5,20 @@ import type { ReviewRunProvenance } from "../../../../packages/reviews/src/index
 /** Filesystem-derived Eve schedule name for agent/schedules/daily-review.ts. */
 export const DAILY_REVIEW_SCHEDULE_ID = "daily-review";
 
+export type ReviewInvocationStatus =
+  | "pending"
+  | "prepared"
+  | "already_completed"
+  | "no_candidates"
+  | "not_claimed"
+  | "completed"
+  | "request_failed"
+  | "submission_uncertain";
+
 export interface ReviewInvocationAudit extends ReviewRunProvenance {
   /** Opaque durable Eve session identity, never model supplied. */
   eveSessionId: string;
-  status: "pending" | "prepared" | "already_completed" | "no_candidates" | "completed" | "failed";
+  status: ReviewInvocationStatus;
   runId?: string;
 }
 
@@ -48,6 +58,46 @@ export function createReviewInvocationAudit(
     observedAt,
     eveSessionId: session.id,
     status: "pending",
+  };
+}
+
+export function classifyPrepareOutcome(input: {
+  alreadyCompleted?: boolean;
+  runId?: string;
+  candidateCount: number;
+}): "already_completed" | "no_candidates" | "not_claimed" | "prepared" {
+  if (input.alreadyCompleted === true) return "already_completed";
+  if (input.candidateCount === 0) {
+    // The registry uses a run ID with an empty candidate list to signal that
+    // another session owns the active lease. A truly empty snapshot has no ID.
+    return input.runId === undefined ? "no_candidates" : "not_claimed";
+  }
+  return "prepared";
+}
+
+export function shouldRecordAlreadyCompleted(
+  status: ReviewInvocationStatus | undefined,
+): boolean {
+  return status === undefined || status === "pending";
+}
+
+/** A cached prepare does not erase a terminal or uncertain prior outcome. */
+export function shouldRecordCachedPrepare(
+  status: ReviewInvocationStatus | undefined,
+): boolean {
+  return status === undefined || status === "pending" || status === "prepared";
+}
+
+/** Record the latest bounded phase without retaining error details. */
+export function withReviewInvocationOutcome(
+  audit: ReviewInvocationAudit,
+  status: ReviewInvocationStatus,
+  runId?: string,
+): ReviewInvocationAudit {
+  return {
+    ...audit,
+    status,
+    ...(runId === undefined ? {} : { runId }),
   };
 }
 

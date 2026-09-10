@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyPrepareOutcome,
   createReviewInvocationAudit,
   resolveReviewInvocationAudit,
+  shouldRecordAlreadyCompleted,
+  shouldRecordCachedPrepare,
   toReviewRunProvenance,
+  withReviewInvocationOutcome,
 } from '../apps/reviewer/agent/lib/provenance.js';
 
 function session(
@@ -101,5 +105,30 @@ describe('review scheduler provenance', () => {
     expect(audit.source).toBe('eve-schedule');
     expect(audit.scheduleId).toBe('daily-review');
     expect(audit).not.toHaveProperty('channel');
+  });
+
+  it('distinguishes a genuinely empty snapshot from an active lease duplicate', () => {
+    expect(classifyPrepareOutcome({ candidateCount: 0 })).toBe('no_candidates');
+    expect(classifyPrepareOutcome({ candidateCount: 0, runId: 'review-run-existing' })).toBe('not_claimed');
+    expect(classifyPrepareOutcome({ alreadyCompleted: true, candidateCount: 0, runId: 'review-run-completed' }))
+      .toBe('already_completed');
+  });
+
+  it('preserves terminal outcomes on repeated prepare and marks uncertainty until completion succeeds', () => {
+    const audit = createReviewInvocationAudit(
+      session('eve-session-outcomes'),
+      { invocationId: 'eve-review-invocation-outcomes', observedAt: '2026-01-02T03:04:05.000Z' },
+    );
+    const notClaimed = withReviewInvocationOutcome(audit, 'not_claimed', 'review-run-existing');
+    const noCandidates = withReviewInvocationOutcome(audit, 'no_candidates');
+    expect(shouldRecordAlreadyCompleted(notClaimed.status)).toBe(false);
+    expect(shouldRecordAlreadyCompleted(noCandidates.status)).toBe(false);
+    expect(shouldRecordCachedPrepare(notClaimed.status)).toBe(false);
+    expect(shouldRecordCachedPrepare(noCandidates.status)).toBe(false);
+
+    const submissionUncertain = withReviewInvocationOutcome(audit, 'submission_uncertain', 'review-run-existing');
+    expect(shouldRecordCachedPrepare(submissionUncertain.status)).toBe(false);
+    expect(withReviewInvocationOutcome(submissionUncertain, 'completed', 'review-run-existing').status)
+      .toBe('completed');
   });
 });

@@ -8,8 +8,13 @@ import {
   prepareResponseSchema,
 } from "../lib/schemas.js";
 import {
+  classifyPrepareOutcome,
   resolveReviewInvocationAudit,
+  shouldRecordAlreadyCompleted,
+  shouldRecordCachedPrepare,
   toReviewRunProvenance,
+  withReviewInvocationOutcome,
+  type ReviewInvocationStatus,
 } from "../lib/provenance.js";
 import { reviewState, type ReviewCandidate } from "../lib/review-state.js";
 
@@ -20,18 +25,14 @@ function outputCandidates(candidates: readonly ReviewCandidate[]): ReviewCandida
 }
 
 function setInvocationOutcome(
-  status: "prepared" | "already_completed" | "no_candidates" | "completed" | "failed",
+  status: ReviewInvocationStatus,
   runId?: string,
 ): void {
   reviewState.update((state) => {
     if (!state.invocation) return state;
     return {
       ...state,
-      invocation: {
-        ...state.invocation,
-        status,
-        ...(runId === undefined ? {} : { runId }),
-      },
+      invocation: withReviewInvocationOutcome(state.invocation, status, runId),
     };
   });
 }
@@ -56,13 +57,17 @@ export default defineTool({
     // state is the session's source of truth for replay identity.
     const invocation = current.invocation ?? createdInvocation;
     if (current.status === "completed") {
-      if (current.invocation?.status === undefined || current.invocation.status === "pending") {
+      if (shouldRecordAlreadyCompleted(current.invocation?.status)) {
         setInvocationOutcome("already_completed", current.runId ?? undefined);
       }
       return { status: "already_completed" as const, candidates: [] };
     }
     if (current.status === "prepared" && current.runId && current.leaseToken && current.candidates.length > 0) {
-      setInvocationOutcome("prepared", current.runId);
+      // A cached prepare does not reconcile an uncertain completion request.
+      // Keep that marker until a later completion call succeeds.
+      if (shouldRecordCachedPrepare(current.invocation?.status)) {
+        setInvocationOutcome("prepared", current.runId);
+      }
       return { status: "prepared" as const, candidates: outputCandidates(current.candidates) };
     }
     if (current.prepareCalls >= 2) {
@@ -84,47 +89,48 @@ export default defineTool({
         ctx.abortSignal,
       );
     } catch (error) {
-      setInvocationOutcome("failed");
+      setInvocationOutcome("request_failed");
       throw error;
     }
 
-    if (prepared.alreadyCompleted === true) {
+    const prepareOutcome = classifyPrepareOutcome({
+      alreadyCompleted: prepared.alreadyCompleted,
+      runId: prepared.runId,
+      candidateCount: prepared.candidates.length,
+    });
+    if (prepareOutcome === "already_completed") {
       reviewState.update((state) => ({
         ...state,
         status: "completed",
         runId: prepared.runId ?? null,
         leaseToken: null,
         candidates: [],
-        invocation: state.invocation ? {
-          ...state.invocation,
-          status: "already_completed",
-          ...(prepared.runId === undefined ? {} : { runId: prepared.runId }),
-        } : state.invocation,
+        invocation: state.invocation
+          ? withReviewInvocationOutcome(state.invocation, prepareOutcome, prepared.runId)
+          : state.invocation,
       }));
       return { status: "already_completed" as const, candidates: [] };
     }
 
-    if (prepared.candidates.length === 0) {
-      // An empty prepare result has nothing to submit. Leave any short-lived
-      // lease to the API's normal expiry path rather than creating a write
-      // record merely to close an otherwise empty review.
+    if (prepareOutcome === "no_candidates" || prepareOutcome === "not_claimed") {
+      // Neither response has a lease for this session. An active duplicate
+      // leaves the other claimant's lease alone; an empty snapshot has no
+      // review row to close.
       reviewState.update((state) => ({
         ...state,
         status: "completed",
         runId: prepared.runId ?? null,
         leaseToken: null,
         candidates: [],
-        invocation: state.invocation ? {
-          ...state.invocation,
-          status: "no_candidates",
-          ...(prepared.runId === undefined ? {} : { runId: prepared.runId }),
-        } : state.invocation,
+        invocation: state.invocation
+          ? withReviewInvocationOutcome(state.invocation, prepareOutcome, prepared.runId)
+          : state.invocation,
       }));
       return { status: "no_candidates" as const, candidates: [] };
     }
 
     if (!prepared.runId || !prepared.leaseToken) {
-      setInvocationOutcome("failed");
+      setInvocationOutcome("request_failed");
       throw new Error("reviewer API returned candidates without a private run lease");
     }
     reviewState.update((state) => ({
@@ -133,11 +139,9 @@ export default defineTool({
       runId: prepared.runId!,
       leaseToken: prepared.leaseToken!,
       candidates: prepared.candidates,
-      invocation: state.invocation ? {
-        ...state.invocation,
-        status: "prepared",
-        runId: prepared.runId!,
-      } : state.invocation,
+      invocation: state.invocation
+        ? withReviewInvocationOutcome(state.invocation, prepareOutcome, prepared.runId!)
+        : state.invocation,
     }));
     return { status: "prepared" as const, candidates: outputCandidates(prepared.candidates) };
   },

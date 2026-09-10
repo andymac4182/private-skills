@@ -1,5 +1,6 @@
 import { defineTool } from "eve/tools";
 import { postReviewerJson } from "../lib/api.js";
+import { withReviewInvocationOutcome } from "../lib/provenance.js";
 import { submitInputSchema, submitOutputSchema } from "../lib/schemas.js";
 import { reviewState } from "../lib/review-state.js";
 
@@ -66,7 +67,10 @@ export default defineTool({
     } catch (error) {
       reviewState.update((state) => state.invocation ? {
         ...state,
-        invocation: { ...state.invocation, status: "failed" },
+        // The request may have committed remotely before its response was
+        // lost. Keep this explicitly uncertain until a successful completion
+        // RPC, without retaining response/error content.
+        invocation: withReviewInvocationOutcome(state.invocation, "submission_uncertain"),
       } : state);
       throw error;
     }
@@ -75,11 +79,9 @@ export default defineTool({
       status: "completed",
       leaseToken: null,
       candidates: [],
-      invocation: state.invocation ? {
-        ...state.invocation,
-        status: "completed",
-        runId: current.runId!,
-      } : state.invocation,
+      invocation: state.invocation
+        ? withReviewInvocationOutcome(state.invocation, "completed", current.runId!)
+        : state.invocation,
     }));
     return {
       status: "completed" as const,

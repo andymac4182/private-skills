@@ -71,7 +71,7 @@ export interface ReviewRunProvenance {
   invocationId: string;
   /** Authored Eve schedule name; present only when source is `eve-schedule`. */
   scheduleId?: string;
-  /** Server-observed ISO timestamp for the prepare invocation. */
+  /** Application-observed ISO timestamp when the invocation audit was created. */
   observedAt: string;
 }
 
