@@ -287,7 +287,10 @@ export function createOpenClawCandidateProvider(options: OpenClawCandidateProvid
       }
       const normalized = normalizeOpenClawEntry(entry)[0];
       if (!normalized || !sourceProofMatchesProvenance(skill, normalized, proof.sourceArtifact)) continue;
-      if (input.metadata !== undefined && !metadataContainsEntry(input.metadata, entry)) continue;
+      const projectedEntry = input.metadata === undefined
+        ? entry
+        : metadataEntryProjection(input.metadata, entry);
+      if (projectedEntry === undefined) continue;
       seen.add(proof.skillId);
       projected.push({
         skillId: skill.id,
@@ -297,7 +300,7 @@ export function createOpenClawCandidateProvider(options: OpenClawCandidateProvid
           artifact: { ...skill.artifact },
           policyRevision: skill.policyRevision,
         },
-        entry,
+        entry: projectedEntry,
         sourceArtifact: cloneSourceArtifact(proof.sourceArtifact),
       });
     }
@@ -776,8 +779,44 @@ function usableMetadata(snapshot: OpenClawMetadataSnapshot, now: number, maxAgeM
     expiresAt > now && snapshot.acceptedAt <= now && now - snapshot.acceptedAt <= maxAgeMs;
 }
 
-function metadataContainsEntry(snapshot: OpenClawMetadataSnapshot, entry: OpenClawFeedEntry): boolean {
-  return snapshot.feed.entries.some((candidate) => candidate.id === entry.id && candidate.version === entry.version && candidate.type === entry.type && candidate.install.candidates.some((item) => entry.install.candidates.some((selected) => item.sourceRef === selected.sourceRef && item.package === selected.package && item.version === selected.version && item.integrity === selected.integrity && JSON.stringify(item.github) === JSON.stringify(selected.github))));
+function metadataEntryProjection(snapshot: OpenClawMetadataSnapshot, entry: OpenClawFeedEntry): OpenClawFeedEntry | undefined {
+  const metadataEntry = snapshot.feed.entries.find((candidate) =>
+    candidate.id === entry.id &&
+    candidate.version === entry.version &&
+    candidate.type === entry.type &&
+    candidate.install.candidates.some((item) => entry.install.candidates.some((selected) =>
+      item.sourceRef === selected.sourceRef &&
+      item.package === selected.package &&
+      item.version === selected.version &&
+      item.integrity === selected.integrity &&
+      JSON.stringify(item.github) === JSON.stringify(selected.github),
+    )),
+  );
+  // A current trusted catalog row is an eligibility gate. The proof remains
+  // the source-integrity authority, while current display/state claims are
+  // projected from the matched row. Every state other than available is
+  // withheld from publication and selection.
+  if (!metadataEntry || metadataEntry.state !== 'available') return undefined;
+  return {
+    type: metadataEntry.type,
+    id: metadataEntry.id,
+    title: metadataEntry.title,
+    ...(metadataEntry.description === undefined ? {} : { description: metadataEntry.description }),
+    ...(metadataEntry.icon === undefined ? {} : { icon: metadataEntry.icon }),
+    version: metadataEntry.version,
+    state: metadataEntry.state,
+    ...(metadataEntry.featured === undefined ? {} : { featured: metadataEntry.featured }),
+    ...(metadataEntry.featuredAt === undefined ? {} : { featuredAt: metadataEntry.featuredAt }),
+    publisher: { ...metadataEntry.publisher },
+    // Never replace the immutable verified candidate with catalog-only data.
+    install: { candidates: entry.install.candidates.map((candidate) => ({
+      sourceRef: candidate.sourceRef,
+      package: candidate.package,
+      version: candidate.version,
+      integrity: candidate.integrity,
+      ...(candidate.github === undefined ? {} : { github: { ...candidate.github } }),
+    })) },
+  };
 }
 
 function validatePersistedProof(value: unknown, tenantId: string): OpenClawSourceProofRecord {
