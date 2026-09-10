@@ -121,6 +121,7 @@ describe('upstream acquisition', () => {
     });
     assert.deepEqual(result.bundle.files.map((file) => file.path), ['LICENSE', 'SKILL.md']);
     assert.equal(result.provenance.revision, COMMIT);
+    assert.match(result.provenance.fetchedAt ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     assert.equal(lastHeaders.authorization, undefined);
   });
 

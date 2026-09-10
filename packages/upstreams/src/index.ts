@@ -237,6 +237,8 @@ interface SkillsShResolutionMetadata {
   sourceType?: 'github' | 'well-known';
   /** Actual acquisition path, distinct from the catalog's reported sourceType. */
   sourceResolutionKind: 'snapshot' | 'github' | 'well-known';
+  /** Trusted worker time when the selected source bytes were fetched. */
+  fetchedAt: string;
   /** Verified source-provider origin; omitted when a custom resolver is opaque. */
   sourceProviderOrigin?: string;
   sourceUrl: string;
@@ -732,6 +734,7 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
     });
     return decodeGithubBlob(blob, entry, limits);
   });
+  const fetchedAt = sourceFetchedAt();
 
   let expandedBytes = 0;
   const bundleCandidate = {
@@ -762,6 +765,7 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
       ...(selectedPath ? { path: selectedPath } : {}),
       revision,
       sourceDigest,
+      fetchedAt,
     },
   };
 }
@@ -856,6 +860,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
   const sourceUrl = detail.installUrl ?? pageUrl;
 
   if (detail.files !== null) {
+    const fetchedAt = sourceFetchedAt();
     const snapshot = bundleFromSnapshotFiles(detail.files, limits);
     const frontmatter = readSkillFrontmatter(snapshot);
     assertFrontmatterIdentity(frontmatter, detail);
@@ -867,6 +872,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
+        fetchedAt,
         frontmatterName: frontmatter.name,
         frontmatterDescription: frontmatter.description,
         sourceDigest: digest,
@@ -891,6 +897,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
+        fetchedAt: github.fetchedAt,
         repository: github.repository,
         skillPath: github.skillPath,
         requestedRef: github.requestedRef,
@@ -930,6 +937,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
         sourceUrl,
         pageUrl,
         externalSnapshotHash: detail.externalSnapshotHash,
+        fetchedAt: github.fetchedAt,
         repository: github.repository,
         skillPath: github.skillPath,
         requestedRef: github.requestedRef,
@@ -958,6 +966,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
       sourceUrl,
       pageUrl,
       externalSnapshotHash: detail.externalSnapshotHash,
+      fetchedAt: wellKnown.fetchedAt,
       externalDigest: wellKnown.externalDigest,
       wellKnownIndexUrl: wellKnown.indexUrl,
       wellKnownEntryName: wellKnown.wellKnownEntryName,
@@ -1313,10 +1322,12 @@ function skillsShProvenance(
     sourceUrl: string;
     pageUrl?: string;
     externalSnapshotHash: string | null;
+    fetchedAt: string;
     sourceDigest: `sha256:${string}`;
     revision?: string;
   },
 ): Provenance {
+  const fetchedAt = validateSourceFetchedAt(values.fetchedAt);
   const resolution: SkillsShResolutionMetadata = {
     provider: 'skills.sh',
     externalId: detail.externalId,
@@ -1324,6 +1335,7 @@ function skillsShProvenance(
     slug: detail.slug,
     ...(detail.sourceType === undefined ? {} : { sourceType: detail.sourceType }),
     sourceResolutionKind: values.sourceResolutionKind,
+    fetchedAt,
     ...(values.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: values.sourceProviderOrigin }),
     sourceUrl: values.sourceUrl,
     ...(values.pageUrl === undefined ? {} : { pageUrl: values.pageUrl }),
@@ -1362,6 +1374,25 @@ function skillsShProvenance(
     ...(resolution as unknown as Record<string, unknown>),
     ...(detail.sourceType === undefined ? {} : { external: resolution }),
   } as unknown as Provenance;
+}
+
+const MAX_SOURCE_FETCHED_AT_BYTES = 64;
+
+/** Stamp source evidence only from the trusted worker clock. */
+function sourceFetchedAt(): string {
+  return validateSourceFetchedAt(new Date().toISOString());
+}
+
+/** Keep persisted external fetch times bounded and in canonical ISO form. */
+function validateSourceFetchedAt(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SOURCE_FETCHED_AT_BYTES) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Source fetchedAt is invalid');
+  }
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Source fetchedAt is invalid');
+  }
+  return value;
 }
 
 function bundleFromSnapshotFiles(files: SkillsShFile[], limits: AcquisitionLimits): SkillBundle {
@@ -1435,6 +1466,7 @@ function assertFrontmatterIdentity(
 
 interface SkillsShGithubResult {
   bundle: SkillBundle;
+  fetchedAt: string;
   repository: string;
   skillPath: string;
   requestedRef: string;
@@ -1545,6 +1577,7 @@ async function acquireSkillsShGithub(args: {
   const selectedAbsolutePath = validateSkillPath(String(selected.raw.path), limits, false);
   const selectedPath = selectedAbsolutePath.slice(0, Math.max(0, selectedAbsolutePath.lastIndexOf('/')));
   const bundle = await downloadGithubDirectory(client, apiBase, repository, selectedPath, treeResponse.tree, headers, limits);
+  const fetchedAt = sourceFetchedAt();
   const frontmatter = readSkillFrontmatter(bundle);
   assertFrontmatterIdentity(frontmatter, detail);
   const selectedTreeEntry = treeResponse.tree.find((raw) => isRecord(raw) && raw.type === 'tree' && raw.path === selectedPath);
@@ -1555,6 +1588,7 @@ async function acquireSkillsShGithub(args: {
       : resolvedCommit;
   return {
     bundle,
+    fetchedAt,
     repository,
     skillPath: selectedPath,
     requestedRef,
@@ -1676,6 +1710,7 @@ function parseGithubInstallHint(value: string | null): { repository: string; ref
 
 interface SkillsShWellKnownResult {
   bundle: SkillBundle;
+  fetchedAt: string;
   indexUrl: string;
   sourceProviderOrigin: string;
   wellKnownEntryName: string;
@@ -1727,10 +1762,12 @@ async function acquireSkillsShWellKnown(args: {
     const entry = selectWellKnownEntry(index, detail);
     if (index.kind === 'v2') {
       const artifact = await fetchWellKnownV2(client, base, indexUrl, entry as WellKnownV2Entry, limits, fetchImpl, options);
+      const fetchedAt = sourceFetchedAt();
       const frontmatter = readSkillFrontmatter(artifact.bundle);
       assertFrontmatterIdentity(frontmatter, detail);
       return {
         bundle: artifact.bundle,
+        fetchedAt,
         indexUrl: indexUrl.toString(),
         sourceProviderOrigin: indexUrl.origin,
         wellKnownEntryName: entry.name,
@@ -1739,10 +1776,12 @@ async function acquireSkillsShWellKnown(args: {
       };
     }
     const bundle = await fetchWellKnownV1(client, base, wellKnownDirectory, entry as WellKnownV1Entry, limits);
+    const fetchedAt = sourceFetchedAt();
     const frontmatter = readSkillFrontmatter(bundle);
     assertFrontmatterIdentity(frontmatter, detail);
     return {
       bundle,
+      fetchedAt,
       indexUrl: indexUrl.toString(),
       sourceProviderOrigin: indexUrl.origin,
       wellKnownEntryName: entry.name,

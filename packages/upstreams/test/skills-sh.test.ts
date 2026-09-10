@@ -133,6 +133,7 @@ function request(
 describe('skills.sh source acquisition', () => {
   it('uses the detail snapshot and preserves the external hash separately', async () => {
     const skill = Buffer.from('---\nname: demo\ndescription: Fixture demo\n---\n# demo\n', 'utf8');
+    const expectedFetchedAt = '2026-09-10T08:00:00.000Z';
     const calls: string[] = [];
     const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
       const url = new URL(input.toString());
@@ -142,12 +143,15 @@ describe('skills.sh source acquisition', () => {
         return json({
           id: 'octo/repo/demo', source: 'octo/repo', slug: 'demo', name: 'demo', sourceType: 'github',
           installUrl: 'https://github.com/octo/repo/tree/main/skills/demo', url: '/site/octo/repo/demo', hash: 'snapshot-123',
+          fetchedAt: '2000-01-01T00:00:00.000Z',
           files: [{ path: 'SKILL.md', contents: skill.toString('utf8') }],
         });
       }
       return json({ error: 'not found' }, 404);
     };
     process.env.PSKILLS_SKILLS_SH_TOKEN = 'catalog-token';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(expectedFetchedAt));
     try {
       const result = await acquireSkillsShSkill({
         ...request('octo/repo/demo', fetchImpl),
@@ -164,9 +168,13 @@ describe('skills.sh source acquisition', () => {
       expect(result.provenance.sourceDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
       expect((result.provenance as unknown as Record<string, unknown>).sourceResolutionKind).toBe('snapshot');
       expect((result.provenance as unknown as Record<string, unknown>).sourceProviderOrigin).toBeUndefined();
+      expect(result.provenance.fetchedAt).toBe(expectedFetchedAt);
+      expect((result.provenance.external as unknown as Record<string, unknown>).fetchedAt).toBe(expectedFetchedAt);
+      expect(result.provenance.fetchedAt).not.toBe('2000-01-01T00:00:00.000Z');
       expect(calls).toEqual(['/catalog/api/v1/skills/octo/repo/demo']);
     } finally {
       delete process.env.PSKILLS_SKILLS_SH_TOKEN;
+      vi.useRealTimers();
     }
   });
 
@@ -461,6 +469,7 @@ describe('skills.sh source acquisition', () => {
     expect(metadata.resolvedCommit).toBe(COMMIT);
     expect(metadata.skillPath).toBe('skills/demo');
     expect(metadata.resolvedTree).toBe(TREE);
+    expect(metadata.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
     const explicitlyTrusted = await acquireSkillsShSkill({
       ...input,
@@ -662,6 +671,8 @@ describe('skills.sh source acquisition', () => {
     expect(metadata.wellKnownEntryName).not.toBe('catalog-demo');
     expect(metadata.sourceResolutionKind).toBe('well-known');
     expect(metadata.sourceProviderOrigin).toBe(BASE);
+    expect(metadata.fetchedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect((result.provenance.external as unknown as Record<string, unknown>).fetchedAt).toBe(metadata.fetchedAt);
     expect(result.provenance.revision).toBe(expected);
   });
 
