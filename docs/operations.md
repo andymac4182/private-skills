@@ -89,6 +89,15 @@ use it as evidence that a production factory has disabled its configured
 scanners. Read `/v1/policy` after startup and record the policy revision with
 the deployment manifest.
 
+These are the fresh-factory defaults. The verified current production
+deployment is an explicit override: SkillsGuard is `required`, Cisco and
+NVIDIA are `disabled`, and `allowUnscanned=false`. The committed [production
+policy checkpoint](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+records the corresponding fail-closed policy and read-only checks; disabled
+engines do not constitute scanner verdicts. Keep the override documented with
+the deployment's policy revision and do not describe it as evidence that those
+disabled scanners ran.
+
 Semantic search is disabled unless `PSKILLS_AI_ENABLED=true`. When it is
 enabled, configure `PSKILLS_EMBEDDING_MODEL` and
 `PSKILLS_EMBEDDING_DIMENSIONS` only when overriding the defaults, plus either
