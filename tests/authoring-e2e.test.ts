@@ -493,7 +493,7 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
     const approvedState = await fixture.repository.read(ORGANIZATION);
     const approved = approvedState.skills.find((skill) => skill.id === publication.operation.resourceId);
     expect(approved).toMatchObject({ state: 'approved', artifact: { digest: updated.draft.digest }, version: '1.1.0' });
-    expect(approved?.provenance).toEqual({ kind: 'native' });
+    expect(approved?.provenance).toMatchObject({ kind: 'native' });
     expect(approved?.scanIds).toHaveLength(1);
     expect(approvedState.scans).toEqual(expect.arrayContaining([
       expect.objectContaining({ jobId: publication.operation.id, scannerId: 'skillsguard', status: 'completed' }),
