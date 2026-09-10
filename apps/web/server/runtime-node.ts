@@ -14,6 +14,7 @@ import {
   createHostedWorkerHandlerFromEnv,
   type HostedOpenClawSourceConfig,
 } from '../../../workers/runner/src/hosted';
+import { createDefaultOpenClawSourceConfiguration } from '../../../packages/upstreams/src/index';
 import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types';
 import {
   createSkillsDirectoryGatewayTokenProvider,
@@ -35,19 +36,32 @@ const HEX40_RE = /^[0-9a-f]{40}$/u;
 const HEX64_RE = /^[0-9a-f]{64}$/u;
 
 /**
- * Build the deployment-owned OpenClaw source locator from an explicit,
- * server-only mapping. The worker job supplies only a normalized source
- * identity; it can never choose a URL or widen the transport allowlist.
+ * Build the deployment-owned OpenClaw source locator. Supported public
+ * OpenClaw source identities use the reviewed default locator, so a hosted
+ * worker does not need a per-skill binding map. The optional map remains a
+ * server-only operator override/restriction; the worker job supplies only a
+ * normalized source identity and can never choose a URL or widen an allowlist.
  *
- * The setting is intentionally opt-in. An absent setting leaves the hosted
- * worker without an OpenClaw source transport, which is safer than deriving
- * a guessed artifact endpoint from package metadata.
+ * The reviewed default is deliberately limited to the two normalized public
+ * source families. An absent override uses those profiles; an unrecognized or
+ * malformed identity still fails closed instead of reaching a guessed URL.
  */
 export function createHostedOpenClawSourceConfigFromEnv(
   env: RuntimeEnvironment,
-): HostedOpenClawSourceConfig | undefined {
+): HostedOpenClawSourceConfig {
+  const configuredClawHubOrigin = env.PSKILLS_OPENCLAW_SOURCE_ORIGIN?.trim();
+  const defaults = createDefaultOpenClawSourceConfiguration(
+    configuredClawHubOrigin === undefined || configuredClawHubOrigin.length === 0
+      ? {}
+      : { clawHubOrigin: configuredClawHubOrigin },
+  );
   const raw = env.PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON?.trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return {
+      locator: defaults.locator,
+      sourceProfiles: defaults.profiles,
+    };
+  }
   if (new TextEncoder().encode(raw).byteLength > OPENCLAW_SOURCE_CONFIG_MAX_BYTES) {
     throw new Error('OpenClaw source locator configuration is too large');
   }

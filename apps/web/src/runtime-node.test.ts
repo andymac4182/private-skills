@@ -168,6 +168,65 @@ describe('node directory token provider', () => {
     expect(() => config?.locator.locate({ ...source, version: '1.0.1' })).toThrow('not configured');
   });
 
+  it('uses reviewed public locators for both source families without per-skill bindings', () => {
+    const config = createHostedOpenClawSourceConfigFromEnv({});
+    const clawHub: OpenClawNormalizedSource = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/agent-skill',
+      version: '2.4.0',
+      artifactDigest: `sha256:${'b'.repeat(64)}`,
+    };
+    const github: OpenClawNormalizedSource = {
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'acme/agent-skills',
+      path: 'skills/agent-skill',
+      commit: '0123456789012345678901234567890123456789',
+      contentHash: 'c'.repeat(64),
+    };
+
+    expect(config?.sourceProfiles?.['public-clawhub']).toMatchObject({
+      allowedArtifactOrigins: ['https://clawhub.ai'],
+      sourceProviderOrigin: 'https://clawhub.ai',
+    });
+    expect(config?.sourceProfiles?.['public-github']).toMatchObject({
+      allowedArtifactOrigins: ['https://codeload.github.com'],
+      sourceProviderOrigin: 'https://github.com',
+    });
+    expect(config?.locator.locate(clawHub)).toMatchObject({
+      url: 'https://clawhub.ai/api/v1/download?slug=agent-skill&ownerHandle=acme&version=2.4.0',
+    });
+    expect(config?.locator.locate(github)).toMatchObject({
+      url: 'https://codeload.github.com/acme/agent-skills/tar.gz/0123456789012345678901234567890123456789',
+    });
+  });
+
+  it('keeps unknown source identities unavailable and keeps the configured ClawHub origin scoped', () => {
+    const config = createHostedOpenClawSourceConfigFromEnv({
+      PSKILLS_OPENCLAW_SOURCE_ORIGIN: 'https://clawhub.gateway.example',
+    });
+    const clawHub: OpenClawNormalizedSource = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: 'agent-skill',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'d'.repeat(64)}`,
+    };
+    expect(config?.locator.locate(clawHub)).toMatchObject({
+      url: 'https://clawhub.gateway.example/api/v1/download?slug=agent-skill&version=1.0.0',
+    });
+    expect(config?.sourceProfiles?.['public-clawhub']?.sourceProviderOrigin).toBe('https://clawhub.gateway.example');
+    expect(config?.sourceProfiles?.['public-github']?.sourceProviderOrigin).toBe('https://github.com');
+    expect(() => config?.locator.locate({
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/../other',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'d'.repeat(64)}`,
+    })).toThrow('invalid');
+  });
+
   it.each([
     { label: 'malformed JSON', value: '{' },
     {
