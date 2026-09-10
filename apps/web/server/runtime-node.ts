@@ -16,6 +16,7 @@ import {
   createUnavailableSkillsDirectoryTokenProvider,
   resolveSkillsDirectoryConnection,
   SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
+  SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
   type SkillsTokenProvider,
 } from '../../../packages/directory/src/index';
 
@@ -106,11 +107,11 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const directoryConnection = resolveSkillsDirectoryConnection(env);
   // The official skills.sh token provider is request-scoped. Keep the
   // resolver function in the long-lived runtime, never its token, and pass it
-  // into hosted import jobs so each catalog request obtains a fresh project
-  // OIDC credential. Disabled directory access leaves existing env-backed
-  // upstream credentials untouched. The hosted worker wires an explicitly
-  // configured gateway through its separate, base-bound credential seam;
-  // this callback remains official-origin OIDC only.
+  // into hosted import jobs so each canonical catalog request obtains a fresh
+  // project OIDC credential. Disabled directory access leaves existing
+  // env-backed upstream credentials untouched. The hosted worker wires an
+  // explicitly configured gateway through its separate, base-bound credential
+  // seam; this callback remains the root official-origin OIDC path only.
   const directoryTokenProvider = createDirectoryTokenProvider(env);
   const hostedSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
     const token = await directoryTokenProvider(signal);
@@ -122,7 +123,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
     ? createHostedWorkerHandlerFromEnv(
       { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
-      directoryConnection.kind === 'official'
+      directoryConnection.kind === 'official' && directoryConnection.baseURL === SKILLS_DIRECTORY_OFFICIAL_BASE_URL
         ? { acquisition: { getSkillsShToken: hostedSkillsShToken } }
         : {},
     )
