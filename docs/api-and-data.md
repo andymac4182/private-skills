@@ -22,6 +22,7 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 | `GET /v1/skills/{id}/versions` | Authorized version/provenance metadata |
 | `GET /v1/skills/{resourceId}/files` | Authorized immutable release digest and canonical file manifest with per-file content digests and explicit binary/unsupported/oversize preview states; metadata-only and scanner/policy gated |
 | `GET /v1/skills/{resourceId}/file?path=...` | Authorized exact file read for one canonical relative path; repeats the release/digest binding and returns full bounded UTF-8 text only for that selected file |
+| `POST /v1/drafts` | Publisher-only upload-origin draft from a namespace-scoped canonical bundle; requires an idempotency key and has no fake base release |
 | `POST /v1/skills/{resourceId}/drafts` | Publisher-only draft fork from an authorized approved release; requires the exact base digest and an idempotency key |
 | `GET/PUT /v1/drafts/{draftId}` | Publisher-only namespace draft read or CAS update; every revision is a freshly sealed canonical bundle with an exact digest |
 | `POST /v1/drafts/{draftId}/publish` | Publisher-only explicit publication request; queues a scan-bound pending release for the selected draft revision and returns an idempotent operation |
@@ -109,7 +110,7 @@ Transfer descriptors specify `mode: signed-url | gateway`, approved URL, method,
 | `source_revisions` | Tenant/feed identity, original external ID/source type, verified upstream/repository/subdirectory/immutable revision when available, external hash/digest (including null), local canonical digest, resolver provenance, ACL/policy revision, and license data; never an invented path from snapshot-only metadata |
 | `artifacts`, `artifact_files` | Organization-scoped digest, logical store ID and sealed object key/version, byte limits, file manifest, creation/retention state; no provider URL as permanent identity |
 | `packs`, `pack_drafts`, `pack_versions`, `pack_members` | Immutable published manifest/member graph; exact skills/releases/digests; no nested packs in v1 |
-| `skill_drafts`, `skill_draft_revisions` | Tenant/namespace-scoped mutable editor state, exact sealed bundle digest, base release/digest, monotonic revision, and publication idempotency records |
+| `skill_drafts`, `skill_draft_revisions` | Tenant/namespace-scoped mutable editor state, explicit release/upload origin, optional base release/digest, exact sealed bundle digest, monotonic revision, and publication idempotency records |
 | `policy_revisions`, `policy_exceptions` | Immutable normalized config/hash; scoped reasoned exceptions with expiry |
 | `scan_runs`, `scan_findings`, `approvals` | Reusable artifact/engine/config/rules evidence; approvals additionally bind release/source/pack context, effective policy revisions, and expiry |
 | `jobs`, `job_attempts`, `outbox_events` | Unique idempotency binding, lease/fencing token, state, heartbeat, bounded retries, durable event handoff |
