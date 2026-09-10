@@ -7,6 +7,7 @@ import type {
   SkillVersion,
   StateRepository,
 } from '../../contracts/src/index.js';
+import type { UploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
 import { decodeBundle } from '../../storage/src/index.js';
 import { digestBytes, isSha256Digest } from '../../storage/src/digest.js';
 
@@ -64,6 +65,18 @@ export interface AuthoringHandlerDependencies {
   auth: Authenticator;
   config: AuthoringHandlerConfig;
   releaseAdmission: ReleaseAdmission;
+  /** Synchronous admission predicate evaluated inside the repository CAS transaction. */
+  releaseAdmissionAtCommit?: (state: RegistryState, release: SkillVersion, principal: Principal) => boolean;
+  /** Optional advisory upload/edit review integration. Scanner admission remains authoritative. */
+  uploadReview?: UploadReviewIntegration;
+}
+
+export interface UploadReviewIntegration {
+  service: UploadReviewPersistenceService;
+  model: string;
+  reviewerRevision: string;
+  /** Starts the separate Eve session after its job is durably queued. */
+  trigger?: (organizationId: string, jobId: string, service: UploadReviewPersistenceService) => Promise<unknown>;
 }
 
 export interface AuthoringHandler {

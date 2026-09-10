@@ -5,11 +5,19 @@ import type {
   Principal,
   RegistryState,
   SkillDraft,
+  SkillDraftFileManifestEntry,
   SkillDraftIdempotencyRecord,
   SkillDraftPublicationRecord,
   SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
+import { createUploadReviewSnapshot } from '../../upload-reviews/src/snapshot.js';
+import type {
+  UploadReviewBinding,
+  UploadReviewFindingDecision,
+  UploadReviewJob,
+  UploadReviewResult,
+} from '../../upload-reviews/src/index.js';
 import {
   AuthoringApiError,
   assertPublisher,
@@ -24,6 +32,7 @@ import {
   decodeBundle,
   digestBytes,
   encodeBundle,
+  parseSkillMetadata,
   validateBundle,
 } from '../../storage/src/index.js';
 
@@ -45,8 +54,19 @@ export interface PublicSkillDraft {
   actor: string;
   createdAt: string;
   updatedAt: string;
-  publications?: SkillDraftPublicationRecord[];
+  publications?: PublicSkillDraftPublication[];
 }
+
+export interface PublicSkillDraftPublication {
+  revision: number;
+  digest: Digest;
+  version: string;
+  resourceId: string;
+  jobId: string;
+  createdAt: string;
+}
+
+const MAX_PUBLICATION_HISTORY = 16;
 
 /**
  * Create the explicit draft routes. Saving a draft only creates a fresh
@@ -58,6 +78,9 @@ export interface PublicSkillDraft {
  *   GET  /v1/drafts/:draftId
  *   PUT  /v1/drafts/:draftId
  *   POST /v1/drafts/:draftId/publish
+ *   GET/POST /v1/drafts/:draftId/reviews
+ *   POST /v1/drafts/:draftId/reviews/:resultId/decisions
+ *   POST /v1/drafts/:draftId/reviews/:jobId/retry
  */
 export function createDraftHandler(deps: AuthoringHandlerDependencies): AuthoringHandler {
   const maxBodyBytes = normalizeBodyLimit(deps.config.maxBodyBytes);
@@ -107,6 +130,55 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
         return await publishDraft(body, request, draftId, principal, deps);
       }
 
+      if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'reviews') {
+        const draftId = decodePathPart(segments[2]);
+        if (!isSafeId(draftId)) throw unavailableDraft();
+        assertPublisher(principal);
+        if (request.method.toUpperCase() === 'GET') {
+          return await listDraftReviews(draftId, principal, deps);
+        }
+        if (request.method.toUpperCase() === 'POST') {
+          const body = await readJson(request, maxBodyBytes);
+          return await requestDraftReview(body, draftId, principal, deps);
+        }
+        throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET and POST are supported', 405);
+      }
+
+      if (
+        segments.length === 6 &&
+        segments[0] === 'v1' &&
+        segments[1] === 'drafts' &&
+        segments[3] === 'reviews' &&
+        segments[5] === 'decisions'
+      ) {
+        if (request.method.toUpperCase() !== 'POST') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+        }
+        const draftId = decodePathPart(segments[2]);
+        const resultId = decodePathPart(segments[4]);
+        if (!isSafeId(draftId) || !isSafeId(resultId)) throw unavailableDraft();
+        assertPublisher(principal);
+        const body = await readJson(request, maxBodyBytes);
+        return await decideDraftReview(body, draftId, resultId, principal, deps);
+      }
+
+      if (
+        segments.length === 6 &&
+        segments[0] === 'v1' &&
+        segments[1] === 'drafts' &&
+        segments[3] === 'reviews' &&
+        segments[5] === 'retry'
+      ) {
+        if (request.method.toUpperCase() !== 'POST') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+        }
+        const draftId = decodePathPart(segments[2]);
+        const jobId = decodePathPart(segments[4]);
+        if (!isSafeId(draftId) || !isSafeId(jobId)) throw unavailableDraft();
+        assertPublisher(principal);
+        return await retryDraftReview(draftId, jobId, principal, deps);
+      }
+
       throw new AuthoringApiError('NOT_FOUND', 'Route not found', 404);
     } catch (error) {
       return errorResponse(error);
@@ -136,7 +208,7 @@ async function createDraft(
     if (existing.createIdempotency?.requestDigest !== requestDigest) {
       throw idempotencyConflict();
     }
-    const existingDraft = draftFromCreateRecord(existing);
+    const existingDraft = await draftFromCreateRecord(existing, deps);
     return jsonResponse({ draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
       'cache-control': 'private, no-store',
     });
@@ -155,7 +227,7 @@ async function createDraft(
     revision: 1,
     digest: snapshot.release.artifact.digest,
     artifact: stored,
-    files: snapshot.bundle.files,
+    manifest: await compactManifest(snapshot.bundle.files),
     updatedAt: now,
   };
   const draft: SkillDraft = {
@@ -191,7 +263,7 @@ async function createDraft(
       if (existing.createIdempotency?.requestDigest !== requestDigest) {
         throw idempotencyConflict();
       }
-      return { draft: draftFromCreateRecord(existing), idempotent: true };
+      return { draft: existing, idempotent: true };
     }
 
     const current = state.skills.find((candidate) => candidate.id === resourceId);
@@ -203,8 +275,10 @@ async function createDraft(
     return { draft, idempotent: false };
   });
 
-  const bundle = { format: 'pskills-bundle-v1' as const, files: result.draft.files };
-  return jsonResponse({ draft: toPublicDraft(result.draft, bundle) }, result.idempotent ? 200 : 201, {
+  const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
+  const bundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
+  await syncDraftReview(responseDraft, bundle.files, deps, false);
+  return jsonResponse({ draft: toPublicDraft(responseDraft, bundle) }, result.idempotent ? 200 : 201, {
     'cache-control': 'private, no-store',
   });
 }
@@ -236,18 +310,23 @@ async function updateDraft(
   }
   let bundle;
   try {
-    bundle = validateBundle({ format: 'pskills-bundle-v1', files: body.files });
+    const validated = validateBundle({ format: 'pskills-bundle-v1', files: body.files });
+    // encodeBundle sorts paths; decode the exact bytes once so the persisted
+    // manifest and every replay use the same canonical file order.
+    bundle = decodeBundle(encodeBundle(validated));
   } catch {
     throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
   }
-  const digest = await digestBytes(encodeBundle(bundle));
+  const encoded = encodeBundle(bundle);
+  const digest = await digestBytes(encoded);
   const requestDigest = await digestText(JSON.stringify({ expectedRevision, digest }));
   const stateBefore = await deps.repository.read(deps.config.organizationId);
   const before = findDraft(stateBefore, draftId, principal, deps.config.organizationId);
   const prior = findIdempotency(before, idempotencyKey, principal.subject);
   if (prior) {
     if (prior.requestDigest !== requestDigest) throw idempotencyConflict();
-    return jsonResponse({ draft: toPublicDraft(draftFromIdempotency(before, prior), { format: 'pskills-bundle-v1', files: prior.files }), idempotent: true }, 200, {
+    const replay = await draftFromIdempotency(before, prior, deps);
+    return jsonResponse({ draft: toPublicDraft(replay, { format: 'pskills-bundle-v1', files: replay.files }), idempotent: true }, 200, {
       'cache-control': 'private, no-store',
     });
   }
@@ -258,7 +337,6 @@ async function updateDraft(
     throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
   }
 
-  const encoded = encodeBundle(bundle);
   const stored = await putVerifiedDraftBlob(deps, encoded, digest);
   const now = new Date().toISOString();
   const record: SkillDraftIdempotencyRecord = {
@@ -268,7 +346,7 @@ async function updateDraft(
     revision: expectedRevision + 1,
     digest,
     artifact: stored,
-    files: bundle.files,
+    manifest: await compactManifest(bundle.files),
     updatedAt: now,
   };
 
@@ -277,7 +355,7 @@ async function updateDraft(
     const concurrent = findIdempotency(current, idempotencyKey, principal.subject);
     if (concurrent) {
       if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
-      return { draft: draftFromIdempotency(current, concurrent), idempotent: true };
+      return { draft: current, idempotent: true };
     }
     if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
     if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
@@ -291,10 +369,230 @@ async function updateDraft(
     return { draft: current, idempotent: false };
   });
 
-  const responseBundle = { format: 'pskills-bundle-v1' as const, files: result.draft.files };
-  return jsonResponse({ draft: toPublicDraft(result.draft, responseBundle), idempotent: result.idempotent }, 200, {
+  const responseDraft = result.idempotent
+    ? await draftFromIdempotency(result.draft, findIdempotency(result.draft, idempotencyKey, principal.subject)!, deps)
+    : result.draft;
+  const responseBundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
+  await syncDraftReview(responseDraft, responseBundle.files, deps, true);
+  return jsonResponse({ draft: toPublicDraft(responseDraft, responseBundle), idempotent: result.idempotent }, 200, {
     'cache-control': 'private, no-store',
   });
+}
+
+/**
+ * Review is advisory and therefore never makes a successful draft mutation
+ * fail. The durable queue write happens after the draft transaction, and the
+ * separate Eve trigger is best effort after that sealed queue row exists.
+ */
+async function syncDraftReview(
+  draft: SkillDraft,
+  files: BundleFile[],
+  deps: AuthoringHandlerDependencies,
+  markPreviousStale: boolean,
+): Promise<UploadReviewJob | undefined> {
+  const integration = deps.uploadReview;
+  if (!integration) return undefined;
+  try {
+    const state = await deps.repository.read(deps.config.organizationId);
+    const currentDraft = state.drafts?.find(
+      (candidate) => candidate.id === draft.id && candidate.organizationId === deps.config.organizationId,
+    );
+    if (!currentDraft || currentDraft.revision !== draft.revision || currentDraft.digest !== draft.digest) return undefined;
+    const base = state.skills.find(
+      (candidate) => candidate.id === currentDraft.baseResourceId && candidate.organizationId === deps.config.organizationId,
+    );
+    const binding: UploadReviewBinding = {
+      draftId: currentDraft.id,
+      draftRevision: currentDraft.revision,
+      contentDigest: currentDraft.digest,
+      baseReleaseId: currentDraft.baseResourceId,
+      ...(base?.version === undefined ? {} : { baseReleaseVersion: base.version }),
+      baseDigest: currentDraft.baseDigest,
+      policyRevision: state.policy.revision,
+    };
+    if (markPreviousStale) {
+      try {
+        await integration.service.markStale(deps.config.organizationId, {
+          draftId: currentDraft.id,
+          current: binding,
+          model: integration.model,
+          reviewerRevision: integration.reviewerRevision,
+          reason: 'draft revision changed',
+        });
+      } catch {
+        // The new review remains advisory and can still be queued below.
+      }
+    }
+    const snapshot = await createUploadReviewSnapshot(files);
+    const job = await integration.service.enqueue(deps.config.organizationId, {
+      binding,
+      snapshot,
+      model: integration.model,
+      reviewerRevision: integration.reviewerRevision,
+    });
+    if (job.state === 'pending' && job.eveSessionId === undefined && integration.trigger) {
+      try {
+        await integration.trigger(deps.config.organizationId, job.id, integration.service);
+      } catch {
+        // The pending row remains visible for a later trigger/retry. Review is
+        // advisory and an Eve outage must not reject a saved draft.
+      }
+    }
+    return job;
+  } catch {
+    return undefined;
+  }
+}
+
+function reviewUnavailable(): AuthoringApiError {
+  return new AuthoringApiError('REVIEW_UNAVAILABLE', 'Upload review is temporarily unavailable', 503);
+}
+
+function mapReviewError(error: unknown): AuthoringApiError {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : '';
+  if (code === 'UPLOAD_REVIEW_NOT_FOUND') return unavailableDraft();
+  if (code === 'INVALID_UPLOAD_REVIEW_INPUT') return new AuthoringApiError('INVALID_REQUEST', 'Review request is invalid', 400);
+  if (code === 'UPLOAD_REVIEW_CONFLICT') return new AuthoringApiError('REVIEW_CONFLICT', 'Review state changed; retry the request', 409);
+  if (code === 'UPLOAD_REVIEW_LEASE_FENCED' || code === 'UPLOAD_REVIEW_LEASE_EXPIRED') {
+    return new AuthoringApiError('REVIEW_CONFLICT', 'Review lease is no longer current', 409);
+  }
+  return reviewUnavailable();
+}
+
+function publicReviewJob(job: UploadReviewJob): Record<string, unknown> {
+  return {
+    id: job.id,
+    binding: { ...job.binding },
+    model: job.model,
+    reviewerRevision: job.reviewerRevision,
+    state: job.state,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
+    ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+    ...(job.error === undefined ? {} : { error: job.error }),
+    ...(job.staleReason === undefined ? {} : { staleReason: job.staleReason }),
+    ...(job.resultId === undefined ? {} : { resultId: job.resultId }),
+  };
+}
+
+function publicReviewResult(result: UploadReviewResult): Record<string, unknown> {
+  return {
+    id: result.id,
+    jobId: result.jobId,
+    binding: { ...result.binding },
+    model: result.model,
+    reviewerRevision: result.reviewerRevision,
+    state: result.state,
+    findings: result.findings.map((finding) => ({ ...finding })),
+    createdAt: result.createdAt,
+    finishedAt: result.finishedAt,
+    ...(result.error === undefined ? {} : { error: result.error }),
+    ...(result.staleReason === undefined ? {} : { staleReason: result.staleReason }),
+  };
+}
+
+async function listDraftReviews(
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  if (!deps.uploadReview) throw reviewUnavailable();
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+  const jobs = await deps.uploadReview.service.listJobs(deps.config.organizationId, { draftId: draft.id });
+  const results = await deps.uploadReview.service.listResults(deps.config.organizationId, { draftId: draft.id });
+  return jsonResponse({
+    reviews: jobs.map(publicReviewJob),
+    results: results.map(publicReviewResult),
+  }, 200, { 'cache-control': 'private, no-store' });
+}
+
+async function requestDraftReview(
+  _body: Record<string, unknown>,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  if (!deps.uploadReview) throw reviewUnavailable();
+  try {
+    const state = await deps.repository.read(deps.config.organizationId);
+    const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+    const job = await syncDraftReview(draft, draft.files, deps, false);
+    if (!job) throw reviewUnavailable();
+    return jsonResponse({ review: publicReviewJob(job) }, 202, { 'cache-control': 'private, no-store' });
+  } catch (error) {
+    if (error instanceof AuthoringApiError) throw error;
+    throw mapReviewError(error);
+  }
+}
+
+async function retryDraftReview(
+  draftId: string,
+  jobId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  if (!deps.uploadReview) throw reviewUnavailable();
+  try {
+    const state = await deps.repository.read(deps.config.organizationId);
+    const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+    const jobs = await deps.uploadReview.service.listJobs(deps.config.organizationId, { draftId: draft.id });
+    const existing = jobs.find((job) => job.id === jobId);
+    if (!existing) throw unavailableDraft();
+    const job = await deps.uploadReview.service.requeue(deps.config.organizationId, existing.id, undefined, principal.subject);
+    if (job.state === 'pending' && job.eveSessionId === undefined && deps.uploadReview.trigger) {
+      try {
+        await deps.uploadReview.trigger(deps.config.organizationId, job.id, deps.uploadReview.service);
+      } catch {
+        // Keep the durable pending row available for a later retry.
+      }
+    }
+    return jsonResponse({ review: publicReviewJob(job) }, 202, { 'cache-control': 'private, no-store' });
+  } catch (error) {
+    if (error instanceof AuthoringApiError) throw error;
+    throw mapReviewError(error);
+  }
+}
+
+async function decideDraftReview(
+  body: Record<string, unknown>,
+  draftId: string,
+  resultId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  if (!deps.uploadReview) throw reviewUnavailable();
+  const findingId = typeof body.findingId === 'string' ? body.findingId : '';
+  const decision = body.decision;
+  const reason = body.reason;
+  if (!findingId || !isReviewDecision(decision) || (reason !== undefined && typeof reason !== 'string')) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'findingId, decision, and an optional reason are required', 400);
+  }
+  try {
+    const state = await deps.repository.read(deps.config.organizationId);
+    const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+    const results = await deps.uploadReview.service.listResults(deps.config.organizationId, { draftId: draft.id });
+    if (!results.some((result) => result.id === resultId)) throw unavailableDraft();
+    const updated = await deps.uploadReview.service.updateFindingDecision(
+      deps.config.organizationId,
+      resultId,
+      findingId,
+      decision,
+      principal.subject,
+      { reason: reason as string | undefined },
+    );
+    return jsonResponse({ review: publicReviewResult(updated) }, 200, { 'cache-control': 'private, no-store' });
+  } catch (error) {
+    if (error instanceof AuthoringApiError) throw error;
+    throw mapReviewError(error);
+  }
+}
+
+function isReviewDecision(value: unknown): value is UploadReviewFindingDecision {
+  return value === 'open' || value === 'acknowledged' || value === 'dismissed';
 }
 
 interface DraftPublishOperation {
@@ -333,8 +631,16 @@ async function publishDraft(
   }
 
   // The draft bytes are re-read and verified before the job is queued. This
-  // binds the scanner job to the exact revision/digest being published.
-  await readDraftBundle(before, deps);
+  // binds the scanner job to the exact revision/digest being published, and
+  // publication derives release metadata from the new bytes rather than the
+  // historical base release.
+  const draftBundle = await readDraftBundle(before, deps);
+  let metadata;
+  try {
+    metadata = parseSkillMetadata(draftBundle);
+  } catch {
+    throw new AuthoringApiError('INVALID_BUNDLE', 'Draft metadata is not a valid SKILL.md manifest', 400);
+  }
   const base = await assertCurrentPublishableBase(stateBefore, before, principal, deps);
   const policy = clonePolicy(stateBefore.policy);
   const now = new Date().toISOString();
@@ -344,14 +650,14 @@ async function publishDraft(
     id: resourceId,
     organizationId: deps.config.organizationId,
     name: before.name,
-    skillName: before.skillName,
+    skillName: metadata.skillName,
     version,
-    description: before.description ?? '',
+    description: metadata.description,
     artifact: before.artifact,
     state: 'pending',
     policyRevision: policy.revision,
     createdAt: now,
-    provenance: { ...base.provenance },
+    provenance: { kind: 'native', sourceDigest: before.digest },
     fileCount: before.files.length,
     scanIds: [],
     authoring: {
@@ -405,12 +711,15 @@ async function publishDraft(
     if (state.policy.revision !== policy.revision) {
       throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
     }
+    if (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal)) {
+      throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
+    }
     if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
       throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
     }
     state.skills.push(skill);
     state.jobs.push(job);
-    current.publications = [...(current.publications ?? []), publication];
+    current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
     appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
       digest: publication.digest,
       version,
@@ -418,7 +727,7 @@ async function publishDraft(
       jobId,
       draftRevision: expectedRevision,
       scanRequired: true,
-    });
+    }, now);
     return { operation: operationFromPublication(publication), idempotent: false };
   });
 
@@ -515,32 +824,76 @@ function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1';
     actor: draft.actor,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
-    ...(draft.publications ? { publications: draft.publications.map((publication) => ({ ...publication })) } : {}),
+    ...(draft.publications
+      ? {
+        publications: draft.publications.slice(-MAX_PUBLICATION_HISTORY).map((publication) => ({
+          revision: publication.revision,
+          digest: publication.digest,
+          version: publication.version,
+          resourceId: publication.resourceId,
+          jobId: publication.jobId,
+          createdAt: publication.createdAt,
+        })),
+      }
+      : {}),
   };
 }
 
-function draftFromCreateRecord(draft: SkillDraft): SkillDraft {
+async function draftFromCreateRecord(draft: SkillDraft, deps: AuthoringHandlerDependencies): Promise<SkillDraft> {
   const record = draft.createIdempotency;
   if (!record) return draft;
+  const bundle = await readIdempotencyBundle(record, deps);
   return {
     ...draft,
     revision: record.revision,
     digest: record.digest,
     artifact: record.artifact,
-    files: record.files,
+    files: bundle.files,
     updatedAt: record.updatedAt,
   };
 }
 
-function draftFromIdempotency(draft: SkillDraft, record: SkillDraftIdempotencyRecord): SkillDraft {
+async function draftFromIdempotency(
+  draft: SkillDraft,
+  record: SkillDraftIdempotencyRecord,
+  deps: AuthoringHandlerDependencies,
+): Promise<SkillDraft> {
+  const bundle = await readIdempotencyBundle(record, deps);
   return {
     ...draft,
     revision: record.revision,
     digest: record.digest,
     artifact: record.artifact,
-    files: record.files,
+    files: bundle.files,
     updatedAt: record.updatedAt,
   };
+}
+
+async function readIdempotencyBundle(
+  record: SkillDraftIdempotencyRecord,
+  deps: AuthoringHandlerDependencies,
+): Promise<ReturnType<typeof decodeBundle>> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.blobs.get(record.artifact.key);
+  } catch {
+    throw new AuthoringApiError('DRAFT_UNAVAILABLE', 'Draft content is temporarily unavailable', 503);
+  }
+  const actual = await digestBytes(bytes);
+  if (actual !== record.digest || actual !== record.artifact.digest || bytes.byteLength !== record.artifact.size) {
+    throw new AuthoringApiError('DIGEST_MISMATCH', 'Draft content failed integrity verification', 409);
+  }
+  let bundle: ReturnType<typeof decodeBundle>;
+  try {
+    bundle = decodeBundle(bytes);
+  } catch {
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft content is not a canonical bundle', 409);
+  }
+  const manifest = await compactManifest(bundle.files);
+  if (!Array.isArray(record.manifest) || !sameManifest(manifest, record.manifest)) {
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft manifest does not match its sealed content', 409);
+  }
+  return bundle;
 }
 
 function findIdempotency(draft: SkillDraft, key: string, subject: string): SkillDraftIdempotencyRecord | undefined {
@@ -573,6 +926,7 @@ function appendDraftAudit(
   draft: SkillDraft,
   organizationId: string,
   extra: Record<string, unknown> = {},
+  createdAt = draft.updatedAt,
 ): void {
   state.audit.push({
     id: randomId('audit'),
@@ -580,7 +934,7 @@ function appendDraftAudit(
     subject: principal.subject,
     action,
     resourceId: draft.id,
-    createdAt: draft.updatedAt,
+    createdAt,
     details: {
       baseResourceId: draft.baseResourceId,
       baseDigest: draft.baseDigest,
@@ -589,6 +943,44 @@ function appendDraftAudit(
       ...extra,
     },
   });
+}
+
+async function compactManifest(files: BundleFile[]): Promise<SkillDraftFileManifestEntry[]> {
+  return Promise.all(files.map(async (file) => {
+    const bytes = decodeBase64(file.content);
+    return {
+      path: file.path,
+      size: bytes.byteLength,
+      digest: await digestBytes(bytes),
+      ...(file.executable === true ? { executable: true } : {}),
+    };
+  }));
+}
+
+function sameManifest(
+  left: SkillDraftFileManifestEntry[],
+  right: SkillDraftFileManifestEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((file, index) => {
+    const other = right[index];
+    return file.path === other?.path &&
+      file.size === other.size &&
+      file.digest === other.digest &&
+      file.executable === other.executable;
+  });
+}
+
+function decodeBase64(value: string): Uint8Array {
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch {
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft file content is not canonical base64', 409);
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 async function putVerifiedDraftBlob(deps: AuthoringHandlerDependencies, bytes: Uint8Array, digest: Digest): Promise<StoredBlob> {

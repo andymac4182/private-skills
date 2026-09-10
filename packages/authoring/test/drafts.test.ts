@@ -3,6 +3,7 @@ import { createDraftHandler } from '../src/drafts.js';
 import type { AuthoringHandlerDependencies } from '../src/index.js';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
+import { createUploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
 import type {
   Authenticator,
   BlobStore,
@@ -12,6 +13,7 @@ import type {
   SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
+import type { UploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION = 'org-test';
@@ -63,9 +65,12 @@ interface Fixture {
   handler: ReturnType<typeof createDraftHandler>;
   setPrincipal(value: Principal | null): void;
   setAdmission(value: boolean): void;
+  setCommitAdmission(value: boolean): void;
+  reviewService?: UploadReviewPersistenceService;
+  reviewTriggerCalls: number;
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(options: { withReview?: boolean } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
@@ -98,13 +103,27 @@ async function fixture(): Promise<Fixture> {
   const repository = createMemoryStateRepository({ initial: { [ORGANIZATION]: state } });
   let current: Principal | null = user();
   let admitted = true;
+  let commitAdmitted = true;
+  let reviewTriggerCalls = 0;
+  const reviewService = options.withReview ? createUploadReviewPersistenceService(repository) : undefined;
   const auth: Authenticator = { authenticate: async () => current };
   const deps: AuthoringHandlerDependencies = {
     repository,
     blobs,
     auth,
     config: { organizationId: ORGANIZATION, maxBodyBytes: 1024 * 1024 },
-    releaseAdmission: async () => admitted,
+    releaseAdmission: () => admitted,
+    releaseAdmissionAtCommit: () => commitAdmitted,
+    ...(reviewService ? {
+      uploadReview: {
+        service: reviewService,
+        model: 'test/reviewer',
+        reviewerRevision: 'review-contract-1',
+        trigger: async () => {
+          reviewTriggerCalls += 1;
+        },
+      },
+    } : {}),
   };
   return {
     repository,
@@ -117,6 +136,13 @@ async function fixture(): Promise<Fixture> {
     },
     setAdmission(value) {
       admitted = value;
+    },
+    setCommitAdmission(value) {
+      commitAdmitted = value;
+    },
+    reviewService,
+    get reviewTriggerCalls() {
+      return reviewTriggerCalls;
     },
   };
 }
@@ -221,6 +247,26 @@ describe('durable skill drafts', () => {
     expect((await test.repository.read(ORGANIZATION)).skills[0]!.artifact).toEqual(test.release.artifact);
   });
 
+  it('canonicalizes file order before sealing and replays idempotency from the verified blob', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const unsorted = [...test.bundle.files].reverse();
+    const updated = await test.handler(updateRequest(created.draft.id, 'unordered', 1, unsorted));
+    expect(updated.status).toBe(200);
+    const updatedBody = await json(updated);
+    expect(updatedBody.draft.files.map((file: { path: string }) => file.path)).toEqual([
+      'SKILL.md',
+      'docs/guide.md',
+      'rules.json',
+    ]);
+    const loaded = await test.handler(new Request(`${ORIGIN}/v1/drafts/${created.draft.id}`));
+    expect(loaded.status).toBe(200);
+    expect((await json(loaded)).draft.files).toEqual(updatedBody.draft.files);
+    const retry = await test.handler(updateRequest(created.draft.id, 'unordered', 1, unsorted));
+    expect(retry.status).toBe(200);
+    expect((await json(retry)).draft).toEqual(updatedBody.draft);
+  });
+
   it('makes a successful update retry idempotent and rejects key reuse with another payload', async () => {
     const test = await fixture();
     const created = await create(test);
@@ -322,6 +368,56 @@ describe('durable skill drafts', () => {
     expect(retryResponse.status).toBe(200);
     expect(await json(retryResponse)).toEqual({ operation: first.operation, idempotent: true });
     expect((await test.repository.read(ORGANIZATION)).jobs).toHaveLength(1);
+
+    const publicDraft = await test.handler(new Request(`${ORIGIN}/v1/drafts/${created.draft.id}`));
+    expect(publicDraft.status).toBe(200);
+    const publication = (await json(publicDraft)).draft.publications[0];
+    expect(publication).toMatchObject({
+      revision: 1,
+      version: '1.1.0',
+      resourceId: first.operation.resourceId,
+      jobId: first.operation.id,
+      digest: created.draft.digest,
+    });
+    expect(publication).not.toHaveProperty('key');
+    expect(publication).not.toHaveProperty('subject');
+    expect(publication).not.toHaveProperty('requestDigest');
+  });
+
+  it('derives the new release metadata and native provenance from edited bytes', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const edited = [
+      { ...test.bundle.files[0]!, content: base64('---\nname: edited\ndescription: Edited release\n---\n# Edited\n') },
+      ...test.bundle.files.slice(1),
+    ];
+    const updated = await test.handler(updateRequest(created.draft.id, 'metadata-edit', 1, edited));
+    const draft = (await json(updated)).draft;
+    const published = await test.handler(publishRequest(draft.id, 'metadata-publish', 2, '2.0.0'));
+    expect(published.status).toBe(202);
+    const body = await json(published);
+    const state = await test.repository.read(ORGANIZATION);
+    const release = state.skills.find((skill) => skill.id === body.operation.resourceId)!;
+    expect(release).toMatchObject({
+      skillName: 'edited',
+      description: 'Edited release',
+      provenance: { kind: 'native', sourceDigest: draft.digest },
+      authoring: { baseResourceId: test.release.id, baseDigest: test.release.artifact.digest, draftRevision: 2 },
+    });
+    expect(release.provenance).not.toHaveProperty('externalId');
+    expect(release.provenance).not.toHaveProperty('sourceUrl');
+  });
+
+  it('requires atomic commit-time release admission', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    test.setCommitAdmission(false);
+    const response = await test.handler(publishRequest(created.draft.id, 'commit-denied', 1, '1.1.0'));
+    expect(response.status).toBe(503);
+    expect((await json(response)).error.code).toBe('RELEASE_UNAVAILABLE');
+    const state = await test.repository.read(ORGANIZATION);
+    expect(state.skills).toHaveLength(1);
+    expect(state.jobs).toHaveLength(0);
   });
 
   it('rejects publication when the base release loses admission or the CAS revision is stale', async () => {
@@ -337,5 +433,68 @@ describe('durable skill drafts', () => {
     const stale = await test.handler(publishRequest(created.draft.id, 'publish-stale', 2, '1.1.0'));
     expect(stale.status).toBe(409);
     expect((await json(stale)).error.code).toBe('DRAFT_CONFLICT');
+  });
+
+  it('queues advisory Eve review snapshots on draft changes and scopes human decisions to the draft', async () => {
+    const test = await fixture({ withReview: true });
+    const created = await create(test);
+    expect(test.reviewTriggerCalls).toBe(1);
+    let state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: any[]; uploadReviewResults?: any[] };
+    expect(state.uploadReviewJobs).toHaveLength(1);
+    expect(state.uploadReviewJobs![0]).toMatchObject({
+      state: 'pending',
+      binding: {
+        draftId: created.draft.id,
+        draftRevision: 1,
+        contentDigest: created.draft.digest,
+        baseReleaseId: test.release.id,
+        baseReleaseVersion: test.release.version,
+        baseDigest: test.release.artifact.digest,
+        policyRevision: state.policy.revision,
+      },
+      model: 'test/reviewer',
+      reviewerRevision: 'review-contract-1',
+    });
+
+    const changedFiles = test.bundle.files.map((file, index) => ({
+      ...file,
+      content: base64(`${file.path}\nreview revision ${index}\n`),
+    }));
+    const updatedResponse = await test.handler(updateRequest(created.draft.id, 'review-update', 1, changedFiles));
+    expect(updatedResponse.status).toBe(200);
+    expect(test.reviewTriggerCalls).toBe(2);
+    state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: any[]; uploadReviewResults?: any[] };
+    expect(state.uploadReviewJobs).toHaveLength(2);
+    expect(state.uploadReviewJobs!.map((job) => job.state).sort()).toEqual(['pending', 'stale']);
+    expect(state.uploadReviewResults).toHaveLength(1);
+    expect(state.uploadReviewResults![0]).toMatchObject({ state: 'stale', staleReason: 'draft revision changed' });
+
+    const listed = await test.handler(new Request(`${ORIGIN}/v1/drafts/${created.draft.id}/reviews`));
+    expect(listed.status).toBe(200);
+    const listedBody = await json(listed);
+    expect(listedBody.reviews).toHaveLength(2);
+    expect(listedBody.reviews[0]).not.toHaveProperty('snapshot');
+    expect(listedBody.reviews[0]).not.toHaveProperty('leaseToken');
+
+    const pending = state.uploadReviewJobs!.find((job) => job.state === 'pending')!;
+    const claim = await test.reviewService!.claim(ORGANIZATION, pending.id, { now: '2026-09-10T00:01:00.000Z' });
+    const completed = await test.reviewService!.complete(ORGANIZATION, pending.id, claim.leaseToken!, {
+      findings: [{
+        severity: 'low',
+        category: 'style',
+        title: 'Review note',
+        summary: 'A bounded advisory note',
+        path: 'SKILL.md',
+        line: 1,
+      }],
+      now: '2026-09-10T00:02:00.000Z',
+    });
+    const decision = await test.handler(new Request(`${ORIGIN}/v1/drafts/${created.draft.id}/reviews/${completed.id}/decisions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ findingId: completed.findings[0]!.id, decision: 'acknowledged' }),
+    }));
+    expect(decision.status).toBe(200);
+    expect((await json(decision)).review.findings[0]).toMatchObject({ decision: 'acknowledged' });
   });
 });

@@ -99,9 +99,10 @@ export interface SkillDraftIdempotencyRecord {
   revision: number;
   digest: Digest;
   artifact: StoredBlob;
-  files: BundleFile[];
+  manifest: SkillDraftFileManifestEntry[];
   updatedAt: string;
 }
+export interface SkillDraftFileManifestEntry { path: string; size: number; digest: Digest; executable?: boolean; }
 export interface SkillDraftPublicationRecord {
   key: string;
   subject: string;
