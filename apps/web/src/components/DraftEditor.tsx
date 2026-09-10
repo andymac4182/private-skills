@@ -3,7 +3,7 @@ import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
-import type { DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
+import type { DraftFileReference, DraftFileUpdate, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
 import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
 import { DraftReviewPanel } from './DraftReviewPanel'
@@ -212,6 +212,52 @@ export async function draftPayloadFingerprint(files: DraftFile[]): Promise<strin
   // Browsers without Web Crypto still get a deterministic binding. This path
   // is only an idempotency key discriminator; the server validates the body.
   return `canonical:${canonical}`
+}
+
+/**
+ * Build the sparse PUT manifest for the saved draft revision. The server
+ * resolves references against that exact revision, so only bytes that changed
+ * (or are new) travel over the wire. A local rename can retain a large or
+ * binary file by pointing at its previous saved path; the server validates the
+ * digest before moving the bytes. Missing paths are intentionally omitted and
+ * are therefore deleted by the revision writer.
+ */
+export async function buildDraftDeltaFiles(
+  savedFiles: DraftFile[],
+  workingFiles: DraftFile[],
+  renameOrigins: Record<string, string> = {},
+): Promise<DraftFileUpdate[]> {
+  const savedByPath = new Map(savedFiles.map((file) => [file.path, file]))
+  const delta: DraftFileUpdate[] = []
+
+  for (const file of workingFiles) {
+    const mappedSource = renameOrigins[file.path]
+    const sourcePath = mappedSource && mappedSource !== file.path && savedByPath.has(mappedSource)
+      ? mappedSource
+      : savedByPath.has(file.path)
+        ? file.path
+        : undefined
+    const saved = sourcePath === undefined ? undefined : savedByPath.get(sourcePath)
+
+    if (!saved || saved.executable !== file.executable || saved.content !== file.content) {
+      delta.push({ ...file })
+      continue
+    }
+
+    const digest = await digestForContent(saved.content)
+    if (!digest.digest) {
+      // If Web Crypto or base64 decoding is unavailable, let the server apply
+      // its normal full-file validation instead of sending an unverifiable ref.
+      delta.push({ ...file })
+      continue
+    }
+
+    const reference: DraftFileReference = { path: file.path, digest: digest.digest }
+    if (sourcePath !== undefined && sourcePath !== file.path) reference.sourcePath = sourcePath
+    delta.push(reference)
+  }
+
+  return delta
 }
 
 function filesEqual(left: DraftFile[], right: DraftFile[]): boolean {
@@ -705,7 +751,12 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     const pathError = validDraftPath(path)
     if (pathError) { setMessage({ kind: 'error', text: pathError }); return }
     if (entries.some((entry) => entry.path === path)) { setMessage({ kind: 'error', text: 'A file with that path already exists in this draft.' }); return }
-    const origin = renameOrigins[selectedPath] ?? (releaseBaseEntries.some((entry) => entry.path === selectedPath) ? selectedPath : undefined)
+    // A reference must point into the currently saved draft revision. Prefer
+    // the selected saved path when it exists; the release path can be older
+    // than a resumed draft that was already renamed in a previous revision.
+    const origin = savedFiles.some((file) => file.path === selectedPath)
+      ? selectedPath
+      : renameOrigins[selectedPath] ?? (releaseBaseEntries.some((entry) => entry.path === selectedPath) ? selectedPath : undefined)
     const nextFiles = syncSurfaceFiles().map((file) => file.path === selectedPath ? { ...file, path } : file)
     setWorkingFiles(nextFiles)
     setRenameOrigins((current) => {
@@ -750,7 +801,14 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       const payloadFingerprint = await draftPayloadFingerprint(snapshot)
       if (generation !== requestGeneration.current) return
       const key = operationKey(saveOperation, 'draft-save', draft, payloadFingerprint)
-      const response = await api.updateDraft(draft.id, { expectedRevision: draft.revision, files: snapshot, idempotencyKey: key })
+      const files = await buildDraftDeltaFiles(savedFiles, snapshot, renameOrigins)
+      if (generation !== requestGeneration.current) return
+      const response = await api.updateDraft(draft.id, {
+        expectedRevision: draft.revision,
+        expectedDigest: draft.digest,
+        files,
+        idempotencyKey: key,
+      })
       if (generation !== requestGeneration.current) return
       installServerDraft(response.draft)
       saveOperation.current = null

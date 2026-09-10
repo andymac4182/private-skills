@@ -200,6 +200,17 @@ export interface DraftView {
   updatedAt: string
   publications?: Array<{ resourceId: string; jobId: string; version: string; revision: number; digest: `sha256:${string}`; createdAt: string }>
 }
+/**
+ * PUT entries for a draft revision. Inline files carry changed/new bytes;
+ * references let the server copy bytes from the saved revision without
+ * sending them through the browser again.
+ */
+export interface DraftFileReference {
+  path: string
+  sourcePath?: string
+  digest: `sha256:${string}`
+}
+export type DraftFileUpdate = SkillBundle['files'][number] | DraftFileReference
 export interface DraftResponse { draft: DraftView; idempotent?: boolean }
 export interface DraftPublishOperation {
   id: string

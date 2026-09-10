@@ -7,7 +7,7 @@ import type {
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
   BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
-  DraftReviewsResponse, DraftReviewResponse,
+  DraftFileUpdate, DraftReviewsResponse, DraftReviewResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -81,8 +81,16 @@ export const api = {
     return request<DraftResponse>('/v1/drafts', { method: 'POST', body: { name: input.name, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
   },
   draft(draftId: string, signal?: AbortSignal) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { signal }).then(unwrap) },
-  updateDraft(draftId: string, input: { expectedRevision: number; files: SkillBundle['files']; idempotencyKey: string }) {
-    return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { expectedRevision: input.expectedRevision, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  updateDraft(draftId: string, input: { expectedRevision: number; expectedDigest?: `sha256:${string}`; files: DraftFileUpdate[]; idempotencyKey: string }) {
+    return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, {
+      method: 'PUT',
+      body: {
+        expectedRevision: input.expectedRevision,
+        ...(input.expectedDigest === undefined ? {} : { expectedDigest: input.expectedDigest }),
+        files: input.files,
+      },
+      headers: { 'idempotency-key': input.idempotencyKey },
+    }).then(unwrap)
   },
   publishDraft(draftId: string, input: { expectedRevision: number; version: string; idempotencyKey: string }) {
     return request<DraftPublishResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST', body: { expectedRevision: input.expectedRevision, version: input.version }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)

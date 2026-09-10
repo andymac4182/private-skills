@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus } from './DraftEditor'
+import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus } from './DraftEditor'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
 
 const draft: DraftView = {
@@ -38,6 +38,39 @@ describe('draft editor persistence identities', () => {
     const firstKey = operationKey(ref, 'draft-save', draft, firstFingerprint)
     expect(operationKey(ref, 'draft-save', draft, sameFingerprint)).toBe(firstKey)
     expect(operationKey(ref, 'draft-save', draft, changedFingerprint)).not.toBe(firstKey)
+  })
+
+  it('sends unchanged large and renamed files as digest references while omitting deletions', async () => {
+    const largeContent = btoa('x'.repeat(3_500_000))
+    const unchangedNotes = btoa('unchanged notes\n')
+    const savedFiles = [
+      { path: 'assets/large.bin', content: largeContent },
+      { path: 'notes.md', content: unchangedNotes },
+      { path: 'removed.txt', content: btoa('remove me\n') },
+    ]
+    const workingFiles = [
+      { path: 'assets/archive.bin', content: largeContent },
+      { path: 'notes.md', content: unchangedNotes },
+      { path: 'new.md', content: btoa('new file\n') },
+    ]
+
+    const delta = await buildDraftDeltaFiles(savedFiles, workingFiles, { 'assets/archive.bin': 'assets/large.bin' })
+    const serializedDelta = new TextEncoder().encode(JSON.stringify({ expectedRevision: 1, expectedDigest: 'sha256:saved', files: delta }))
+    const serializedFull = new TextEncoder().encode(JSON.stringify({ expectedRevision: 1, expectedDigest: 'sha256:saved', files: savedFiles }))
+
+    expect(delta).toHaveLength(3)
+    expect(delta.find((file) => file.path === 'assets/archive.bin')).toMatchObject({
+      path: 'assets/archive.bin',
+      sourcePath: 'assets/large.bin',
+    })
+    const largeReference = delta.find((file) => file.path === 'assets/archive.bin')
+    expect(largeReference && 'digest' in largeReference ? largeReference.digest : '').toMatch(/^sha256:[0-9a-f]{64}$/)
+    expect(delta.find((file) => file.path === 'notes.md')).toMatchObject({ path: 'notes.md', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) })
+    expect(delta.find((file) => file.path === 'new.md')).toEqual({ path: 'new.md', content: btoa('new file\n') })
+    expect(delta.some((file) => file.path === 'removed.txt')).toBe(false)
+    expect(serializedDelta.byteLength).toBeLessThan(4_500_000)
+    expect(serializedFull.byteLength).toBeGreaterThan(4_500_000)
+    expect(await buildDraftDeltaFiles(savedFiles, workingFiles, { 'assets/archive.bin': 'assets/large.bin' })).toEqual(delta)
   })
 })
 
