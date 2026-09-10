@@ -742,6 +742,16 @@ boundary. `PSKILLS_OPENCLAW_TRUSTED_FEED_URL` and the optional
 URL must be HTTPS without credentials, query, or fragment. Hosted worker
 execution is separately enabled with `PSKILLS_HOSTED_WORKER=true`. Feed and
 source credentials remain deployment-owned and are never returned to callers.
+When hosted source acquisition is enabled, the Node worker also requires the
+operator-only `PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON` setting. It is a bounded
+JSON object with `sourceProviderOrigin`, an `allowedArtifactOrigins` array, and
+an explicit `bindings` array of `{ "source": <normalized source identity>,
+"url": <artifact URL> }`. A binding URL must be HTTPS and belong to the
+configured artifact-origin allowlist. The worker matches the complete source
+identity before fetching; it does not construct URLs from package names or
+paths, and this setting is never accepted from a request or exposed to the
+browser. An absent setting leaves OpenClaw source acquisition unavailable while
+the rest of the registry remains usable.
 
 The checked-in composition fixture proves the protocol boundary with an
 in-memory trusted feed, injected source bytes, and a deterministic local

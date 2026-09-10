@@ -145,6 +145,7 @@ function setup(options: {
   trustedPreview?: boolean;
   consumer?: RegistryOpenClawConsumerDependencies;
   namespace?: string;
+  currentTrustedMetadata?: () => Promise<OpenClawMetadataSnapshot | undefined> | OpenClawMetadataSnapshot | undefined;
 } = {}) {
   const repository = new MemoryRepository();
   repository.state.skills.push(skill());
@@ -196,6 +197,9 @@ function setup(options: {
       ...(options.recordSourceProof === undefined ? {} : { recordSourceProof: options.recordSourceProof }),
       ...(options.consumer === undefined ? {} : { consumer: options.consumer }),
       ...(options.namespace === undefined ? {} : { namespace: options.namespace }),
+      ...(trustedFeed === undefined ? {} : {
+        currentTrustedMetadata: options.currentTrustedMetadata ?? (() => metadataSnapshot(sourceCandidate.entry)),
+      }),
       now: () => Date.parse('2030-01-01T00:00:00.000Z'),
     },
   };
@@ -328,6 +332,34 @@ describe('core OpenClaw feed composition', () => {
     expect(withConsumer.repository.state.jobs.length).toBe(beforeDenied);
   });
 
+  it('does not queue an import when the trusted metadata refresh is stale', async () => {
+    let queueCalls = 0;
+    const test = setup({
+      trustedPreview: true,
+      namespace: '@team',
+      consumer: {
+        refresh: async () => ({
+          kind: 'stale',
+          snapshot: metadataSnapshot(candidate().entry),
+        }),
+        selectAndQueue: async () => {
+          queueCalls += 1;
+          return { operationId: 'unexpected', state: 'queued' };
+        },
+      },
+    });
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/feeds/skills/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ externalId: '@acme/demo' }),
+    }));
+
+    expect(response.status).toBe(503);
+    expect(queueCalls).toBe(0);
+    expect(test.repository.state.jobs).toHaveLength(0);
+  });
+
   it('refreshes from verifier-backed approved evidence and serves an authenticated feed', async () => {
     const test = setup({ trustedPreview: true });
     const capabilities = await test.handler(new Request(`${ORIGIN}/v1/capabilities`));
@@ -362,7 +394,28 @@ describe('core OpenClaw feed composition', () => {
     });
   });
 
-  it('hands a completed server-owned OpenClaw import to the durable proof store', async () => {
+  it('rechecks the latest persisted trusted metadata before serving a publication', async () => {
+    let current = metadataSnapshot(candidate().entry);
+    const test = setup({
+      trustedPreview: true,
+      currentTrustedMetadata: () => current,
+    });
+
+    expect((await test.handler(post(`${ORIGIN}/v1/feeds/skills/refresh`))).status).toBe(200);
+    expect((await test.handler(new Request(`${ORIGIN}/v1/feeds/skills`))).status).toBe(200);
+
+    current = {
+      ...current,
+      feed: {
+        ...current.feed,
+        entries: [{ ...candidate().entry, state: 'blocked' }],
+      },
+    };
+    const response = await test.handler(new Request(`${ORIGIN}/v1/feeds/skills`));
+    expect(response.status).toBe(403);
+  });
+
+  it('does not record a source proof when completion omits the canonical artifact digest', async () => {
     const recorded: Array<{
       tenantId: string;
       completionJobId: string;
@@ -443,17 +496,11 @@ describe('core OpenClaw feed composition', () => {
           externalDigest: SOURCE_DIGEST,
           sourceResolutionKind: 'snapshot',
           sourceProviderOrigin: 'https://clawhub.example',
-          sourceDigest: artifactDigest,
         },
       }),
     }));
     expect(completed.status).toBe(200);
-    expect(recorded).toMatchObject([{
-      tenantId: ORGANIZATION_ID,
-      completionJobId: 'job-openclaw-proof',
-      entry: { id: '@acme/demo', version: '1.0.0' },
-      sourceArtifact: { digest: SOURCE_DIGEST, format: 'clawhub-skill-v1', identity: '@acme/demo@1.0.0' },
-    }]);
+    expect(recorded).toEqual([]);
   });
 
   it('requires admin refresh and current namespace/policy admission on every read', async () => {

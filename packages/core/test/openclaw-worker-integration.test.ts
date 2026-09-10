@@ -339,6 +339,14 @@ describe('OpenClaw trusted-feed worker composition', () => {
           },
           selectAndQueue: consumerService.selectAndQueue.bind(consumerService),
         },
+        currentTrustedMetadata: async () => {
+          const snapshot = await consumerStore.read({
+            tenantId: ORGANIZATION_ID,
+            feedId: FEED_ID,
+            sourceUrl: FEED_URL,
+          });
+          return snapshot === undefined ? undefined : metadataFromRefresh({ kind: 'not-modified', snapshot }).snapshot;
+        },
       },
     });
 

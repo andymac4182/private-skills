@@ -451,6 +451,12 @@ export interface RegistryOpenClawDependencies {
   sourceProviderOrigin?: string;
   /** Optional trusted-feed metadata source. It is metadata-only and bounded. */
   trustedFeed?: OpenClawTrustedFeedProfile;
+  /**
+   * Reads the latest validated persisted trusted-feed metadata without doing
+   * network I/O. A configured trusted feed must provide this for publication
+   * reads to recheck current upstream eligibility.
+   */
+  currentTrustedMetadata?: () => Promise<OpenClawMetadataSnapshot | undefined> | OpenClawMetadataSnapshot | undefined;
   now?: () => number;
 }
 
@@ -3086,7 +3092,10 @@ async function handleOpenClawRoute(
     }
     if (openClaw.consumer.refresh) {
       const refreshed = await openClaw.consumer.refresh(request.signal);
-      if (refreshed.kind === 'rejected') {
+      if (
+        (refreshed.kind !== 'accepted' && refreshed.kind !== 'not-modified') ||
+        refreshed.snapshot === undefined
+      ) {
         throw new RegistryApiError(
           'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
           'The configured OpenClaw metadata feed is unavailable',
@@ -3144,8 +3153,13 @@ async function refreshOpenClawPublication(
 
   let metadata: OpenClawMetadataSnapshot | undefined;
   if (openClaw.trustedFeed) {
-    const preview = await previewOpenClawFeed(openClaw.trustedFeed, { signal: request.signal });
-    if (preview.kind !== 'accepted' && preview.kind !== 'not-modified') {
+    const preview = openClaw.consumer?.refresh
+      ? await openClaw.consumer.refresh(request.signal)
+      : await previewOpenClawFeed(openClaw.trustedFeed, { signal: request.signal });
+    if (
+      (preview.kind !== 'accepted' && preview.kind !== 'not-modified') ||
+      preview.snapshot === undefined
+    ) {
       throw new RegistryApiError(
         'OPENCLAW_TRUSTED_FEED_UNAVAILABLE',
         'The configured OpenClaw metadata feed is unavailable',
@@ -3204,6 +3218,7 @@ async function refreshOpenClawPublication(
     principal,
     publication,
     signal: request.signal,
+    ...(metadata === undefined ? {} : { metadata }),
   }, deps, config, openClaw);
   if (!authorized) {
     throw new RegistryApiError('OPENCLAW_PUBLICATION_DENIED', 'The OpenClaw publication did not pass current registry policy', 403);
@@ -3307,7 +3322,11 @@ function validateOpenClawSourceProviderOrigin(value: string): string {
   }
 }
 
-function openClawCandidateMatchesMetadata(entry: OpenClawFeedEntry, metadata: OpenClawMetadataSnapshot): OpenClawFeedEntry | undefined {
+function openClawCandidateMatchesMetadata(
+  entry: OpenClawFeedEntry,
+  metadata: OpenClawMetadataSnapshot,
+  requireCurrentPresentation = false,
+): OpenClawFeedEntry | undefined {
   const metadataEntry = metadata.feed.entries.find((candidate) => candidate.id === entry.id && candidate.version === entry.version);
   if (!metadataEntry || entry.type !== 'skill' || metadataEntry.type !== 'skill' || metadataEntry.state !== 'available') return undefined;
   const matches = entry.install.candidates.some((candidate) => metadataEntry.install.candidates.some((expected) =>
@@ -3317,7 +3336,28 @@ function openClawCandidateMatchesMetadata(entry: OpenClawFeedEntry, metadata: Op
     expected.integrity === candidate.integrity &&
     JSON.stringify(expected.github) === JSON.stringify(candidate.github),
   ));
+  if (matches && requireCurrentPresentation && (
+    metadataEntry.title !== entry.title ||
+    metadataEntry.description !== entry.description ||
+    metadataEntry.icon !== entry.icon ||
+    metadataEntry.featured !== entry.featured ||
+    metadataEntry.featuredAt !== entry.featuredAt ||
+    JSON.stringify(metadataEntry.publisher) !== JSON.stringify(entry.publisher)
+  )) return undefined;
   return matches ? metadataEntry as OpenClawFeedEntry : undefined;
+}
+
+function openClawTrustedMetadataUsable(
+  metadata: OpenClawMetadataSnapshot | undefined,
+  expectedFeedId: string,
+  now: number,
+): metadata is OpenClawMetadataSnapshot {
+  if (!metadata || metadata.feed.id !== expectedFeedId || metadata.feed.schemaVersion !== 1) return false;
+  const generatedAt = Date.parse(metadata.feed.generatedAt);
+  const expiresAt = Date.parse(metadata.feed.expiresAt);
+  return Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
+    generatedAt <= now && expiresAt > now &&
+    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now;
 }
 
 async function authorizeOpenClawPublication(
@@ -3326,6 +3366,7 @@ async function authorizeOpenClawPublication(
     principal: Principal;
     publication: OpenClawStoredPublication | OpenClawFeedPublicationSnapshot | Omit<OpenClawFeedPublicationSnapshot, 'sequence'>;
     signal: AbortSignal;
+    metadata?: OpenClawMetadataSnapshot;
   },
   deps: RegistryHandlerDependencies,
   config: Required<RegistryConfiguration>,
@@ -3334,6 +3375,19 @@ async function authorizeOpenClawPublication(
   if (input.signal.aborted || input.tenantId !== config.organizationId || input.principal.organizationId !== config.organizationId) return false;
   const entries = openClawPublicationEntries(input.publication, openClaw.feedId);
   if (!entries) return false;
+  let trustedMetadata = input.metadata;
+  if (trustedMetadata === undefined && openClaw.trustedFeed !== undefined) {
+    if (openClaw.currentTrustedMetadata === undefined) return false;
+    try {
+      trustedMetadata = await openClaw.currentTrustedMetadata();
+    } catch {
+      return false;
+    }
+  }
+  if (openClaw.trustedFeed !== undefined &&
+      !openClawTrustedMetadataUsable(trustedMetadata, openClaw.trustedFeed.expectedFeedId, openClaw.now?.() ?? Date.now())) {
+    return false;
+  }
   const state = await readState(deps.repository, config.organizationId);
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -3345,6 +3399,7 @@ async function authorizeOpenClawPublication(
     } catch {
       return false;
     }
+    if (trustedMetadata !== undefined && !openClawCandidateMatchesMetadata(entry, trustedMetadata, true)) return false;
     const matches = state.skills.filter((skill) =>
       skill.organizationId === config.organizationId &&
       skill.version === entry.version &&
@@ -3404,6 +3459,7 @@ function openClawProvenanceMatches(
 function openClawCompletionProof(
   job: Job,
   rawProvenance: unknown,
+  canonicalArtifactDigest: string | undefined,
 ): { entry: OpenClawFeedEntry; sourceArtifact: OpenClawSourceArtifactProof } | undefined {
   if (!isObject(job.openclawSource) || !isObject(job.openclawSource.entry) || !isObject(job.openclawSource.source)) return undefined;
   const descriptor = job.openclawSource;
@@ -3418,7 +3474,12 @@ function openClawCompletionProof(
     return undefined;
   }
   const provenance = isObject(rawProvenance) ? rawProvenance : undefined;
-  if (!provenance || provenance.externalDigest !== normalized.candidate.integrity) return undefined;
+  if (
+    !provenance ||
+    canonicalArtifactDigest === undefined ||
+    provenance.externalDigest !== normalized.candidate.integrity ||
+    provenance.sourceDigest !== canonicalArtifactDigest
+  ) return undefined;
   // ImportRequest.version is a server-owned private release version.  Hosted
   // ClawHub candidates may carry SemVer while GitHub candidates carry an
   // immutable commit, so the worker source descriptor and completion proof,
@@ -5178,7 +5239,7 @@ async function completeJob(
   });
   const recordSourceProof = (deps as RegistryHandlerDependencies).openClaw?.recordSourceProof;
   if (recordSourceProof && result.kind === 'import' && result.state === 'completed' && result.resourceId && body.error === undefined) {
-    const proof = openClawCompletionProof(job, body.provenance);
+    const proof = openClawCompletionProof(job, body.provenance, result.artifact?.digest);
     if (proof) {
       // Proof persistence is deliberately a separate adapter transaction. A
       // failure leaves the approved release intact but unavailable to the

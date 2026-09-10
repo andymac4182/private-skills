@@ -127,6 +127,24 @@ async function createRuntime(env: RuntimeEnvironment) {
       selectAndQueue: openClawConsumerService.selectAndQueue.bind(openClawConsumerService),
     }
     : undefined;
+  const currentTrustedMetadata = openClawTrustedFeed && openClawConsumerStore
+    ? async (): Promise<OpenClawMetadataSnapshot | undefined> => {
+      try {
+        const snapshot = await openClawConsumerStore.read({
+          tenantId: config.organizationId,
+          feedId: openClawTrustedFeed.expectedFeedId,
+          sourceUrl: new URL(openClawTrustedFeed.url).href,
+        });
+        return snapshot === undefined
+          ? undefined
+          : openClawConsumerRefreshResult({ kind: 'not-modified', status: 304, snapshot }).snapshot;
+      } catch {
+        // A missing or malformed durable snapshot must fail closed for
+        // publication reads; it must never turn into a network refresh here.
+        return undefined;
+      }
+    }
+    : undefined;
   // Publication persistence is always the injected StateRepository. The
   // feed remains disabled unless an operator supplies a non-reserved feed ID.
   // Candidate projection is deliberately read-only: it can expose only
@@ -148,6 +166,7 @@ async function createRuntime(env: RuntimeEnvironment) {
       ...(openClawNamespace === undefined ? {} : { namespace: openClawNamespace }),
       ...(openClawSourceOrigin === undefined ? {} : { sourceProviderOrigin: openClawSourceOrigin }),
       ...(openClawConsumer === undefined ? {} : { consumer: openClawConsumer }),
+      ...(currentTrustedMetadata === undefined ? {} : { currentTrustedMetadata }),
     }
     : undefined;
   // Directory access is an explicit server-side opt-in. The selected

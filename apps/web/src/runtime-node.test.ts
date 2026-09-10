@@ -7,7 +7,12 @@ const oidc = vi.hoisted(() => ({
 
 vi.mock('@vercel/oidc', () => oidc);
 
-import { createDirectoryTokenProvider, createOfficialDirectoryTokenProvider } from '../server/runtime-node.js';
+import {
+  createDirectoryTokenProvider,
+  createHostedOpenClawSourceConfigFromEnv,
+  createOfficialDirectoryTokenProvider,
+} from '../server/runtime-node.js';
+import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types.js';
 
 describe('node directory token provider', () => {
   beforeEach(() => {
@@ -134,5 +139,53 @@ describe('node directory token provider', () => {
       code: 'unavailable',
       message: 'skills.sh is temporarily unavailable',
     });
+  });
+
+  it('builds the hosted OpenClaw source locator only from an exact operator mapping', () => {
+    const source: OpenClawNormalizedSource = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/demo',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+    };
+    const config = createHostedOpenClawSourceConfigFromEnv({
+      PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON: JSON.stringify({
+        sourceProviderOrigin: 'https://clawhub.example.test',
+        allowedArtifactOrigins: ['https://artifacts.example.test'],
+        bindings: [{ source, url: 'https://artifacts.example.test/acme-demo.json' }],
+      }),
+    });
+
+    expect(config).toBeDefined();
+    expect(config?.allowedArtifactOrigins).toEqual(['https://artifacts.example.test']);
+    expect(config?.sourceProviderOrigin).toBe('https://clawhub.example.test');
+    expect(config?.locator.locate(source)).toMatchObject({
+      url: 'https://artifacts.example.test/acme-demo.json',
+      allowedArtifactOrigins: ['https://artifacts.example.test'],
+      sourceProviderOrigin: 'https://clawhub.example.test',
+    });
+    expect(() => config?.locator.locate({ ...source, version: '1.0.1' })).toThrow('not configured');
+  });
+
+  it.each([
+    { label: 'malformed JSON', value: '{' },
+    {
+      label: 'untrusted URL',
+      value: JSON.stringify({
+        sourceProviderOrigin: 'https://clawhub.example.test',
+        allowedArtifactOrigins: ['https://artifacts.example.test'],
+        bindings: [{
+          source: {
+            kind: 'public-clawhub', sourceRef: 'public-clawhub', packageName: '@acme/demo', version: '1.0.0', artifactDigest: `sha256:${'a'.repeat(64)}`,
+          },
+          url: 'https://evil.example.test/artifact.json',
+        }],
+      }),
+    },
+  ])('rejects unsafe hosted OpenClaw source configuration: $label', ({ value }) => {
+    expect(() => createHostedOpenClawSourceConfigFromEnv({
+      PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON: value,
+    })).toThrow('OpenClaw');
   });
 });
