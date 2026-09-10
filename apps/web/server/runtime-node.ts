@@ -10,7 +10,10 @@ import { defaultRegistryState } from '../../../packages/database/src/state';
 import { PostgresSemanticIndex } from '../../../packages/search/src/postgres';
 import { StateSemanticIndex } from '../../../packages/search/src/state';
 import type { EmbeddingProfile, SemanticIndex } from '../../../packages/search/src/types';
-import { createHostedWorkerHandlerFromEnv } from '../../../workers/runner/src/hosted';
+import {
+  createHostedWorkerHandlerFromEnv,
+  type HostedOpenClawSourceConfig,
+} from '../../../workers/runner/src/hosted';
 import { resolveCurrentUploadReviewBinding } from '../../../packages/core/src/index';
 import {
   createUploadReviewPersistenceService,
@@ -20,6 +23,8 @@ import {
 } from '../../../packages/upload-reviews/src/index';
 import { createUploadReviewHttpHandler } from '../../../packages/upload-reviews/src/http';
 import { createUploadReviewTrigger } from '../../../packages/upload-reviews/src/trigger';
+import { createDefaultOpenClawSourceConfiguration } from '../../../packages/upstreams/src/index';
+import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types';
 import {
   createSkillsDirectoryGatewayTokenProvider,
   createUnavailableSkillsDirectoryTokenProvider,
@@ -38,6 +43,84 @@ export interface UploadReviewRuntime {
   trigger?: ReturnType<typeof createUploadReviewTrigger>;
   httpHandler?: (request: Request) => Promise<Response | undefined>;
   configured: boolean;
+
+}
+
+const OPENCLAW_SOURCE_CONFIG_MAX_BYTES = 512 * 1024;
+const OPENCLAW_SOURCE_CONFIG_MAX_BINDINGS = 256;
+const OPENCLAW_SOURCE_URL_MAX_BYTES = 8_192;
+const OPENCLAW_SOURCE_STRING_MAX_BYTES = 4_096;
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
+const HEX40_RE = /^[0-9a-f]{40}$/u;
+const HEX64_RE = /^[0-9a-f]{64}$/u;
+
+/**
+ * Build the deployment-owned OpenClaw source locator. Supported public
+ * OpenClaw source identities use the reviewed default locator, so a hosted
+ * worker does not need a per-skill binding map. The optional map remains a
+ * server-only operator override/restriction; the worker job supplies only a
+ * normalized source identity and can never choose a URL or widen an allowlist.
+ *
+ * The reviewed default is deliberately limited to the two normalized public
+ * source families. An absent override uses those profiles; an unrecognized or
+ * malformed identity still fails closed instead of reaching a guessed URL.
+ */
+export function createHostedOpenClawSourceConfigFromEnv(
+  env: RuntimeEnvironment,
+): HostedOpenClawSourceConfig {
+  const configuredClawHubOrigin = env.PSKILLS_OPENCLAW_SOURCE_ORIGIN?.trim();
+  const defaults = createDefaultOpenClawSourceConfiguration(
+    configuredClawHubOrigin === undefined || configuredClawHubOrigin.length === 0
+      ? {}
+      : { clawHubOrigin: configuredClawHubOrigin },
+  );
+  const raw = env.PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON?.trim();
+  if (!raw) {
+    return {
+      locator: defaults.locator,
+      sourceProfiles: defaults.profiles,
+    };
+  }
+  if (new TextEncoder().encode(raw).byteLength > OPENCLAW_SOURCE_CONFIG_MAX_BYTES) {
+    throw new Error('OpenClaw source locator configuration is too large');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('OpenClaw source locator configuration is invalid');
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.bindings)) {
+    throw new Error('OpenClaw source locator configuration is invalid');
+  }
+  const sourceProviderOrigin = strictHttpsOrigin(parsed.sourceProviderOrigin);
+  const allowedArtifactOrigins = strictHttpsOrigins(parsed.allowedArtifactOrigins);
+  if (parsed.bindings.length === 0 || parsed.bindings.length > OPENCLAW_SOURCE_CONFIG_MAX_BINDINGS) {
+    throw new Error('OpenClaw source locator configuration has an invalid binding count');
+  }
+
+  const locations = new Map<string, string>();
+  for (const rawBinding of parsed.bindings) {
+    if (!isRecord(rawBinding)) throw new Error('OpenClaw source locator binding is invalid');
+    const source = parseHostedOpenClawSource(rawBinding.source);
+    const url = strictHttpsURL(rawBinding.url, allowedArtifactOrigins);
+    const key = hostedOpenClawSourceKey(source);
+    if (locations.has(key)) throw new Error('OpenClaw source locator contains duplicate identities');
+    locations.set(key, url);
+  }
+
+  return {
+    locator: {
+      locate(source) {
+        const url = locations.get(hostedOpenClawSourceKey(source));
+        if (url === undefined) throw new Error('OpenClaw source location is not configured');
+        return { url, allowedArtifactOrigins, sourceProviderOrigin };
+      },
+    },
+    allowedArtifactOrigins,
+    sourceProviderOrigin,
+  };
 }
 
 /**
@@ -75,6 +158,99 @@ export function createOfficialDirectoryTokenProvider(env: RuntimeEnvironment): S
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function boundedSourceString(value: unknown, allowEmpty = false): string {
+  if (typeof value !== 'string' || (!allowEmpty && value.length === 0)) {
+    throw new Error('OpenClaw source identity is invalid');
+  }
+  if (new TextEncoder().encode(value).byteLength > OPENCLAW_SOURCE_STRING_MAX_BYTES || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error('OpenClaw source identity is invalid');
+  }
+  // JSON.parse can create lone UTF-16 surrogates. Reject them before any URL
+  // or identity construction so the locator never normalizes malformed input.
+  try {
+    encodeURIComponent(value);
+  } catch {
+    throw new Error('OpenClaw source identity is invalid');
+  }
+  return value;
+}
+
+function parseHostedOpenClawSource(value: unknown): OpenClawNormalizedSource {
+  if (!isRecord(value)) throw new Error('OpenClaw source identity is invalid');
+  const kind = boundedSourceString(value.kind);
+  const sourceRef = boundedSourceString(value.sourceRef);
+  if (kind === 'public-clawhub' && sourceRef === 'public-clawhub') {
+    const packageName = boundedSourceString(value.packageName);
+    const version = boundedSourceString(value.version);
+    const artifactDigest = boundedSourceString(value.artifactDigest);
+    if (!SHA256_RE.test(artifactDigest)) throw new Error('OpenClaw source identity is invalid');
+    return { kind: 'public-clawhub', sourceRef: 'public-clawhub', packageName, version, artifactDigest };
+  }
+  if (kind === 'public-github' && sourceRef === 'public-github') {
+    const repo = boundedSourceString(value.repo);
+    const path = boundedSourceString(value.path, true);
+    const commit = boundedSourceString(value.commit);
+    const contentHash = boundedSourceString(value.contentHash);
+    if (!HEX40_RE.test(commit) || !HEX64_RE.test(contentHash)) {
+      throw new Error('OpenClaw source identity is invalid');
+    }
+    return { kind: 'public-github', sourceRef: 'public-github', repo, path, commit, contentHash };
+  }
+  throw new Error('OpenClaw source identity is invalid');
+}
+
+function hostedOpenClawSourceKey(source: OpenClawNormalizedSource): string {
+  if (source.kind === 'public-clawhub') {
+    return JSON.stringify(['public-clawhub', source.packageName, source.version, source.artifactDigest]);
+  }
+  return JSON.stringify(['public-github', source.repo, source.path, source.commit, source.contentHash]);
+}
+
+function strictHttpsOrigin(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) {
+    throw new Error('OpenClaw source origin is invalid');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('OpenClaw source origin is invalid');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error('OpenClaw source origin is invalid');
+  }
+  return parsed.origin;
+}
+
+function strictHttpsOrigins(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8) {
+    throw new Error('OpenClaw artifact origins are invalid');
+  }
+  const origins = [...new Set(value.map((item) => strictHttpsOrigin(item)))];
+  if (origins.length === 0) throw new Error('OpenClaw artifact origins are invalid');
+  return origins;
+}
+
+function strictHttpsURL(value: unknown, allowedOrigins: readonly string[]): string {
+  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > OPENCLAW_SOURCE_URL_MAX_BYTES) {
+    throw new Error('OpenClaw source URL is invalid');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('OpenClaw source URL is invalid');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || !allowedOrigins.includes(parsed.origin)) {
+    throw new Error('OpenClaw source URL is invalid');
+  }
+  return parsed.href;
 }
 
 function required(env: RuntimeEnvironment, name: string): string {
@@ -148,12 +324,16 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     }
     return token;
   };
+  const hostedOpenClawSource = env.PSKILLS_HOSTED_WORKER === 'true'
+    ? createHostedOpenClawSourceConfigFromEnv(env)
+    : undefined;
   const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
     ? createHostedWorkerHandlerFromEnv(
       { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
-      directoryOfficialAvailable
-        ? { acquisition: { getSkillsShToken: hostedSkillsShToken } }
-        : {},
+      {
+        ...(directoryOfficialAvailable ? { acquisition: { getSkillsShToken: hostedSkillsShToken } } : {}),
+        ...(hostedOpenClawSource === undefined ? {} : { openClawSource: hostedOpenClawSource }),
+      },
     )
     : undefined;
   const uploadReviewEnabled = env.PSKILLS_UPLOAD_REVIEW_ENABLED === 'true';
