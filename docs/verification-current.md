@@ -397,8 +397,9 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
 - M7 OpenClaw backend code is shipped, and its production settings are staged
   but awaiting activation. The current c7 runtime remains inactive; the public
   metadata probe above is interoperability evidence only. Keep activation held
-  until its explicit feed/trust configuration, bounded producer/consumer
-  interoperability, artifact import, and private publication evidence are ready.
+  pending exact activation approval. After activation, perform fresh
+  trusted-catalog resolution, required-scan-governed import, and private-
+  publication verification.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
