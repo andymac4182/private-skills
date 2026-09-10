@@ -742,16 +742,20 @@ boundary. `PSKILLS_OPENCLAW_TRUSTED_FEED_URL` and the optional
 URL must be HTTPS without credentials, query, or fragment. Hosted worker
 execution is separately enabled with `PSKILLS_HOSTED_WORKER=true`. Feed and
 source credentials remain deployment-owned and are never returned to callers.
-When hosted source acquisition is enabled, the Node worker also requires the
-operator-only `PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON` setting. It is a bounded
-JSON object with `sourceProviderOrigin`, an `allowedArtifactOrigins` array, and
-an explicit `bindings` array of `{ "source": <normalized source identity>,
-"url": <artifact URL> }`. A binding URL must be HTTPS and belong to the
-configured artifact-origin allowlist. The worker matches the complete source
-identity before fetching; it does not construct URLs from package names or
-paths, and this setting is never accepted from a request or exposed to the
-browser. An absent setting leaves OpenClaw source acquisition unavailable while
-the rest of the registry remains usable.
+When hosted source acquisition is enabled, the Node worker uses the reviewed
+default locator for supported public GitHub and ClawHub source identities. It
+does not require a tenant administrator to create a per-skill mapping or enter
+an artifact URL. `PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON` remains an optional,
+operator-only restriction/override for deployments that need a narrower
+source or artifact-origin policy. It is a bounded JSON object with
+`sourceProviderOrigin`, an `allowedArtifactOrigins` array, and an explicit
+`bindings` array of `{ "source": <normalized source identity>, "url":
+<artifact URL> }`; each binding URL must be HTTPS and belong to the configured
+artifact-origin allowlist. The worker matches the complete source identity and
+the reviewed locator never derives an endpoint from an unverified package name,
+repository, or path. The setting is never accepted from a request or exposed
+to the browser. Unknown or unsupported source identities remain unavailable
+and fail closed; the rest of the registry remains usable.
 
 The checked-in composition fixture proves the protocol boundary with an
 in-memory trusted feed, injected source bytes, and a deterministic local
