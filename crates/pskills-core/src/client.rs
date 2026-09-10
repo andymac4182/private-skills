@@ -156,6 +156,19 @@ impl ApiClient {
     /// the only network boundary here: this client never fetches skills.sh
     /// or another directory source directly.
     pub fn directory_list(&self, view: &str, page: u32, per_page: u32) -> Result<Value, ApiError> {
+        self.directory_list_with_feed(view, page, per_page, None)
+    }
+
+    /// List one bounded directory page, optionally selecting a configured
+    /// server-side feed. The feed is sent only to the registry; this client
+    /// never contacts a feed origin directly.
+    pub fn directory_list_with_feed(
+        &self,
+        view: &str,
+        page: u32,
+        per_page: u32,
+        feed: Option<&str>,
+    ) -> Result<Value, ApiError> {
         if !matches!(view, "all-time" | "trending" | "hot") {
             return Err(ApiError::Response(format!(
                 "directory view must be one of all-time, trending, or hot (received `{view}`)"
@@ -166,13 +179,14 @@ impl ApiClient {
                 "directory per_page must be between 1 and 500".into(),
             ));
         }
-        let url = self.directory_url(
+        let url = self.directory_url_with_feed(
             "skills",
             &[
                 ("view", view.to_string()),
                 ("page", page.to_string()),
                 ("per_page", per_page.to_string()),
             ],
+            feed,
         )?;
         self.get_json(&url, true)
     }
@@ -185,6 +199,19 @@ impl ApiClient {
         query: &str,
         owner: Option<&str>,
         limit: u32,
+    ) -> Result<Value, ApiError> {
+        self.directory_search_with_feed(query, owner, limit, None)
+    }
+
+    /// Search the registry's directory index using an optional configured
+    /// server-side feed. The response remains opaque JSON so additive catalog
+    /// metadata passes through without a CLI-side schema mirror.
+    pub fn directory_search_with_feed(
+        &self,
+        query: &str,
+        owner: Option<&str>,
+        limit: u32,
+        feed: Option<&str>,
     ) -> Result<Value, ApiError> {
         let query = query.trim();
         if query.chars().count() < 2 {
@@ -202,36 +229,62 @@ impl ApiClient {
         if let Some(owner) = owner {
             query_parameters.push(("owner", owner.to_string()));
         }
-        let url = self.directory_url("search", &query_parameters)?;
+        let url = self.directory_url_with_feed("search", &query_parameters, feed)?;
         self.get_json(&url, true)
     }
 
     /// Return the registry's first-party directory grouping.
     pub fn directory_official(&self) -> Result<Value, ApiError> {
-        self.get_json(&self.directory_url("official", &[])?, true)
+        self.directory_official_with_feed(None)
+    }
+
+    /// Return the registry's first-party directory grouping for an optional
+    /// configured server-side feed.
+    pub fn directory_official_with_feed(&self, feed: Option<&str>) -> Result<Value, ApiError> {
+        self.get_json(&self.directory_url_with_feed("official", &[], feed)?, true)
     }
 
     /// Return bounded metadata for one directory identifier.
     pub fn directory_detail(&self, id: &str) -> Result<Value, ApiError> {
+        self.directory_detail_with_feed(id, None)
+    }
+
+    /// Return bounded metadata for one directory identifier from an optional
+    /// configured server-side feed.
+    pub fn directory_detail_with_feed(
+        &self,
+        id: &str,
+        feed: Option<&str>,
+    ) -> Result<Value, ApiError> {
         let id = id.trim();
         if id.is_empty() {
             return Err(ApiError::Response(
                 "directory detail id must not be empty".into(),
             ));
         }
-        let url = self.directory_url("detail", &[("id", id.to_string())])?;
+        let url = self.directory_url_with_feed("detail", &[("id", id.to_string())], feed)?;
         self.get_json(&url, true)
     }
 
     /// Return external audit evidence for one directory identifier.
     pub fn directory_audits(&self, id: &str) -> Result<Value, ApiError> {
+        self.directory_audits_with_feed(id, None)
+    }
+
+    /// Return external audit evidence for one directory identifier from an
+    /// optional configured server-side feed.
+    pub fn directory_audits_with_feed(
+        &self,
+        id: &str,
+        feed: Option<&str>,
+    ) -> Result<Value, ApiError> {
         let id = id.trim();
         if id.is_empty() {
             return Err(ApiError::Response(
                 "directory audits id must not be empty".into(),
             ));
         }
-        let url = self.directory_url("audits", &[("id", id.to_string())])?;
+        let url = self.directory_url_with_feed("audits", &[("id", id.to_string())], feed)?;
         self.get_json(&url, true)
     }
 
@@ -756,10 +809,18 @@ impl ApiClient {
         Ok(url)
     }
 
-    fn directory_url(&self, resource: &str, query: &[(&str, String)]) -> Result<Url, ApiError> {
+    fn directory_url_with_feed(
+        &self,
+        resource: &str,
+        query: &[(&str, String)],
+        feed: Option<&str>,
+    ) -> Result<Url, ApiError> {
         let mut url = self.endpoint(&["v1", "directory", resource])?;
         for (key, value) in query {
             url.query_pairs_mut().append_pair(key, value);
+        }
+        if let Some(feed) = feed {
+            url.query_pairs_mut().append_pair("feed", feed);
         }
         Ok(url)
     }
@@ -1333,6 +1394,9 @@ pub fn query_parameters(values: &[(&str, &str)]) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn root_origin_does_not_loop_when_building_endpoint() {
@@ -1347,6 +1411,100 @@ mod tests {
     fn remote_http_requires_tls_but_loopback_is_allowed_for_development() {
         assert!(ApiClient::new("http://registry.example", None).is_err());
         assert!(ApiClient::new("http://127.0.0.1:5173", None).is_ok());
+    }
+
+    fn loopback_response(status: u16, body: &str) -> (String, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let address = listener.local_addr().expect("loopback address");
+        let body = body.to_owned();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("loopback request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).expect("request bytes");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("response bytes");
+            String::from_utf8(request).expect("request UTF-8")
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn directory_feed_query_is_encoded_and_json_is_passthrough() {
+        let (base, handle) = loopback_response(
+            200,
+            r#"{"data":[{"id":"same/repo/item","feed":"selected"}],"pagination":{"page":0}}"#,
+        );
+        let client = ApiClient::new(&base, None).expect("client");
+        let value = client
+            .directory_search_with_feed("ab", Some("owner"), 7, Some("feed/with space?"))
+            .expect("directory search");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "data": [{ "id": "same/repo/item", "feed": "selected" }],
+                "pagination": { "page": 0 }
+            })
+        );
+        let request = handle.join().expect("server thread");
+        assert!(request.starts_with(
+            "GET /v1/directory/search?q=ab&limit=7&owner=owner&feed=feed%2Fwith+space%3F HTTP/1.1"
+        ));
+    }
+
+    #[test]
+    fn directory_routes_omit_feed_when_not_selected() {
+        let (base, handle) = loopback_response(
+            200,
+            r#"{"data":[],"pagination":{"page":2,"perPage":25,"total":0,"hasMore":false}}"#,
+        );
+        let client = ApiClient::new(&base, None).expect("client");
+        client.directory_list("hot", 2, 25).expect("directory list");
+        let request = handle.join().expect("server thread");
+        assert!(
+            request.starts_with("GET /v1/directory/skills?view=hot&page=2&per_page=25 HTTP/1.1")
+        );
+        assert!(!request.contains("feed="));
+    }
+
+    #[test]
+    fn directory_feed_errors_remain_registry_errors() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":{"code":"INVALID_FEED","message":"feed is unknown"}}"#,
+            ),
+            (
+                404,
+                r#"{"error":{"code":"NOT_FOUND","message":"feed is disabled"}}"#,
+            ),
+        ] {
+            let (base, handle) = loopback_response(status, body);
+            let client = ApiClient::new(&base, None).expect("client");
+            let error = client
+                .directory_official_with_feed(Some("missing"))
+                .expect_err("registry error");
+            assert!(matches!(error, ApiError::Http { status: actual, .. } if actual == status));
+            let request = handle.join().expect("server thread");
+            assert!(request.starts_with("GET /v1/directory/official?feed=missing HTTP/1.1"));
+        }
     }
 
     #[test]
@@ -1843,13 +2001,14 @@ mod tests {
     fn directory_list_uses_registry_route_and_query_contract() {
         let client = ApiClient::new("https://registry.example", None).expect("client");
         let url = client
-            .directory_url(
+            .directory_url_with_feed(
                 "skills",
                 &[
                     ("view", "trending".into()),
                     ("page", "3".into()),
                     ("per_page", "25".into()),
                 ],
+                None,
             )
             .expect("directory URL");
         assert_eq!(
