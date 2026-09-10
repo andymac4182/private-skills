@@ -254,6 +254,14 @@ The current API documentation describes these versioned endpoints:
 | Audits | `GET /api/v1/skills/audit/{id}` returns an `audits` array of partner results. The documented normalized status is `pass`, `warn`, or `fail`; entries can include provider, partner slug, summary, audit time, risk level, and categories. `404` means no partner has audited the skill yet. | Treat a missing audit as unknown evidence. Display provider data generically because partner availability can change. Never use a remote `pass` as a Private Skills approval. |
 | Rate/error behavior | Authenticated requests expose `X-RateLimit-*`; `429` includes `Retry-After`; documented errors include 400, 401, 404, 429, and 503. List/search cache for 30–60 seconds; detail/curated cache for five minutes. | Proxy and cache server-side, obey `Retry-After`, use bounded retries, surface stale metadata, and retain source response time/age. |
 
+The Private Skills `GET /v1/directory/detail` route uses the exported
+`SkillDetailMetadataResponse` projection. It preserves the external identity,
+install count, snapshot hash, and `files: null` state; non-null file entries
+contain paths only. The injected directory client and worker retain the full
+bounded `SkillDetailResponse` for source acquisition, but reader-facing JSON
+never exposes file `contents` before scanner and policy admission. Partner
+audit responses remain separate external evidence.
+
 The API examples contain dynamic install and total values. They are examples,
 not schema constants. Earlier live spotchecks on 2026-09-10 observed
 `pagination.total = 9,735` from `/api/v1/skills?per_page=2` and `total=9,736`

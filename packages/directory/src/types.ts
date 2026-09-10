@@ -103,6 +103,31 @@ export interface SkillDetailResponse {
   files: SkillDetailFile[] | null;
 }
 
+/**
+ * One file entry exposed by the authenticated public directory-detail route.
+ * Source text remains an internal acquisition/worker concern until scanning
+ * and policy admission complete.
+ */
+export interface SkillDetailMetadataFile {
+  path: string;
+}
+
+/**
+ * Metadata-only projection of a skills.sh detail response.  This deliberately
+ * retains the upstream snapshot hash and null snapshot state while omitting
+ * all file contents from reader-facing HTTP responses.
+ */
+export interface SkillDetailMetadataResponse {
+  id: string;
+  source: string;
+  slug: string;
+  installs: number;
+  /** SHA-256-like source snapshot identifier, or null when unavailable. */
+  hash: string | null;
+  /** Null means the upstream has no available file snapshot. */
+  files: SkillDetailMetadataFile[] | null;
+}
+
 export type SkillAuditStatus = 'pass' | 'warn' | 'fail';
 /**
  * Risk labels emitted by the documented API and by existing partner feeds.
