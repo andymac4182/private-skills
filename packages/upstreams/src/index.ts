@@ -16,8 +16,7 @@ import {
   isValidSkillsShGatewayToken,
 } from '../../directory/src/gateway.js';
 import type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
-import { parseSkillMetadata } from '../../storage/src/bundle.js';
-import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
+import { BundleValidationError, parseSkillMetadata } from '../../storage/src/bundle.js';
 
 export type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 
@@ -1667,124 +1666,19 @@ function readSkillFrontmatter(bundle: SkillBundle): { name: string; description:
   }
 }
 
-/**
- * ClawHub permits the standard nested `metadata.openclaw` map in SKILL.md.
- * The Private Skills metadata parser intentionally accepts only flat string
- * metadata for ordinary uploads, so OpenClaw acquisition uses this separate
- * bounded, data-only validator while preserving the original bytes. It never
- * resolves or executes values from the nested map.
- */
 function readOpenClawFrontmatter(bundle: SkillBundle): { name: string; description: string } {
-  const file = bundle.files.find((candidate) => candidate.path === 'SKILL.md');
-  if (!file) throw new UpstreamAcquisitionError('missing_skill_file', 'OpenClaw source has no SKILL.md');
-  let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(file.content, 'base64'));
-  } catch {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md is not valid UTF-8');
+    const metadata = parseSkillMetadata(bundle);
+    return { name: metadata.skillName, description: metadata.description };
+  } catch (error) {
+    // Keep storage's parser as the single frontmatter implementation. Its
+    // detailed error can contain source context; acquisition only needs a
+    // stable, non-content-bearing rejection code.
+    const code = error instanceof BundleValidationError && error.code === 'unsafe_frontmatter'
+      ? 'unsafe_frontmatter'
+      : 'invalid_frontmatter';
+    throw new UpstreamAcquisitionError(code, 'SKILL.md metadata is invalid');
   }
-  const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
-  if (lines[0] !== '---') throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is missing');
-  const end = lines.findIndex((line, index) => index > 0 && line === '---');
-  if (end < 0 || end > 4_096) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is invalid');
-  const frontmatter = lines.slice(0, end + 1).join('\n');
-  if (Buffer.byteLength(frontmatter, 'utf8') > 128 * 1024) {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is too large');
-  }
-  let document: ReturnType<typeof parseDocument>;
-  try {
-    document = parseDocument(lines.slice(1, end).join('\n'), {
-      customTags: [],
-      merge: false,
-      prettyErrors: false,
-      resolveKnownTags: false,
-      schema: 'core',
-      strict: true,
-      stringKeys: true,
-      uniqueKeys: true,
-      version: '1.2',
-    });
-  } catch {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is invalid YAML');
-  }
-  const directives = document.directives;
-  if (!directives || document.errors.length > 0 || document.warnings.length > 0 || directives.docStart !== null || directives.docEnd || directives.yaml.explicit || Object.keys(directives.tags).some((tag) => tag !== '!!') || !isMap(document.contents)) {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is not safe YAML');
-  }
-  if (document.contents.items.length > 256) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter has too many fields');
-  const budget = { nodes: 0 };
-  assertOpenClawYamlNode(document.contents, 0, budget);
-  let name: string | undefined;
-  let description: string | undefined;
-  for (const pair of document.contents.items) {
-    const key = openClawYamlMapKey(pair.key);
-    const normalized = key.toLocaleLowerCase('en-US');
-    if (isOpenClawDangerousKey(key)) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md enables a blocked feature');
-    if (normalized === 'metadata') {
-      if (!isMap(pair.value)) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md metadata must be a map');
-      continue;
-    }
-    if (!isScalar(pair.value) || typeof pair.value.value !== 'string' || pair.value.value.length === 0) {
-      throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md root metadata must be scalar');
-    }
-    if (normalized === 'name') name = pair.value.value;
-    if (normalized === 'description') description = pair.value.value;
-  }
-  if (name === undefined || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name) || [...name].length > 64) {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md name is invalid');
-  }
-  if (description === undefined || description.trim().length === 0 || [...description].length > 1_024) {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md description is invalid');
-  }
-  return { name, description };
-}
-
-function openClawYamlMapKey(node: unknown): string {
-  if (!isScalar(node) || typeof node.value !== 'string' || node.value.length === 0 || node.value.length > 64 || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(node.value) || /[\u0000-\u001f\u007f]/u.test(node.value)) {
-    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md contains an invalid metadata key');
-  }
-  return node.value;
-}
-
-function assertOpenClawYamlNode(node: unknown, depth: number, budget: { nodes: number }): void {
-  budget.nodes += 1;
-  if (budget.nodes > 2_048 || depth > 8 || node === null || typeof node !== 'object' || isAlias(node)) {
-    throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata exceeds safe bounds');
-  }
-  if (isScalar(node)) {
-    if (typeof node.value === 'string') {
-      if (node.value.length > 16_384 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(node.value)) {
-        throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains unsafe text');
-      }
-      return;
-    }
-    if (typeof node.value === 'boolean' || (typeof node.value === 'number' && Number.isFinite(node.value))) return;
-    throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains an unsupported scalar');
-  }
-  if (isSeq(node)) {
-    if (node.items.length > 128) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata sequence is too large');
-    for (const item of node.items) assertOpenClawYamlNode(item, depth + 1, budget);
-    return;
-  }
-  if (!isMap(node) || node.items.length > 256) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata map is invalid');
-  const seen = new Set<string>();
-  for (const pair of node.items) {
-    const key = openClawYamlMapKey(pair.key);
-    const normalized = key.toLocaleLowerCase('en-US').replaceAll(/[-_]/gu, '');
-    if (seen.has(normalized) || isOpenClawDangerousKey(key)) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains a duplicate or blocked key');
-    seen.add(normalized);
-    assertOpenClawYamlNode(pair.value, depth + 1, budget);
-  }
-}
-
-function isOpenClawDangerousKey(value: string): boolean {
-  const normalized = value.toLocaleLowerCase('en-US');
-  const compact = normalized.replaceAll(/[-_]/gu, '');
-  const exact = new Set(['plugin', 'plugins', 'pluginjson', 'extension', 'extensions', 'mcp', 'mcpserver', 'mcpservers', 'hook', 'hooks', 'command', 'commands', 'script', 'scripts', 'runtime', 'runtimes', 'entrypoint', 'install', 'installer', 'tool', 'tools']);
-  if (compact === 'allowedtools') return false;
-  if (exact.has(compact)) return true;
-  const segments = normalized.replaceAll(/([a-z])([A-Z])/gu, '$1-$2').split(/[-_]+/u);
-  return ['plugin', 'extension', 'mcp', 'hook', 'command', 'script', 'runtime', 'entrypoint', 'install', 'execute'].some((part) => segments.includes(part) || compact.startsWith(part) || compact.endsWith(part));
 }
 
 function assertFrontmatterIdentity(

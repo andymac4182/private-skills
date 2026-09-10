@@ -7,6 +7,11 @@ export {
   encodeBundle,
   parseSkillMetadata,
   validateBundle,
+  type FrontmatterMetadata,
+  type FrontmatterOpenClawMetadata,
+  type FrontmatterOpenClawValue,
+  type FrontmatterScalar,
+  type FrontmatterValue,
   type SkillMetadata,
 } from "./bundle.js";
 export { digestBytes, isSha256Digest } from "./digest.js";

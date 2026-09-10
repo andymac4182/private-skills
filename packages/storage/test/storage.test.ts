@@ -241,6 +241,56 @@ describe("canonical skill bundles", () => {
     });
   });
 
+  it("accepts bounded OpenClaw metadata in a canonical bundle", () => {
+    const source = [
+      "name: openclaw-fixture",
+      "description: A bounded OpenClaw fixture",
+      "metadata:",
+      "  openclaw:",
+      "    primaryEnv: DEMO_TOKEN",
+      "    requires:",
+      "      env:",
+      "        - DEMO_TOKEN",
+      "      bins:",
+      "        - node",
+      "    nested:",
+      "      enabled: true",
+    ].join("\n");
+    const canonical = encodeBundle(skill(source));
+    const metadata = parseSkillMetadata(decodeBundle(canonical));
+    expect(metadata).toMatchObject({
+      skillName: "openclaw-fixture",
+      description: "A bounded OpenClaw fixture",
+    });
+    expect(metadata.frontmatter.metadata).toMatchObject({
+      openclaw: {
+        primaryEnv: "DEMO_TOKEN",
+        requires: { env: ["DEMO_TOKEN"], bins: ["node"] },
+        nested: { enabled: true },
+      },
+    });
+  });
+
+  it("keeps OpenClaw nested metadata inert and bounded", () => {
+    expect(() => parseSkillMetadata(skill([
+      "name: openclaw-fixture",
+      "description: safe",
+      "metadata:",
+      "  openclaw:",
+      "    hooks:",
+      "      - run",
+    ].join("\n")))).toThrow(/unsafe|blocked|hook/u);
+    expect(() => parseSkillMetadata(skill([
+      "name: openclaw-fixture",
+      "description: safe",
+      "metadata:",
+      "  openclaw:",
+      "    requires: &requires",
+      "      env: [DEMO_TOKEN]",
+      "    duplicate: *requires",
+    ].join("\n")))).toThrow(/alias|anchor|unsafe/u);
+  });
+
   it("rejects nested executable shapes and YAML object features", () => {
     const rejected = [
       "name: hello\ndescription: safe\nmetadata:\n  plugins: enabled",

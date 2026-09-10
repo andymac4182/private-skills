@@ -5,9 +5,25 @@ import { describe, expect, it } from 'vitest';
 import { WorkerRunner } from '../src/worker.js';
 import type { WorkerClaimedJob } from '../src/client.js';
 import type { ScannerAdapter, ScanResult as AdapterScanResult } from '../../../packages/scanners/src/types.js';
+import { parseSkillMetadata } from '../../../packages/storage/src/index.js';
 import { serializeSkillBundle } from '../../../packages/upstreams/src/index.js';
 
-const SKILL = Buffer.from('---\nname: demo\ndescription: Worker OpenClaw fixture\n---\n# Demo\n', 'utf8');
+const SKILL = Buffer.from([
+  '---',
+  'name: demo',
+  'description: Worker OpenClaw fixture',
+  'metadata:',
+  '  openclaw:',
+  '    primaryEnv: DEMO_TOKEN',
+  '    requires:',
+  '      env:',
+  '        - DEMO_TOKEN',
+  '      bins:',
+  '        - node',
+  '---',
+  '# Demo',
+  '',
+].join('\n'), 'utf8');
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
@@ -60,6 +76,7 @@ describe('worker OpenClaw source acquisition', () => {
       },
     };
     let completion: Record<string, unknown> | undefined;
+    let coreValidated = false;
     let fetchedSource: unknown;
     let recordedProof: Record<string, unknown> | undefined;
     const apiFetch = async (input: string | URL, init?: { body?: BodyInit | null }): Promise<Response> => {
@@ -67,6 +84,16 @@ describe('worker OpenClaw source acquisition', () => {
       if (url.pathname === '/internal/jobs/claim') return jsonResponse({ job });
       if (url.pathname === '/internal/jobs/job-openclaw-1/complete') {
         completion = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        const canonicalBundle = completion.bundle;
+        const metadata = parseSkillMetadata(canonicalBundle);
+        expect(metadata.frontmatter.metadata).toMatchObject({
+          openclaw: { requires: { env: ['DEMO_TOKEN'], bins: ['node'] } },
+        });
+        const scans = completion.scanResults;
+        if (!Array.isArray(scans) || scans.length !== 1 || (scans[0] as Record<string, unknown>).status !== 'completed') {
+          return jsonResponse({ error: 'required scan evidence missing' }, 422);
+        }
+        coreValidated = true;
         return jsonResponse({ operation: { ...job, state: 'completed', resourceId: 'skill-openclaw-1' } });
       }
       return jsonResponse({ error: 'missing worker route' }, 404);
@@ -121,6 +148,7 @@ describe('worker OpenClaw source acquisition', () => {
 
     const result = await runner.runOnce();
     expect(result.allow).toBe(true);
+    expect(coreValidated).toBe(true);
     expect(fetchedSource).toEqual(source);
     assert.ok(completion);
     expect(completion.artifactDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
