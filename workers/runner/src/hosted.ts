@@ -152,8 +152,9 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
 /**
  * Construct the OpenClaw worker seam once at route creation. This keeps the
  * source locator and origin allowlist deployment-owned while reusing the
- * shared bounded transport implementation. In particular, no URL is derived
- * from a claimed package name, repository, or path.
+ * shared bounded transport implementation. A default locator may derive a
+ * URL from a validated immutable source identity; the claimed job cannot
+ * supply that URL or widen the resulting profile boundaries.
  */
 export function createHostedOpenClawAcquisition(
   config: HostedOpenClawSourceConfig,
