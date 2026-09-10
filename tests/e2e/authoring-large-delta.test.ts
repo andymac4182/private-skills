@@ -43,6 +43,7 @@ const BASE_RESOURCE_ID = 'release-large-draft';
 const VERCEL_BODY_CAP_BYTES = 4_500_000;
 const LARGE_FILE_BYTES = Math.floor(3.5 * 1024 * 1024);
 const LARGE_FILE_PATH = 'assets/unchanged.bin';
+const RENAMED_LARGE_FILE_PATH = 'assets/renamed.bin';
 
 type DraftFileReference = {
   path: string;
@@ -301,7 +302,11 @@ async function json<T>(response: Response): Promise<T> {
 
 function deltaFiles(largeDigest: `sha256:${string}`): DraftFileInput[] {
   return [
-    { path: LARGE_FILE_PATH, digest: largeDigest },
+    {
+      path: RENAMED_LARGE_FILE_PATH,
+      sourcePath: LARGE_FILE_PATH,
+      digest: largeDigest,
+    },
     {
       path: 'rules.json',
       content: base64Text('{"revision":2,"safe":true}\n'),
@@ -353,8 +358,15 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
       id: expect.any(String),
       revision: 1,
       digest: fixture.baseRelease.artifact.digest,
-      files: fixture.baseBundle.files,
     });
+    expect(created.draft.files.map((file) => file.path)).toEqual([
+      'SKILL.md',
+      LARGE_FILE_PATH,
+      'docs/guide.md',
+      'rules.json',
+    ]);
+    expect(created.draft.files).toEqual([...fixture.baseBundle.files].sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
 
     const payload = {
       expectedRevision: 1,
@@ -371,7 +383,11 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
     expect(deltaBodyBytes).toBeLessThan(VERCEL_BODY_CAP_BYTES);
     expect(payload.files).toHaveLength(4);
     expect(payload.files.filter((file): file is DraftFileReference => 'digest' in file)).toEqual([
-      { path: LARGE_FILE_PATH, digest: largeDigest },
+      {
+        path: RENAMED_LARGE_FILE_PATH,
+        sourcePath: LARGE_FILE_PATH,
+        digest: largeDigest,
+      },
     ]);
 
     const putsBeforeUpdate = fixture.blobs.putCalls;
@@ -390,11 +406,12 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
     expect(updated.draft.digest).not.toBe(created.draft.digest);
     expect(updated.draft.files.map((file) => file.path)).toEqual([
       'SKILL.md',
-      LARGE_FILE_PATH,
+      RENAMED_LARGE_FILE_PATH,
       'docs/guide.md',
       'rules.json',
     ]);
-    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, LARGE_FILE_PATH).content)
+    expect(updated.draft.files.some((file) => file.path === LARGE_FILE_PATH)).toBe(false);
+    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, RENAMED_LARGE_FILE_PATH).content)
       .toBe(fixture.largeContent);
     expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, 'SKILL.md').content)
       .toBe(base64Text('---\nname: large-draft\ndescription: Edited large draft\n---\n\n# Edited\n'));
@@ -410,7 +427,8 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
     expect(draftAfterUpdate?.artifact.digest).toBe(updated.draft.digest);
     const sealedDraftBytes = await fixture.blobs.get(draftAfterUpdate!.artifact.key);
     const sealedDraft = decodeBundle(sealedDraftBytes);
-    expect(fileByPath(sealedDraft, LARGE_FILE_PATH).content).toBe(fixture.largeContent);
+    expect(sealedDraft.files.some((file) => file.path === LARGE_FILE_PATH)).toBe(false);
+    expect(fileByPath(sealedDraft, RENAMED_LARGE_FILE_PATH).content).toBe(fixture.largeContent);
     expect(await digestBytes(sealedDraftBytes)).toBe(updated.draft.digest);
 
     // The immutable base object and its metadata remain byte-for-byte stable.
