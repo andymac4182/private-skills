@@ -6,6 +6,7 @@ import { FileTree, useFileTree } from '@pierre/trees/react'
 import type { ReleaseFilePreviewState, SkillBundle } from '../lib/types'
 import { formatBytes } from '../lib/format'
 import { Badge, LoadingState } from './Primitives'
+import type { DraftWorkingFile } from './DraftEditor'
 
 type DraftFile = SkillBundle['files'][number]
 
@@ -25,7 +26,7 @@ interface PierreDraftSurfaceProps {
   entries: DraftSurfaceEntry[]
   selectedPath: string | null
   baseFile: DraftFile | null
-  currentFile: DraftFile | null
+  currentFile: DraftWorkingFile | null
   currentPreviewState: ReleaseFilePreviewState | null
   currentPreviewSize: number | null
   basePreviewState: ReleaseFilePreviewState | null
@@ -68,8 +69,8 @@ function isSupportedTextPath(path: string): boolean {
   return TEXT_FILENAMES.has(basename) || TEXT_EXTENSIONS.has(extensionFor(path))
 }
 
-function toFile(file: DraftFile | null, maxPreviewBytes: number): FileContents | null {
-  if (!file || !isSupportedTextPath(file.path) || BINARY_EXTENSIONS.has(extensionFor(file.path))) return null
+function toFile(file: DraftFile | DraftWorkingFile | null, maxPreviewBytes: number): FileContents | null {
+  if (!file || typeof file.content !== 'string' || !isSupportedTextPath(file.path) || BINARY_EXTENSIONS.has(extensionFor(file.path))) return null
   const contents = decodeText(file.content, maxPreviewBytes)
   if (contents === null) return null
   return { name: file.path, contents, cacheKey: file.content }

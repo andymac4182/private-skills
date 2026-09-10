@@ -40,7 +40,7 @@ const reboundDraft: DraftView = {
   revision: draft.revision + 1,
   digest: 'sha256:next',
   size: 12,
-  files: [{ path: 'SKILL.md', content: 'I0FmdGVyCg==' }],
+  files: [{ path: 'SKILL.md', size: 9, digest: 'sha256:' + 'n'.repeat(64) as `sha256:${string}` }],
   status: 'open',
   actor: 'owner',
   createdAt: '2026-09-10T00:00:00.000Z',

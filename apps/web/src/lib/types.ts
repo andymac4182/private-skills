@@ -193,13 +193,29 @@ export interface DraftView {
   revision: number
   digest: `sha256:${string}`
   size: number
-  files: SkillBundle['files']
+  /** File metadata only. File bytes are fetched for one selected path. */
+  files: DraftFileMetadata[]
   status: 'open' | 'publishing' | 'published' | 'discarded'
   actor: string
   createdAt: string
   updatedAt: string
   publications?: Array<{ resourceId: string; jobId: string; version: string; revision: number; digest: `sha256:${string}`; createdAt: string }>
 }
+
+/** Metadata returned for every draft path without transferring file bytes. */
+export interface DraftFileMetadata {
+  path: string
+  size: number
+  digest: `sha256:${string}`
+  executable?: boolean
+}
+
+/** One selected draft file, with a bounded optional base64 text payload. */
+export interface DraftFileResponseEntry extends DraftFileMetadata {
+  previewState: ReleaseFilePreviewState
+  content?: string
+}
+export interface DraftFileResponse { file: DraftFileResponseEntry }
 /**
  * PUT entries for a draft revision. Inline files carry changed/new bytes;
  * references let the server copy bytes from the saved revision without

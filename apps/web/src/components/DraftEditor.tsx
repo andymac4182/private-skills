@@ -3,7 +3,7 @@ import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
-import type { DraftFileReference, DraftFileUpdate, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
+import type { DraftFileMetadata, DraftFileReference, DraftFileResponseEntry, DraftFileUpdate, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
 import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
 import { DraftReviewPanel } from './DraftReviewPanel'
@@ -24,6 +24,8 @@ interface DraftEditorProps {
 }
 
 type DraftFile = SkillBundle['files'][number]
+export type DraftWorkingFile = DraftFileMetadata & { content?: string; previewState?: ReleaseFilePreviewState; dirty?: boolean }
+type DraftFileLike = { path: string; content?: string; size?: number; previewState?: ReleaseFilePreviewState }
 type ReleaseBaselineEntry = Pick<ReleaseFileView, 'path' | 'size' | 'previewState' | 'executable'> & { contentDigest?: `sha256:${string}`; contents?: string }
 interface ImmutableReleaseBaseline { entries: ReleaseBaselineEntry[]; files: DraftFile[] }
 type DraftOperation = { draftId: string; revision: number; version?: string; payloadFingerprint: string; key: string }
@@ -102,6 +104,32 @@ function digestForContent(content: string): Promise<DigestResult> {
   return promise
 }
 
+const draftFileCache = new Map<string, DraftWorkingFile>()
+const MAX_DRAFT_FILE_CACHE = 128
+
+function draftFileCacheKey(draftId: string, revision: number, digest: string, path: string): string {
+  return `${draftId}\u0000${revision}\u0000${digest}\u0000${path}`
+}
+
+async function workingFileFromResponse(entry: DraftFileResponseEntry): Promise<DraftWorkingFile> {
+  if (entry.previewState === 'text' && entry.content === undefined) throw new Error('The registry did not return the bounded text preview.')
+  if (entry.content === undefined || entry.previewState !== 'text') {
+    const { content: _content, ...metadata } = entry
+    return { ...metadata, dirty: false }
+  }
+  const result = await digestForContent(entry.content)
+  if (result.digest !== entry.digest || result.size !== entry.size) throw new Error('The selected draft file failed its digest check.')
+  return { ...entry, dirty: false }
+}
+
+function cacheDraftFile(key: string, file: DraftWorkingFile): void {
+  if (draftFileCache.size >= MAX_DRAFT_FILE_CACHE) {
+    const oldest = draftFileCache.keys().next().value
+    if (typeof oldest === 'string') draftFileCache.delete(oldest)
+  }
+  draftFileCache.set(key, { ...file })
+}
+
 function extensionFor(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
   const index = name.lastIndexOf('.')
@@ -138,8 +166,15 @@ export interface DraftFilePreview {
 const previewCache = new Map<string, DraftFilePreview>()
 const MAX_PREVIEW_CACHE = 256
 
-export function inspectDraftFile(file: DraftFile | null): DraftFilePreview | null {
+export function inspectDraftFile(file: DraftFileLike | null): DraftFilePreview | null {
   if (!file) return null
+  if (typeof file.content !== 'string') {
+    const size = file.size ?? null
+    const inferredState = file.previewState ?? (size !== null && size > MAX_TEXT_PREVIEW_BYTES
+      ? (isSupportedTextPath(file.path) ? 'oversize' : 'unsupported')
+      : isBinaryPath(file.path) ? 'binary' : isSupportedTextPath(file.path) ? 'text' : 'unsupported')
+    return { state: inferredState, size, text: null }
+  }
   const cacheKey = `${file.path}\u0000${file.content}`
   const cached = previewCache.get(cacheKey)
   if (cached) return cached
@@ -182,12 +217,40 @@ function previewReason(state: ReleaseFilePreviewState | null): string {
   return 'This file is available in the release manifest, but no text preview is available.'
 }
 
-function editableText(file: DraftFile | null): string | null {
+function editableText(file: DraftFileLike | null): string | null {
   return inspectDraftFile(file)?.text ?? null
 }
 
 function cloneFiles(files: DraftFile[]): DraftFile[] {
   return files.map((file) => ({ ...file }))
+}
+
+function workingFileFromMetadata(file: DraftFileMetadata): DraftWorkingFile {
+  return { ...file, dirty: false }
+}
+
+function workingFileWithText(file: DraftWorkingFile | DraftFileMetadata, text: string): DraftWorkingFile {
+  const content = encodeBase64Text(text)
+  return {
+    ...file,
+    content,
+    size: new TextEncoder().encode(text).byteLength,
+    previewState: 'text',
+    dirty: true,
+  }
+}
+
+function workingFileFromLoaded(file: DraftFile, metadata?: DraftFileMetadata, dirty = false): DraftWorkingFile {
+  const preview = inspectDraftFile(file)
+  return {
+    path: file.path,
+    size: metadata?.size ?? preview?.size ?? 0,
+    digest: metadata?.digest ?? `sha256:${'0'.repeat(64)}`,
+    ...(file.executable === undefined ? {} : { executable: file.executable }),
+    content: file.content,
+    previewState: preview?.state,
+    dirty,
+  }
 }
 
 /**
@@ -240,8 +303,8 @@ export async function draftPayloadFingerprint(
  * are therefore deleted by the revision writer.
  */
 export async function buildDraftDeltaFiles(
-  savedFiles: DraftFile[],
-  workingFiles: DraftFile[],
+  savedFiles: DraftFileMetadata[],
+  workingFiles: DraftWorkingFile[],
   renameOrigins: Record<string, string> = {},
 ): Promise<DraftFileUpdate[]> {
   const savedByPath = new Map(savedFiles.map((file) => [file.path, file]))
@@ -255,21 +318,15 @@ export async function buildDraftDeltaFiles(
         ? file.path
         : undefined
     const saved = sourcePath === undefined ? undefined : savedByPath.get(sourcePath)
+    const sameSavedMetadata = saved !== undefined && saved.digest === file.digest && saved.size === file.size && saved.executable === file.executable
 
-    if (!saved || saved.executable !== file.executable || saved.content !== file.content) {
-      delta.push({ ...file })
+    if (!sameSavedMetadata || file.dirty === true) {
+      if (file.content === undefined) throw new Error(`Load ${file.path} before saving its changes.`)
+      delta.push({ path: file.path, content: file.content, ...(file.executable === true ? { executable: true } : {}) })
       continue
     }
 
-    const digest = await digestForContent(saved.content)
-    if (!digest.digest) {
-      // If Web Crypto or base64 decoding is unavailable, let the server apply
-      // its normal full-file validation instead of sending an unverifiable ref.
-      delta.push({ ...file })
-      continue
-    }
-
-    const reference: DraftFileReference = { path: file.path, digest: digest.digest }
+    const reference: DraftFileReference = { path: file.path, digest: file.digest }
     if (sourcePath !== undefined && sourcePath !== file.path) reference.sourcePath = sourcePath
     delta.push(reference)
   }
@@ -281,7 +338,7 @@ export async function buildDraftDeltaFiles(
 export function renameOriginForPath(
   selectedPath: string,
   renameOrigins: Readonly<Record<string, string>>,
-  savedFiles: DraftFile[],
+  savedFiles: DraftFileMetadata[],
   releaseBaseEntries: ReadonlyArray<Pick<ReleaseBaselineEntry, 'path'>>,
 ): string | undefined {
   const carriedOrigin = renameOrigins[selectedPath]
@@ -290,16 +347,16 @@ export function renameOriginForPath(
   return releaseBaseEntries.some((entry) => entry.path === selectedPath) ? selectedPath : undefined
 }
 
-function filesEqual(left: DraftFile[], right: DraftFile[]): boolean {
+function filesEqual(left: DraftFileMetadata[], right: DraftWorkingFile[]): boolean {
   if (left.length !== right.length) return false
   const rightByPath = new Map(right.map((file) => [file.path, file]))
   return left.every((file) => {
     const other = rightByPath.get(file.path)
-    return other?.content === file.content && other.executable === file.executable
+    return other?.digest === file.digest && other.size === file.size && other.executable === file.executable && other.dirty !== true
   })
 }
 
-function firstPath(files: DraftFile[]): string | null {
+function firstPath(files: DraftFileLike[]): string | null {
   return files.find((file) => editableText(file) !== null)?.path ?? files[0]?.path ?? null
 }
 
@@ -358,35 +415,32 @@ export async function loadImmutableReleaseBaseline(resourceId: string, expectedD
     previewState: entry.previewState,
     contentDigest: entry.contentDigest,
     ...(entry.executable === undefined ? {} : { executable: entry.executable }),
-    ...(typeof entry.contents === 'string' ? { contents: entry.contents } : {}),
   }))
-  const files = entries
-    .filter((entry) => entry.previewState === 'text' && typeof entry.contents === 'string')
-    .map((entry) => ({ path: entry.path, content: encodeBase64Text(entry.contents as string), ...(entry.executable === undefined ? {} : { executable: entry.executable }) }))
-  return { entries, files }
+  return { entries, files: [] }
 }
 
-function baselineEntriesFromFiles(files: DraftFile[]): ReleaseBaselineEntry[] {
-  return files.map((file) => {
-    const preview = inspectDraftFile(file)
-    return {
-      path: file.path,
-      size: preview?.size ?? 0,
-      previewState: preview?.state ?? 'binary',
-      ...(file.executable === undefined ? {} : { executable: file.executable }),
-    }
-  })
+function baselineEntriesFromMetadata(files: DraftFileMetadata[]): ReleaseBaselineEntry[] {
+  return files.map((file) => ({
+    path: file.path,
+    size: file.size,
+    previewState: inspectDraftFile(workingFileFromMetadata(file))?.state ?? 'binary',
+    contentDigest: file.digest,
+    ...(file.executable === undefined ? {} : { executable: file.executable }),
+  }))
 }
 
-export function releaseBaselineStatus(entry: ReleaseBaselineEntry | undefined, baseFile: DraftFile | undefined, currentFile: DraftFile | undefined, currentDigest?: `sha256:${string}` | null, currentSize?: number | null): DraftSurfaceEntry['status'] {
+export function releaseBaselineStatus(entry: ReleaseBaselineEntry | undefined, baseFile: DraftFile | undefined, currentFile: { path: string; content?: string; size?: number; digest?: `sha256:${string}`; executable?: boolean; dirty?: boolean } | undefined, currentDigest?: `sha256:${string}` | null, currentSize?: number | null): DraftSurfaceEntry['status'] {
   if (!currentFile) return 'removed'
   if (!entry) return 'added'
-  if (baseFile) return baseFile.content !== currentFile.content || baseFile.executable !== currentFile.executable ? 'changed' : 'unchanged'
+  if (currentFile.dirty === true) return 'changed'
+  if (baseFile && currentFile.content !== undefined) return baseFile.content !== currentFile.content || baseFile.executable !== currentFile.executable ? 'changed' : 'unchanged'
   if (entry.executable !== currentFile.executable) return 'changed'
-  if (currentDigest === undefined) return 'checking'
-  if (currentDigest === null || !entry.contentDigest) return 'unknown'
-  if (currentDigest !== entry.contentDigest) return 'changed'
-  if (entry.size !== undefined && currentSize !== null && currentSize !== undefined && entry.size !== currentSize) return 'changed'
+  const digest = currentDigest === undefined ? currentFile.digest : currentDigest
+  const size = currentSize === undefined ? currentFile.size : currentSize
+  if (digest === undefined) return 'checking'
+  if (digest === null || !entry.contentDigest) return 'unknown'
+  if (digest !== entry.contentDigest) return 'changed'
+  if (entry.size !== undefined && size !== null && size !== undefined && entry.size !== size) return 'changed'
   return 'unchanged'
 }
 
@@ -403,8 +457,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [draft, setDraft] = useState<DraftView | null>(null)
   const [releaseBaseFiles, setReleaseBaseFiles] = useState<DraftFile[]>([])
   const [releaseBaseEntries, setReleaseBaseEntries] = useState<ReleaseBaselineEntry[]>([])
-  const [savedFiles, setSavedFiles] = useState<DraftFile[]>([])
-  const [workingFiles, setWorkingFiles] = useState<DraftFile[]>([])
+  const [savedFiles, setSavedFiles] = useState<DraftFileMetadata[]>([])
+  const [workingFiles, setWorkingFiles] = useState<DraftWorkingFile[]>([])
   const [renameOrigins, setRenameOrigins] = useState<Record<string, string>>({})
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mode, setMode] = useState<'edit' | 'diff'>('diff')
@@ -422,7 +476,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [error, setError] = useState<string | null>(null)
   const [baseLoadingPath, setBaseLoadingPath] = useState<string | null>(null)
   const [baseLoadError, setBaseLoadError] = useState<{ path: string; text: string } | null>(null)
-  const [currentDigests, setCurrentDigests] = useState<Record<string, { content: string; result: DigestResult }>>({})
+  const [currentLoadingPath, setCurrentLoadingPath] = useState<string | null>(null)
+  const [currentLoadError, setCurrentLoadError] = useState<{ path: string; text: string } | null>(null)
   const requestGeneration = useRef(0)
   const persistence = useRef<DraftPersistence | null>(null)
   const saveOperation = useRef<DraftOperation | null>(null)
@@ -431,7 +486,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const releaseBaseEntriesRef = useRef<ReleaseBaselineEntry[]>([])
   const releaseBaselineLoadedRef = useRef(false)
   const baseLoadGeneration = useRef(0)
-  const digestGeneration = useRef(0)
+  const currentLoadGeneration = useRef(0)
   const surfaceRef = useRef<DraftSurfaceHandle | null>(null)
   const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
 
@@ -445,22 +500,23 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   }, [releaseBaseFiles, selectedBasePath])
   const selectedPreview = inspectDraftFile(selectedFile)
   const selectedText = selectedPreview?.text ?? null
-  const selectedIsEditable = selectedPreview?.state === 'text'
+  const selectedIsEditable = selectedPreview?.state === 'text' && typeof selectedFile?.content === 'string'
   const selectedFilePresent = selectedFile !== null
+  const selectedCurrentError = selectedPath && currentLoadError?.path === selectedPath ? currentLoadError.text : null
   const selectedBaseError = selectedBasePath && baseLoadError?.path === selectedBasePath ? baseLoadError.text : null
+  const uploadDraft = draft?.origin === 'upload' || resourceId.startsWith('upload:')
   const canLoadSelectedBase = !selectedFilePresent || selectedPreview?.state === 'text'
-  const selectedBaseLoading = canLoadSelectedBase && selectedBaseEntry?.previewState === 'text' && !selectedBaseFile && !selectedBaseError && (baseLoadingPath === selectedBasePath || baseLoadingPath === null)
+  const selectedBaseLoading = !uploadDraft && canLoadSelectedBase && selectedBaseEntry?.previewState === 'text' && !selectedBaseFile && !selectedBaseError && (baseLoadingPath === selectedBasePath || baseLoadingPath === null)
+  const selectedCurrentLoading = selectedPath !== null && currentLoadingPath === selectedPath
   const entries = useMemo<DraftSurfaceEntry[]>(() => {
     const paths = new Set([...releaseBaseEntries.map((entry) => entry.path), ...workingFiles.map((file) => file.path)])
     return [...paths].sort().map((path) => {
       const entry = releaseBaseEntries.find((candidate) => candidate.path === path)
       const base = releaseBaseFiles.find((file) => file.path === path)
       const current = workingFiles.find((file) => file.path === path)
-      const digest = current ? currentDigests[path] : undefined
-      const currentDigest = current && digest?.content === current.content ? digest : undefined
-      return { path, status: releaseBaselineStatus(entry, base, current, currentDigest?.result.digest, currentDigest?.result.size) }
+      return { path, status: releaseBaselineStatus(entry, base, current, current?.digest, current?.size) }
     })
-  }, [currentDigests, releaseBaseEntries, releaseBaseFiles, workingFiles])
+  }, [releaseBaseEntries, releaseBaseFiles, workingFiles])
   const hasFileChanges = draft !== null && !filesEqual(savedFiles, workingFiles)
   const liveText = useMemo(() => surfaceRef.current?.readCurrent(), [selectedPath, selectedText, surfaceRevision])
   const hasLiveEdit = mode === 'edit' && selectedIsEditable && liveText !== null && liveText !== selectedText
@@ -483,23 +539,33 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   }
 
   function installServerDraft(next: DraftView): void {
-    const files = cloneFiles(next.files)
+    const metadata = next.files.map((file) => ({ ...file }))
+    const previousByPath = new Map(workingFiles.map((file) => [file.path, file]))
+    const files = metadata.map((file): DraftWorkingFile => {
+      const previous = previousByPath.get(file.path)
+      return previous?.content !== undefined && previous.dirty !== true && previous.digest === file.digest && previous.size === file.size && previous.executable === file.executable
+        ? { ...file, content: previous.content, ...(previous.previewState === undefined ? {} : { previewState: previous.previewState }), dirty: false }
+        : workingFileFromMetadata(file)
+    })
     const uploadOrigin = next.origin === 'upload' || resourceId.startsWith('upload:')
     if (!releaseBaselineLoadedRef.current && (uploadOrigin || next.revision === 0)) {
-      releaseBaseRef.current = cloneFiles(files)
-      setReleaseBaseFiles(cloneFiles(files))
-      const entries = baselineEntriesFromFiles(files)
+      releaseBaseRef.current = []
+      setReleaseBaseFiles([])
+      const entries = baselineEntriesFromMetadata(metadata)
       releaseBaseEntriesRef.current = entries
       setReleaseBaseEntries(entries)
       releaseBaselineLoadedRef.current = true
     }
-    setDraft(next)
-    setSavedFiles(cloneFiles(files))
-    setWorkingFiles(cloneFiles(files))
+    setDraft({ ...next, files: metadata })
+    setSavedFiles(metadata)
+    setWorkingFiles(files)
     setRenameOrigins({})
     setSelectedPath((current) => current && files.some((file) => file.path === current) ? current : firstPath(files))
     setMode('diff')
     setWorkspaceTab('files')
+    currentLoadGeneration.current += 1
+    setCurrentLoadingPath(null)
+    setCurrentLoadError(null)
     setVersion((current) => current || baseVersion)
     saveOperation.current = null
     publishOperation.current = null
@@ -516,11 +582,11 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
 
   useEffect(() => () => { onDirtyChange?.(false) }, [onDirtyChange])
 
-  function syncSurfaceFiles(): DraftFile[] {
+  function syncSurfaceFiles(): DraftWorkingFile[] {
     if (!selectedFile || !selectedIsEditable) return workingFiles
     const currentText = surfaceRef.current?.readCurrent()
     if (currentText === undefined || currentText === null || currentText === selectedText) return workingFiles
-    return workingFiles.map((file) => file.path === selectedFile.path ? { ...file, content: encodeBase64Text(currentText) } : file)
+    return workingFiles.map((file) => file.path === selectedFile.path ? workingFileWithText(file, currentText) : file)
   }
 
   function getPersistence(): DraftPersistence {
@@ -564,7 +630,9 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setError(null)
     setBaseLoadingPath(null)
     setBaseLoadError(null)
-    setCurrentDigests({})
+    setCurrentLoadingPath(null)
+    setCurrentLoadError(null)
+    currentLoadGeneration.current += 1
     setResuming(true)
     persistence.current = readPersistence(storageKey)
     saveOperation.current = null
@@ -623,9 +691,53 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   }, [baseDigest, baseVersion, initialDraft, resourceId, resumeDraftId, storageKey])
 
   useEffect(() => {
+    const current = selectedPath ? workingFiles.find((file) => file.path === selectedPath) ?? null : null
+    if (!draft || !current || current.content !== undefined || current.previewState !== undefined) {
+      if (currentLoadingPath !== null) setCurrentLoadingPath(null)
+      return
+    }
+
+    const generation = ++currentLoadGeneration.current
+    const controller = new AbortController()
+    const key = draftFileCacheKey(draft.id, draft.revision, draft.digest, current.path)
+    setCurrentLoadingPath(current.path)
+    setCurrentLoadError(null)
+    const cached = draftFileCache.get(key)
+    const request = cached
+      ? Promise.resolve({ ...cached })
+      : api.draftFile(draft.id, current.path, { revision: draft.revision, digest: draft.digest }, controller.signal)
+        .then((response) => workingFileFromResponse(response.file))
+        .then((loaded) => {
+          cacheDraftFile(key, loaded)
+          return loaded
+        })
+    void request.then((loaded) => {
+      if (generation !== currentLoadGeneration.current || controller.signal.aborted) return
+      if (loaded.path !== current.path || loaded.digest !== current.digest || loaded.size !== current.size || loaded.executable !== current.executable) {
+        throw new Error('The draft changed while loading the selected file. Reload the draft before continuing.')
+      }
+      setWorkingFiles((files) => files.map((file) => file.path === current.path && file.digest === current.digest ? { ...file, ...loaded, dirty: false } : file))
+      if ((draft.origin === 'upload' || resourceId.startsWith('upload:')) && !releaseBaseRef.current.some((file) => file.path === current.path) && loaded.content !== undefined) {
+        const baseline: DraftFile = { path: loaded.path, content: loaded.content, ...(loaded.executable === undefined ? {} : { executable: loaded.executable }) }
+        releaseBaseRef.current = [...releaseBaseRef.current, baseline]
+        setReleaseBaseFiles((files) => files.some((file) => file.path === baseline.path) ? files : [...files, baseline])
+      }
+    }).catch((cause: unknown) => {
+      if (generation !== currentLoadGeneration.current || controller.signal.aborted || isAbortError(cause)) return
+      setCurrentLoadError({ path: current.path, text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load the selected draft file.' })
+    }).finally(() => {
+      if (generation === currentLoadGeneration.current) setCurrentLoadingPath(null)
+    })
+    return () => {
+      controller.abort()
+      if (generation === currentLoadGeneration.current) currentLoadGeneration.current += 1
+    }
+  }, [draft, resourceId, selectedPath, workingFiles])
+
+  useEffect(() => {
     const path = selectedBasePath
     const metadata = selectedBaseEntry
-    if (!path || !metadata || metadata.previewState !== 'text' || (selectedFilePresent && selectedPreview?.state !== 'text') || releaseBaseFiles.some((file) => file.path === path)) {
+    if (uploadDraft || !path || !metadata || metadata.previewState !== 'text' || (selectedFilePresent && selectedPreview?.state !== 'text') || releaseBaseFiles.some((file) => file.path === path)) {
       if (baseLoadingPath !== null) setBaseLoadingPath(null)
       return
     }
@@ -652,29 +764,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       controller.abort()
       if (generation === baseLoadGeneration.current) baseLoadGeneration.current += 1
     }
-  }, [baseDigest, releaseBaseFiles, resourceId, selectedBaseEntry, selectedBasePath, selectedFilePresent, selectedPreview?.state])
-
-  useEffect(() => {
-    const generation = ++digestGeneration.current
-    const baselinePaths = new Set(releaseBaseEntries.map((entry) => entry.path))
-    setCurrentDigests({})
-    for (const file of workingFiles) {
-      if (!baselinePaths.has(file.path)) continue
-      const path = file.path
-      const content = file.content
-      void digestForContent(content).then((result) => {
-        if (generation !== digestGeneration.current) return
-        setCurrentDigests((current) => {
-          const previous = current[path]
-          if (previous?.content === content && previous.result.digest === result.digest && previous.result.size === result.size) return current
-          return { ...current, [path]: { content, result } }
-        })
-      })
-    }
-    return () => {
-      if (generation === digestGeneration.current) digestGeneration.current += 1
-    }
-  }, [releaseBaseEntries, workingFiles])
+  }, [baseDigest, releaseBaseFiles, resourceId, selectedBaseEntry, selectedBasePath, selectedFilePresent, selectedPreview?.state, uploadDraft])
 
   useEffect(() => {
     if (closeRequest > 0) requestClose()
@@ -732,6 +822,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setWorkingFiles(nextFiles)
     setMode('diff')
     setSelectedPath(path)
+    setCurrentLoadingPath(null)
+    setCurrentLoadError(null)
     setMessage(null)
     setError(null)
   }
@@ -754,7 +846,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
 
   function onPierreContentChange(contents: string): void {
     if (!selectedPath) return
-    setWorkingFiles((current) => current.map((file) => file.path === selectedPath ? { ...file, content: encodeBase64Text(contents) } : file))
+    setWorkingFiles((current) => current.map((file) => file.path === selectedPath ? workingFileWithText(file, contents) : file))
     setSurfaceRevision((current) => current + 1)
   }
 
@@ -766,7 +858,14 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     if (pathError) { setMessage({ kind: 'error', text: pathError }); return }
     if (entries.some((entry) => entry.path === path)) { setMessage({ kind: 'error', text: 'A file with that path already exists in this draft.' }); return }
     const currentFiles = syncSurfaceFiles()
-    setWorkingFiles([...currentFiles, { path, content: encodeBase64Text('') }])
+    setWorkingFiles([...currentFiles, {
+      path,
+      size: 0,
+      digest: `sha256:${'0'.repeat(64)}`,
+      content: encodeBase64Text(''),
+      previewState: 'text',
+      dirty: true,
+    }])
     setSelectedPath(path)
     setMode('edit')
     setNewPath('')
@@ -811,7 +910,14 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
 
   function restoreFile(): void {
     if (busy || selectedFile || !selectedBaseFile || !selectedPath) return
-    setWorkingFiles((current) => [...current, { ...selectedBaseFile, path: selectedPath }])
+    const restoreMetadata: DraftFileMetadata | undefined = selectedBaseEntry ? {
+      path: selectedPath,
+      size: selectedBaseEntry.size,
+      digest: selectedBaseEntry.contentDigest ?? `sha256:${'0'.repeat(64)}`,
+      ...(selectedBaseEntry.executable === undefined ? {} : { executable: selectedBaseEntry.executable }),
+    } : undefined
+    const restored = workingFileFromLoaded({ ...selectedBaseFile, path: selectedPath }, restoreMetadata, true)
+    setWorkingFiles((current) => [...current, restored])
     setMessage({ kind: 'success', text: `${selectedPath} restored locally. Save the revision to persist it.` })
   }
 
@@ -872,7 +978,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     }
   }
 
-  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onContentChange={onPierreContentChange} />
+  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} currentLoading={selectedCurrentLoading} currentError={selectedCurrentError} onSelect={selectFile} onContentChange={onPierreContentChange} />
 
   return <section className="draft-editor">
     <header className="draft-editor-header">
@@ -901,7 +1007,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
         <div className="draft-editor-layout">
           <div className="draft-editor-main draft-editor-surface-main">
             <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
-            <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
+            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>
@@ -911,7 +1017,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   </section>
 }
 
-function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, mode, editable, busy, baseLoading, baseError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftFile | null; currentPreviewState: ReleaseFilePreviewState | null; currentPreviewSize: number | null; basePreviewState: ReleaseFilePreviewState | null; basePreviewSize: number | null; mode: 'edit' | 'diff'; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
+function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, mode, editable, busy, baseLoading, baseError, currentLoading, currentError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftWorkingFile | null; currentPreviewState: ReleaseFilePreviewState | null; currentPreviewSize: number | null; basePreviewState: ReleaseFilePreviewState | null; basePreviewSize: number | null; mode: 'edit' | 'diff'; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; currentLoading: boolean; currentError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
   const currentPreview = currentFile ? inspectDraftFile(currentFile) : null
   const basePreview = baseFile ? inspectDraftFile(baseFile) : null
   const text = currentPreview?.text ?? null
@@ -922,6 +1028,6 @@ function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, curr
   const placeholderSize = currentPreviewSize ?? basePreviewSize
   return <div className="draft-surface draft-surface-native">
     <aside className="draft-surface-tree" aria-label="Draft files"><div className="release-tree-heading"><strong>Files</strong><span>{entries.length}</span></div><div className="release-file-list">{entries.map((entry) => <button className={`release-file-row ${entry.path === selectedPath ? 'release-file-row-selected' : ''}`.trim()} key={entry.path} type="button" disabled={busy} onClick={() => onSelect(entry.path)}><span aria-hidden="true">{entry.status === 'removed' ? '−' : entry.status === 'added' ? '+' : '▤'}</span><code title={entry.path}>{entry.path}</code><small>{entry.status}</small></button>)}</div></aside>
-    <div className="draft-surface-code">{baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && canShowDiff && (baseText !== null || text !== null) ? <div className="draft-native-diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}</div>
+    <div className="draft-surface-code">{currentLoading ? <LoadingState label="Loading the selected draft file…" /> : currentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{currentError}</p></div> : baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && canShowDiff && (baseText !== null || text !== null) ? <div className="draft-native-diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}</div>
   </div>
 }

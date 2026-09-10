@@ -7,7 +7,7 @@ import type {
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
   BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
-  DraftFileUpdate, DraftReviewsResponse, DraftReviewResponse,
+  DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -81,6 +81,12 @@ export const api = {
     return request<DraftResponse>('/v1/drafts', { method: 'POST', body: { name: input.name, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
   },
   draft(draftId: string, signal?: AbortSignal) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { signal }).then(unwrap) },
+  draftFile(draftId: string, path: string, input: { revision: number; digest: `sha256:${string}` }, signal?: AbortSignal) {
+    return request<DraftFileResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/files`, {
+      query: { path, revision: String(input.revision), digest: input.digest },
+      signal,
+    }).then(unwrap)
+  },
   updateDraft(draftId: string, input: { expectedRevision: number; expectedDigest?: `sha256:${string}`; files: DraftFileUpdate[]; idempotencyKey: string }) {
     return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, {
       method: 'PUT',

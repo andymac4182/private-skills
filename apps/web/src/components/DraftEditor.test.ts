@@ -13,7 +13,7 @@ const draft: DraftView = {
   revision: 3,
   digest: 'sha256:draft',
   size: 4,
-  files: [{ path: 'SKILL.md', content: 'I2F2ZQ==' }],
+  files: [{ path: 'SKILL.md', size: 4, digest: 'sha256:' + 'd'.repeat(64) as `sha256:${string}` }],
   status: 'open',
   actor: 'owner',
   createdAt: '2026-09-10T00:00:00.000Z',
@@ -57,28 +57,34 @@ describe('draft editor persistence identities', () => {
     expect(renameOriginForPath(
       'assets/final.bin',
       { 'assets/final.bin': 'assets/original.bin' },
-      [{ path: 'assets/original.bin', content: 'b3JpZ2luYWw=' }, { path: 'assets/final.bin', content: 'b2xk' }],
+      [{ path: 'assets/original.bin', size: 8, digest: 'sha256:' + 'a'.repeat(64) as `sha256:${string}` }, { path: 'assets/final.bin', size: 3, digest: 'sha256:' + 'b'.repeat(64) as `sha256:${string}` }],
       [{ path: 'assets/original.bin' }, { path: 'assets/final.bin' }],
     )).toBe('assets/original.bin')
   })
 
   it('sends unchanged large and renamed files as digest references while omitting deletions', async () => {
     const largeContent = btoa('x'.repeat(3_500_000))
-    const unchangedNotes = btoa('unchanged notes\n')
+    const largeDigest = 'sha256:' + 'a'.repeat(64) as `sha256:${string}`
+    const notesDigest = 'sha256:' + 'b'.repeat(64) as `sha256:${string}`
     const savedFiles = [
-      { path: 'assets/large.bin', content: largeContent },
-      { path: 'notes.md', content: unchangedNotes },
-      { path: 'removed.txt', content: btoa('remove me\n') },
+      { path: 'assets/large.bin', size: 3_500_000, digest: largeDigest },
+      { path: 'notes.md', size: 16, digest: notesDigest },
+      { path: 'removed.txt', size: 9, digest: 'sha256:' + 'c'.repeat(64) as `sha256:${string}` },
     ]
     const workingFiles = [
-      { path: 'assets/archive.bin', content: largeContent },
-      { path: 'notes.md', content: unchangedNotes },
-      { path: 'new.md', content: btoa('new file\n') },
+      { path: 'assets/archive.bin', size: 3_500_000, digest: largeDigest, previewState: 'binary' as const, dirty: false },
+      { path: 'notes.md', size: 16, digest: notesDigest, previewState: 'text' as const, dirty: false },
+      { path: 'new.md', size: 9, digest: 'sha256:' + '0'.repeat(64) as `sha256:${string}`, content: btoa('new file\n'), previewState: 'text' as const, dirty: true },
+    ]
+    const fullSavedFiles = [
+      { path: 'assets/large.bin', content: largeContent },
+      { path: 'notes.md', content: btoa('unchanged notes\n') },
+      { path: 'removed.txt', content: btoa('remove me\n') },
     ]
 
     const delta = await buildDraftDeltaFiles(savedFiles, workingFiles, { 'assets/archive.bin': 'assets/large.bin' })
     const serializedDelta = new TextEncoder().encode(JSON.stringify({ expectedRevision: 1, expectedDigest: 'sha256:saved', files: delta }))
-    const serializedFull = new TextEncoder().encode(JSON.stringify({ expectedRevision: 1, expectedDigest: 'sha256:saved', files: savedFiles }))
+    const serializedFull = new TextEncoder().encode(JSON.stringify({ expectedRevision: 1, expectedDigest: 'sha256:saved', files: fullSavedFiles }))
 
     expect(delta).toHaveLength(3)
     expect(delta.find((file) => file.path === 'assets/archive.bin')).toMatchObject({
@@ -117,7 +123,7 @@ describe('immutable release baseline loading', () => {
     expect(baseline.entries.map((entry) => entry.path)).toEqual(['SKILL.md', 'assets/logo.bin', 'LICENSE', 'README.md'])
     expect(baseline.entries[0]).toMatchObject({ size: 128, contentDigest: 'sha256:skill' })
     expect(baseline.entries[1]).toMatchObject({ size: 16, contentDigest: 'sha256:binary' })
-    expect(baseline.files).toEqual([{ path: 'README.md', content: 'cmVhZA==' }])
+    expect(baseline.files).toEqual([])
     expect(releaseFile).not.toHaveBeenCalled()
   })
 
@@ -141,6 +147,16 @@ describe('immutable release baseline loading', () => {
     expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:draft', 3)).toBe('changed')
     expect(releaseBaselineStatus({ path: 'assets/logo.bin', size: 1, contentDigest: 'sha256:binary', previewState: 'binary' }, undefined, originalBinary, 'sha256:binary', 1)).toBe('unchanged')
     expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:release', 3)).toBe('unchanged')
+  })
+
+  it('keeps an unloaded text path metadata-only and refuses to submit it as changed bytes', async () => {
+    const digest = 'sha256:' + 'a'.repeat(64) as `sha256:${string}`
+    const metadata = { path: 'docs/notes.md', size: 12, digest, previewState: 'text' as const }
+    expect(inspectDraftFile(metadata)).toEqual({ state: 'text', size: 12, text: null })
+    await expect(buildDraftDeltaFiles(
+      [{ path: metadata.path, size: 8, digest: 'sha256:' + 'b'.repeat(64) as `sha256:${string}` }],
+      [{ ...metadata, dirty: true }],
+    )).rejects.toThrow('Load docs/notes.md before saving its changes.')
   })
 
   it('keeps oversized text metadata-only while allowing bounded text editing', () => {

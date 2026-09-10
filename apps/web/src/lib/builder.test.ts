@@ -56,7 +56,7 @@ function draft() {
     revision: 5,
     digest: 'sha256:next' as const,
     size: 12,
-    files: [{ path: 'SKILL.md', content: 'I1VwZGF0ZWQK' }],
+    files: [{ path: 'SKILL.md', size: 11, digest: 'sha256:' + 'n'.repeat(64) }],
     status: 'open' as const,
     actor: 'owner',
     createdAt: '2026-09-10T00:00:00.000Z',
