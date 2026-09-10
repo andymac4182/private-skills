@@ -205,6 +205,21 @@ describe('OpenClaw source proof and consumer services', () => {
       sourceArtifact,
     })).rejects.toMatchObject({ code: 'not-eligible' });
 
+    await repository.transaction(TENANT, (state) => {
+      state.skills[0]!.provenance = { ...state.skills[0]!.provenance, sourceResolutionKind: undefined };
+    });
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+
+    await repository.transaction(TENANT, (state) => {
+      state.skills[0]!.provenance = { ...state.skills[0]!.provenance, sourceResolutionKind: 'snapshot' };
+    });
+
     const spoofDigest = `sha256:${'c'.repeat(64)}` as Digest;
     await expect(proofs.recordFromCompletion({
       tenantId: TENANT,
@@ -233,6 +248,90 @@ describe('OpenClaw source proof and consumer services', () => {
       sourceArtifact,
     })).rejects.toMatchObject({ code: 'equivocation' });
     await expect(proofs.list(TENANT)).resolves.toMatchObject([{ recordedAt: first.recordedAt, entry: { title: 'Demo' } }]);
+  });
+
+  it('re-admits the same immutable source proof after a policy revision and blocks optional scanner findings', async () => {
+    const repository = await repositoryWithCompletedImport();
+    const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => FIXED_NOW });
+    const completion = {
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    };
+    const first = await proofs.recordFromCompletion(completion);
+
+    await repository.transaction(TENANT, (state) => {
+      const current = state.skills[0]!;
+      current.policyRevision = 'policy-p2';
+      state.policy.revision = 'policy-p2';
+      state.jobs.push({
+        ...state.jobs[0]!,
+        id: 'job-2',
+        policyRevision: 'policy-p2',
+        policy: state.policy,
+      });
+    });
+    const readmitted = await proofs.recordFromCompletion({ ...completion, completionJobId: 'job-2' });
+    expect(readmitted).toMatchObject({
+      recordedAt: first.recordedAt,
+      completionJobId: 'job-1',
+      policyRevision: 'policy-test',
+      sourceArtifact: { digest: SOURCE_DIGEST, identity: '@acme/demo@1.0.0' },
+    });
+
+    const provider = createOpenClawCandidateProvider({ proofs, now: () => FIXED_NOW });
+    await expect(provider({
+      tenantId: TENANT,
+      principal: principal(),
+      state: await repository.read(TENANT),
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject([{ skillId: 'skill-1' }]);
+
+    const failingPolicyProvider = createOpenClawCandidateProvider({
+      proofs,
+      now: () => FIXED_NOW,
+      isCurrentPolicyApproved: () => { throw new Error('policy evaluator unavailable'); },
+    });
+    await expect(failingPolicyProvider({
+      tenantId: TENANT,
+      principal: principal(),
+      state: await repository.read(TENANT),
+      signal: new AbortController().signal,
+    })).resolves.toEqual([]);
+
+    await repository.transaction(TENANT, (state) => {
+      state.policy.scanners = [{
+        id: 'skillsguard',
+        mode: 'advisory',
+        blockSeverities: ['high'],
+        timeoutSeconds: 60,
+      }];
+      state.skills[0]!.scanIds = ['scan-optional'];
+      state.scans.push({
+        id: 'scan-optional',
+        organizationId: TENANT,
+        jobId: 'job-2',
+        artifactDigest: REGISTRY_DIGEST,
+        policyRevision: 'policy-p2',
+        scannerId: 'skillsguard',
+        engineVersion: 'test',
+        rulesRevision: 'test',
+        configurationHash: 'test',
+        status: 'completed',
+        findings: [{ ruleId: 'blocked', fingerprint: 'blocked', severity: 'high', category: 'test', message: 'blocked' }],
+        coverage: { filesEnumerated: 1, filesAnalyzed: 1, filesSkipped: 0, filesUnsupported: 0, limitations: [], externalDestinations: [] },
+        createdAt: '2030-01-01T00:00:00.000Z',
+        durationMs: 1,
+      });
+    });
+    await expect(provider({
+      tenantId: TENANT,
+      principal: principal(),
+      state: await repository.read(TENANT),
+      signal: new AbortController().signal,
+    })).resolves.toEqual([]);
   });
 
   it('selects only a non-expired persisted snapshot and queues the existing scanner-bound path', async () => {

@@ -1,6 +1,7 @@
 import type { StateRepository } from '../../contracts/src/index.ts';
 import {
   OpenClawFeedCache,
+  OpenClawRequestError,
   OpenClawValidationError,
   parseOpenClawFeed,
   sha256,
@@ -249,6 +250,7 @@ export class PersistentOpenClawFeedCache {
   private readonly maxFeedKeys: number;
   private readonly now: () => number;
   private readonly caches = new Map<string, OpenClawFeedCache>();
+  private readonly refreshTails = new Map<string, Promise<void>>();
 
   constructor(options: PersistentOpenClawFeedCacheOptions) {
     this.tenantId = safeTenantId(options.tenantId);
@@ -273,6 +275,31 @@ export class PersistentOpenClawFeedCache {
     } catch {
       return { kind: 'rejected', error: 'invalid-url' };
     }
+    const cacheKey = storageKey(key);
+    const previous = this.refreshTails.get(cacheKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.refreshTails.set(cacheKey, gate);
+    await previous;
+    try {
+      return await this.refreshInternal(key, request);
+    } catch {
+      // The adapter must never expose a transport or storage exception. A
+      // durable read/put failure is handled inside refreshInternal; this is a
+      // final guard for injected fetchers and malformed host implementations.
+      return { kind: 'rejected', error: 'fetch-failed' };
+    } finally {
+      release();
+      if (this.refreshTails.get(cacheKey) === gate) this.refreshTails.delete(cacheKey);
+    }
+  }
+
+  private async refreshInternal(
+    key: OpenClawConsumerCacheKey,
+    request: OpenClawFeedRefreshRequest,
+  ): Promise<OpenClawRefreshResult> {
     let cache = this.caches.get(storageKey(key));
     if (cache === undefined) {
       if (this.caches.size >= this.maxFeedKeys) return { kind: 'rejected', error: 'fetch-failed' };
@@ -287,36 +314,76 @@ export class PersistentOpenClawFeedCache {
     try {
       durable = await this.store.read(key);
     } catch {
+      cache.clear();
       return { kind: 'rejected', error: 'fetch-failed' };
     }
+    // The repository is the authoritative high-water mark. Never let a
+    // process-local snapshot answer after restart or after another instance
+    // advanced the durable sequence.
+    cache.clear();
     const usableDurable = durable === undefined ? undefined : usableSnapshot(durable, this.now(), this.maxStaleMs);
-    let substitutedNotModified = false;
+    let durableNotModified = false;
     const fetcher = request.fetcher ?? globalThis.fetch;
     const wrappedFetcher: OpenClawFetch | undefined = typeof fetcher === 'function'
       ? async (input, init) => {
-          const response = await fetcher(input, init);
-          if (response.status !== 304 || usableDurable === undefined) return response;
-          if (!validatorsMatch(response, usableDurable)) return response;
-          substitutedNotModified = true;
-          const headers = new Headers({
-            'content-type': 'application/json; charset=utf-8',
-            etag: usableDurable.etag,
-            ...(usableDurable.lastModified === undefined ? {} : { 'last-modified': usableDurable.lastModified }),
-          });
-          return new Response(usableDurable.body, { status: 200, headers });
+          const headers = new Headers(init?.headers);
+          if (durable !== undefined) {
+            headers.set('if-none-match', durable.etag);
+            if (durable.lastModified === undefined) headers.delete('if-modified-since');
+            else headers.set('if-modified-since', durable.lastModified);
+          }
+          const response = await fetcher(input, { ...init, headers });
+          // Do not turn a redirected 304 into a local response. The pinned
+          // cache must observe the redirect marker and reject/fallback with
+          // the redirect error.
+          if (response.redirected) return response;
+          if (response.url !== '' && response.url !== key.sourceUrl) {
+            throw new OpenClawRequestError('redirected');
+          }
+          if (response.status === 304 && usableDurable !== undefined && validatorsMatch(response, usableDurable)) {
+            // Keep the 304 response intact. The durable snapshot is selected
+            // below only after the worker's redirect/validator checks run.
+            durableNotModified = true;
+          }
+          return response;
         }
       : undefined;
     const result = await cache.refresh({ ...request, fetcher: wrappedFetcher });
-    if (substitutedNotModified && result.kind === 'accepted' && usableDurable !== undefined) {
-      return { kind: 'not-modified', status: 304, snapshot: cloneSnapshot(usableDurable) };
+    if (durableNotModified && usableDurable !== undefined) {
+      const refreshed = cloneSnapshot(usableDurable);
+      refreshed.acceptedAt = this.now();
+      try {
+        await this.store.put(key, refreshed);
+      } catch (error) {
+        cache.clear();
+        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
+        return authoritativeResult(authoritative.usable, 304, projectStoreError(error));
+      }
+      return { kind: 'not-modified', status: 304, snapshot: refreshed };
     }
     if (result.kind === 'accepted' || result.kind === 'not-modified') {
+      const relation = durable === undefined ? 'newer' : compareSnapshots(result.snapshot, durable);
+      if (relation === 'older' || relation === 'equivocation') {
+        cache.clear();
+        return authoritativeResult(usableDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
+      }
       try {
         await this.store.put(key, result.snapshot);
       } catch (error) {
-        return { kind: 'rejected', status: result.status, error: projectStoreError(error) };
+        cache.clear();
+        // Another process may have won the compare-and-swap between read and
+        // put. Re-read before deciding whether the candidate can be exposed.
+        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
+        return authoritativeResult(authoritative.usable, result.status, projectStoreError(error));
       }
       return result;
+    }
+    if (result.snapshot !== undefined && durable !== undefined) {
+      const relation = compareSnapshots(result.snapshot, durable);
+      if (relation === 'older' || relation === 'equivocation') {
+        cache.clear();
+        return authoritativeResult(usableDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
+      }
     }
     if (
       result.snapshot === undefined &&
@@ -332,6 +399,63 @@ export class PersistentOpenClawFeedCache {
     }
     return result;
   }
+}
+
+type SnapshotRelation = 'older' | 'same' | 'newer' | 'equivocation';
+
+function compareSnapshots(
+  candidate: OpenClawCacheSnapshot,
+  durable: OpenClawCacheSnapshot,
+): SnapshotRelation {
+  if (candidate.feed.sequence < durable.feed.sequence) return 'older';
+  if (candidate.feed.sequence > durable.feed.sequence) return 'newer';
+  return candidate.sha256 === durable.sha256 ? 'same' : 'equivocation';
+}
+
+function authoritativeResult(
+  usable: OpenClawCacheSnapshot | undefined,
+  status: number | undefined,
+  error: OpenClawFeedErrorCode,
+): OpenClawRefreshResult {
+  if (usable !== undefined) {
+    return {
+      kind: 'stale',
+      ...(status === undefined ? {} : { status }),
+      snapshot: cloneSnapshot(usable),
+      error,
+    };
+  }
+  return {
+    kind: 'rejected',
+    ...(status === undefined ? {} : { status }),
+    error,
+  };
+}
+
+async function readAuthoritativeSnapshot(
+  store: OpenClawConsumerSnapshotStore,
+  key: OpenClawConsumerCacheKey,
+  prior: OpenClawCacheSnapshot | undefined,
+  priorUsable: OpenClawCacheSnapshot | undefined,
+  now: number,
+  maxStaleMs: number,
+): Promise<{ snapshot: OpenClawCacheSnapshot | undefined; usable: OpenClawCacheSnapshot | undefined }> {
+  let current: OpenClawCacheSnapshot | undefined;
+  try {
+    current = await store.read(key);
+  } catch {
+    return { snapshot: prior, usable: priorUsable };
+  }
+  if (current === undefined) return { snapshot: prior, usable: priorUsable };
+  if (prior === undefined) return { snapshot: current, usable: usableSnapshot(current, now, maxStaleMs) };
+  const relation = compareSnapshots(current, prior);
+  if (relation === 'older') return { snapshot: prior, usable: priorUsable };
+  if (relation === 'equivocation') {
+    // Same-sequence bytes have no safe winner. Keep the high-water identity
+    // for diagnostics but never serve either conflicting body as fallback.
+    return { snapshot: current, usable: undefined };
+  }
+  return { snapshot: current, usable: usableSnapshot(current, now, maxStaleMs) };
 }
 
 function normalizeCacheKey(value: OpenClawConsumerCacheKey): OpenClawConsumerCacheKey {

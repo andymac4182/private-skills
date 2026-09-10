@@ -125,8 +125,10 @@ describe('durable OpenClaw consumer snapshots', () => {
     const original = await snapshot();
     await store.put(key(), original);
     let calls = 0;
-    const fetcher = async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    const seenHeaders: Headers[] = [];
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
       calls += 1;
+      seenHeaders.push(new Headers(init?.headers));
       return new Response(null, {
         status: 304,
         headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
@@ -151,6 +153,128 @@ describe('durable OpenClaw consumer snapshots', () => {
       kind: 'not-modified',
       snapshot: { body: original.body, etag: original.etag },
     });
+    expect(calls).toBe(2);
+    expect(seenHeaders[0]?.get('if-none-match')).toBe(original.etag);
+    expect(seenHeaders[0]?.get('if-modified-since')).toBe(LAST_MODIFIED);
+    expect(seenHeaders[1]?.get('if-none-match')).toBe(original.etag);
+    expect(seenHeaders[1]?.get('if-modified-since')).toBe(LAST_MODIFIED);
+  });
+
+  it('keeps the durable high-water snapshot when an instance receives an older 200 and then loses the network', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const durable = await snapshot(2);
+    const old = await snapshot(1);
+    await store.put(key(), durable);
+
+    const first = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(first.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(old.body, { status: 200, headers: { etag: old.etag } }),
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      error: 'replay',
+      snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 },
+    });
+
+    const restarted = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const networkFailure = await restarted.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => { throw new Error('upstream unavailable'); },
+    });
+    expect(networkFailure).toMatchObject({ kind: 'stale', snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 } });
+    expect(['fetch-failed', 'timeout']).toContain(networkFailure.kind === 'stale' ? networkFailure.error : undefined);
+  });
+
+  it('does not serve a same-sequence equivocation from local memory after durable fallback', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const durable = await snapshot(2);
+    const changed = await snapshot(2);
+    changed.body = changed.body.replace('"entries":[]', '"description":"changed","entries":[]');
+    changed.bytes = utf8Bytes(changed.body);
+    changed.sha256 = await sha256(changed.bytes);
+    changed.etag = `"${changed.sha256}"`;
+    changed.feed = parseOpenClawFeed(changed.body, { expectedFeedId: FEED_ID, checkExpiry: false });
+    await store.put(key(), durable);
+
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(changed.body, { status: 200, headers: { etag: changed.etag } }),
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      error: 'equivocation',
+      snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 },
+    });
+
+    const networkFailure = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => { throw new Error('upstream unavailable'); },
+    });
+    expect(networkFailure).toMatchObject({ kind: 'stale', snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 } });
+    expect(['fetch-failed', 'timeout']).toContain(networkFailure.kind === 'stale' ? networkFailure.error : undefined);
+  });
+
+  it('preserves a redirected 304 marker instead of converting it to not-modified', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    await store.put(key(), original);
+    const redirected = new Response(null, {
+      status: 304,
+      headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+    });
+    Object.defineProperty(redirected, 'redirected', { value: true });
+
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => redirected,
+    })).resolves.toMatchObject({
+      kind: 'stale',
+      status: 304,
+      error: 'redirected',
+      snapshot: { feed: { sequence: 1 }, sha256: original.sha256 },
+    });
+  });
+
+  it('serializes refreshes for one durable feed key', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await snapshot();
+    let calls = 0;
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const fetcher = async () => {
+      calls += 1;
+      if (calls === 1) {
+        started();
+        await blocked;
+      }
+      return new Response(original.body, { status: 200, headers: { etag: original.etag } });
+    };
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const request = { url: SOURCE_URL, expectedFeedId: FEED_ID, allowedOrigins: ['https://feed.example'], fetcher };
+    const first = cache.refresh(request);
+    await firstStarted;
+    const second = cache.refresh(request);
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    release();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(calls).toBe(2);
   });
 

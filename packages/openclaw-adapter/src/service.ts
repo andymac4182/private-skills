@@ -88,7 +88,7 @@ export interface StateRepositoryOpenClawSourceProofStoreOptions {
   maxEntriesPerTenant?: number;
   maxBytesPerTenant?: number;
   now?: () => number;
-  /** Host policy evaluator; the conservative default is used when omitted. */
+  /** Host policy evaluator; the bounded fallback mirrors scanner evidence checks. */
   isCurrentPolicyApproved?: (state: RegistryState, skill: SkillVersion, now: number) => boolean;
 }
 
@@ -264,8 +264,8 @@ export function createOpenClawCandidateProvider(options: OpenClawCandidateProvid
       if (input.signal.aborted || projected.length >= 1_000 || seen.has(proof.skillId)) break;
       if (proof.tenantId !== input.tenantId) continue;
       const skill = input.state.skills.find((candidate) => candidate.id === proof.skillId && candidate.organizationId === input.tenantId);
-      if (!skill || skill.version !== proof.skillVersion || skill.policyRevision !== proof.policyRevision || skill.artifact.digest !== proof.registryArtifactDigest) continue;
-      if (!canReadSkill(input.principal, skill) || !isCurrentPolicyApproved(input.state, skill, nowMs)) continue;
+      if (!skill || skill.version !== proof.skillVersion || skill.artifact.digest !== proof.registryArtifactDigest) continue;
+      if (!canReadSkill(input.principal, skill) || !skillCurrentlyApproved(input.state, skill, nowMs, isCurrentPolicyApproved)) continue;
       let entry: OpenClawFeedEntry;
       try {
         entry = validateProofEntry(proof.entry, proof.sourceArtifact);
@@ -511,8 +511,8 @@ function sourceProofMatchesProvenance(
     return provenance.externalId === normalized.candidate.package &&
       (provenance.path === undefined || provenance.path === normalized.candidate.package) &&
       provenance.externalDigest === sourceArtifact.digest &&
-      (provenance.sourceResolutionKind === undefined || provenance.sourceResolutionKind === 'snapshot') &&
-      (provenance.revision === undefined || provenance.revision === normalized.candidate.version);
+      provenance.sourceResolutionKind === 'snapshot' &&
+      provenance.revision === normalized.candidate.version;
   }
   const provenancePath = provenance.skillPath ?? provenance.path;
   const provenanceOrigin = provenance.sourceProviderOrigin === undefined
@@ -520,9 +520,10 @@ function sourceProofMatchesProvenance(
     : safeHostname(provenance.sourceProviderOrigin);
   return provenance.repository === normalized.source.repo &&
     provenancePath === normalized.source.path &&
-    (provenance.resolvedCommit === normalized.source.commit || provenance.revision === normalized.source.commit) &&
-    (provenanceOrigin === undefined || provenanceOrigin === 'github.com') &&
-    (provenance.externalDigest === undefined || provenance.externalDigest === sourceArtifact.digest);
+    provenance.resolvedCommit === normalized.source.commit &&
+    provenance.sourceResolutionKind === 'github' &&
+    provenanceOrigin === 'github.com' &&
+    provenance.externalDigest === sourceArtifact.digest;
 }
 
 function safeHostname(value: string): string | undefined {
@@ -591,12 +592,13 @@ function defaultCurrentPolicyApproved(state: RegistryState, skill: SkillVersion,
     const result = latest(scanner.id);
     if (!result || result.status !== 'completed' || evidenceExpired(result, state.policy.evidenceMaxAgeSeconds, now) || result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0 || result.coverage.filesSkipped > 0 || result.coverage.filesUnsupported > 0 || result.coverage.filesAnalyzed !== result.coverage.filesEnumerated || result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return false;
   }
-  if (required.length > 0) return true;
   if (enabled.length === 0) return state.policy.allowUnscanned;
   if (!state.policy.allowUnscanned && enabled.some((scanner) => latest(scanner.id) === undefined)) return false;
   return !enabled.some((scanner) => {
     const result = latest(scanner.id);
-    return result?.status !== undefined && result.status !== 'completed';
+    if (result?.status !== undefined && result.status !== 'completed') return true;
+    if (result?.status === 'completed' && result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return true;
+    return false;
   });
 }
 
@@ -665,8 +667,6 @@ function sameProofIdentity(left: OpenClawSourceProofRecord, right: OpenClawSourc
   return left.tenantId === right.tenantId &&
     left.skillId === right.skillId &&
     left.skillVersion === right.skillVersion &&
-    left.policyRevision === right.policyRevision &&
-    left.completionJobId === right.completionJobId &&
     left.upstreamId === right.upstreamId &&
     left.registryArtifactDigest === right.registryArtifactDigest &&
     JSON.stringify(left.sourceArtifact) === JSON.stringify(right.sourceArtifact) &&
