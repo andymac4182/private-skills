@@ -1,0 +1,80 @@
+{
+  "evidenceVersion": 1,
+  "generatedAt": "2026-09-10T14:36:59.687Z",
+  "observedAt": "2026-09-10T14:36:59.422Z",
+  "sourceUrl": "https://clawhub.ai/api/v1/feeds/skills",
+  "expectedFeedId": "clawhub-official-skills",
+  "compatibilityProfile": "clawhub-live-skills-694ff719",
+  "adapter": {
+    "resultKind": "accepted",
+    "status": 200,
+    "request": {
+      "method": "GET",
+      "redirectMode": "error",
+      "allowedOrigins": [
+        "https://clawhub.ai"
+      ]
+    },
+    "response": {
+      "status": 200,
+      "url": "https://clawhub.ai/api/v1/feeds/skills",
+      "redirected": false,
+      "location": null,
+      "transportEtag": "W/\"sha256:09e58b93243621c7a99679d473a096264f8a21397199577e969d7536a6df2a99-gzip\"",
+      "contentSha256Header": "09e58b93243621c7a99679d473a096264f8a21397199577e969d7536a6df2a99",
+      "lastModified": "Thu, 10 Sep 2026 12:37:54 GMT",
+      "contentLength": null
+    },
+    "canonicalBodySha256": "sha256:09e58b93243621c7a99679d473a096264f8a21397199577e969d7536a6df2a99",
+    "canonicalBodyEtag": "\"sha256:09e58b93243621c7a99679d473a096264f8a21397199577e969d7536a6df2a99\"",
+    "acceptedAt": "2026-09-10T14:36:59.638Z",
+    "canonicalBodyByteLength": 833178
+  },
+  "feed": {
+    "schemaVersion": 1,
+    "id": "clawhub-official-skills",
+    "sequence": 316,
+    "generatedAt": "2026-09-10T12:37:36.408Z",
+    "expiresAt": "2026-09-17T12:37:34.618Z",
+    "effectiveLocalExpiry": "2026-09-11T12:37:36.408Z",
+    "entryCount": 891,
+    "normalizedCandidateCount": 891,
+    "rejectedCandidateCount": 0
+  },
+  "selectedCandidate": {
+    "entryId": "@alipay/alipay-authenticate-wallet",
+    "entryType": "skill",
+    "title": "alipay-authenticate-wallet",
+    "state": "available",
+    "publisher": {
+      "id": "alipay",
+      "trust": "official"
+    },
+    "source": {
+      "kind": "public-clawhub",
+      "sourceRef": "public-clawhub",
+      "packageName": "@alipay/alipay-authenticate-wallet",
+      "version": "1.0.11-beta.1",
+      "artifactDigest": "sha256:6c5cc09766732e917f43909a6d5f9f21fa108cecaabd974faa36926faa2e4231"
+    },
+    "candidate": {
+      "sourceRef": "public-clawhub",
+      "package": "@alipay/alipay-authenticate-wallet",
+      "version": "1.0.11-beta.1",
+      "integrity": "sha256:6c5cc09766732e917f43909a6d5f9f21fa108cecaabd974faa36926faa2e4231"
+    }
+  },
+  "sourceSpec": {
+    "repository": "openclaw/clawhub",
+    "commit": "694ff719e9b161ea770fe2abfdc43f2ff5401fe4",
+    "hostedFeedBlob": "9c1cd5c2d67b598bc470e0044713ecfc9725df1c",
+    "githubSkillsBlob": "33f89b51815b4b6a188f2dc6a3e83afcb2835585"
+  },
+  "contentPolicy": {
+    "feedBodyStored": false,
+    "skillTextStored": false,
+    "skillContentExecuted": false,
+    "registryMutated": false
+  },
+  "testedRegistryCommit": "0ab50abcaf4bc7f924bdeb501d78462f4c16497b"
+}

@@ -58,6 +58,50 @@ the loopback HTTP gateway because production runtime guards reject that path;
 the inert synthetic fixture demonstrates required-scan coverage and clean
 policy evaluation, not malicious-pattern detection breadth. OpenClaw remains
 disabled, and no secrets or artifact contents were retained.
+## Recorded public OpenClaw metadata interoperability probe
+
+As of `2026-09-10T14:36:59Z`, the sanitized [public ClawHub feed
+record](evidence/openclaw-clawhub-feed-evidence-20260910.json) accepted the
+HTTPS `GET` of `https://clawhub.ai/api/v1/feeds/skills` with status 200, no
+redirect, and the configured origin restriction. The normalized response had
+feed ID `clawhub-official-skills`, schema version 1, sequence 316, 891 entries,
+and zero rejected candidates. The canonical body SHA-256, canonical/transport
+ETags, last-modified value, and byte length are retained in the record. The
+wire `expiresAt` was seven days after publication; the adapter constrained its
+local effective expiry to 24 hours. The source specification commit is labeled
+as upstream specification provenance, and the selected publisher `official`
+trust value remains an upstream claim.
+
+The probe retained one normalized metadata candidate with its public package,
+version, and declared artifact digest. It stored no feed body or skill text,
+executed no skill content, and made no registry mutation. This proves public
+metadata interoperability only; it does not prove artifact import, private
+publication, feed activation, scanner admission, or hosted production
+acceptance. The adapter behavior was checked against tested registry commit
+`0ab50abcaf4bc7f924bdeb501d78462f4c16497b`.
+
+## Recorded local transparent-proxy CLI fixture
+
+The sanitized [CLI fixture record](evidence/transparent-proxy-cli-evidence-1789051607574.json)
+is a verified local HTTP plus Files SDK filesystem and deterministic-scanner
+fixture. Its provenance records registry source commit
+`547d9c2e5a1ac88c38456757961ce0bc19afd338`, verifier SHA-256
+`187272da2831dfa1ab1c6fad328daec89668cae26a38f5d55147b004e637594d`, and a
+cached `pskills 0.3.0` Darwin/arm64 binary SHA-256
+`6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a`.
+The cached binary's build source commit is explicitly unknown and unattested.
+The fixture proves named-feed listing and guards (unknown feed 404, disabled
+feed 409), two successful cold CLI installs, required-scan failure and rescan
+behavior, and a warm repeat that exited 0. The injected Node
+directory/acquisition fetch boundary counted 38 source-origin attempts before
+and after the warm stop (delta zero); after the source server stopped, source
+requests and attempts were both zero. The warm repeat recorded no new import
+job after the prior cold/rescan setup, preserved the selected feed, and made no
+authorization-bearing public source request or unexpected route.
+
+This is local fixture evidence, not native CLI syscall tracing, native CI,
+Docker scanner execution, or production acceptance. It does not establish
+hosted source availability or a separately attested CLI build source.
 
 ## Recorded Git-triggered M6 read-only release-file checkpoint
 
