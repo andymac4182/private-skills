@@ -90,7 +90,7 @@ describe('SkillsDirectoryClient', () => {
       sourceStatus: 'metadata-only',
       feedName: null,
     });
-    expect(row.sourceReason).toBe('Catalog metadata is not a validated source snapshot.');
+    expect(row.sourceReason).toBe('Catalog metadata has no validated source snapshot; source resolution may still be available.');
     expect(JSON.stringify(row)).not.toContain('attacker.example');
     expect(JSON.stringify(row)).not.toContain('untrusted-feed');
     expect(JSON.stringify(row)).not.toContain('approved by an upstream party');
@@ -150,7 +150,8 @@ describe('SkillsDirectoryClient', () => {
     expect(curated.data[0]?.skills[0]).toMatchObject({ provider: 'skills.sh', sourceStatus: 'metadata-only', feedName: null });
     expect(detail.files).toBeNull();
     expect(detail.hash).toBeNull();
-    expect(detail).toMatchObject({ provider: 'skills.sh', sourceStatus: 'unavailable', feedName: null });
+    expect(detail).toMatchObject({ provider: 'skills.sh', sourceStatus: 'metadata-only', feedName: null });
+    expect(detail.sourceReason).toBe('Catalog metadata has no validated source snapshot; source resolution may still be available.');
     expect(audits.audits[0]?.provider).toBe('Socket');
     expect(audits.audits[0]?.status).toBe('pass');
     expect(audits.audits[0]?.riskLevel).toBeNull();
@@ -174,6 +175,20 @@ describe('SkillsDirectoryClient', () => {
     const detail = await client.detail(skill.id);
     expect(detail.files).toEqual([{ path: 'SKILL.md', contents: '# Safe text\n' }]);
     expect(detail).toMatchObject({ provider: 'skills.sh', sourceStatus: 'snapshot-available', feedName: null });
+
+    const emptySnapshotClient = new SkillsDirectoryClient({
+      fetch: vi.fn(async () => response({
+        id: skill.id,
+        source: skill.source,
+        slug: skill.slug,
+        installs: 1,
+        hash: 'empty-snapshot',
+        files: [],
+      })),
+    });
+    const emptySnapshot = await emptySnapshotClient.detail(skill.id);
+    expect(emptySnapshot).toMatchObject({ provider: 'skills.sh', sourceStatus: 'metadata-only', feedName: null });
+    expect(emptySnapshot.sourceReason).toBe('skills.sh returned no source files; source resolution is required.');
 
     const traversalFetch = vi.fn(async () => response({
       id: skill.id,
@@ -471,6 +486,7 @@ describe('SkillsDirectoryClient', () => {
     });
     const client = new SkillsDirectoryClient({
       fetch,
+      now: () => now,
       cache: { now: () => now },
     });
 
@@ -489,6 +505,20 @@ describe('SkillsDirectoryClient', () => {
     expect(warm.data[0]?.fetchedAt).toBe(first.data[0]?.fetchedAt);
     expect(client.cacheStats()).toMatchObject({ hits: 1, coalesced: 1, stores: 1 });
     expect(client.cacheStats()?.cached[0]?.ageMs).toBe(5_000);
+  });
+
+  it('keeps the metadata wall clock independent from a monotonic cache clock', async () => {
+    const fetch = vi.fn(async () => response({
+      data: [{ ...skill }],
+      pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+    }));
+    const client = new SkillsDirectoryClient({ fetch, cache: { now: () => 12_345 } });
+
+    const result = await client.list();
+    const fetchedAt = result.data[0]?.fetchedAt;
+    expect(fetchedAt).toEqual(expect.any(String));
+    expect(Date.parse(fetchedAt!)).toBeGreaterThan(1_000_000_000_000);
+    expect(fetchedAt).not.toBe(new Date(12_345).toISOString());
   });
 
   it('does not cache detail snapshots while keeping each request authenticated', async () => {

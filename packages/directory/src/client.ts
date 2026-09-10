@@ -59,9 +59,9 @@ const MAX_OWNER_BYTES = 512;
 const MAX_IDENTIFIER_BYTES = 2_048;
 const MAX_IDENTIFIER_SEGMENTS = 64;
 const MAX_IDENTIFIER_SEGMENT_BYTES = 512;
-const SOURCE_METADATA_REASON = 'Catalog metadata is not a validated source snapshot.';
+const SOURCE_METADATA_REASON = 'Catalog metadata has no validated source snapshot; source resolution may still be available.';
+const SOURCE_EMPTY_REASON = 'skills.sh returned no source files; source resolution is required.';
 const SOURCE_SNAPSHOT_REASON = 'skills.sh returned a bounded and validated source snapshot.';
-const SOURCE_UNAVAILABLE_REASON = 'skills.sh did not provide a source snapshot.';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -95,11 +95,8 @@ export class SkillsDirectoryClient {
     this.getToken = options.getToken;
     this.limits = normalizeLimits(options);
     this.sleep = options.sleep ?? defaultSleep;
-    const cacheNow = options.cache !== false ? options.cache?.now : undefined;
-    this.now = options.now ?? cacheNow ?? Date.now;
-    this.responseCache = options.cache === false ? undefined : new DirectoryResponseCache(
-      options.cache === undefined ? { now: this.now } : { ...options.cache, now: options.cache.now ?? this.now },
-    );
+    this.now = options.now ?? Date.now;
+    this.responseCache = options.cache === false ? undefined : new DirectoryResponseCache(options.cache);
   }
 
   /** Return safe cache metadata without exposing cached response values. */
@@ -793,8 +790,8 @@ function normalizeSkillDetailResponse(value: unknown, limits: DirectoryLimits, _
     files,
     provider: 'skills.sh',
     fetchedAt,
-    sourceStatus: files === null ? 'unavailable' : 'snapshot-available',
-    sourceReason: files === null ? SOURCE_UNAVAILABLE_REASON : SOURCE_SNAPSHOT_REASON,
+    sourceStatus: files !== null && files.length > 0 ? 'snapshot-available' : 'metadata-only',
+    sourceReason: files === null ? SOURCE_METADATA_REASON : files.length === 0 ? SOURCE_EMPTY_REASON : SOURCE_SNAPSHOT_REASON,
     feedName: null,
   };
 }
