@@ -6,6 +6,7 @@ import {
   UploadReviewValidationError,
   createUploadReviewPersistenceService,
   createUploadReviewHttpHandler,
+  createUploadReviewSnapshot,
   type UploadReviewBinding,
   type UploadReviewSnapshot,
 } from '../src/index.js';
@@ -256,5 +257,25 @@ describe('upload/edit review persistence', () => {
     });
     expect(complete?.status).toBe(200);
     expect(await complete!.json()).toMatchObject({ status: 'passed', findingCount: 0 });
+  });
+
+  it('creates a metadata-only snapshot for binary and oversized files', async () => {
+    const text = new TextEncoder().encode('# Safe\n');
+    const binary = Uint8Array.from([0, 255, 1]);
+    const oversized = new TextEncoder().encode('x'.repeat(16_001));
+    const encode = (bytes: Uint8Array) => {
+      let value = '';
+      for (const byte of bytes) value += String.fromCharCode(byte);
+      return btoa(value);
+    };
+    const snapshot = await createUploadReviewSnapshot([
+      { path: 'SKILL.md', content: encode(text) },
+      { path: 'tool.bin', content: encode(binary) },
+      { path: 'notes.txt', content: encode(oversized) },
+    ]);
+    expect(snapshot.files.find((file) => file.path === 'SKILL.md')).toMatchObject({ kind: 'text', text: '# Safe\n' });
+    expect(snapshot.files.find((file) => file.path === 'tool.bin')).toMatchObject({ kind: 'binary', size: 3 });
+    expect(snapshot.files.find((file) => file.path === 'notes.txt')).toMatchObject({ kind: 'oversize', size: 16_001 });
+    expect(snapshot.files.find((file) => file.path === 'tool.bin')).not.toHaveProperty('text');
   });
 });
