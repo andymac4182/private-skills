@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   OPENCLAW_RESERVED_OFFICIAL_FEED_ID,
+  OPENCLAW_RESERVED_SKILLS_FEED_ID,
   createOpenClawSkillsFeedHandler,
   previewOpenClawFeed,
   type OpenClawEligibleRecord,
+  type OpenClawFeedPublicationSnapshot,
 } from '../src/index.ts';
 import { OpenClawFeedCache } from '../../openclaw/src/client.ts';
 import { serializeOpenClawFeed } from '../../openclaw/src/feed.ts';
@@ -11,6 +13,7 @@ import type { OpenClawFeed, OpenClawSkillEntry } from '../../openclaw/src/types.
 import type { Principal } from '../../contracts/src/index.ts';
 
 const DIGEST = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const REGISTRY_DIGEST = 'sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const PRINCIPAL: Principal = {
   organizationId: 'tenant-a',
   subject: 'reader-a',
@@ -37,7 +40,16 @@ function record(overrides: Partial<OpenClawSkillEntry> = {}): OpenClawEligibleRe
     },
     ...overrides,
   };
-  return { entry, canonicalDigest: DIGEST };
+  return {
+    entry,
+    registryArtifactDigest: REGISTRY_DIGEST,
+    sourceArtifact: {
+      verified: true,
+      digest: DIGEST,
+      format: 'clawhub-skill-v1',
+      identity: '@team/demo@1.0.0',
+    },
+  };
 }
 
 function feed(overrides: Partial<OpenClawFeed> = {}): OpenClawFeed {
@@ -54,19 +66,21 @@ function feed(overrides: Partial<OpenClawFeed> = {}): OpenClawFeed {
 
 describe('private OpenClaw producer route', () => {
   it('emits a deterministic authenticated private feed from eligible records only', async () => {
-    let sourceCalls = 0;
+    let publicationCalls = 0;
+    let clock = Date.parse('2030-01-01T00:00:00.000Z');
     const handler = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
-      source: {
-        listEligible: async () => {
-          sourceCalls += 1;
-          return [record()];
-        },
+      publicationForTenant: async () => {
+        publicationCalls += 1;
+        return {
+          id: 'private/opaque-a',
+          generatedAt: '2030-01-01T00:00:00.000Z',
+          sequence: 7,
+          expiresAt: '2030-01-02T00:00:00.000Z',
+          records: [record()],
+        };
       },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 7,
-      now: () => Date.parse('2030-01-01T00:00:00.000Z'),
-      expiresInMs: 60_000,
+      now: () => clock,
     });
 
     const response = await handler(new Request('https://registry.example/v1/feeds/skills'));
@@ -84,36 +98,48 @@ describe('private OpenClaw producer route', () => {
         install: { candidates: [{ integrity: DIGEST, sourceRef: 'public-clawhub' }] },
       }],
     });
-    expect(sourceCalls).toBe(1);
+    expect(publicationCalls).toBe(1);
 
-    const repeated = await handler(new Request('https://registry.example/v1/feeds/skills'));
-    expect(repeated.status).toBe(200);
-    expect(await repeated.text()).toBe(body);
+    clock += 60 * 60 * 1_000;
 
     const second = await handler(new Request('https://registry.example/v1/feeds/skills', {
       headers: { 'if-none-match': response.headers.get('etag')! },
     }));
     expect(second.status).toBe(304);
     expect(await second.text()).toBe('');
-    expect(sourceCalls).toBe(3);
+    expect(publicationCalls).toBe(2);
   });
 
   it('rejects unauthenticated or unauthorized readers before consulting the source', async () => {
     let sourceCalls = 0;
     const handler = createOpenClawSkillsFeedHandler({
       authenticate: async () => null,
-      source: { listEligible: async () => { sourceCalls += 1; return [record()]; } },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 1,
+      publicationForTenant: async () => {
+        sourceCalls += 1;
+        return {
+          id: 'private/opaque-a',
+          generatedAt: '2030-01-01T00:00:00.000Z',
+          sequence: 1,
+          expiresAt: '2030-01-02T00:00:00.000Z',
+          records: [record()],
+        };
+      },
     });
     expect((await handler(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(401);
     expect(sourceCalls).toBe(0);
 
     const scopedOut = createOpenClawSkillsFeedHandler({
       authenticate: async () => ({ ...PRINCIPAL, scopes: ['registry:write'] }),
-      source: { listEligible: async () => { sourceCalls += 1; return [record()]; } },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 1,
+      publicationForTenant: async () => {
+        sourceCalls += 1;
+        return {
+          id: 'private/opaque-a',
+          generatedAt: '2030-01-01T00:00:00.000Z',
+          sequence: 1,
+          expiresAt: '2030-01-02T00:00:00.000Z',
+          records: [record()],
+        };
+      },
     });
     expect((await scopedOut(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(401);
     expect(sourceCalls).toBe(0);
@@ -122,34 +148,66 @@ describe('private OpenClaw producer route', () => {
   it('fails closed for reserved identities and unapproved or mismatched records', async () => {
     const reserved = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
-      source: { listEligible: async () => [] },
-      feedIdForTenant: () => OPENCLAW_RESERVED_OFFICIAL_FEED_ID,
-      sequenceForTenant: () => 1,
+      publicationForTenant: async () => ({
+        id: OPENCLAW_RESERVED_OFFICIAL_FEED_ID,
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [],
+      }),
     });
     expect((await reserved(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
 
     const blocked = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
-      source: { listEligible: async () => [record({ state: 'blocked' })] },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 1,
+      publicationForTenant: async () => ({
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [record({ state: 'blocked' })],
+      }),
     });
     expect((await blocked(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
 
     const mismatch = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
-      source: {
-        listEligible: async () => [{ ...record(), canonicalDigest: 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' }],
-      },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 1,
+      publicationForTenant: async () => ({
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [{
+          ...record(),
+          sourceArtifact: {
+            ...record().sourceArtifact,
+            digest: 'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+          },
+        }],
+      }),
     });
     expect((await mismatch(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
 
+    const reservedSkills = createOpenClawSkillsFeedHandler({
+      authenticate: async () => PRINCIPAL,
+      publicationForTenant: async () => ({
+        id: OPENCLAW_RESERVED_SKILLS_FEED_ID,
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [],
+      }),
+    });
+    expect((await reservedSkills(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(500);
+
     const alternateCandidate = createOpenClawSkillsFeedHandler({
       authenticate: async () => PRINCIPAL,
-      source: {
-        listEligible: async () => [{
+      publicationForTenant: async () => ({
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [{
           ...record(),
           entry: {
             ...record().entry,
@@ -166,14 +224,38 @@ describe('private OpenClaw producer route', () => {
             },
           },
         }],
-      },
-      feedIdForTenant: () => 'private/opaque-a',
-      sequenceForTenant: () => 1,
+      }),
       now: () => Date.parse('2030-01-01T00:00:00.000Z'),
     });
     const alternateResponse = await alternateCandidate(new Request('https://registry.example/v1/feeds/skills'));
     expect(alternateResponse.status).toBe(200);
     expect(JSON.parse(await alternateResponse.text()).entries[0].install.candidates).toHaveLength(1);
+  });
+
+  it('does not serve an expired publication until the host supplies a new sequence', async () => {
+    let clock = Date.parse('2030-01-03T00:00:00.000Z');
+    let publication: OpenClawFeedPublicationSnapshot = {
+      id: 'private/opaque-a',
+      generatedAt: '2030-01-01T00:00:00.000Z',
+      sequence: 1,
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      records: [record()],
+    };
+    const handler = createOpenClawSkillsFeedHandler({
+      authenticate: async () => PRINCIPAL,
+      publicationForTenant: async () => publication,
+      now: () => clock,
+    });
+    expect((await handler(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(503);
+
+    publication = {
+      ...publication,
+      generatedAt: '2030-01-03T00:00:00.000Z',
+      sequence: 2,
+      expiresAt: '2030-01-04T00:00:00.000Z',
+    };
+    clock = Date.parse('2030-01-03T00:00:00.000Z');
+    expect((await handler(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(200);
   });
 });
 

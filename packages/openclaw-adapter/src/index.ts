@@ -6,6 +6,9 @@ import {
   OpenClawFeedCache,
   OpenClawRequestError,
   validateOpenClawFeedUrl,
+  OPENCLAW_SOURCE_CLAWHUB,
+  OPENCLAW_SOURCE_GITHUB,
+  OPENCLAW_SKILLS_FEED_ID,
   type OpenClawCacheSnapshot,
   type OpenClawFeed,
   type OpenClawFeedEntry,
@@ -20,14 +23,15 @@ export const OPENCLAW_SKILLS_FEED_ROUTE = '/v1/feeds/skills';
 
 /** The producer must never impersonate the ClawHub-owned feed identity. */
 export const OPENCLAW_RESERVED_OFFICIAL_FEED_ID = 'clawhub-official';
+/** A second ClawHub-owned identity defined by the pinned producer package. */
+export const OPENCLAW_RESERVED_SKILLS_FEED_ID = OPENCLAW_SKILLS_FEED_ID;
 
-const DEFAULT_FEED_TTL_MS = 15 * 60 * 1_000;
-const MAX_FEED_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_FEED_ID_BYTES = 512;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
 const SAFE_FEED_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const READER_ROLES = new Set(['reader', 'publisher', 'admin', 'owner']);
+const SOURCE_ARTIFACT_FORMATS = new Set(['clawhub-skill-v1', 'github-skill-folder-v1']);
 
 /**
  * A record returned by the registry's existing approved-and-scanned view.
@@ -39,30 +43,49 @@ const READER_ROLES = new Set(['reader', 'publisher', 'admin', 'owner']);
  */
 export interface OpenClawEligibleRecord {
   entry: OpenClawFeedEntry;
-  /** Digest of the exact canonical artifact represented by the install entry. */
-  canonicalDigest: string;
+  /**
+   * The private registry's canonical stored artifact digest. This is retained
+   * as admission evidence and is deliberately never substituted for the
+   * OpenClaw source integrity below.
+   */
+  registryArtifactDigest: string;
+  /** Produced only after the exact source bytes/format were verified. */
+  sourceArtifact: OpenClawSourceArtifactProof;
 }
 
-export interface OpenClawEligibleRecordSource {
-  listEligible(input: {
-    tenantId: string;
-    principal: Principal;
-    signal: AbortSignal;
-  }): Promise<readonly OpenClawEligibleRecord[]>;
+export interface OpenClawSourceArtifactProof {
+  verified: true;
+  digest: string;
+  format: 'clawhub-skill-v1' | 'github-skill-folder-v1';
+  /** Exact source identity, bound below to the candidate fields. */
+  identity: string;
+}
+
+/**
+ * One coherent publication read. The host persists/refreshes this snapshot
+ * separately from the request route, so a sequence, timestamp, and entry set
+ * cannot be mixed across state revisions.
+ */
+export interface OpenClawFeedPublicationSnapshot {
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  expiresAt: string;
+  records: readonly OpenClawEligibleRecord[];
 }
 
 export interface OpenClawFeedHandlerOptions {
   /** Host authentication remains injected so this package is Node/edge safe. */
   authenticate(request: Request): Promise<Principal | null>;
-  source: OpenClawEligibleRecordSource;
-  /** Return a stable opaque feed id; do not return a raw tenant identifier. */
-  feedIdForTenant(tenantId: string, principal: Principal): string | Promise<string>;
-  /** Usually backed by a state metadata revision; it must not mutate state. */
-  sequenceForTenant(tenantId: string, principal: Principal): number | Promise<number>;
+  /** Read one host-persisted, internally coherent tenant publication. */
+  publicationForTenant(input: {
+    tenantId: string;
+    principal: Principal;
+    signal: AbortSignal;
+  }): Promise<OpenClawFeedPublicationSnapshot>;
   /** Optional stricter ACL for a feed or namespace. */
   authorize?(principal: Principal): boolean | Promise<boolean>;
   now?: () => number;
-  expiresInMs?: number;
 }
 
 export interface OpenClawFeedHandler {
@@ -85,16 +108,15 @@ export class OpenClawAdapterError extends Error {
 
 /**
  * Create the authenticated private producer route. This function only reads
- * through the injected source and builds an in-memory response. It does not
+ * through the injected publication and builds an in-memory response. It does not
  * queue imports, write artifacts, or change registry state.
  */
 export function createOpenClawSkillsFeedHandler(
   options: OpenClawFeedHandlerOptions,
 ): OpenClawFeedHandler {
-  if (!options || typeof options.authenticate !== 'function' || !options.source) {
+  if (!options || typeof options.authenticate !== 'function' || typeof options.publicationForTenant !== 'function') {
     throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw feed dependencies are invalid');
   }
-  const expiresInMs = boundedFeedTtl(options.expiresInMs);
   const now = options.now ?? Date.now;
 
   return async function openClawSkillsFeedHandler(request: Request): Promise<Response> {
@@ -133,20 +155,28 @@ export function createOpenClawSkillsFeedHandler(
 
     try {
       const tenantId = safeTenantId(principal.organizationId);
-      const feedId = safeFeedId(await options.feedIdForTenant(tenantId, principal));
-      const sequence = safeSequence(await options.sequenceForTenant(tenantId, principal));
-      const nowMs = safeNow(now());
-      const records = await options.source.listEligible({
+      const publication = await options.publicationForTenant({
         tenantId,
         principal,
         signal: request.signal,
       });
-      const entries = normalizeEligibleRecords(records);
+      const nowMs = safeNow(now());
+      const feedId = safeFeedId(publication.id);
+      const sequence = safeSequence(publication.sequence);
+      const generatedAt = safeIsoTimestamp(publication.generatedAt, 'generatedAt');
+      const expiresAt = safeIsoTimestamp(publication.expiresAt, 'expiresAt');
+      if (expiresAt <= generatedAt) {
+        throw new OpenClawAdapterError('invalid_record', 'The publication expiry is invalid');
+      }
+      if (expiresAt <= nowMs) {
+        return errorResponse(503, 'OPENCLAW_FEED_EXPIRED', 'The OpenClaw feed snapshot is unavailable', true);
+      }
+      const entries = normalizeEligibleRecords(publication.records);
       const produced = await createOpenClawTenantFeedPreview({
         id: feedId,
-        generatedAt: new Date(nowMs).toISOString(),
+        generatedAt: publication.generatedAt,
         sequence,
-        expiresAt: new Date(nowMs + expiresInMs).toISOString(),
+        expiresAt: publication.expiresAt,
         entries,
         authenticatedTenantId: tenantId,
       });
@@ -269,7 +299,12 @@ export async function previewOpenClawFeed(
   let url: URL;
   try {
     url = validateOpenClawFeedUrl(profile.url, profile.allowedOrigins);
-    if (!profile.expectedFeedId || profile.expectedFeedId.length > 512) throw new Error('invalid feed identity');
+    if (
+      typeof profile.expectedFeedId !== 'string' ||
+      profile.expectedFeedId.length === 0 ||
+      new TextEncoder().encode(profile.expectedFeedId).byteLength > MAX_FEED_ID_BYTES ||
+      /[\u0000-\u001f\u007f]/u.test(profile.expectedFeedId)
+    ) throw new Error('invalid feed identity');
   } catch {
     return { kind: 'rejected', error: 'invalid-url' };
   }
@@ -316,11 +351,27 @@ function normalizeEligibleRecords(
   const entries: OpenClawFeedEntry[] = [];
   const seenIds = new Set<string>();
   for (const record of records) {
-    if (!record || typeof record !== 'object' || !record.entry || typeof record.canonicalDigest !== 'string') {
+    if (
+      !record ||
+      typeof record !== 'object' ||
+      !record.entry ||
+      typeof record.registryArtifactDigest !== 'string' ||
+      !record.sourceArtifact ||
+      typeof record.sourceArtifact !== 'object'
+    ) {
       throw new OpenClawAdapterError('invalid_record', 'An eligible record is malformed');
     }
-    if (!SHA256_RE.test(record.canonicalDigest)) {
-      throw new OpenClawAdapterError('invalid_record', 'An eligible record has an invalid artifact digest');
+    if (!SHA256_RE.test(record.registryArtifactDigest)) {
+      throw new OpenClawAdapterError('invalid_record', 'An eligible record has an invalid registry digest');
+    }
+    if (
+      record.sourceArtifact.verified !== true ||
+      !SHA256_RE.test(record.sourceArtifact.digest) ||
+      !SOURCE_ARTIFACT_FORMATS.has(record.sourceArtifact.format) ||
+      typeof record.sourceArtifact.identity !== 'string' ||
+      record.sourceArtifact.identity.length === 0
+    ) {
+      throw new OpenClawAdapterError('invalid_record', 'An eligible record lacks verified source integrity');
     }
     if (record.entry.type !== 'skill' || record.entry.state !== 'available') {
       throw new OpenClawAdapterError('invalid_record', 'An eligible record is not an available skill');
@@ -331,18 +382,36 @@ function normalizeEligibleRecords(
     } catch {
       throw new OpenClawAdapterError('invalid_record', 'An eligible record has invalid install metadata');
     }
-    const matching = candidates.filter((candidate) => candidate.candidate.integrity === record.canonicalDigest);
+    const matching = candidates.filter((candidate) => candidate.candidate.integrity === record.sourceArtifact.digest);
     if (matching.length !== 1) {
-      throw new OpenClawAdapterError('invalid_record', 'An install coordinate does not match the approved artifact');
+      throw new OpenClawAdapterError('invalid_record', 'An install coordinate does not match verified source integrity');
+    }
+    const selected = matching[0]!.candidate;
+    const expectedFormat = selected.sourceRef === OPENCLAW_SOURCE_CLAWHUB
+      ? 'clawhub-skill-v1'
+      : selected.sourceRef === OPENCLAW_SOURCE_GITHUB
+        ? 'github-skill-folder-v1'
+        : undefined;
+    const expectedIdentity = selected.sourceRef === OPENCLAW_SOURCE_CLAWHUB
+      ? `${selected.package}@${selected.version}`
+      : selected.github
+        ? `${selected.github.repo}:${selected.github.path}@${selected.github.commit}`
+        : undefined;
+    if (
+      expectedFormat === undefined ||
+      record.sourceArtifact.format !== expectedFormat ||
+      expectedIdentity === undefined ||
+      record.sourceArtifact.identity !== expectedIdentity
+    ) {
+      throw new OpenClawAdapterError('invalid_record', 'Source integrity proof is not bound to the install identity');
     }
     if (seenIds.has(record.entry.id)) {
       throw new OpenClawAdapterError('invalid_record', 'The feed contains duplicate skill identities');
     }
     seenIds.add(record.entry.id);
-    // Only publish the candidate bound to the canonical approved digest. A
+    // Only publish the candidate bound to the verified source digest. A
     // caller may retain other discovery candidates in its private state, but
     // exposing them here would let a consumer select an unverified artifact.
-    const selected = matching[0]!.candidate;
     entries.push({
       ...record.entry,
       install: {
@@ -438,6 +507,7 @@ function safeFeedId(value: string): string {
   if (
     typeof value !== 'string' ||
     value === OPENCLAW_RESERVED_OFFICIAL_FEED_ID ||
+    value === OPENCLAW_RESERVED_SKILLS_FEED_ID ||
     value.length === 0 ||
     new TextEncoder().encode(value).byteLength > MAX_FEED_ID_BYTES ||
     !SAFE_FEED_ID_RE.test(value)
@@ -455,20 +525,21 @@ function safeSequence(value: number): number {
 }
 
 function safeNow(value: number): number {
-  // Leave room for the configured expiry interval before constructing the
-  // second ISO timestamp; Date rejects values outside this finite range.
-  if (!Number.isFinite(value) || value < 0 || value > 8.64e15 - MAX_FEED_TTL_MS) {
+  if (!Number.isFinite(value) || value < 0 || value > 8.64e15) {
     throw new OpenClawAdapterError('invalid_configuration', 'Feed clock is invalid');
   }
   return value;
 }
 
-function boundedFeedTtl(value: number | undefined): number {
-  const ttl = value ?? DEFAULT_FEED_TTL_MS;
-  if (!Number.isSafeInteger(ttl) || ttl <= 0 || ttl > MAX_FEED_TTL_MS) {
-    throw new OpenClawAdapterError('invalid_configuration', 'Feed expiry is outside supported bounds');
+function safeIsoTimestamp(value: string, label: string): number {
+  if (typeof value !== 'string' || value.length > 64 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new OpenClawAdapterError('invalid_record', `The publication ${label} is invalid`);
   }
-  return ttl;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
+    throw new OpenClawAdapterError('invalid_record', `The publication ${label} is invalid`);
+  }
+  return parsed;
 }
 
 function feedResponse(
