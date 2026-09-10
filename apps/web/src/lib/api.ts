@@ -57,7 +57,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 function unwrap<T>(value: T | { data: T }): T { return isRecord(value) && 'data' in value ? value.data as T : value as T }
 
 function unwrapBuilderConversation(value: BuilderConversation | BuilderConversationResponse): BuilderConversation {
-  const wrapped = value as BuilderConversationResponse
+  const source = isRecord(value) && 'data' in value ? value.data as BuilderConversation | BuilderConversationResponse : value
+  const wrapped = source as BuilderConversationResponse
   if (isRecord(wrapped) && isRecord(wrapped.conversation)) {
     const conversation = wrapped.conversation as BuilderConversation
     return {
@@ -66,7 +67,7 @@ function unwrapBuilderConversation(value: BuilderConversation | BuilderConversat
       ...(Array.isArray(wrapped.proposals) ? { proposals: wrapped.proposals as BuilderConversation['proposals'] } : {}),
     }
   }
-  return value as BuilderConversation
+  return source as BuilderConversation
 }
 
 export const api = {
@@ -85,12 +86,15 @@ export const api = {
   createPack(input: { name: string; version: string; description: string; skills: Array<{ ref: string; version: string }> }) { return request<PackCreateResponse>('/v1/packs', { method: 'POST', body: input }).then(unwrap) },
   operations() { return request<OperationListResponse>('/v1/operations').then(unwrap) },
   operation(id: string) { return request<OperationResponse>(`/v1/operations/${encodeURIComponent(id)}`).then(unwrap) },
-  releaseFiles(resourceId: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`).then(unwrap) },
-  releaseFile(resourceId: string, path: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path } }).then(unwrap) },
+  releaseFiles(resourceId: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`, { signal }).then(unwrap) },
+  releaseFile(resourceId: string, path: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path }, signal }).then(unwrap) },
   createDraft(resourceId: string, baseDigest: `sha256:${string}`, idempotencyKey: string) {
     return request<DraftResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/drafts`, { method: 'POST', body: { baseDigest }, headers: { 'idempotency-key': idempotencyKey } }).then(unwrap)
   },
-  draft(draftId: string) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`).then(unwrap) },
+  createUploadDraft(input: { name: string; files: SkillBundle['files']; idempotencyKey: string }) {
+    return request<DraftResponse>('/v1/drafts', { method: 'POST', body: { name: input.name, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  },
+  draft(draftId: string, signal?: AbortSignal) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { signal }).then(unwrap) },
   updateDraft(draftId: string, input: { expectedRevision: number; files: SkillBundle['files']; idempotencyKey: string }) {
     return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { expectedRevision: input.expectedRevision, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
   },
@@ -109,23 +113,23 @@ export const api = {
   decideDraftReview(draftId: string, resultId: string, input: { findingId: string; decision: 'open' | 'acknowledged' | 'dismissed'; reason?: string }) {
     return request<DraftReviewResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews/${encodeURIComponent(resultId)}/decisions`, { method: 'POST', body: input }).then(unwrap)
   },
-  builderCreateConversation(draftId: string, input: { draftRevision: number; draftDigest: `sha256:${string}` }, idempotencyKey: string) {
-    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey } }).then(unwrapBuilderConversation)
+  builderCreateConversation(draftId: string, input: { draftRevision: number; draftDigest: `sha256:${string}` }, idempotencyKey: string, signal?: AbortSignal) {
+    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrapBuilderConversation)
   },
-  builderConversation(draftId: string, conversationId: string) {
-    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}`).then(unwrapBuilderConversation)
+  builderConversation(draftId: string, conversationId: string, signal?: AbortSignal) {
+    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}`, { signal }).then(unwrapBuilderConversation)
   },
-  builderMessage(draftId: string, conversationId: string, input: { draftRevision: number; draftDigest: `sha256:${string}`; content: string; selectedPath?: string }, idempotencyKey: string) {
-    return request<BuilderMessageResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}/messages`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey } }).then(unwrap)
+  builderMessage(draftId: string, conversationId: string, input: { draftRevision: number; draftDigest: `sha256:${string}`; content: string; selectedPath?: string }, idempotencyKey: string, signal?: AbortSignal) {
+    return request<BuilderMessageResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}/messages`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrap)
   },
-  builderProposal(draftId: string, proposalId: string) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}`).then(unwrap)
+  builderProposal(draftId: string, proposalId: string, signal?: AbortSignal) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}`, { signal }).then(unwrap)
   },
-  applyBuilderProposal(draftId: string, proposalId: string, input: { expectedRevision: number; idempotencyKey: string }) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST', body: { expectedRevision: input.expectedRevision, proposalId }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  applyBuilderProposal(draftId: string, proposalId: string, input: { expectedRevision: number; idempotencyKey: string; signal?: AbortSignal }) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST', body: { expectedRevision: input.expectedRevision, proposalId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
   },
-  rejectBuilderProposal(draftId: string, proposalId: string, idempotencyKey: string) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST', body: { proposalId }, headers: { 'idempotency-key': idempotencyKey } }).then(unwrap)
+  rejectBuilderProposal(draftId: string, proposalId: string, idempotencyKey: string, signal?: AbortSignal) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST', body: { proposalId }, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrap)
   },
   policy() { return request<PolicyResponse>('/v1/policy').then(unwrap) },
   updatePolicy(policy: Policy) {

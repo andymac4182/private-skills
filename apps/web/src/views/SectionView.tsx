@@ -12,11 +12,12 @@ import { DirectoryView } from './DirectoryView'
 import { OfficialView } from './OfficialView'
 import { TopicsView } from './TopicsView'
 import { DirectoryAuditsView } from './DirectoryAuditsView'
+import type { AppSectionSearch } from '../routes/app.$section'
 
-export function SectionView({ section }: { section: string }) {
+export function SectionView({ section, draftSearch }: { section: string; draftSearch?: AppSectionSearch }) {
   switch (section) {
     case 'overview': return <OverviewView />
-    case 'catalog': return <CatalogView />
+    case 'catalog': return <CatalogView draftSearch={draftSearch} />
     case 'packs': return <PacksView />
     case 'directory': return <DirectoryView />
     case 'official': return <OfficialView />

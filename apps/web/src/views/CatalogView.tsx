@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { formatBytes, formatDate, shortDigest } from '../lib/format'
 import { quotePosix, quotePowerShell } from '../lib/shell'
-import type { Policy, Principal, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
+import type { DraftView, Policy, Principal, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
+import type { AppSectionSearch } from '../routes/app.$section'
 import { useAuth } from '../lib/auth'
 import { Badge, Button, DisconnectedState, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
 import { ReleaseViewer } from '../components/ReleaseViewer'
 
-export function CatalogView() {
+export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch }) {
   const [query, setQuery] = useState('')
   const [submittedQuery, setSubmittedQuery] = useState('')
   const [skills, setSkills] = useState<SkillVersion[] | null>(null)
@@ -22,8 +23,38 @@ export function CatalogView() {
   const [reindexCursor, setReindexCursor] = useState<string | null>(null)
   const [reindexIndexed, setReindexIndexed] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(draftSearch?.skill ?? null)
+  const [draftDirty, setDraftDirty] = useState(false)
   const searchInput = useRef<HTMLInputElement>(null)
+  const navigate = useNavigate()
+
+  const updateDraftSearch = useCallback((next: Partial<AppSectionSearch>) => {
+    void navigate({
+      to: '/app/$section',
+      params: { section: 'catalog' },
+      search: (current) => ({ ...current, ...next }),
+    })
+  }, [navigate])
+
+  const selectSkill = useCallback((nextId: string) => {
+    if (nextId === selectedId) return
+    if (draftDirty && !window.confirm('Discard unsaved changes and inspect another skill? Saved draft revisions are not affected.')) return
+    if (draftSearch?.draft) updateDraftSearch({ draft: undefined, skill: undefined, version: undefined, digest: undefined })
+    setSelectedId(nextId)
+  }, [draftDirty, draftSearch?.draft, selectedId, updateDraftSearch])
+
+  const draftRoute = draftSearch?.draft && draftSearch.skill === selectedId
+    ? { draftId: draftSearch.draft }
+    : undefined
+
+  const handleDraftChange = useCallback((next: DraftView) => {
+    const selected = skills?.find((skill) => skill.id === selectedId)
+    updateDraftSearch({ draft: next.id, skill: selectedId ?? undefined, version: selected?.version, digest: selected?.artifact.digest })
+  }, [selectedId, skills, updateDraftSearch])
+
+  const handleDraftClose = useCallback(() => {
+    updateDraftSearch({ draft: undefined, skill: undefined, version: undefined, digest: undefined })
+  }, [updateDraftSearch])
 
   async function load() {
     setError(null)
@@ -39,7 +70,9 @@ export function CatalogView() {
         setSkills(response.skills ?? [])
         setSemanticResults(null)
         setPolicy(policyResponse.policy)
-        setSelectedId((current) => response.skills?.some((skill) => skill.id === current) ? current : response.skills?.[0]?.id ?? null)
+        setSelectedId((current) => response.skills?.some((skill) => skill.id === current)
+          ? current
+          : response.skills?.find((skill) => skill.id === draftSearch?.skill)?.id ?? response.skills?.[0]?.id ?? null)
       }
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Catalog request failed.')
@@ -119,10 +152,10 @@ export function CatalogView() {
       )}
       {!semanticActive && skills !== null && policy !== null && !error && (
         <Panel title={`${skills.length} release${skills.length === 1 ? '' : 's'}`} description={submittedQuery ? `Matching “${submittedQuery}”` : 'Every row is scoped to the signed-in organization.'}>
-          {skills.length === 0 ? <EmptyState title="No skills in the catalog yet" description="Publish a complete skill folder or import one from an approved source to make it available here." action={<Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>} /> : <div className="catalog-grid">{skills.map((skill) => <SkillCard key={skill.id} skill={skill} needsRescan={needsRescan(skill, policy)} selected={selectedId === skill.id} onSelect={() => setSelectedId(skill.id)} />)}</div>}
+          {skills.length === 0 ? <EmptyState title="No skills in the catalog yet" description="Publish a complete skill folder or import one from an approved source to make it available here." action={<Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>} /> : <div className="catalog-grid">{skills.map((skill) => <SkillCard key={skill.id} skill={skill} needsRescan={needsRescan(skill, policy)} selected={selectedId === skill.id} onSelect={() => selectSkill(skill.id)} />)}</div>}
         </Panel>
       )}
-      {selectedId && skills?.some((skill) => skill.id === selectedId) && <SkillDetail currentPolicyRevision={policy?.revision ?? null} skillId={selectedId} fallback={skills.find((skill) => skill.id === selectedId)!} onChanged={() => void load()} />}
+      {selectedId && skills?.some((skill) => skill.id === selectedId) && <SkillDetail currentPolicyRevision={policy?.revision ?? null} skillId={selectedId} fallback={skills.find((skill) => skill.id === selectedId)!} resumeDraftId={draftRoute?.draftId} onDraftDirty={setDraftDirty} onDraftChange={handleDraftChange} onDraftClose={handleDraftClose} onChanged={() => void load()} />}
     </div>
   )
 }
@@ -165,7 +198,7 @@ function SemanticCard({ result, onOpen }: { result: SemanticSearchResult; onOpen
   return <article className="skill-card semantic-card"><button aria-label={`Open ${result.name} ${result.version} in the catalog`} className="skill-card-trigger" type="button" onClick={onOpen}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{result.name}</strong><span>{result.version}</span></span><span className="skill-card-dots">{Math.round(result.score * 100)}%</span></div><p className="skill-card-description">{result.description || result.text}</p><div className="skill-card-tags"><span className="skill-tag">Semantic match</span><span className="skill-tag">Open release</span></div><div className="skill-card-footer"><span className="badge badge-good">{Math.round(result.score * 100)}% match</span><span>Inspect catalog</span></div></button></article>
 }
 
-function SkillDetail({ currentPolicyRevision, skillId, fallback, onChanged }: { currentPolicyRevision: string | null; skillId: string; fallback: SkillVersion; onChanged: () => void }) {
+function SkillDetail({ currentPolicyRevision, skillId, fallback, resumeDraftId, onDraftChange, onDraftDirty, onDraftClose, onChanged }: { currentPolicyRevision: string | null; skillId: string; fallback: SkillVersion; resumeDraftId?: string; onDraftChange: (draft: DraftView) => void; onDraftDirty: (dirty: boolean) => void; onDraftClose: () => void; onChanged: () => void }) {
   const { principal } = useAuth()
   const [skill, setSkill] = useState<SkillVersion>(fallback)
   const [scans, setScans] = useState<ScanResult[]>([])
@@ -231,6 +264,6 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, onChanged }: { 
   const canDraft = canAuthorDraft(principal) && skill.state === 'approved' && !releaseNeedsRescan
   return <Panel title="Release details" description="Release information and security checks for this version." action={(canRescan || canRevoke) && <div className="row-actions">{canRescan && <Button kind="secondary" busy={busy === 'rescan'} onClick={() => void action('rescan')}>Rescan</Button>}{canRevoke && <Button kind="danger" busy={busy === 'revoke'} onClick={() => { if (window.confirm(`Revoke ${skill.name}@${skill.version}?`)) void action('revoke') }}>Revoke</Button>}</div>}>
     {message && <div style={{ padding: '16px 22px 0' }}><Notice kind={message.kind}>{message.text}</Notice></div>}
-    {loading ? <LoadingState label="Loading release details…" /> : <><div className="detail-grid"><div><div className="detail-heading"><div><h2>{identity}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /></div>{releaseNeedsRescan && <Notice kind="warning">Current review rules changed after this release was approved. It remains stored as approved, but it needs a new security scan before installation.</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div>{sourceReference && <div className="meta-row"><span>Canonical source</span><code>{sourceReference}</code></div>}<div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div><div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><span className="helper">POSIX (bash/zsh)</span><pre className="code-block">{installCommand}</pre><span className="helper">PowerShell</span><pre className="code-block">{installPowerShellCommand}</pre></div></div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div><ReleaseViewer key={skill.id} resourceId={skill.id} baseDigest={skill.artifact.digest} baseVersion={skill.version} canEdit={canDraft} /></>}
+    {loading ? <LoadingState label="Loading release details…" /> : <><div className="detail-grid"><div><div className="detail-heading"><div><h2>{identity}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /></div>{releaseNeedsRescan && <Notice kind="warning">Current review rules changed after this release was approved. It remains stored as approved, but it needs a new security scan before installation.</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div>{sourceReference && <div className="meta-row"><span>Canonical source</span><code>{sourceReference}</code></div>}<div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div><div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><span className="helper">POSIX (bash/zsh)</span><pre className="code-block">{installCommand}</pre><span className="helper">PowerShell</span><pre className="code-block">{installPowerShellCommand}</pre></div></div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div><ReleaseViewer key={skill.id} resourceId={skill.id} baseDigest={skill.artifact.digest} baseVersion={skill.version} canEdit={canDraft} resumeDraftId={resumeDraftId} onDraftChange={onDraftChange} onDraftDirty={onDraftDirty} onDraftClose={onDraftClose} /></>}
   </Panel>
 }

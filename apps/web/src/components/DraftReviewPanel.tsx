@@ -27,6 +27,10 @@ function severityTone(severity: DraftReviewFinding['severity']): 'good' | 'warn'
   return 'good'
 }
 
+export function newestFirst<T>(items: readonly T[]): T | undefined {
+  return items[0]
+}
+
 export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelProps) {
   const [reviews, setReviews] = useState<DraftReviewsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -62,8 +66,10 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
 
   const currentJobs = useMemo(() => reviews?.reviews.filter((review) => sameBinding(review, draft)) ?? [], [draft, reviews])
   const currentResults = useMemo(() => reviews?.results.filter((result) => sameBinding(result, draft)) ?? [], [draft, reviews])
-  const latestJob = currentJobs[currentJobs.length - 1]
-  const latestResult = currentResults[currentResults.length - 1]
+  // The registry returns both collections newest-first. Keep the server's
+  // ordering so decisions and retries stay pinned to the current snapshot.
+  const latestJob = newestFirst(currentJobs)
+  const latestResult = newestFirst(currentResults)
   const canRetry = latestJob !== undefined && (latestJob.state === 'failed' || latestJob.state === 'stale')
 
   async function requestReview(): Promise<void> {

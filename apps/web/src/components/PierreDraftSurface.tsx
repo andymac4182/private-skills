@@ -18,6 +18,9 @@ export interface DraftSurfaceHandle {
 }
 
 interface PierreDraftSurfaceProps {
+  draftId: string
+  draftRevision: number
+  draftDigest: `sha256:${string}`
   entries: DraftSurfaceEntry[]
   selectedPath: string | null
   baseFile: DraftFile | null
@@ -49,7 +52,11 @@ function toFile(file: DraftFile | null): FileContents | null {
 
 const createEditor: EditorFactory<undefined, undefined> = (editorType, options, editStateKey) => new Editor(editorType, options, editStateKey)
 
-export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ entries, selectedPath, baseFile, currentFile, mode, editable, busy, onSelect, onEditChange, onContentChange }, ref) {
+export function pierreEditStateKey(draftId: string, revision: number, digest: `sha256:${string}`, path: string): string {
+  return `draft:${draftId}:${revision}:${digest}:${path}`
+}
+
+export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, mode, editable, busy, onSelect, onEditChange, onContentChange }, ref) {
   const paths = entries.map((entry) => entry.path)
   const { model } = useFileTree({
     paths,
@@ -89,11 +96,11 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
     </div>
     <div className="draft-surface-code">
       {mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
-        key={`edit:${current.name}:${current.cacheKey ?? ''}`}
+        key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
         className="draft-pierre-file"
         file={current}
         edit
-        editStateKey={`draft:${current.name}`}
+        editStateKey={pierreEditStateKey(draftId, draftRevision, draftDigest, current.name)}
         options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }}
         disableWorkerPool
         onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}

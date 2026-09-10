@@ -12,6 +12,10 @@ interface ReleaseViewerProps {
   baseDigest: `sha256:${string}`
   baseVersion: string
   canEdit: boolean
+  resumeDraftId?: string
+  onDraftChange?: (draft: import('../lib/types').DraftView) => void
+  onDraftDirty?: (dirty: boolean) => void
+  onDraftClose?: () => void
 }
 
 interface ErrorBoundaryProps {
@@ -50,9 +54,9 @@ function displayPreviewState(file: ReleaseFileView): string {
   return 'Unsupported preview'
 }
 
-export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: ReleaseViewerProps) {
+export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit, resumeDraftId, onDraftChange, onDraftDirty, onDraftClose }: ReleaseViewerProps) {
   const [open, setOpen] = useState(false)
-  const [draftOpen, setDraftOpen] = useState(false)
+  const [draftOpen, setDraftOpen] = useState(Boolean(resumeDraftId))
   const [draftCloseRequest, setDraftCloseRequest] = useState(0)
   const [manifest, setManifest] = useState<ReleaseFilesResponse | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -61,6 +65,10 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: 
   const [fileLoading, setFileLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
+
+  useEffect(() => {
+    if (resumeDraftId) setDraftOpen(true)
+  }, [resumeDraftId])
 
   async function loadManifest() {
     const generation = ++requestGeneration.current
@@ -181,7 +189,7 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: 
         </OptionalRendererBoundary>
       </>}
     </div>}
-    {draftOpen && <DraftEditor closeRequest={draftCloseRequest} resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onClose={() => { setDraftCloseRequest(0); setDraftOpen(false) }} />}
+    {draftOpen && <DraftEditor closeRequest={draftCloseRequest} resumeDraftId={resumeDraftId} resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onDraftChange={onDraftChange} onDirtyChange={onDraftDirty} onClose={() => { setDraftCloseRequest(0); setDraftOpen(false); onDraftClose?.() }} />}
   </section>
 }
 

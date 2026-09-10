@@ -184,11 +184,12 @@ export interface ReleaseFilesResponse {
 
 export interface DraftView {
   id: string
+  origin?: 'release' | 'upload'
   name: string
   skillName: string
   description?: string
-  baseResourceId: string
-  baseDigest: `sha256:${string}`
+  baseResourceId?: string
+  baseDigest?: `sha256:${string}`
   revision: number
   digest: `sha256:${string}`
   size: number

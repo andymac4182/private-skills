@@ -1,10 +1,13 @@
-import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from 'react'
+import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
+import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
 import type { DraftView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
 import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
 import { DraftReviewPanel } from './DraftReviewPanel'
+import { SkillBuilderPanel } from './SkillBuilderPanel'
 
 const PierreDraftSurface = lazy(() => import('./PierreDraftSurface').then((module) => ({ default: module.PierreDraftSurface })))
 
@@ -12,12 +15,16 @@ interface DraftEditorProps {
   resourceId: string
   baseDigest: `sha256:${string}`
   baseVersion: string
+  initialDraft?: DraftView
+  resumeDraftId?: string
   closeRequest?: number
   onClose: () => void
+  onDraftChange?: (draft: DraftView) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type DraftFile = SkillBundle['files'][number]
-type DraftOperation = { draftId: string; revision: number; version?: string; key: string }
+type DraftOperation = { draftId: string; revision: number; version?: string; payloadFingerprint: string; key: string }
 interface DraftPersistence { draftId?: string; createKey: string }
 
 const TEXT_EXTENSIONS = new Set(['.cjs', '.css', '.csv', '.go', '.html', '.ini', '.java', '.js', '.json', '.jsx', '.md', '.mdx', '.mjs', '.py', '.rb', '.rs', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml'])
@@ -61,6 +68,30 @@ function editableText(file: DraftFile | null): string | null {
 
 function cloneFiles(files: DraftFile[]): DraftFile[] {
   return files.map((file) => ({ ...file }))
+}
+
+/**
+ * The idempotency identity is the canonical submitted file payload. Sorting
+ * by path makes retries stable even when a caller rebuilt the same manifest
+ * in a different order; executable is included because it changes the bundle.
+ */
+export function canonicalDraftFiles(files: DraftFile[]): string {
+  return JSON.stringify([...files].sort((left, right) => left.path.localeCompare(right.path)).map((file) => ({
+    path: file.path,
+    content: file.content,
+    ...(file.executable === undefined ? {} : { executable: file.executable }),
+  })))
+}
+
+export async function draftPayloadFingerprint(files: DraftFile[]): Promise<string> {
+  const canonical = canonicalDraftFiles(files)
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+    return `sha256:${Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+  }
+  // Browsers without Web Crypto still get a deterministic binding. This path
+  // is only an idempotency key discriminator; the server validates the body.
+  return `canonical:${canonical}`
 }
 
 function filesEqual(left: DraftFile[], right: DraftFile[]): boolean {
@@ -112,10 +143,27 @@ function validDraftPath(path: string): string | null {
   return null
 }
 
-function operationKey(ref: MutableRefObject<DraftOperation | null>, prefix: string, draft: DraftView, version?: string): string {
-  const sameOperation = ref.current?.draftId === draft.id && ref.current.revision === draft.revision && ref.current.version === version
-  if (!sameOperation || !ref.current) ref.current = { draftId: draft.id, revision: draft.revision, ...(version === undefined ? {} : { version }), key: idempotencyKey(prefix) }
+export function operationKey(ref: MutableRefObject<DraftOperation | null>, prefix: string, draft: DraftView, payloadFingerprint: string, version?: string): string {
+  const sameOperation = ref.current?.draftId === draft.id && ref.current.revision === draft.revision && ref.current.version === version && ref.current.payloadFingerprint === payloadFingerprint
+  if (!sameOperation || !ref.current) ref.current = { draftId: draft.id, revision: draft.revision, ...(version === undefined ? {} : { version }), payloadFingerprint, key: idempotencyKey(prefix) }
   return ref.current.key
+}
+
+function isAbortError(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as { name?: unknown }).name === 'AbortError')
+}
+
+async function loadImmutableReleaseFiles(resourceId: string, expectedDigest: `sha256:${string}`, signal: AbortSignal): Promise<DraftFile[]> {
+  const manifest = await api.releaseFiles(resourceId, signal)
+  if (manifest.release.digest !== expectedDigest) throw new Error('The release file manifest changed while opening the draft.')
+  const files = await Promise.all((manifest.files ?? []).map(async (entry): Promise<DraftFile | null> => {
+    if (entry.previewState !== 'text' && typeof entry.contents !== 'string') return null
+    const response = typeof entry.contents === 'string' ? null : await api.releaseFile(resourceId, entry.path, signal)
+    const content = typeof entry.contents === 'string' ? entry.contents : response?.files.find((file) => file.path === entry.path)?.contents
+    if (typeof content !== 'string') return null
+    return { path: entry.path, content: encodeBase64Text(content), ...(entry.executable === undefined ? {} : { executable: entry.executable }) }
+  }))
+  return files.filter((file): file is DraftFile => file !== null)
 }
 
 interface ErrorBoundaryProps { fallback: ReactNode; children: ReactNode }
@@ -127,14 +175,15 @@ class DraftRendererBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryS
   render() { return this.state.failed ? this.props.fallback : this.props.children }
 }
 
-export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest = 0, onClose }: DraftEditorProps) {
+export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft, resumeDraftId, closeRequest = 0, onClose, onDraftChange, onDirtyChange }: DraftEditorProps) {
   const [draft, setDraft] = useState<DraftView | null>(null)
-  const [baseFiles, setBaseFiles] = useState<DraftFile[]>([])
+  const [releaseBaseFiles, setReleaseBaseFiles] = useState<DraftFile[]>([])
+  const [savedFiles, setSavedFiles] = useState<DraftFile[]>([])
   const [workingFiles, setWorkingFiles] = useState<DraftFile[]>([])
   const [renameOrigins, setRenameOrigins] = useState<Record<string, string>>({})
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mode, setMode] = useState<'edit' | 'diff'>('diff')
-  const [workspaceTab, setWorkspaceTab] = useState<'files' | 'review'>('files')
+  const [workspaceTab, setWorkspaceTab] = useState<'files' | 'build' | 'review'>('files')
   const [creating, setCreating] = useState(false)
   const [resuming, setResuming] = useState(true)
   const [reloading, setReloading] = useState(false)
@@ -150,34 +199,55 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
   const persistence = useRef<DraftPersistence | null>(null)
   const saveOperation = useRef<DraftOperation | null>(null)
   const publishOperation = useRef<DraftOperation | null>(null)
+  const releaseBaseRef = useRef<DraftFile[]>([])
   const surfaceRef = useRef<DraftSurfaceHandle | null>(null)
+  const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
 
   const selectedFile = useMemo(() => workingFiles.find((file) => file.path === selectedPath) ?? null, [selectedPath, workingFiles])
   const selectedBaseFile = useMemo(() => {
     const basePath = selectedPath ? renameOrigins[selectedPath] ?? selectedPath : null
-    return basePath ? baseFiles.find((file) => file.path === basePath) ?? null : null
-  }, [baseFiles, renameOrigins, selectedPath])
+    return basePath ? releaseBaseFiles.find((file) => file.path === basePath) ?? null : null
+  }, [releaseBaseFiles, renameOrigins, selectedPath])
   const selectedText = editableText(selectedFile)
   const selectedIsEditable = selectedText !== null
   const entries = useMemo<DraftSurfaceEntry[]>(() => {
-    const paths = new Set([...baseFiles.map((file) => file.path), ...workingFiles.map((file) => file.path)])
+    const paths = new Set([...releaseBaseFiles.map((file) => file.path), ...workingFiles.map((file) => file.path)])
     return [...paths].sort().map((path) => {
-      const base = baseFiles.find((file) => file.path === path)
+      const base = releaseBaseFiles.find((file) => file.path === path)
       const current = workingFiles.find((file) => file.path === path)
       return { path, status: !current ? 'removed' : !base ? 'added' : base.content !== current.content || base.executable !== current.executable ? 'changed' : 'unchanged' }
     })
-  }, [baseFiles, workingFiles])
-  const hasFileChanges = draft !== null && !filesEqual(baseFiles, workingFiles)
+  }, [releaseBaseFiles, workingFiles])
+  const hasFileChanges = draft !== null && !filesEqual(savedFiles, workingFiles)
   const liveText = useMemo(() => surfaceRef.current?.readCurrent(), [selectedPath, selectedText, surfaceRevision])
   const hasLiveEdit = mode === 'edit' && selectedIsEditable && liveText !== null && liveText !== selectedText
   const hasChanges = hasFileChanges || hasLiveEdit
   const busy = creating || resuming || reloading || saving || publishing
   const storageKey = draftStorageKey(resourceId, baseDigest)
+  const hasChangesRef = useRef(false)
+  hasChangesRef.current = hasChanges
+
+  const shouldBlockNavigation = useCallback(() => {
+    return hasChangesRef.current && !window.confirm('Discard unsaved changes and leave the editor? Saved draft revisions are not affected.')
+  }, [])
+  useBlocker({ shouldBlockFn: shouldBlockNavigation, enableBeforeUnload: () => hasChangesRef.current })
+
+  function matchesDraftSource(next: DraftView): boolean {
+    if (resumeDraftId && next.id !== resumeDraftId) return false
+    if (initialDraft) return next.id === initialDraft.id
+    if (resourceId.startsWith('upload:')) return true
+    return next.baseResourceId === resourceId && next.baseDigest === baseDigest
+  }
 
   function installServerDraft(next: DraftView): void {
     const files = cloneFiles(next.files)
+    const uploadOrigin = next.origin === 'upload' || resourceId.startsWith('upload:')
+    if ((uploadOrigin && releaseBaseRef.current.length === 0) || (releaseBaseRef.current.length === 0 && next.revision === 0)) {
+      releaseBaseRef.current = cloneFiles(files)
+      setReleaseBaseFiles(cloneFiles(files))
+    }
     setDraft(next)
-    setBaseFiles(files)
+    setSavedFiles(cloneFiles(files))
     setWorkingFiles(cloneFiles(files))
     setRenameOrigins({})
     setSelectedPath((current) => current && files.some((file) => file.path === current) ? current : firstPath(files))
@@ -188,6 +258,16 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     publishOperation.current = null
     setSurfaceRevision((current) => current + 1)
   }
+
+  useEffect(() => {
+    if (draft) onDraftChange?.(draft)
+  }, [draft?.digest, draft?.id, draft?.revision, onDraftChange])
+
+  useEffect(() => {
+    onDirtyChange?.(hasChanges)
+  }, [hasChanges, onDirtyChange])
+
+  useEffect(() => () => { onDirtyChange?.(false) }, [onDirtyChange])
 
   function syncSurfaceFiles(): DraftFile[] {
     if (!selectedFile || !selectedIsEditable) return workingFiles
@@ -215,49 +295,76 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
 
   useEffect(() => {
     const generation = ++requestGeneration.current
+    const controller = new AbortController()
     setDraft(null)
-    setBaseFiles([])
+    releaseBaseRef.current = []
+    setReleaseBaseFiles([])
+    setSavedFiles([])
     setWorkingFiles([])
     setRenameOrigins({})
     setSelectedPath(null)
     setMode('diff')
     setWorkspaceTab('files')
     setVersion(baseVersion)
+    setCreating(false)
+    setReloading(false)
+    setSaving(false)
+    setPublishing(false)
     setMessage(null)
     setError(null)
     setResuming(true)
     persistence.current = readPersistence(storageKey)
     saveOperation.current = null
     publishOperation.current = null
-    const savedDraftId = persistence.current?.draftId
-    if (!savedDraftId) {
+    if (initialDraft) {
+      const nextPersistence = { createKey: persistence.current?.createKey ?? idempotencyKey('upload-draft'), draftId: initialDraft.id }
+      persistence.current = nextPersistence
+      writePersistence(storageKey, nextPersistence)
+      installServerDraft(initialDraft)
       setResuming(false)
-      return () => { requestGeneration.current += 1 }
+      return () => { controller.abort(); requestGeneration.current += 1 }
     }
-    void api.draft(savedDraftId).then((response) => {
-      if (generation !== requestGeneration.current) return
-      if (response.draft.baseResourceId !== resourceId || response.draft.baseDigest !== baseDigest) {
-        clearPersistence(storageKey)
-        persistence.current = null
-        setMessage({ kind: 'warning', text: 'The saved draft belongs to another release. Start a new draft here.' })
-      } else {
-        installServerDraft(response.draft)
-        setMessage({ kind: 'success', text: `Resumed draft at revision ${response.draft.revision}.` })
+
+    const savedDraftId = resumeDraftId ?? persistence.current?.draftId
+    const shouldLoadReleaseBase = !resourceId.startsWith('upload:')
+    const basePromise = shouldLoadReleaseBase
+      ? loadImmutableReleaseFiles(resourceId, baseDigest, controller.signal)
+      : Promise.resolve<DraftFile[] | null>(null)
+    const draftPromise = savedDraftId
+      ? api.draft(savedDraftId, controller.signal)
+      : Promise.resolve(null)
+    void Promise.allSettled([basePromise, draftPromise]).then(([baseResult, draftResult]) => {
+      if (generation !== requestGeneration.current || controller.signal.aborted) return
+      if (baseResult.status === 'fulfilled' && baseResult.value) {
+        releaseBaseRef.current = cloneFiles(baseResult.value)
+        setReleaseBaseFiles(cloneFiles(baseResult.value))
+      } else if (baseResult.status === 'rejected' && !isAbortError(baseResult.reason)) {
+        setError(baseResult.reason instanceof ApiError ? baseResult.reason.message : baseResult.reason instanceof Error ? baseResult.reason.message : 'Could not load the immutable release files.')
       }
-      setResuming(false)
-    }).catch((cause: unknown) => {
-      if (generation !== requestGeneration.current) return
-      if (cause instanceof ApiError && cause.status === 404) {
-        clearPersistence(storageKey)
-        persistence.current = null
-        setMessage({ kind: 'warning', text: 'The saved draft is no longer available. Start a new draft here.' })
-      } else {
-        setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not resume the saved draft.')
+      if (draftResult.status === 'fulfilled' && draftResult.value) {
+        const response = draftResult.value
+        if (!matchesDraftSource(response.draft)) {
+          clearPersistence(storageKey)
+          persistence.current = null
+          setMessage({ kind: 'warning', text: 'The saved draft belongs to another release. Start a new draft here.' })
+        } else {
+          installServerDraft(response.draft)
+          setMessage({ kind: 'success', text: `Resumed draft at revision ${response.draft.revision}.` })
+        }
+      } else if (draftResult.status === 'rejected' && !isAbortError(draftResult.reason)) {
+        const cause = draftResult.reason
+        if (cause instanceof ApiError && cause.status === 404) {
+          clearPersistence(storageKey)
+          persistence.current = null
+          setMessage({ kind: 'warning', text: 'The saved draft is no longer available. Start a new draft here.' })
+        } else {
+          setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not resume the saved draft.')
+        }
       }
       setResuming(false)
     })
-    return () => { requestGeneration.current += 1 }
-  }, [baseDigest, baseVersion, resourceId, storageKey])
+    return () => { controller.abort(); requestGeneration.current += 1 }
+  }, [baseDigest, baseVersion, initialDraft, resourceId, resumeDraftId, storageKey])
 
   useEffect(() => {
     if (closeRequest > 0) requestClose()
@@ -276,7 +383,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
       const nextPersistence = { ...stored, draftId: response.draft.id }
       persistence.current = nextPersistence
       writePersistence(storageKey, nextPersistence)
-      if (response.draft.baseResourceId !== resourceId || response.draft.baseDigest !== baseDigest) throw new Error('The registry returned a draft for a different release.')
+      if (!matchesDraftSource(response.draft)) throw new Error('The registry returned a draft for a different release.')
       installServerDraft(response.draft)
       setMessage({ kind: 'success', text: response.idempotent ? 'Reopened your existing draft.' : 'Draft created from this release.' })
     } catch (cause) {
@@ -298,7 +405,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     try {
       const response = await api.draft(draft.id)
       if (generation !== requestGeneration.current) return
-      if (response.draft.baseResourceId !== resourceId || response.draft.baseDigest !== baseDigest) throw new Error('The registry returned a draft for a different release.')
+      if (!matchesDraftSource(response.draft)) throw new Error('The registry returned a draft for a different release.')
       installServerDraft(response.draft)
       setMessage({ kind: 'success', text: `Draft reloaded at revision ${response.draft.revision}.` })
     } catch (cause) {
@@ -319,9 +426,9 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     setError(null)
   }
 
-  function switchWorkspaceTab(next: 'files' | 'review'): void {
+  function switchWorkspaceTab(next: 'files' | 'build' | 'review'): void {
     if (busy || next === workspaceTab) return
-    if (next === 'review') setWorkingFiles(syncSurfaceFiles())
+    if (next !== 'files') setWorkingFiles(syncSurfaceFiles())
     setWorkspaceTab(next)
   }
 
@@ -364,7 +471,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     const pathError = validDraftPath(path)
     if (pathError) { setMessage({ kind: 'error', text: pathError }); return }
     if (entries.some((entry) => entry.path === path)) { setMessage({ kind: 'error', text: 'A file with that path already exists in this draft.' }); return }
-    const origin = renameOrigins[selectedPath] ?? (baseFiles.some((file) => file.path === selectedPath) ? selectedPath : undefined)
+    const origin = renameOrigins[selectedPath] ?? (releaseBaseFiles.some((file) => file.path === selectedPath) ? selectedPath : undefined)
     const nextFiles = syncSurfaceFiles().map((file) => file.path === selectedPath ? { ...file, path } : file)
     setWorkingFiles(nextFiles)
     setRenameOrigins((current) => {
@@ -384,7 +491,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     const nextFiles = syncSurfaceFiles().filter((file) => file.path !== selectedPath)
     setWorkingFiles(nextFiles)
     setRenameOrigins((current) => { const next = { ...current }; delete next[selectedPath]; return next })
-    setSelectedPath(firstPath(nextFiles) ?? baseFiles.find((file) => file.path !== selectedPath)?.path ?? null)
+    setSelectedPath(firstPath(nextFiles) ?? releaseBaseFiles.find((file) => file.path !== selectedPath)?.path ?? null)
     setMode('diff')
     setMessage({ kind: 'success', text: `${selectedPath} removed locally. Save the revision to persist it.` })
   }
@@ -400,13 +507,15 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     const snapshot = syncSurfaceFiles()
     if (snapshot.length === 0) { setMessage({ kind: 'error', text: 'A draft must contain at least one file.' }); return }
     const generation = ++requestGeneration.current
-    const key = operationKey(saveOperation, 'draft-save', draft)
     setMode('diff')
     setWorkingFiles(snapshot)
     setSaving(true)
     setError(null)
     setMessage(null)
     try {
+      const payloadFingerprint = await draftPayloadFingerprint(snapshot)
+      if (generation !== requestGeneration.current) return
+      const key = operationKey(saveOperation, 'draft-save', draft, payloadFingerprint)
       const response = await api.updateDraft(draft.id, { expectedRevision: draft.revision, files: snapshot, idempotencyKey: key })
       if (generation !== requestGeneration.current) return
       installServerDraft(response.draft)
@@ -425,11 +534,12 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     const nextVersion = version.trim()
     if (!nextVersion) { setMessage({ kind: 'error', text: 'Enter a release version before queuing a scan.' }); return }
     const generation = ++requestGeneration.current
-    const key = operationKey(publishOperation, 'draft-publish', draft, nextVersion)
     setPublishing(true)
     setError(null)
     setMessage(null)
     try {
+      const payloadFingerprint = JSON.stringify({ expectedRevision: draft.revision, version: nextVersion })
+      const key = operationKey(publishOperation, 'draft-publish', draft, payloadFingerprint, nextVersion)
       const response = await api.publishDraft(draft.id, { expectedRevision: draft.revision, version: nextVersion, idempotencyKey: key })
       if (generation !== requestGeneration.current) return
       publishOperation.current = null
@@ -452,17 +562,26 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     {error && <ErrorState message={error} onRetry={draft ? () => void reloadDraft() : undefined} />}
     {message && <div className="draft-editor-message"><Notice kind={message.kind}>{message.text}</Notice></div>}
     {resuming && <LoadingState label="Looking for an open draft…" />}
-    {!resuming && !draft && <div className="draft-start"><p className="helper">The draft starts with the exact bytes and digest from version <strong>{baseVersion}</strong>. Nothing is saved until you start it.</p><Button kind="secondary" busy={creating} type="button" onClick={() => void startDraft()}>Start draft</Button></div>}
+    {!resuming && !draft && !initialDraft && <div className="draft-start"><p className="helper">The draft starts with the exact bytes and digest from version <strong>{baseVersion}</strong>. Nothing is saved until you start it.</p><Button kind="secondary" busy={creating} type="button" onClick={() => void startDraft()}>Start draft</Button></div>}
+    {!resuming && !draft && initialDraft && <div className="draft-start"><p className="helper">This upload draft is no longer available in the registry.</p></div>}
     {!resuming && draft && <>
       <div className="draft-editor-meta"><span>Revision <strong>{draft.revision}</strong></span><span>Files <strong>{workingFiles.length}</strong></span><span>Size <strong>{formatBytes(draft.size)}</strong></span><span title={draft.digest}>Digest <code>{shortDigest(draft.digest)}</code></span>{hasChanges && <span className="draft-dirty">Local changes</span>}</div>
-      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('review')}>Review</button></div>
-      {workspaceTab === 'review' ? <DraftReviewPanel draft={draft} disabled={busy} /> : <>
+      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'build'} className={workspaceTab === 'build' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('build')}>Build with Eve</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('review')}>Review</button></div>
+      {workspaceTab === 'build' ? <SkillBuilderPanel draft={{ draftId: draft.id, revision: draft.revision, digest: draft.digest, ...(selectedPath ? { selectedPath } : {}) }} adapter={builderAdapter} canApply={!hasChanges && !busy} applyDisabledReason={hasChanges ? 'Save or discard local changes before applying an Eve proposal.' : busy ? 'Wait for the current draft operation to finish.' : undefined} onDraftRebound={(next) => {
+        if (next.id !== draft.id || next.revision <= draft.revision) {
+          setError('Eve returned an unexpected draft revision. Reload the draft before continuing.')
+          return
+        }
+        installServerDraft(next)
+      }} onApplied={(result) => {
+        setMessage({ kind: 'success', text: `Eve applied the proposal and saved revision ${result.draft.revision}.` })
+      }} /> : workspaceTab === 'review' ? <DraftReviewPanel draft={draft} disabled={busy} /> : <>
         <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
         {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
         <div className="draft-editor-layout">
           <div className="draft-editor-main draft-editor-surface-main">
             <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
-            <DraftRendererBoundary key={`${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
+            <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>
