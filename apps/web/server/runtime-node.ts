@@ -108,9 +108,9 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   // resolver function in the long-lived runtime, never its token, and pass it
   // into hosted import jobs so each catalog request obtains a fresh project
   // OIDC credential. Disabled directory access leaves existing env-backed
-  // upstream credentials untouched. A gateway credential is deliberately not
-  // passed through this callback: upstream uses it only for the fixed
-  // official catalog origin, so forwarding it would leak the gateway secret.
+  // upstream credentials untouched. The hosted worker wires an explicitly
+  // configured gateway through its separate, base-bound credential seam;
+  // this callback remains official-origin OIDC only.
   const directoryTokenProvider = createDirectoryTokenProvider(env);
   const hostedSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
     const token = await directoryTokenProvider(signal);
