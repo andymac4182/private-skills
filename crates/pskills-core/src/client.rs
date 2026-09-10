@@ -2102,6 +2102,7 @@ mod tests {
             source_reference: Some("@github/vercel-labs/skills/skills/find-skills".into()),
             source_provider_origin: Some("https://registry.example".into()),
             source_resolution_kind: Some("github".into()),
+            fetched_at: Some("2026-09-10T08:00:00.000Z".into()),
             well_known_entry_name: Some("find-skills".into()),
             external_digest: Some("sha256:external".into()),
             source_url: Some("https://github.com/vercel-labs/skills".into()),
@@ -2123,6 +2124,7 @@ mod tests {
                 slug: "find-skills".into(),
                 source_type: "github".into(),
                 source_url: "https://github.com/vercel-labs/skills".into(),
+                fetched_at: Some("2026-09-10T08:00:00.000Z".into()),
                 page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
                 external_snapshot_hash: Some("snapshot-1".into()),
                 external_digest: Some("sha256:external".into()),
@@ -2168,6 +2170,7 @@ mod tests {
             "https://registry.example"
         );
         assert_eq!(value["provenance"]["sourceResolutionKind"], "github");
+        assert_eq!(value["provenance"]["fetchedAt"], "2026-09-10T08:00:00.000Z");
         assert_eq!(value["provenance"]["wellKnownEntryName"], "find-skills");
         assert_eq!(value["provenance"]["externalDigest"], "sha256:external");
         assert_eq!(
@@ -2178,7 +2181,27 @@ mod tests {
             value["provenance"]["external"]["frontmatterName"],
             "Find Skills"
         );
+        assert_eq!(
+            value["provenance"]["external"]["fetchedAt"],
+            "2026-09-10T08:00:00.000Z"
+        );
         assert!(value["provenance"].get("external_id").is_none());
+        assert!(value["provenance"].get("fetched_at").is_none());
+        assert!(value["provenance"]["external"].get("fetched_at").is_none());
+
+        let roundtrip: LockSkill = serde_json::from_value(value).expect("lock roundtrip");
+        assert_eq!(
+            roundtrip.provenance.fetched_at.as_deref(),
+            Some("2026-09-10T08:00:00.000Z")
+        );
+        assert_eq!(
+            roundtrip
+                .provenance
+                .external
+                .as_ref()
+                .and_then(|external| external.fetched_at.as_deref()),
+            Some("2026-09-10T08:00:00.000Z")
+        );
 
         let legacy: Provenance = serde_json::from_value(serde_json::json!({
             "kind": "native"
@@ -2191,7 +2214,10 @@ mod tests {
         assert_eq!(legacy.source_reference, None);
         assert_eq!(legacy.source_provider_origin, None);
         assert_eq!(legacy.source_resolution_kind, None);
+        assert_eq!(legacy.fetched_at, None);
         assert_eq!(legacy.well_known_entry_name, None);
+        let legacy_value = serde_json::to_value(&legacy).expect("legacy provenance JSON");
+        assert!(legacy_value.get("fetchedAt").is_none());
     }
 
     #[test]

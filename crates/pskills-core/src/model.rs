@@ -49,6 +49,8 @@ pub struct ExternalProvenance {
     pub source_type: String,
     pub source_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub page_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_snapshot_hash: Option<String>,
@@ -110,6 +112,8 @@ pub struct Provenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_resolution_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub well_known_entry_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_digest: Option<Digest>,
@@ -154,6 +158,7 @@ impl Default for Provenance {
             source_reference: None,
             source_provider_origin: None,
             source_resolution_kind: None,
+            fetched_at: None,
             well_known_entry_name: None,
             external_digest: None,
             source_url: None,
