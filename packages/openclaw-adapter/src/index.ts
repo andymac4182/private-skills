@@ -1,8 +1,9 @@
-import type { Principal, SkillVersion } from '../../contracts/src/index.ts';
+import type { Principal, SkillVersion, StateRepository } from '../../contracts/src/index.ts';
 import {
   createOpenClawTenantFeedPreview,
   normalizeOpenClawEntry,
   parseOpenClawFeed,
+  sha256,
   OpenClawValidationError,
   OpenClawFeedCache,
   OpenClawRequestError,
@@ -101,9 +102,14 @@ export interface OpenClawPublicationStore {
   putIfNewer(tenantId: string, publication: OpenClawStoredPublication): Promise<boolean>;
 }
 
+export interface OpenClawPublicationSequenceAllocator {
+  reserveNext(tenantId: string): Promise<number>;
+}
+
 /** A bounded in-memory store for tests and single-process development only. */
 export class MemoryOpenClawPublicationStore implements OpenClawPublicationStore {
   private readonly publications = new Map<string, OpenClawStoredPublication>();
+  private readonly nextSequences = new Map<string, number>();
 
   constructor(private readonly options: { maxTenants?: number } = {}) {
     const maxTenants = options.maxTenants ?? 128;
@@ -114,12 +120,12 @@ export class MemoryOpenClawPublicationStore implements OpenClawPublicationStore 
 
   async read(tenantId: string): Promise<OpenClawStoredPublication | undefined> {
     const publication = this.publications.get(safeTenantId(tenantId));
-    return publication === undefined ? undefined : cloneStoredPublication(publication);
+    return publication === undefined ? undefined : cloneStoredPublication(await validateStoredPublication(publication));
   }
 
   async putIfNewer(tenantId: string, publication: OpenClawStoredPublication): Promise<boolean> {
     const key = safeTenantId(tenantId);
-    const validated = validateStoredPublication(publication);
+    const validated = await validateStoredPublication(publication);
     const current = this.publications.get(key);
     if (current !== undefined && validated.sequence < current.sequence) return false;
     if (current !== undefined && validated.sequence === current.sequence) {
@@ -129,7 +135,75 @@ export class MemoryOpenClawPublicationStore implements OpenClawPublicationStore 
       throw new OpenClawAdapterError('unavailable', 'OpenClaw publication storage is full');
     }
     this.publications.set(key, cloneStoredPublication(validated));
+    this.nextSequences.set(key, Math.max(this.nextSequences.get(key) ?? 0, validated.sequence));
     return true;
+  }
+
+  async reserveNext(tenantId: string): Promise<number> {
+    const key = safeTenantId(tenantId);
+    const next = Math.max(this.nextSequences.get(key) ?? 0, this.publications.get(key)?.sequence ?? 0) + 1;
+    this.nextSequences.set(key, next);
+    return next;
+  }
+}
+
+interface PersistedOpenClawPublication {
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  expiresAt: string;
+  body: string;
+  bytesBase64: string;
+  sha256: OpenClawSha256;
+  etag: string;
+  lastModified: string;
+}
+
+interface OpenClawRepositoryState extends Record<string, unknown> {
+  openClawPublication?: PersistedOpenClawPublication;
+  openClawNextSequence?: number;
+}
+
+/** JSON-safe StateRepository persistence for one tenant's latest publication. */
+export class StateRepositoryOpenClawPublicationStore implements OpenClawPublicationStore, OpenClawPublicationSequenceAllocator {
+  constructor(private readonly repository: StateRepository) {
+    if (!repository || typeof repository.read !== 'function' || typeof repository.transaction !== 'function') {
+      throw new OpenClawAdapterError('invalid_configuration', 'OpenClaw state repository is invalid');
+    }
+  }
+
+  async read(tenantId: string): Promise<OpenClawStoredPublication | undefined> {
+    const state = await this.repository.read(safeTenantId(tenantId));
+    const persisted = (state as unknown as OpenClawRepositoryState).openClawPublication;
+    return persisted === undefined ? undefined : fromPersistedPublication(persisted);
+  }
+
+  async putIfNewer(tenantId: string, publication: OpenClawStoredPublication): Promise<boolean> {
+    const key = safeTenantId(tenantId);
+    const validated = await validateStoredPublication(publication);
+    const persisted = toPersistedPublication(validated);
+    return this.repository.transaction(key, (state) => {
+      const extension = state as unknown as OpenClawRepositoryState;
+      const current = extension.openClawPublication;
+      if (current !== undefined && current.sequence > persisted.sequence) return false;
+      if (current !== undefined && current.sequence === persisted.sequence) {
+        return samePersistedPublication(current, persisted);
+      }
+      extension.openClawPublication = persisted;
+      extension.openClawNextSequence = Math.max(extension.openClawNextSequence ?? 0, persisted.sequence);
+      return true;
+    });
+  }
+
+  async reserveNext(tenantId: string): Promise<number> {
+    const key = safeTenantId(tenantId);
+    return this.repository.transaction(key, (state) => {
+      const extension = state as unknown as OpenClawRepositoryState;
+      const currentSequence = extension.openClawPublication?.sequence ?? 0;
+      const next = Math.max(extension.openClawNextSequence ?? 0, currentSequence) + 1;
+      extension.openClawNextSequence = next;
+      return next;
+    });
   }
 }
 
@@ -169,6 +243,17 @@ export interface OpenClawFeedHandlerOptions {
   }): Promise<OpenClawStoredPublication | OpenClawFeedPublicationSnapshot>;
   /** Optional stricter ACL for a feed or namespace. */
   authorize?(principal: Principal): boolean | Promise<boolean>;
+  /**
+   * Optional per-publication admission check. A restricted namespace
+   * principal is denied by default unless the host supplies a check that
+   * revalidates every published resource against the current policy.
+   */
+  authorizePublication?(input: {
+    tenantId: string;
+    principal: Principal;
+    publication: OpenClawStoredPublication | OpenClawFeedPublicationSnapshot;
+    signal: AbortSignal;
+  }): boolean | Promise<boolean>;
   now?: () => number;
 }
 
@@ -217,7 +302,7 @@ export class OpenClawPublicationManager {
       entries,
       authenticatedTenantId: tenantId,
     });
-    const stored = toStoredPublication(produced);
+    const stored = await toStoredPublication(produced);
     let accepted: boolean;
     try {
       accepted = await this.store.putIfNewer(tenantId, stored);
@@ -230,10 +315,33 @@ export class OpenClawPublicationManager {
     return cloneStoredPublication(stored);
   }
 
+  /**
+   * Allocate the next tenant sequence before building a publication.  Durable
+   * stores implement this as a repository transaction; generic stores may
+   * fall back to a bounded read-then-publish path.
+   */
+  async publishNext(input: {
+    tenantId: string;
+    publication: Omit<OpenClawFeedPublicationSnapshot, 'sequence'>;
+  }): Promise<OpenClawStoredPublication> {
+    const allocator = this.store as OpenClawPublicationStore & Partial<OpenClawPublicationSequenceAllocator>;
+    let sequence: number;
+    if (typeof allocator.reserveNext === 'function') {
+      sequence = await allocator.reserveNext(safeTenantId(input.tenantId));
+    } else {
+      const current = await this.get(input.tenantId);
+      sequence = (current?.sequence ?? 0) + 1;
+    }
+    return this.publish({
+      tenantId: input.tenantId,
+      publication: { ...input.publication, sequence },
+    });
+  }
+
   async get(tenantId: string): Promise<OpenClawStoredPublication | undefined> {
     try {
       const publication = await this.store.read(safeTenantId(tenantId));
-      return publication === undefined ? undefined : validateStoredPublication(publication);
+      return publication === undefined ? undefined : await validateStoredPublication(publication);
     } catch (error) {
       if (error instanceof OpenClawAdapterError) throw error;
       throw new OpenClawAdapterError('unavailable', 'OpenClaw publication storage is unavailable');
@@ -295,9 +403,26 @@ export function createOpenClawSkillsFeedHandler(
         principal,
         signal: request.signal,
       });
+      if (isRestrictedNamespacePrincipal(principal) && !options.authorizePublication) {
+        return forbiddenResponse();
+      }
+      if (options.authorizePublication) {
+        let allowed = false;
+        try {
+          allowed = await options.authorizePublication({
+            tenantId,
+            principal,
+            publication,
+            signal: request.signal,
+          });
+        } catch {
+          allowed = false;
+        }
+        if (!allowed) return forbiddenResponse();
+      }
       const nowMs = safeNow(now());
       if (isStoredPublication(publication)) {
-        const stored = validateStoredPublication(publication);
+        const stored = await validateStoredPublication(publication);
         const storedGeneratedAt = safeIsoTimestamp(stored.generatedAt, 'generatedAt');
         const storedExpiresAt = safeIsoTimestamp(stored.expiresAt, 'expiresAt');
         if (storedGeneratedAt > nowMs || storedExpiresAt - storedGeneratedAt > MAX_PUBLICATION_TTL_MS) {
@@ -352,6 +477,12 @@ export function createOpenClawTenantFeedRoute(options: {
   manager: OpenClawPublicationReader;
   authenticate(request: Request): Promise<Principal | null>;
   authorize?(principal: Principal): boolean | Promise<boolean>;
+  authorizePublication?(input: {
+    tenantId: string;
+    principal: Principal;
+    publication: OpenClawStoredPublication | OpenClawFeedPublicationSnapshot;
+    signal: AbortSignal;
+  }): boolean | Promise<boolean>;
   now?: () => number;
 }): OpenClawFeedHandler {
   if (!options || !options.manager || typeof options.manager.get !== 'function') {
@@ -360,6 +491,7 @@ export function createOpenClawTenantFeedRoute(options: {
   return createOpenClawSkillsFeedHandler({
     authenticate: options.authenticate,
     authorize: options.authorize,
+    authorizePublication: options.authorizePublication,
     now: options.now,
     publicationForTenant: async ({ tenantId }) => {
       const publication = await options.manager.get(tenantId);
@@ -477,7 +609,79 @@ function isStoredPublication(value: unknown): value is OpenClawStoredPublication
   return Boolean(value && typeof value === 'object' && 'body' in value && 'bytes' in value && 'sha256' in value && 'etag' in value);
 }
 
-function validateStoredPublication(value: OpenClawStoredPublication): OpenClawStoredPublication {
+function toPersistedPublication(publication: OpenClawStoredPublication): PersistedOpenClawPublication {
+  return {
+    id: publication.id,
+    generatedAt: publication.generatedAt,
+    sequence: publication.sequence,
+    expiresAt: publication.expiresAt,
+    body: publication.body,
+    bytesBase64: bytesToBase64(publication.bytes),
+    sha256: publication.sha256,
+    etag: publication.etag,
+    lastModified: publication.lastModified,
+  };
+}
+
+async function fromPersistedPublication(value: PersistedOpenClawPublication): Promise<OpenClawStoredPublication> {
+  if (!value || typeof value !== 'object' || typeof value.bytesBase64 !== 'string') {
+    throw new OpenClawAdapterError('invalid_record', 'The persisted OpenClaw publication is malformed');
+  }
+  return validateStoredPublication({
+    id: value.id,
+    generatedAt: value.generatedAt,
+    sequence: value.sequence,
+    expiresAt: value.expiresAt,
+    body: value.body,
+    bytes: base64ToBytes(value.bytesBase64),
+    sha256: value.sha256,
+    etag: value.etag,
+    lastModified: value.lastModified,
+  });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof btoa !== 'function') {
+    throw new OpenClawAdapterError('unavailable', 'OpenClaw publication encoding is unavailable');
+  }
+  let binary = '';
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.byteLength)));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  if (
+    typeof atob !== 'function' ||
+    value.length > 8 * 1024 * 1024 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)
+  ) {
+    throw new OpenClawAdapterError('invalid_record', 'The persisted OpenClaw bytes are invalid');
+  }
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch {
+    throw new OpenClawAdapterError('invalid_record', 'The persisted OpenClaw bytes are invalid');
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function samePersistedPublication(left: PersistedOpenClawPublication, right: PersistedOpenClawPublication): boolean {
+  return left.id === right.id &&
+    left.generatedAt === right.generatedAt &&
+    left.expiresAt === right.expiresAt &&
+    left.body === right.body &&
+    left.bytesBase64 === right.bytesBase64 &&
+    left.sha256 === right.sha256 &&
+    left.etag === right.etag &&
+    left.lastModified === right.lastModified;
+}
+
+async function validateStoredPublication(value: OpenClawStoredPublication): Promise<OpenClawStoredPublication> {
   const snapshot = validatePublicationSnapshot({
     id: value.id,
     generatedAt: value.generatedAt,
@@ -501,6 +705,15 @@ function validateStoredPublication(value: OpenClawStoredPublication): OpenClawSt
   const bodyBytes = new TextEncoder().encode(value.body);
   if (!bytesEqual(bodyBytes, value.bytes)) {
     throw new OpenClawAdapterError('invalid_record', 'The stored publication bytes do not match its body');
+  }
+  let actualSha256: OpenClawSha256;
+  try {
+    actualSha256 = await sha256(value.bytes);
+  } catch {
+    throw new OpenClawAdapterError('unavailable', 'OpenClaw publication hashing is unavailable');
+  }
+  if (actualSha256 !== value.sha256) {
+    throw new OpenClawAdapterError('invalid_record', 'The stored publication digest does not match its bytes');
   }
   try {
     const parsed = parseOpenClawFeed(value.body, {
@@ -528,14 +741,14 @@ function validateStoredPublication(value: OpenClawStoredPublication): OpenClawSt
   };
 }
 
-function toStoredPublication(produced: {
+async function toStoredPublication(produced: {
   feed: OpenClawFeed;
   body: string;
   bytes: Uint8Array;
   sha256: OpenClawSha256;
   etag: string;
   lastModified: string;
-}): OpenClawStoredPublication {
+}): Promise<OpenClawStoredPublication> {
   return validateStoredPublication({
     id: produced.feed.id,
     generatedAt: produced.feed.generatedAt,
@@ -869,6 +1082,11 @@ function isReaderPrincipal(principal: Principal): boolean {
   return principal.scopes.some((scope) =>
     scope === '*' || scope === 'registry:*' || scope === 'registry:read' || scope === 'skills:read',
   );
+}
+
+function isRestrictedNamespacePrincipal(principal: Principal): boolean {
+  if (principal.roles.includes('owner') || principal.roles.includes('admin')) return false;
+  return Array.isArray(principal.namespaces) && principal.namespaces.length > 0;
 }
 
 function safeTenantId(value: string): string {

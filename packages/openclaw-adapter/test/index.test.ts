@@ -6,6 +6,7 @@ import {
   MemoryOpenClawPublicationStore,
   OpenClawAdapterError,
   OpenClawPublicationManager,
+  StateRepositoryOpenClawPublicationStore,
   createOpenClawSkillsFeedHandler,
   previewOpenClawFeed,
   selectOpenClawEligibleRecords,
@@ -14,6 +15,7 @@ import {
 } from '../src/index.ts';
 import { OpenClawFeedCache } from '../../openclaw/src/client.ts';
 import { serializeOpenClawFeed } from '../../openclaw/src/feed.ts';
+import { createMemoryStateRepository } from '../../database/src/index.ts';
 import type { OpenClawFeed, OpenClawSkillEntry } from '../../openclaw/src/types.ts';
 import type { Principal } from '../../contracts/src/index.ts';
 
@@ -297,6 +299,71 @@ describe('private OpenClaw producer route', () => {
     expect(notModified.status).toBe(304);
     expect(await notModified.text()).toBe('');
     expect((await manager.get('tenant-b'))?.id).toBe('private/opaque-b');
+  });
+
+  it('persists JSON-safe bytes and allocates sequences atomically through StateRepository', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawPublicationStore(repository);
+    const manager = new OpenClawPublicationManager(store);
+    const input = {
+      id: 'private/opaque-a',
+      generatedAt: '2030-01-01T00:00:00.000Z',
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      records: [record()],
+    } satisfies Omit<OpenClawFeedPublicationSnapshot, 'sequence'>;
+    const first = await manager.publishNext({ tenantId: 'tenant-a', publication: input });
+    const second = await manager.publishNext({ tenantId: 'tenant-a', publication: input });
+    expect(first.sequence).toBe(1);
+    expect(second.sequence).toBe(2);
+    const reloaded = await new OpenClawPublicationManager(new StateRepositoryOpenClawPublicationStore(repository)).get('tenant-a');
+    expect(reloaded).toMatchObject({ sequence: 2, sha256: second.sha256, etag: second.etag });
+    const persisted = await repository.read('tenant-a');
+    const persistedJson = JSON.stringify(persisted);
+    expect(persistedJson).not.toContain('Uint8Array');
+    expect((persisted as unknown as { openClawPublication: { bytesBase64: string } }).openClawPublication.bytesBase64).toMatch(/^[A-Za-z0-9+/]+=*$/u);
+  });
+
+  it('rehashes stored bytes and denies a restricted namespace before serving the feed', async () => {
+    const store = new MemoryOpenClawPublicationStore();
+    const manager = new OpenClawPublicationManager(store);
+    const stored = await manager.publish({
+      tenantId: 'tenant-a',
+      publication: {
+        id: 'private/opaque-a',
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        records: [record()],
+      },
+    });
+    const corruptingManager = new OpenClawPublicationManager({
+      read: async () => ({
+        ...stored,
+        body: stored.body.replace('Demo skill', 'Corrupted skill'),
+        bytes: new TextEncoder().encode(stored.body.replace('Demo skill', 'Corrupted skill')),
+      }),
+      putIfNewer: async () => false,
+    });
+    await expect(corruptingManager.get('tenant-a')).rejects.toMatchObject({ code: 'invalid_record' });
+
+    const restrictedPrincipal: Principal = { ...PRINCIPAL, namespaces: ['@other'] };
+    const denied = createOpenClawTenantFeedRoute({
+      manager,
+      authenticate: async () => restrictedPrincipal,
+      now: () => Date.parse('2030-01-01T00:00:00.000Z'),
+    });
+    expect((await denied(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(403);
+    const admitted = createOpenClawTenantFeedRoute({
+      manager,
+      authenticate: async () => restrictedPrincipal,
+      authorizePublication: async ({ principal, publication }) => {
+        expect(principal.namespaces).toEqual(['@other']);
+        expect('body' in publication).toBe(true);
+        return true;
+      },
+      now: () => Date.parse('2030-01-01T00:00:00.000Z'),
+    });
+    expect((await admitted(new Request('https://registry.example/v1/feeds/skills'))).status).toBe(200);
   });
 
   it('keeps publication sequence monotonic under concurrent publication attempts', async () => {
