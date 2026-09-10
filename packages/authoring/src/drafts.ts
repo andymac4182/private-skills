@@ -90,6 +90,8 @@ export interface PublicSkillDraftPublication {
   createdAt: string;
 }
 
+type DraftResponseEnvelope = (publicDraft: PublicSkillDraft) => unknown;
+
 const MAX_PUBLICATION_HISTORY = 16;
 
 /**
@@ -132,6 +134,12 @@ export interface DraftRevisionWriteInput {
    * with the revision it authorizes.
    */
   readonly onCommit?: (state: RegistryState, draft: SkillDraft) => void;
+  /**
+   * Optional complete public response wrapper used by builder apply. The
+   * envelope is checked again inside the CAS transaction against the actual
+   * publication history before any draft or proposal mutation.
+   */
+  readonly responseEnvelope?: DraftResponseEnvelope;
 }
 
 export interface DraftRevisionWriteResult {
@@ -569,6 +577,10 @@ async function applyBuilderProposal(
     deps,
     kind: 'builder-proposal',
     proposalId,
+    responseEnvelope: (publicDraft) => ({
+      proposal: publicBuilderProposal({ ...proposal, state: 'applied' }, before),
+      draft: publicDraft,
+    }),
     onCommit: (mutable, updatedDraft) => {
       const currentSession = findBuilderSession(mutable, draftId, sessionId, deps.config.organizationId);
       const currentProposal = currentSession?.proposals.find((candidate) => candidate.id === proposalId && candidate.subject === principal.subject);
@@ -1166,6 +1178,7 @@ export async function writeDraftRevision(
   ));
   const identityDigest = requestDigest ?? fullRequestDigest!;
   const prior = findIdempotency(before, idempotencyKey, input.principal.subject);
+  const publicStateFingerprint = publicDraftStateFingerprint(before);
   if (prior) {
     if (prior.requestDigest !== identityDigest) throw idempotencyConflict();
     const replay = await draftFromIdempotency(before, prior, input.deps);
@@ -1173,7 +1186,7 @@ export async function writeDraftRevision(
     await assertDraftEnvelopeFits(
       replay,
       replayBundle,
-      kind === 'update' ? (publicDraft) => ({ draft: publicDraft, idempotent: true }) : undefined,
+      input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
     );
     // Recover a queue write lost after the draft transaction. The current
     // binding guard prevents an old revision's replay from staling or
@@ -1228,7 +1241,7 @@ export async function writeDraftRevision(
   await assertDraftEnvelopeFits(
     candidateDraft,
     { format: 'pskills-bundle-v1', files: bundle!.files },
-    kind === 'update' ? (publicDraft) => ({ draft: publicDraft, idempotent: false }) : undefined,
+    input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
   );
   const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
   record.artifact = stored;
@@ -1238,6 +1251,18 @@ export async function writeDraftRevision(
     const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
     if (concurrent) {
       if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
+      const replay = {
+        ...current,
+        revision: concurrent.revision,
+        digest: concurrent.digest,
+        artifact: concurrent.artifact,
+        updatedAt: concurrent.updatedAt,
+      };
+      assertDraftEnvelopeSizeWithManifest(
+        replay,
+        concurrent.manifest,
+        input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
+      );
       return { draft: current, idempotent: true };
     }
     if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
@@ -1245,12 +1270,30 @@ export async function writeDraftRevision(
     if (expectedDigest !== undefined && current.digest !== expectedDigest) {
       throw draftDigestConflict(current.revision);
     }
+    if (publicDraftStateFingerprint(current) !== publicStateFingerprint) {
+      throw publicDraftStateConflict(current.revision);
+    }
+    const nextIdempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
+    const nextDraft: SkillDraft = {
+      ...current,
+      revision: expectedRevision + 1,
+      digest: digest!,
+      artifact: stored,
+      files: bundle!.files,
+      updatedAt: now,
+      idempotency: nextIdempotency,
+    };
+    assertDraftEnvelopeSizeWithManifest(
+      nextDraft,
+      record.manifest,
+      input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
+    );
     current.revision = expectedRevision + 1;
     current.digest = digest!;
     current.artifact = stored;
     current.files = bundle!.files;
     current.updatedAt = now;
-    current.idempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
+    current.idempotency = nextIdempotency;
     appendDraftAudit(
       state,
       input.principal,
@@ -1781,14 +1824,35 @@ function responsePreflightArtifact(digest: Digest, size: number): StoredBlob {
 async function assertDraftEnvelopeFits(
   draft: SkillDraft,
   bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] },
-  envelope: (publicDraft: PublicSkillDraft) => unknown = (publicDraft) => ({ draft: publicDraft }),
+  envelope: DraftResponseEnvelope = (publicDraft) => ({ draft: publicDraft }),
 ): Promise<void> {
   const publicDraft = await toPublicDraft(draft, bundle);
   assertDraftResponseSize(envelope(publicDraft));
 }
 
+function assertDraftEnvelopeSizeWithManifest(
+  draft: SkillDraft,
+  manifest: SkillDraftFileManifestEntry[],
+  envelope: DraftResponseEnvelope,
+): void {
+  assertDraftResponseSize(envelope(publicDraftWithManifest(draft, manifest)));
+}
+
+function defaultDraftResponseEnvelope(
+  kind: DraftRevisionWriteInput['kind'],
+  idempotent: boolean,
+): DraftResponseEnvelope {
+  return kind === 'update'
+    ? (publicDraft) => ({ draft: publicDraft, idempotent })
+    : (publicDraft) => ({ draft: publicDraft });
+}
+
 export async function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): Promise<PublicSkillDraft> {
   const files = await publicDraftManifest(draft, bundle.files);
+  return publicDraftWithManifest(draft, files);
+}
+
+function publicDraftWithManifest(draft: SkillDraft, files: SkillDraftFileManifestEntry[]): PublicSkillDraft {
   return {
     id: draft.id,
     origin: draftOrigin(draft),
@@ -1807,17 +1871,48 @@ export async function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskill
     updatedAt: draft.updatedAt,
     ...(draft.publications
       ? {
-        publications: draft.publications.slice(-MAX_PUBLICATION_HISTORY).map((publication) => ({
-          revision: publication.revision,
-          digest: publication.digest,
-          version: publication.version,
-          resourceId: publication.resourceId,
-          jobId: publication.jobId,
-          createdAt: publication.createdAt,
-        })),
+        publications: draft.publications.slice(-MAX_PUBLICATION_HISTORY).map(publicDraftPublication),
       }
       : {}),
   };
+}
+
+function publicDraftPublication(publication: SkillDraftPublicationRecord): PublicSkillDraftPublication {
+  return {
+    revision: publication.revision,
+    digest: publication.digest,
+    version: publication.version,
+    resourceId: publication.resourceId,
+    jobId: publication.jobId,
+    createdAt: publication.createdAt,
+  };
+}
+
+/**
+ * Fingerprint the mutable fields that can appear in a public draft response.
+ * The writer compares this inside the CAS transaction so a same-revision
+ * publication/status change cannot make a previously checked envelope grow
+ * after the revision mutation.
+ */
+function publicDraftStateFingerprint(draft: SkillDraft): string {
+  return JSON.stringify({
+    id: draft.id,
+    origin: draftOrigin(draft),
+    name: draft.name,
+    skillName: draft.skillName,
+    description: draft.description,
+    ...(draft.baseResourceId === undefined ? {} : { baseResourceId: draft.baseResourceId }),
+    ...(draft.baseDigest === undefined ? {} : { baseDigest: draft.baseDigest }),
+    revision: draft.revision,
+    digest: draft.digest,
+    status: draft.status,
+    actor: draft.actor,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+    ...(draft.publications === undefined
+      ? {}
+      : { publications: draft.publications.slice(-MAX_PUBLICATION_HISTORY).map(publicDraftPublication) }),
+  });
 }
 
 async function publicDraftManifest(
@@ -2267,6 +2362,15 @@ function idempotencyConflict(): AuthoringApiError {
 
 function revisionConflict(currentRevision: number): AuthoringApiError {
   return new AuthoringApiError('DRAFT_CONFLICT', 'Draft revision is stale; rebase before saving', 409, { currentRevision });
+}
+
+function publicDraftStateConflict(currentRevision: number): AuthoringApiError {
+  return new AuthoringApiError(
+    'DRAFT_CONFLICT',
+    'Draft metadata changed while saving; reload before saving',
+    409,
+    { currentRevision },
+  );
 }
 
 function draftDigestConflict(currentRevision: number | undefined, path?: string): AuthoringApiError {

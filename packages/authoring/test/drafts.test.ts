@@ -9,6 +9,7 @@ import type {
   BlobStore,
   Principal,
   RegistryState,
+  SkillDraftPublicationRecord,
   SkillBundle,
   SkillVersion,
   StoredBlob,
@@ -685,6 +686,86 @@ describe('durable skill drafts', () => {
     expect(state.uploadReviewJobs ?? []).toHaveLength(1);
     expect(state.uploadReviewResults ?? []).toHaveLength(0);
     expect(test.blobs.putCalls).toBe(2);
+  });
+
+  it('rejects a same-revision publication race before the draft CAS mutation', async () => {
+    const longSegment = 'a'.repeat(255);
+    const longFiles: SkillBundle['files'] = Array.from({ length: 1_686 }, (_, index) => ({
+      path: `${Array.from({ length: 10 }, () => longSegment).join('/')}/${index}`,
+      content: base64('x'),
+    }));
+
+    async function publicationRace(kind: 'update' | 'builder-proposal'): Promise<void> {
+      const test = await fixture({ withReview: true });
+      const created = await create(test, `race-base-${kind}`);
+      let allowPut!: () => void;
+      let signalPut!: () => void;
+      const putStarted = new Promise<void>((resolve) => { signalPut = resolve; });
+      const putGate = new Promise<void>((resolve) => { allowPut = resolve; });
+      const originalPut = test.blobs.put.bind(test.blobs);
+      test.blobs.put = async (bytes) => {
+        if (test.blobs.putCalls === 2) {
+          signalPut();
+          await putGate;
+        }
+        return await originalPut(bytes);
+      };
+
+      let committed = false;
+      const write = writeDraftRevision({
+        draftId: created.draft.id,
+        expectedRevision: 1,
+        expectedDigest: created.draft.digest,
+        files: longFiles,
+        idempotencyKey: `race-${kind}`,
+        principal: user(),
+        deps: test.deps,
+        kind,
+        proposalId: kind === 'builder-proposal' ? 'race-proposal' : undefined,
+        ...(kind === 'builder-proposal' ? {
+          responseEnvelope: (publicDraft) => ({ proposal: { state: 'applied' }, draft: publicDraft }),
+          onCommit: () => { committed = true; },
+        } : {}),
+      });
+
+      const started = await Promise.race([
+        putStarted.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+      ]);
+      if (!started) allowPut();
+      expect(started).toBe(true);
+
+      const publications: SkillDraftPublicationRecord[] = Array.from({ length: 16 }, (_, index) => ({
+        key: `publication-${index}`,
+        subject: 'publisher',
+        requestDigest: created.draft.digest,
+        revision: 1,
+        digest: created.draft.digest,
+        version: `1.0.${index}`,
+        resourceId: `skill-${index}`,
+        jobId: `job-${index}`,
+        createdAt: `2026-09-10T00:00:${String(index).padStart(2, '0')}.000Z`,
+      }));
+      await test.repository.transaction(ORGANIZATION, (state) => {
+        state.drafts![0]!.publications = publications;
+      });
+      allowPut();
+
+      await expect(write).rejects.toMatchObject({ code: 'DRAFT_CONFLICT' });
+      expect(committed).toBe(false);
+      const state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: unknown[] };
+      expect(state.drafts![0]).toMatchObject({ revision: 1, digest: created.draft.digest });
+      expect(state.drafts![0]!.publications).toHaveLength(16);
+      expect(state.audit).toHaveLength(1);
+      expect(state.uploadReviewJobs ?? []).toHaveLength(1);
+      // The sealed blob is written before the repository CAS, matching the
+      // existing storage/CAS contract; the failed 409 leaves no state or
+      // review mutation and the orphan is eligible for normal blob cleanup.
+      expect(test.blobs.putCalls).toBe(3);
+    }
+
+    await publicationRace('update');
+    await publicationRace('builder-proposal');
   });
 
   it('returns an explicit conflict when the selected base digest is stale', async () => {
