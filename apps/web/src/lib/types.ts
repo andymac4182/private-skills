@@ -181,3 +181,32 @@ export interface ReleaseFilesResponse {
   }
   files: ReleaseFileView[]
 }
+
+export interface DraftView {
+  id: string
+  name: string
+  skillName: string
+  description?: string
+  baseResourceId: string
+  baseDigest: `sha256:${string}`
+  revision: number
+  digest: `sha256:${string}`
+  size: number
+  files: SkillBundle['files']
+  status: 'open' | 'publishing' | 'published' | 'discarded'
+  actor: string
+  createdAt: string
+  updatedAt: string
+  publications?: Array<{ resourceId: string; jobId: string; version: string; revision: number; digest: `sha256:${string}`; createdAt: string }>
+}
+export interface DraftResponse { draft: DraftView; idempotent?: boolean }
+export interface DraftPublishOperation {
+  id: string
+  resourceId: string
+  state: 'queued'
+  version: string
+  revision: number
+  digest: `sha256:${string}`
+  scanRequired: true
+}
+export interface DraftPublishResponse { operation: DraftPublishOperation; idempotent?: boolean }

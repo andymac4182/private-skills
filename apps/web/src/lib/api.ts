@@ -5,7 +5,7 @@ import type {
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
-  SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse,
+  SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -72,6 +72,16 @@ export const api = {
   operation(id: string) { return request<OperationResponse>(`/v1/operations/${encodeURIComponent(id)}`).then(unwrap) },
   releaseFiles(resourceId: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`).then(unwrap) },
   releaseFile(resourceId: string, path: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path } }).then(unwrap) },
+  createDraft(resourceId: string, baseDigest: `sha256:${string}`, idempotencyKey: string) {
+    return request<DraftResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/drafts`, { method: 'POST', body: { baseDigest }, headers: { 'idempotency-key': idempotencyKey } }).then(unwrap)
+  },
+  draft(draftId: string) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`).then(unwrap) },
+  updateDraft(draftId: string, input: { expectedRevision: number; files: SkillBundle['files']; idempotencyKey: string }) {
+    return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { method: 'PUT', body: { expectedRevision: input.expectedRevision, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  },
+  publishDraft(draftId: string, input: { expectedRevision: number; version: string; idempotencyKey: string }) {
+    return request<DraftPublishResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST', body: { expectedRevision: input.expectedRevision, version: input.version }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  },
   policy() { return request<PolicyResponse>('/v1/policy').then(unwrap) },
   updatePolicy(policy: Policy) {
     const { revision: _revision, ...next } = policy

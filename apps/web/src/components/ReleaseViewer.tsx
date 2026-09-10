@@ -3,11 +3,15 @@ import { api, ApiError } from '../lib/api'
 import { formatBytes, shortDigest } from '../lib/format'
 import type { ReleaseFileView, ReleaseFilesResponse } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
+import { DraftEditor } from './DraftEditor'
 
 const PierreReleaseRenderer = lazy(() => import('./PierreReleaseRenderer').then((module) => ({ default: module.PierreReleaseRenderer })))
 
 interface ReleaseViewerProps {
   resourceId: string
+  baseDigest: `sha256:${string}`
+  baseVersion: string
+  canEdit: boolean
 }
 
 interface ErrorBoundaryProps {
@@ -46,8 +50,9 @@ function displayPreviewState(file: ReleaseFileView): string {
   return 'Unsupported preview'
 }
 
-export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
+export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: ReleaseViewerProps) {
   const [open, setOpen] = useState(false)
+  const [draftOpen, setDraftOpen] = useState(false)
   const [manifest, setManifest] = useState<ReleaseFilesResponse | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<ReleaseFileView | null>(null)
@@ -82,6 +87,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
   useEffect(() => {
     requestGeneration.current += 1
     setOpen(false)
+    setDraftOpen(false)
     setManifest(null)
     setSelectedPath(null)
     setSelectedFile(null)
@@ -148,7 +154,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
         <h3>Explore files in this version</h3>
         <p className="helper">Read-only view of the selected version.</p>
       </div>
-      <Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>
+      <div className="row-actions"><Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>{canEdit && <Button kind="quiet" type="button" onClick={() => setDraftOpen((current) => !current)}>{draftOpen ? 'Hide editor' : 'Open draft editor'}</Button>}</div>
     </div>
     {open && <div className="release-viewer-body">
       {manifestLoading && <LoadingState label="Loading the release manifest…" />}
@@ -173,6 +179,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
         </OptionalRendererBoundary>
       </>}
     </div>}
+    {draftOpen && <DraftEditor resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onClose={() => setDraftOpen(false)} />}
   </section>
 }
 
