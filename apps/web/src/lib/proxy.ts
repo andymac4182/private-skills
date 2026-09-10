@@ -29,10 +29,24 @@ interface ProxyMemberProvenance {
 }
 
 export function verifiedSourceReference(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length < 4 || value.length > 2_048 || !value.startsWith('@') || /[\u0000-\u001f\u007f\\?#%\s]/u.test(value)) return null
+  if (typeof value !== 'string' || value.length < 4 || value.length > 2_048 || !isWellFormedUnicode(value) || !value.startsWith('@') || /[\u0000-\u001f\u007f\\?#%]/u.test(value)) return null
   const parts = value.slice(1).split('/')
-  if (parts.length < 2 || !['github', 'web', 'snapshot'].includes(parts[0] ?? '') || parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._~-]+$/u.test(part))) return null
+  if (parts.length < 3 || !['github', 'web', 'snapshot'].includes(parts[0] ?? '') || parts.some((part) => !part || part === '.' || part === '..')) return null
   return value
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index)
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false
+      index += 1
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false
+    }
+  }
+  return true
 }
 
 function matchesFeed(provenance: ProxyMemberProvenance, feed: DirectoryFeed): boolean {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DirectoryFeed, Job, SkillVersion } from './types'
-import { pinProxyOperation } from './proxy'
+import { pinProxyOperation, verifiedSourceReference } from './proxy'
 
 const feed: DirectoryFeed = {
   id: 'feed-community',
@@ -28,5 +28,23 @@ describe('pinProxyOperation', () => {
   it('rejects a scan job when source or feed provenance does not match', () => {
     expect(pinProxyOperation(job({ resourceId: 'skill-1' }), feed, 'other/repo/skill', undefined, skill())).toBeNull()
     expect(pinProxyOperation(job({ resourceId: 'skill-1' }), feed, 'owner/repo/skill', undefined, skill({ provenance: { kind: 'skills-sh', externalId: 'owner/repo/skill', feedId: 'feed-other', feedName: feed.name } as SkillVersion['provenance'] }))).toBeNull()
+  })
+})
+
+describe('verifiedSourceReference', () => {
+  it('accepts bounded server-derived snapshot references with punctuation and Unicode', () => {
+    expect(verifiedSourceReference('@snapshot/skills-sh/source.127.0.0.1:59009/transparent-demo')).toBe('@snapshot/skills-sh/source.127.0.0.1:59009/transparent-demo')
+    expect(verifiedSourceReference('@snapshot/skills-sh/团队/技能')).toBe('@snapshot/skills-sh/团队/技能')
+    expect(verifiedSourceReference('@snapshot/skills-sh/owner/repo skill')).toBe('@snapshot/skills-sh/owner/repo skill')
+  })
+
+  it('rejects unknown families, traversal, unsafe separators, controls, and malformed Unicode', () => {
+    expect(verifiedSourceReference('@other/skills-sh/source/skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source/../skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source//skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source\\skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source?skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source\u0000skill')).toBeNull()
+    expect(verifiedSourceReference('@snapshot/skills-sh/source/\ud800')).toBeNull()
   })
 })
