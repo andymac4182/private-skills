@@ -365,6 +365,22 @@ function validBlobRecord(value: unknown): value is StoredBlob {
     typeof candidate.size === 'number' && Number.isSafeInteger(candidate.size) && candidate.size >= 0;
 }
 
+/**
+ * A StoredBlob is deliberately recognized by its complete shape.  Several
+ * persisted authoring records also have a `key` and a `digest` (the
+ * idempotency/publication history), while compact file-manifest entries have
+ * a `digest` and `size`.  Treating any one of those fields as a blob marker
+ * makes draft history look like an invalid object and either omits the
+ * sealed artifact or aborts the backup.  Requiring all three fields lets the
+ * recursive walk discover current and historical draft artifacts while
+ * preserving the surrounding metadata records verbatim.
+ */
+function hasStoredBlobShape(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return 'key' in candidate && 'digest' in candidate && 'size' in candidate;
+}
+
 function totalObjectByteBudget(value: unknown, field: string): number {
   if (value === undefined) return MAX_BACKUP_TOTAL_OBJECT_BYTES;
   if (
@@ -446,8 +462,7 @@ function collectBlobReferences(value: unknown, path = 'state', seen = new WeakSe
     return value.flatMap((entry, index) => collectBlobReferences(entry, `${path}[${index}]`, seen));
   }
   const record = value as Record<string, unknown>;
-  const hasBlobShape = 'key' in record || ('digest' in record && 'size' in record);
-  if (hasBlobShape) {
+  if (hasStoredBlobShape(record)) {
     if (!validBlobRecord(record)) fail('MANIFEST_INVALID', `invalid sealed-object reference at ${path}`);
     return [{ key: record.key, digest: record.digest, size: record.size, path }];
   }
@@ -888,7 +903,7 @@ function rewriteBlobKeys(value: unknown, keyMap: ReadonlyMap<string, StoredBlob>
   seen.add(value);
   if (Array.isArray(value)) return value.map((entry) => rewriteBlobKeys(entry, keyMap, seen));
   const record = value as Record<string, unknown>;
-  if ('key' in record || ('digest' in record && 'size' in record)) {
+  if (hasStoredBlobShape(record)) {
     if (!validBlobRecord(record)) fail('MANIFEST_INVALID', 'invalid sealed-object reference during restore');
     const replacement = keyMap.get(record.key);
     if (!replacement) fail('MANIFEST_INVALID', 'sealed-object reference has no restored object');
