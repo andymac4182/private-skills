@@ -11,9 +11,11 @@ import {
   type AcquisitionResult,
 } from '../../../packages/upstreams/src/index.js';
 import {
+  MAX_SKILLS_DIRECTORY_GATEWAYS,
   isValidSkillsShGatewayToken,
   normalizeDirectoryBaseURL,
-  resolveSkillsDirectoryConnection,
+  resolveSkillsDirectoryGateways,
+  type SkillsDirectoryGatewayResolution,
   type SkillsShGatewayCredential,
 } from '../../../packages/directory/src/index.js';
 import type { WorkerClaimedJob } from './client.js';
@@ -33,16 +35,35 @@ const GATEWAY_CREDENTIAL_UNAVAILABLE = 'skills.sh gateway credential unavailable
 export function workerAcquisitionOptionsFromEnv(
   env: Readonly<Record<string, string | undefined>>,
 ): WorkerAcquisitionOptions {
-  if (env.PSKILLS_DIRECTORY_ENABLED !== 'true') return {};
+  const resolution: SkillsDirectoryGatewayResolution = resolveSkillsDirectoryGateways(env);
+  if (resolution.kind === 'disabled') return {};
 
+  // A multi-feed document is represented by the plural seam even when it
+  // happens to contain one gateway. This lets the upstream adapter treat an
+  // empty or unmatched profile as authoritative and fail closed.
+  if (resolution.kind === 'ready') {
+    if (env.PSKILLS_DIRECTORY_GATEWAYS_JSON !== undefined) {
+      return { skillsShGatewayCredentials: resolution.gateways };
+    }
+    // Preserve the pre-multi-feed object shape for deployments using the
+    // original URL/token pair. The upstream accepts this field unchanged.
+    if (resolution.gateways.length === 1) {
+      return { skillsShGatewayCredential: resolution.gateways[0] };
+    }
+    return { skillsShGatewayCredentials: resolution.gateways };
+  }
+
+  if (env.PSKILLS_DIRECTORY_GATEWAYS_JSON !== undefined) {
+    // The empty list is an explicit fail-closed profile. It cannot be
+    // mistaken for an unset option and therefore cannot fall through to an
+    // upstream credentialEnv or anonymous custom-feed request.
+    return { skillsShGatewayCredentials: [] };
+  }
+
+  // Preserve the established legacy failure marker for one URL/token pair so
+  // existing standalone workers keep their stable error and redaction path.
   const baseUrl = env.PSKILLS_DIRECTORY_GATEWAY_URL;
-  const connection = resolveSkillsDirectoryConnection(env);
-  if (connection.kind === 'gateway') return { skillsShGatewayCredential: connection.gateway };
-  if (connection.kind === 'official' || baseUrl === undefined) return {};
-
-  // Preserve a fail-closed marker for an explicitly selected but incomplete
-  // or unsafe gateway.  Without this marker the upstream adapter could fall
-  // through to an ambient credentialEnv token or an anonymous request.
+  if (baseUrl === undefined) return {};
   const credential: SkillsShGatewayCredential = {
     baseUrl: normalizeDirectoryBaseURL(baseUrl) ?? '',
     getToken: async (signal?: AbortSignal): Promise<string> => {
@@ -109,7 +130,10 @@ function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisiti
   const gateway = (options as WorkerAcquisitionOptions & {
     skillsShGatewayCredential?: unknown;
   }).skillsShGatewayCredential;
-  if (candidate === undefined && gateway === undefined) return options;
+  const gateways = (options as WorkerAcquisitionOptions & {
+    skillsShGatewayCredentials?: unknown;
+  }).skillsShGatewayCredentials;
+  if (candidate === undefined && gateway === undefined && gateways === undefined) return options;
 
   const safe: WorkerAcquisitionOptions = { ...options };
   if (candidate !== undefined) {
@@ -127,26 +151,37 @@ function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisiti
     };
   }
   if (gateway !== undefined) {
-    if (typeof gateway !== 'object' || gateway === null || typeof (gateway as { baseUrl?: unknown }).baseUrl !== 'string' || typeof (gateway as { getToken?: unknown }).getToken !== 'function') {
+    safe.skillsShGatewayCredential = wrapGatewayCredential(gateway);
+  }
+  if (gateways !== undefined) {
+    if (!Array.isArray(gateways) || gateways.length > MAX_SKILLS_DIRECTORY_GATEWAYS) {
       throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
     }
-    const credential = gateway as SkillsShGatewayCredential;
-    safe.skillsShGatewayCredential = {
-      baseUrl: credential.baseUrl,
-      getToken: async (signal?: AbortSignal): Promise<string> => {
-        try {
-          const token = await credential.getToken(signal);
-          if (!isValidSkillsShGatewayToken(token)) {
-            throw new Error('invalid skills.sh gateway credential');
-          }
-          return token;
-        } catch {
-          throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
-        }
-      },
-    };
+    safe.skillsShGatewayCredentials = gateways.map((entry) => wrapGatewayCredential(entry));
   }
   return safe;
+}
+
+/** Validate and redact every plural provider without retaining its token. */
+function wrapGatewayCredential(value: unknown): SkillsShGatewayCredential {
+  if (typeof value !== 'object' || value === null
+    || typeof (value as { baseUrl?: unknown }).baseUrl !== 'string'
+    || typeof (value as { getToken?: unknown }).getToken !== 'function') {
+    throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
+  }
+  const credential = value as SkillsShGatewayCredential;
+  return {
+    baseUrl: credential.baseUrl,
+    getToken: async (signal?: AbortSignal): Promise<string> => {
+      try {
+        const token = await credential.getToken(signal);
+        if (!isValidSkillsShGatewayToken(token)) throw new Error('invalid skills.sh gateway credential');
+        return token;
+      } catch {
+        throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
+      }
+    },
+  };
 }
 
 function asUpstream(value: unknown): Upstream {

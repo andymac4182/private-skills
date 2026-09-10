@@ -117,6 +117,13 @@ export interface AcquireSkillOptions {
    * callback above.
    */
   skillsShGatewayCredential?: SkillsShGatewayCredential;
+  /**
+   * Credential providers for multiple operator-configured skills.sh API
+   * gateways. Each provider is bound to one complete normalized origin and
+   * pathname; an unmatched configured base is a terminal credential error.
+   * The singular field remains for callers on the pre-multi-feed seam.
+   */
+  skillsShGatewayCredentials?: readonly SkillsShGatewayCredential[];
 }
 
 export interface AcquireSkillInput extends AcquireSkillOptions {
@@ -571,6 +578,7 @@ function normalizeInput(
     signal,
     getSkillsShToken,
     skillsShGatewayCredential,
+    skillsShGatewayCredentials,
     options: nestedOptions,
   } = input;
   const mergedOptions: AcquireSkillOptions = {
@@ -584,6 +592,7 @@ function normalizeInput(
     signal: signal ?? nestedOptions?.signal,
     getSkillsShToken: getSkillsShToken ?? nestedOptions?.getSkillsShToken,
     skillsShGatewayCredential: skillsShGatewayCredential ?? nestedOptions?.skillsShGatewayCredential,
+    skillsShGatewayCredentials: skillsShGatewayCredentials ?? nestedOptions?.skillsShGatewayCredentials,
   };
   return {
     job,
@@ -2705,6 +2714,50 @@ async function skillsShCatalogCredential(
   options: AcquireSkillOptions,
   timeoutMs: number,
 ): Promise<string | undefined> {
+  if (options.skillsShGatewayCredentials !== undefined) {
+    const credentials = options.skillsShGatewayCredentials;
+    if (!Array.isArray(credentials)) {
+      throw new UpstreamAcquisitionError(
+        'invalid_credential_ref',
+        'skills.sh gateway credential configuration is invalid',
+      );
+    }
+    const configuredCredentials: unknown[] = [...credentials];
+    if (options.skillsShGatewayCredential !== undefined) configuredCredentials.push(options.skillsShGatewayCredential);
+    const gateways = normalizeSkillsShGatewayCredentials(
+      configuredCredentials,
+      options.allowLoopbackForTests ?? false,
+    );
+    const matching = gateways.find((gateway) => sameCatalogBase(apiBase, gateway.base));
+
+    // The official service has one credential path: the request-scoped OIDC
+    // callback. Never route a configured gateway token to skills.sh, even if
+    // the gateway list contains a malformed official alias (which validation
+    // above rejects before any request is started).
+    if (isCanonicalSkillsShCatalogBase(apiBase)) {
+      if (options.getSkillsShToken !== undefined) {
+        const token = await resolveSkillsShToken(options, timeoutMs);
+        return `Bearer ${token}`;
+      }
+      throw new UpstreamAcquisitionError(
+        'credential_missing',
+        'skills.sh catalog authentication is unavailable',
+      );
+    }
+
+    if (matching === undefined) {
+      // A configured multi-feed profile is authoritative. Falling through to
+      // upstream.credentialEnv (or an anonymous request) would let a job
+      // select a sibling tenant while silently using another feed's secret.
+      throw new UpstreamAcquisitionError(
+        'credential_missing',
+        'skills.sh gateway credential is unavailable for this catalog base',
+      );
+    }
+    const token = await resolveSkillsShGatewayToken(matching.credential.getToken, options, timeoutMs);
+    return `Bearer ${token}`;
+  }
+
   const gateway = options.skillsShGatewayCredential;
   if (gateway !== undefined) {
     const gatewayBase = normalizeSkillsShGatewayCredentialBase(
@@ -2743,6 +2796,55 @@ async function skillsShCatalogCredential(
   // fixtures/private destinations.  It is intentionally not a fallback for
   // a request-scoped callback failure above.
   return credentialHeader(upstream, 'skills-sh');
+}
+
+const MAX_SKILLS_SH_GATEWAY_CREDENTIALS = 16;
+
+interface NormalizedSkillsShGatewayCredential {
+  credential: SkillsShGatewayCredential;
+  base: URL;
+}
+
+/**
+ * Validate a multi-feed profile before selecting a request credential. The
+ * full normalized origin and pathname are the identity key; two callbacks
+ * bound to the same key are ambiguous even when their token values differ.
+ */
+function normalizeSkillsShGatewayCredentials(
+  credentials: readonly unknown[],
+  allowLoopbackForTests: boolean,
+): NormalizedSkillsShGatewayCredential[] {
+  if (!Array.isArray(credentials) || credentials.length > MAX_SKILLS_SH_GATEWAY_CREDENTIALS) {
+    throw new UpstreamAcquisitionError(
+      'invalid_credential_ref',
+      'skills.sh gateway credential configuration is invalid',
+    );
+  }
+
+  const normalized: NormalizedSkillsShGatewayCredential[] = [];
+  const seen = new Set<string>();
+  for (const credential of credentials) {
+    const base = normalizeSkillsShGatewayCredentialBase(
+      credential as SkillsShGatewayCredential,
+      allowLoopbackForTests,
+    );
+    if (isCanonicalSkillsShOrigin(base)) {
+      throw new UpstreamAcquisitionError(
+        'invalid_credential_ref',
+        'skills.sh gateway credential cannot target the canonical skills.sh origin',
+      );
+    }
+    const key = `${base.origin}${base.pathname}`;
+    if (seen.has(key)) {
+      throw new UpstreamAcquisitionError(
+        'invalid_credential_ref',
+        'skills.sh gateway credential configuration contains duplicate bases',
+      );
+    }
+    seen.add(key);
+    normalized.push({ credential: credential as SkillsShGatewayCredential, base });
+  }
+  return normalized;
 }
 
 function isCanonicalSkillsShCatalogBase(apiBase: URL): boolean {
