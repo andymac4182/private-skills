@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { api, ApiError, isApiErrorCode } from '../lib/api'
 import { shortDigest } from '../lib/format'
+import { pinProxyOperation, verifiedSourceReference, type ProxyOperationPin } from '../lib/proxy'
 import { quotePosix, quotePowerShell } from '../lib/shell'
 import { useAuth } from '../lib/auth'
 import type {
@@ -245,15 +246,6 @@ function DirectoryPagination({ pagination, page, onPageChange }: { pagination: D
   return <div className="directory-pagination"><span>Page {pagination.page + 1} of {totalPages} · {formatNumber(pagination.total)} total rows</span><div className="row-actions"><Button disabled={page <= 0} kind="quiet" type="button" onClick={() => onPageChange(Math.max(0, page - 1))}>Previous</Button><Button disabled={!pagination.hasMore} kind="secondary" type="button" onClick={() => onPageChange(page + 1)}>Next</Button></div></div>
 }
 
-interface ProxyImportFields {
-  externalId?: unknown
-  feedId?: unknown
-  feedName?: unknown
-  name?: unknown
-  version?: unknown
-  sourceReference?: unknown
-}
-
 interface ProxyMemberProvenance {
   externalId?: unknown
   feedId?: unknown
@@ -261,46 +253,12 @@ interface ProxyMemberProvenance {
   sourceReference?: unknown
 }
 
-interface ProxyOperationPin {
-  rootOperationId: string
-  activeOperationId: string
-  resourceId: string | null
-  externalId: string
-  feedId: string
-  feedName: string
-  name: string
-  version: string
-  sourceReference: string | null
-}
-
-function proxyImportFields(job: Job): ProxyImportFields {
-  return (job.import ?? {}) as ProxyImportFields
-}
-
-function pinProxyOperation(job: Job, feed: DirectoryFeed, externalId: string, responseReference?: string): ProxyOperationPin | null {
-  if (job.kind !== 'import') return null
-  const request = proxyImportFields(job)
-  if (request.externalId !== externalId || typeof request.name !== 'string' || request.name.length === 0 || typeof request.version !== 'string' || request.version.length === 0) return null
-  if (request.feedId !== feed.id && request.feedName !== feed.name) return null
-  return {
-    rootOperationId: job.id,
-    activeOperationId: job.id,
-    resourceId: job.resourceId ?? null,
-    externalId,
-    feedId: feed.id,
-    feedName: feed.name,
-    name: request.name,
-    version: request.version,
-    sourceReference: verifiedSourceReference(responseReference) ?? verifiedSourceReference(request.sourceReference),
-  }
-}
-
 function hasProxyResolveScope(principal: Principal | null | undefined): boolean {
   if (!principal) return false
   if (principal.roles.some((role) => role === 'owner' || role === 'admin')) return true
   const scopes = (principal as Principal & { scopes?: unknown }).scopes
   if (!Array.isArray(scopes)) return false
-  return scopes.some((scope) => scope === 'proxy:resolve' || scope === 'proxy:*' || scope === 'registry:*' || scope === '*')
+  return scopes.some((scope) => scope === 'proxy:resolve' || scope === 'proxy:*' || scope === '*')
 }
 
 function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, feedsError, feedsLoading, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailDisconnected: boolean; detailError: string | null; feed: DirectoryFeed | null; feedsError: string | null; feedsLoading: boolean; loading: boolean; selected: V1Skill; onRetry: () => void }) {
@@ -335,7 +293,19 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, f
       if (response.feed !== feed.name || response.externalId !== selected.id || (response.reference !== undefined && !canonicalReference)) {
         setMessage({ kind: 'error', text: 'The registry returned a different feed or external identity, so this request was not accepted.' })
       } else if (response.operation) {
-        const pin = pinProxyOperation(response.operation, feed, selected.id, canonicalReference ?? undefined)
+        let pin = pinProxyOperation(response.operation, feed, selected.id, canonicalReference ?? undefined)
+        if (!pin && response.operation.kind === 'scan' && response.operation.resourceId) {
+          try {
+            const skillResponse = await api.skill(response.operation.resourceId)
+            if (generation !== requestGeneration.current) return
+            pin = pinProxyOperation(response.operation, feed, selected.id, canonicalReference ?? undefined, skillResponse.skill)
+          } catch (cause) {
+            if (generation === requestGeneration.current) {
+              setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not pin the registry scan to this source.' })
+            }
+            return
+          }
+        }
         if (!pin) {
           setMessage({ kind: 'error', text: 'The registry operation was not pinned to this source and discovery feed.' })
           return
@@ -464,13 +434,6 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, f
       {detail.files === null ? <Notice kind="info">This row has metadata only. The first request below asks the registry to resolve the source, retain the external identity, scan the bytes, and cache the result.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Snapshot files</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · text is retained as source data</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
     </div><div className="directory-import"><h3 className="subheading">Use this skill privately</h3><p className="helper">The catalog ID below is the source identity while the registry resolves it. No rename, version, or mapping form is required; the registry fetches, scans, and caches it on the first request.</p><div className="proxy-identity"><span>Catalog source ID</span><code>{selected.id}</code></div>{reference && <div className="proxy-reference"><span>Verified source reference</span><code>{reference}</code></div>}{message && <Notice kind={message.kind}>{message.text}</Notice>}{operation && <div className="proxy-operation"><div className="meta-row"><span>Registry operation</span><Badge value={operation.state} /></div><div className="meta-row"><span>Operation ID</span><code>{operation.id}</code></div>{operation.error && <Notice kind="error">{operation.error}</Notice>}</div>}{ready && <Notice kind="success">Approved resolution available through this registry.</Notice>}{feedsLoading && <Notice kind="info">Loading configured discovery feeds…</Notice>}{!feedsLoading && feedsError && <Notice kind="warning">Discovery feed configuration is unavailable; source requests stay disabled.</Notice>}{!feedsLoading && !feedsError && !feed && <Notice kind="warning">No matching discovery feed is available for this source.</Notice>}{!feedsLoading && !feedsError && feed && !feed.enabled && <Notice kind="warning">This discovery feed is disabled for new source requests.</Notice>}{!feedsLoading && !feedsError && feed?.enabled && !canResolveProxy && <Notice kind="warning">Your session does not have the proxy:resolve permission.</Notice>}<div className="proxy-actions"><Button busy={busy} disabled={!canImport} type="button" onClick={() => void requestProxy()}>{ready ? 'Check source again' : 'Fetch and check source'}</Button>{ready && <Button busy={busy} disabled={!canImport} kind="quiet" type="button" onClick={() => void requestProxy(true)}>Refresh source</Button>}</div><div className="proxy-command"><span className="helper">{ready && reference ? 'CLI command using the configured private registry' : 'Canonical source reference pending'}</span>{ready && reference ? <div className="proxy-command-variants"><span className="helper">POSIX (bash/zsh)</span><code>{proxyInstallCommand('posix', selected.id, feed?.name ?? '', registryOrigin())}</code><span className="helper">PowerShell</span><code>{proxyInstallCommand('powershell', selected.id, feed?.name ?? '', registryOrigin())}</code></div> : <div className="proxy-command-pending"><code>{selected.id}</code><span className="helper">Request the source to receive its canonical registry reference before installing.</span></div>}<span className="helper">{ready && reference ? 'Install uses this catalog ID with the selected discovery feed; the verified source reference above records what the registry resolved.' : 'The catalog ID remains visible while the registry fetches, scans, and caches the source.'}</span></div>{operation && <Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link>}</div></div>}
   </Panel>
-}
-
-function verifiedSourceReference(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length < 4 || value.length > 2_048 || !value.startsWith('@') || /[\u0000-\u001f\u007f\\?#%\s]/u.test(value)) return null
-  const parts = value.slice(1).split('/')
-  if (parts.length < 2 || !['github', 'web', 'snapshot'].includes(parts[0] ?? '') || parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._~-]+$/u.test(part))) return null
-  return value
 }
 
 function proxyInstallCommand(shell: 'posix' | 'powershell', externalId: string, feedName: string, origin: string): string {
