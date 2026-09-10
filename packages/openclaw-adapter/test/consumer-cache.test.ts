@@ -54,6 +54,35 @@ class DelayedPutStore implements OpenClawConsumerSnapshotStore {
   }
 }
 
+type DelayedAuthoritativeReadMode = 'failure' | 'missing' | 'older' | 'same';
+
+class DelayedAuthoritativeReadStore implements OpenClawConsumerSnapshotStore {
+  private reads = 0;
+
+  constructor(
+    private readonly durable: OpenClawCacheSnapshot,
+    private readonly older: OpenClawCacheSnapshot,
+    private readonly mode: DelayedAuthoritativeReadMode,
+    private readonly afterAwait: () => void,
+  ) {}
+
+  async read(_key: OpenClawConsumerCacheKey): Promise<OpenClawCacheSnapshot | undefined> {
+    this.reads += 1;
+    if (this.reads === 1) return this.durable;
+    await Promise.resolve();
+    this.afterAwait();
+    if (this.mode === 'failure') throw new Error('authoritative read unavailable');
+    if (this.mode === 'missing') return undefined;
+    return this.mode === 'older' ? this.older : this.durable;
+  }
+
+  async put(): Promise<void> {
+    throw new Error('compare-and-swap lost');
+  }
+
+  async clear(): Promise<void> {}
+}
+
 async function snapshot(
   sequence = 1,
   sourceUrl = SOURCE_URL,
@@ -379,6 +408,114 @@ describe('durable OpenClaw consumer snapshots', () => {
     expect(networkFailure).toMatchObject({ kind: 'stale', snapshot: { feed: { sequence: 2 }, sha256: durable.sha256 } });
     expect(['fetch-failed', 'timeout']).toContain(networkFailure.kind === 'stale' ? networkFailure.error : undefined);
   });
+
+  it('does not return expired durable metadata after a delayed fetch failure', async () => {
+    const repository = createMemoryStateRepository();
+    const store = consumerStore(repository);
+    const durable = await snapshot(2);
+    await store.put(key(), durable);
+    let now = CLOCK;
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => now });
+
+    const result = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => {
+        await Promise.resolve();
+        now = Date.parse('2030-01-02T00:00:00.000Z');
+        throw new Error('upstream unavailable');
+      },
+    });
+
+    if (result.kind !== 'rejected') throw new Error('expected expired fallback rejection');
+    expect(result.snapshot).toBeUndefined();
+    expect(['fetch-failed', 'timeout']).toContain(result.error);
+  });
+
+  it('revalidates a durable replay fallback after refresh crosses expiry', async () => {
+    const repository = createMemoryStateRepository();
+    const store = consumerStore(repository);
+    const durable = await snapshot(2);
+    const replay = await snapshot(1);
+    await store.put(key(), durable);
+    let nowReads = 0;
+    const cache = new PersistentOpenClawFeedCache({
+      store,
+      tenantId: TENANT,
+      now: () => {
+        nowReads += 1;
+        return nowReads <= 4 ? CLOCK : Date.parse('2030-01-02T00:00:00.000Z');
+      },
+    });
+
+    const result = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(replay.body, { status: 200, headers: { etag: replay.etag } }),
+    });
+
+    if (result.kind !== 'rejected') throw new Error('expected expired replay fallback rejection');
+    expect(result.snapshot).toBeUndefined();
+    expect(result.error).toBe('replay');
+  });
+
+  it('does not return expired metadata from a durable 304 authoritative fallback', async () => {
+    const durable = await snapshot(2);
+    const older = await snapshot(1);
+    let now = CLOCK;
+    const store = new DelayedAuthoritativeReadStore(
+      durable,
+      older,
+      'same',
+      () => { now = Date.parse('2030-01-02T00:00:00.000Z'); },
+    );
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => now });
+
+    const result = await cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(null, {
+        status: 304,
+        headers: { etag: durable.etag, 'last-modified': LAST_MODIFIED },
+      }),
+    });
+
+    if (result.kind !== 'rejected') throw new Error('expected expired 304 fallback rejection');
+    expect(result.status).toBe(304);
+    expect(result.snapshot).toBeUndefined();
+    expect(result.error).toBe('fetch-failed');
+  });
+
+  it.each(['failure', 'missing', 'older', 'same'] as const)(
+    'revalidates an authoritative %s fallback after an awaited read crosses expiry',
+    async (mode) => {
+      const durable = await snapshot(2);
+      const older = await snapshot(1);
+      let now = CLOCK;
+      const store = new DelayedAuthoritativeReadStore(
+        durable,
+        older,
+        mode,
+        () => { now = Date.parse('2030-01-02T00:00:00.000Z'); },
+      );
+      const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => now });
+      const candidate = await snapshot(3);
+
+      const result = await cache.refresh({
+        url: SOURCE_URL,
+        expectedFeedId: FEED_ID,
+        allowedOrigins: ['https://feed.example'],
+        fetcher: async () => new Response(candidate.body, { status: 200, headers: { etag: candidate.etag } }),
+      });
+
+      if (result.kind !== 'rejected') throw new Error(`expected expired ${mode} fallback rejection`);
+      expect(result.snapshot).toBeUndefined();
+      expect(result.error).toBe('fetch-failed');
+    },
+  );
 
   it('preserves a redirected 304 marker instead of converting it to not-modified', async () => {
     const repository = createMemoryStateRepository();
