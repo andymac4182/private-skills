@@ -26,6 +26,7 @@ const MAX_SESSION_ID_LENGTH = 256;
 const MAX_PROMPT_BYTES = 8_000;
 const MAX_REQUEST_ID_BYTES = 256;
 const MAX_EVE_STREAM_BYTES = 2 * 1024 * 1024;
+const MAX_CANCEL_RESPONSE_BYTES = 16 * 1024;
 const UPSTREAM_TIMEOUT_MS = 20_000;
 
 export interface BuilderBffRuntime {
@@ -68,7 +69,7 @@ interface BuilderEvent {
   meta?: { id?: unknown; at?: unknown };
 }
 
-type BuilderSessionLifecycle = 'ready' | 'running' | 'failed' | 'completed';
+type BuilderSessionLifecycle = 'ready' | 'running' | 'failed' | 'stopped' | 'completed';
 
 class BuilderApiError extends Error {
   readonly code: string;
@@ -168,7 +169,7 @@ async function loadSession(
   const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId);
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
-  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
+  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
   else if (snapshot.activeTurnId) record.activeTurnId = snapshot.activeTurnId;
   return json({ session: toSessionDto(record, snapshot.events) }, 200);
 }
@@ -235,6 +236,8 @@ async function sendPrompt(
     return json({ session: toSessionDto(record, snapshot.events) }, 200);
   }
 
+  const requestRecord = record.requests.find((candidate) => candidate.id === requestId);
+  if (!requestRecord) throw builderError('BUILDER_UNAVAILABLE', 'The builder request could not be recorded', 500);
   const payload = {
     sessionKey: record.sessionKey,
     draftId,
@@ -242,10 +245,10 @@ async function sendPrompt(
     digest: binding.digest,
     message: prompt,
     requestId,
-    requestDigest: record.requests.find((candidate) => candidate.id === requestId)?.requestDigest,
+    requestDigest: requestRecord.requestDigest,
     ...(selectedPath === undefined ? {} : { selectedPath }),
   };
-  let accepted: Record<string, unknown>;
+  let acceptedSessionId: string;
   try {
     const response = await fetchWithTimeout(fetchImpl, `${deps.runtime.appOrigin}/internal/builder/sessions`, {
       method: 'POST',
@@ -258,8 +261,17 @@ async function sendPrompt(
       redirect: 'error',
     });
     const value = await boundedJson(response, 64 * 1024);
-    if (!response.ok || !isRecord(value) || typeof value.sessionId !== 'string') throw builderError('BUILDER_UPSTREAM', 'The skill builder could not accept the prompt', 502);
-    accepted = { ...value, sessionId: boundedAcceptedSessionId(value.sessionId) };
+    if (
+      !response.ok ||
+      !isRecord(value) ||
+      value.requestId !== requestId ||
+      value.requestDigest !== requestRecord.requestDigest ||
+      value.draftId !== draftId ||
+      value.revision !== binding.revision ||
+      value.digest !== binding.digest ||
+      typeof value.sessionId !== 'string'
+    ) throw builderError('BUILDER_UPSTREAM', 'The skill builder returned an invalid acceptance', 502);
+    acceptedSessionId = boundedAcceptedSessionId(value.sessionId);
   } catch (error) {
     // A transport or response failure is ambiguous: Eve may have accepted the
     // durable turn before the registry observed the response.  Keep the
@@ -274,11 +286,11 @@ async function sendPrompt(
     );
     throw error;
   }
-  record = await bindAcceptedSession(deps.repository, deps.config.organizationId, record.id, requestId, binding, String(accepted.sessionId));
+  record = await bindAcceptedSession(deps.repository, deps.config.organizationId, record.id, requestId, binding, acceptedSessionId);
   const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId);
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
-  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
+  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
   else if (snapshot.activeTurnId) record.activeTurnId = snapshot.activeTurnId;
   return json({ session: toSessionDto(record, snapshot.events) }, 202);
 }
@@ -306,11 +318,15 @@ async function stopSession(
     sessionId,
     requestId,
   });
-  await fetchEve(fetchImpl, deps.runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(record.eveSessionId))}/cancel`, {
+  const cancelResponse = await fetchEve(fetchImpl, deps.runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(record.eveSessionId))}/cancel`, {
     method: 'POST',
     body: JSON.stringify(record.activeTurnId ? { turnId: record.activeTurnId } : {}),
     headers: { 'content-type': 'application/json' },
   });
+  const cancelValue = await boundedJson(cancelResponse, MAX_CANCEL_RESPONSE_BYTES);
+  if (!isRecord(cancelValue) || cancelValue.ok !== true || (cancelValue.status !== 'accepted' && cancelValue.status !== 'no_active_turn')) {
+    throw builderError('BUILDER_UPSTREAM', 'The builder returned an invalid cancellation response', 502);
+  }
   await updateSession(deps.repository, deps.config.organizationId, record.id, (current) => {
     current.state = 'stopped';
     delete current.activeTurnId;
@@ -337,7 +353,7 @@ async function streamSession(
   const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, boundedSessionId(record.eveSessionId));
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
-  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
+  if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
   else if (snapshot.activeTurnId) record.activeTurnId = snapshot.activeTurnId;
   return json({ session: toSessionDto(record, snapshot.events) }, 200);
 }
@@ -489,7 +505,7 @@ async function reconcileSnapshot(
   await updateSession(repository, organizationId, record.id, (current) => {
     if (current.state === 'stopped') return;
     if (snapshot.lifecycle) current.state = snapshot.lifecycle;
-    if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'completed') {
+    if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') {
       delete current.activeTurnId;
       delete current.activeRequestId;
     }
@@ -512,13 +528,24 @@ async function fetchSessionSnapshot(fetchImpl: typeof fetch, runtime: BuilderBff
   }
   let activeTurnId: string | undefined;
   let lifecycle: BuilderSessionLifecycle | undefined;
+  let terminalBoundary: 'failed' | 'stopped' | undefined;
   for (const event of events) {
     const turnId = typeof event.data?.turnId === 'string' ? event.data.turnId : undefined;
     if (turnId) activeTurnId = turnId;
-    if (event.type === 'session.waiting') lifecycle = 'ready';
-    else if (event.type === 'session.failed') lifecycle = 'failed';
-    else if (event.type === 'session.completed') lifecycle = 'completed';
-    else if (event.type === 'turn.started' || event.type === 'message.received') lifecycle = 'running';
+    if (event.type === 'session.waiting') lifecycle = terminalBoundary ?? 'ready';
+    else if (event.type === 'session.failed' || event.type === 'turn.failed' || event.type === 'step.failed') {
+      lifecycle = 'failed';
+      terminalBoundary = 'failed';
+    } else if (event.type === 'session.completed') {
+      lifecycle = 'completed';
+      terminalBoundary = undefined;
+    } else if (event.type === 'turn.cancelled') {
+      lifecycle = 'stopped';
+      terminalBoundary = 'stopped';
+    } else if (event.type === 'turn.started' || event.type === 'step.started' || event.type === 'message.received') {
+      lifecycle = 'running';
+      terminalBoundary = undefined;
+    }
   }
   return {
     events,
@@ -538,19 +565,10 @@ function toSessionDto(record: SkillBuilderSessionRecord, events: readonly Builde
       if (content) turns.push({ id: eventId(event, `user-${turns.length}`), role: 'user', content, createdAt: at });
     } else if (type === 'message.completed') {
       const content = boundedEventText(data.message ?? data.text);
-      if (content) {
-        const existing = turns.find((turn) => turn.id === eventId(event, ''));
-        if (existing) existing.content = content;
-        else turns.push({ id: eventId(event, `assistant-${turns.length}`), role: 'assistant', content, createdAt: at });
-      }
-    } else if (type === 'message.appended') {
-      const delta = boundedEventText(data.messageDelta ?? data.textDelta ?? data.message);
-      if (delta) {
-        const id = eventId(event, `assistant-${turns.length}`);
-        const existing = turns.find((turn) => turn.id === id);
-        if (existing) existing.content = `${existing.content}${delta}`.slice(0, MAX_TURN_TEXT_BYTES);
-        else turns.push({ id, role: 'assistant', content: delta, createdAt: at });
-      }
+      // Eve meta.id identifies each event, not a message stream. Keep only
+      // finalized blocks so a replay cannot expose every delta as a separate
+      // assistant turn or incorrectly merge events from different steps.
+      if (content) turns.push({ id: eventId(event, `assistant-${turns.length}`), role: 'assistant', content, createdAt: at });
     }
   }
   const proposal = [...record.proposals].reverse().find((candidate) => candidate.state === 'pending' || candidate.state === 'applied' || candidate.state === 'rejected');
