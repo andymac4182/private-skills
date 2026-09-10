@@ -371,6 +371,11 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
       expect.objectContaining({ scannerId: 'skillsguard', status: 'completed' }),
     ]));
     expect(fixture.sourceFetch.mock.calls.length).toBeGreaterThan(0);
+    const catalogDetailPath = `/catalog/api/v1/skills/${fixture.externalId.split('/').map(encodeURIComponent).join('/')}`;
+    expect(fixture.sourceFetch.mock.calls.filter(([input]) => {
+      const url = new URL(String(input));
+      return url.origin === CATALOG_ORIGIN && url.pathname === catalogDetailPath;
+    })).toHaveLength(1);
     const sourceFetchesAfterApproval = fixture.sourceFetch.mock.calls.length;
 
     const warm = await resolveRequest(harness, feed, fixture.externalId);
