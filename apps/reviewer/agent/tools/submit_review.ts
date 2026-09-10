@@ -51,22 +51,35 @@ export default defineTool({
     }
 
     reviewState.update((state) => ({ ...state, submitCalls: state.submitCalls + 1 }));
-    await postReviewerJson(
-      "/internal/reviewer/complete",
-      {
-        runId: current.runId,
-        leaseToken: current.leaseToken,
-        summary: input.summary,
-        suggestions: input.suggestions,
-      },
-      completionResponse,
-      ctx.abortSignal,
-    );
+    try {
+      await postReviewerJson(
+        "/internal/reviewer/complete",
+        {
+          runId: current.runId,
+          leaseToken: current.leaseToken,
+          summary: input.summary,
+          suggestions: input.suggestions,
+        },
+        completionResponse,
+        ctx.abortSignal,
+      );
+    } catch (error) {
+      reviewState.update((state) => state.invocation ? {
+        ...state,
+        invocation: { ...state.invocation, status: "failed" },
+      } : state);
+      throw error;
+    }
     reviewState.update((state) => ({
       ...state,
       status: "completed",
       leaseToken: null,
       candidates: [],
+      invocation: state.invocation ? {
+        ...state.invocation,
+        status: "completed",
+        runId: current.runId!,
+      } : state.invocation,
     }));
     return {
       status: "completed" as const,

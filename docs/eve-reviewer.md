@@ -90,6 +90,21 @@ tool sends the deterministic idempotency key `common-skill-review:YYYY-MM-DD`
 (UTC); the root API owns the daily claim and must keep retries for that day
 idempotent, so a retry cannot create a second lease or proposal.
 
+At `session.started`, the reviewer records a bounded invocation audit in Eve
+durable state before model work begins. The hook uses the framework-owned
+`channel.kind === "schedule"` signal; the authored `daily-review` name is
+fixed by the schedule file. The prepare tool sends the same safe metadata with
+the existing Eve session ID to the root API. Other session channels and
+principals, including manual API sessions, are recorded as `source: "api"`.
+Each invocation gets an application-generated opaque ID and an observed ISO
+timestamp. Eve 0.52.3 does not expose the provider cron request ID through the
+public authored context, so the generated ID is never presented as one. Review
+runs retain this bounded provenance alongside `eveSessionId`; active and
+completed idempotent duplicates keep the original claimant, while failed or
+expired lease reclamation records the new claimant. Provider execution logs
+still need to be paired with the persisted session and run IDs before claiming
+a calendar-triggered production run.
+
 An authenticated backend can start the same fixed prompt through Eve's Client
 SDK. The caller, not the model, supplies the host and bearer token:
 

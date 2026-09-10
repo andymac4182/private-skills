@@ -1,4 +1,5 @@
 import { defineState } from "eve/context";
+import type { ReviewInvocationAudit } from "./provenance.js";
 
 export interface ReviewCandidate {
   resourceId: string;
@@ -19,6 +20,8 @@ export interface ReviewSessionState {
   candidates: ReviewCandidate[];
   prepareCalls: number;
   submitCalls: number;
+  /** Sanitized per-session scheduler/API provenance and outcome. */
+  invocation: ReviewInvocationAudit | null;
 }
 
 export const reviewState = defineState<ReviewSessionState>(
@@ -30,5 +33,6 @@ export const reviewState = defineState<ReviewSessionState>(
     candidates: [],
     prepareCalls: 0,
     submitCalls: 0,
+    invocation: null,
   }),
 );
