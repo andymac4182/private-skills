@@ -3,7 +3,7 @@ import { createDraftHandler, writeDraftRevision } from '../src/drafts.js';
 import type { AuthoringHandlerDependencies } from '../src/index.js';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
-import { createUploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
+import { createUploadReviewPersistenceService, uploadReviewIdempotencyKey } from '../../upload-reviews/src/index.js';
 import type {
   Authenticator,
   BlobStore,
@@ -13,7 +13,13 @@ import type {
   SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
-import type { UploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
+import type {
+  EnqueueUploadReviewInput,
+  MarkUploadReviewStaleInput,
+  UploadReviewBinding,
+  UploadReviewJob,
+  UploadReviewPersistenceService,
+} from '../../upload-reviews/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION = 'org-test';
@@ -55,6 +61,71 @@ function user(subject = 'publisher', namespaces = ['@team']): Principal {
     namespaces,
     scopes: ['skills:publish', 'skills:read'],
   };
+}
+
+interface ReviewQueueHarness {
+  service: UploadReviewPersistenceService;
+  jobs: UploadReviewJob[];
+  failNextEnqueue: boolean;
+}
+
+function sameReviewBinding(left: UploadReviewBinding, right: UploadReviewBinding): boolean {
+  return left.draftId === right.draftId &&
+    left.draftRevision === right.draftRevision &&
+    left.contentDigest === right.contentDigest &&
+    left.baseReleaseId === right.baseReleaseId &&
+    left.baseReleaseVersion === right.baseReleaseVersion &&
+    left.baseDigest === right.baseDigest &&
+    left.policyRevision === right.policyRevision;
+}
+
+function reviewQueueHarness(): ReviewQueueHarness {
+  const harness: ReviewQueueHarness = {
+    service: undefined as unknown as UploadReviewPersistenceService,
+    jobs: [],
+    failNextEnqueue: false,
+  };
+  let sequence = 0;
+  harness.service = {
+    enqueue: async (organizationId: string, input: EnqueueUploadReviewInput): Promise<UploadReviewJob> => {
+      if (harness.failNextEnqueue) {
+        harness.failNextEnqueue = false;
+        throw new Error('injected review enqueue failure');
+      }
+      const idempotencyKey = input.idempotencyKey ?? uploadReviewIdempotencyKey(input.binding, input.reviewerRevision);
+      const existing = harness.jobs.find((job) => job.organizationId === organizationId && job.idempotencyKey === idempotencyKey);
+      if (existing) return existing;
+      const now = new Date().toISOString();
+      const job: UploadReviewJob = {
+        id: `review-${++sequence}`,
+        organizationId,
+        idempotencyKey,
+        binding: input.binding,
+        snapshot: input.snapshot,
+        model: input.model,
+        reviewerRevision: input.reviewerRevision,
+        state: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      };
+      harness.jobs.push(job);
+      return job;
+    },
+    markStale: async (organizationId: string, input: MarkUploadReviewStaleInput): Promise<UploadReviewJob[]> => {
+      const changed: UploadReviewJob[] = [];
+      const now = new Date().toISOString();
+      for (const job of harness.jobs) {
+        if (job.organizationId !== organizationId || job.binding.draftId !== input.draftId || sameReviewBinding(job.binding, input.current) || job.state === 'stale') continue;
+        job.state = 'stale';
+        job.updatedAt = now;
+        job.finishedAt = now;
+        job.staleReason = input.reason;
+        changed.push(job);
+      }
+      return changed;
+    },
+  } as unknown as UploadReviewPersistenceService;
+  return harness;
 }
 
 interface Fixture {
@@ -390,6 +461,76 @@ describe('durable skill drafts', () => {
       ...input,
       idempotencyKey: 'builder-stale',
     })).rejects.toMatchObject({ code: 'DRAFT_CONFLICT' });
+  });
+
+  it('reconciles advisory review queues when create or update replays recover a post-commit failure', async () => {
+    const test = await fixture();
+    const queue = reviewQueueHarness();
+    test.deps.uploadReview = {
+      service: queue.service,
+      model: 'test/reviewer',
+      reviewerRevision: 'review-contract-1',
+      trigger: async () => undefined,
+    };
+
+    queue.failNextEnqueue = true;
+    const firstCreate = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'recover-release-create' },
+      body: JSON.stringify({ baseDigest: test.release.artifact.digest }),
+    }));
+    expect(firstCreate.status).toBe(201);
+    expect(queue.jobs).toHaveLength(0);
+    const recoveredCreate = await create(test, 'recover-release-create');
+    expect(recoveredCreate.draft.revision).toBe(1);
+    expect(queue.jobs).toHaveLength(1);
+    expect(queue.jobs[0]).toMatchObject({ state: 'pending', binding: { draftRevision: 1 } });
+    await create(test, 'recover-release-create');
+    expect(queue.jobs).toHaveLength(1);
+
+    const created = recoveredCreate.draft;
+    const editedFiles = test.bundle.files.map((file) => ({
+      ...file,
+      content: base64(`${file.path}\nrecovery edit\n`),
+    }));
+    queue.failNextEnqueue = true;
+    const firstUpdate = await test.handler(updateRequest(created.id, 'recover-update', 1, editedFiles));
+    expect(firstUpdate.status).toBe(200);
+    expect((await test.repository.read(ORGANIZATION)).drafts![0]!.revision).toBe(2);
+    expect(queue.jobs).toHaveLength(1);
+    expect(queue.jobs[0]).toMatchObject({ state: 'stale', binding: { draftRevision: 1 } });
+
+    const recoveredUpdate = await test.handler(updateRequest(created.id, 'recover-update', 1, editedFiles));
+    expect(recoveredUpdate.status).toBe(200);
+    expect((await test.repository.read(ORGANIZATION)).drafts![0]!.revision).toBe(2);
+    expect(queue.jobs).toHaveLength(2);
+    expect(queue.jobs.filter((job) => job.state === 'pending')).toHaveLength(1);
+    expect(queue.jobs.find((job) => job.binding.draftRevision === 2)).toMatchObject({ state: 'pending' });
+    await test.handler(updateRequest(created.id, 'recover-update', 1, editedFiles));
+    expect(queue.jobs).toHaveLength(2);
+
+    const advancedFiles = editedFiles.map((file) => ({
+      ...file,
+      content: base64(`${file.path}\nadvanced revision\n`),
+    }));
+    const advanced = await test.handler(updateRequest(created.id, 'recover-advance', 2, advancedFiles));
+    expect(advanced.status).toBe(200);
+    expect(queue.jobs).toHaveLength(3);
+    expect(queue.jobs.find((job) => job.binding.draftRevision === 3)).toMatchObject({ state: 'pending' });
+    await test.handler(updateRequest(created.id, 'recover-update', 1, editedFiles));
+    expect(queue.jobs).toHaveLength(3);
+    expect(queue.jobs.find((job) => job.binding.draftRevision === 3)).toMatchObject({ state: 'pending' });
+
+    queue.failNextEnqueue = true;
+    const firstUpload = await test.handler(uploadCreateRequest('@team/recover-upload', 'recover-upload-create', test.bundle.files));
+    expect(firstUpload.status).toBe(201);
+    expect(queue.jobs).toHaveLength(3);
+    const recoveredUploadResponse = await test.handler(uploadCreateRequest('@team/recover-upload', 'recover-upload-create', test.bundle.files));
+    expect(recoveredUploadResponse.status).toBe(200);
+    const recoveredUpload = await json(recoveredUploadResponse);
+    expect(queue.jobs).toHaveLength(4);
+    expect(queue.jobs.filter((job) => job.binding.draftId === recoveredUpload.draft.id)).toHaveLength(1);
+    expect((await test.repository.read(ORGANIZATION)).drafts).toHaveLength(2);
   });
 
   it('rejects unauthorized drafts and unsafe file paths without reading or persisting content', async () => {

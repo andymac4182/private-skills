@@ -250,6 +250,11 @@ async function createDraft(
       throw idempotencyConflict();
     }
     const existingDraft = await draftFromCreateRecord(existing, deps);
+    // A previous request may have committed the draft and crashed before the
+    // advisory queue write. Reconcile only when this create record still
+    // describes the current revision; syncDraftReview's binding guard makes a
+    // historical replay a no-op.
+    await syncDraftReview(existingDraft, existingDraft.files, deps, false);
     return jsonResponse({ draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
       'cache-control': 'private, no-store',
     });
@@ -359,6 +364,7 @@ async function createUploadDraft(
       throw idempotencyConflict();
     }
     const existingDraft = await draftFromCreateRecord(existing, deps);
+    await syncDraftReview(existingDraft, existingDraft.files, deps, false);
     return jsonResponse({
       draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }),
       idempotent: true,
@@ -509,6 +515,10 @@ export async function writeDraftRevision(
   if (prior) {
     if (prior.requestDigest !== requestDigest) throw idempotencyConflict();
     const replay = await draftFromIdempotency(before, prior, input.deps);
+    // Recover a queue write lost after the draft transaction. The current
+    // binding guard prevents an old revision's replay from staling or
+    // re-enqueuing historical content.
+    await syncDraftReview(replay, replay.files, input.deps, true);
     return { draft: replay, bundle: { format: 'pskills-bundle-v1', files: replay.files }, idempotent: true };
   }
   if (before.revision !== expectedRevision) {
