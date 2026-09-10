@@ -451,18 +451,55 @@ describe('PostgreSQL isolated restore target', () => {
     await expect(target.repository.read(ORGANIZATION)).resolves.toMatchObject({ metadataRevision: 0 });
   });
 
-  it('rejects an exact source URL in the restore CLI before constructing a target client', async () => {
+  it('rejects an exact source URL from environment credentials before constructing a target client', async () => {
     await expect(main([
       'restore',
       '--target-isolated', 'true',
       '--backup', '/private/tmp/does-not-matter',
       '--target-id', TARGET_IDENTITY,
-      '--target-database-url', 'postgres://same-target',
     ], {
       PSKILLS_ORGANIZATION_ID: ORGANIZATION,
       DATABASE_URL: 'postgres://same-target',
-      PSKILLS_TARGET_DATABASE_URL: undefined,
+      PSKILLS_TARGET_DATABASE_URL: 'postgres://same-target',
     })).rejects.toMatchObject({ code: 'TARGET_NOT_ISOLATED' });
+  });
+
+  it('rejects a target database credential passed as a CLI value', async () => {
+    const value = 'postgres://target-secret.invalid/restore';
+    const error = await main([
+      'restore',
+      '--target-isolated', 'true',
+      '--backup', '/private/tmp/does-not-matter',
+      '--target-id', TARGET_IDENTITY,
+      '--target-database-url', value,
+    ], {
+      PSKILLS_ORGANIZATION_ID: ORGANIZATION,
+      PSKILLS_TARGET_DATABASE_URL: 'postgres://environment-target',
+      PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN: 'environment-token',
+    }).then(() => undefined, (reason: unknown) => reason);
+    expect(error).toMatchObject({ code: 'INVALID_OPTIONS' });
+    expect(error).toBeInstanceOf(PostgresSnapshotError);
+    expect((error as Error).message).not.toContain(value);
+    expect((error as Error).message).toContain('PSKILLS_TARGET_DATABASE_URL');
+  });
+
+  it('rejects a target blob credential passed as a CLI value', async () => {
+    const value = 'plaintext-target-token';
+    const error = await main([
+      'restore',
+      '--target-isolated', 'true',
+      '--backup', '/private/tmp/does-not-matter',
+      '--target-id', TARGET_IDENTITY,
+      '--target-blob-token', value,
+    ], {
+      PSKILLS_ORGANIZATION_ID: ORGANIZATION,
+      PSKILLS_TARGET_DATABASE_URL: 'postgres://environment-target',
+      PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN: 'environment-token',
+    }).then(() => undefined, (reason: unknown) => reason);
+    expect(error).toMatchObject({ code: 'INVALID_OPTIONS' });
+    expect(error).toBeInstanceOf(PostgresSnapshotError);
+    expect((error as Error).message).not.toContain(value);
+    expect((error as Error).message).toContain('PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN');
   });
 
   it('requires the explicit isolated-target attestation in the CLI', async () => {
@@ -470,7 +507,6 @@ describe('PostgreSQL isolated restore target', () => {
       'restore',
       '--backup', '/private/tmp/does-not-matter',
       '--target-id', TARGET_IDENTITY,
-      '--target-database-url', 'postgres://isolated-target',
     ], { PSKILLS_ORGANIZATION_ID: ORGANIZATION }))
       .rejects.toMatchObject({ code: 'TARGET_NOT_ISOLATED' });
   });

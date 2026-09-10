@@ -631,9 +631,9 @@ function fenceFromCli(values: Map<string, string>, environment: Record<string, s
 }
 
 /**
- * CLI capture/restore commands.  They read credentials only from the process
+ * CLI capture/restore commands. They read credentials only from the process
  * environment and print status metadata without IDs that identify providers,
- * connection strings, object keys, bytes, or manifest contents.  Restore uses
+ * connection strings, object keys, bytes, or manifest contents. Restore uses
  * separately named target credentials so a source token cannot be selected by
  * accident.
  */
@@ -692,10 +692,16 @@ export async function main(
   if (parsed.values.get('target-isolated') !== 'true') {
     throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'restore requires --target-isolated true');
   }
+  if (parsed.values.has('target-database-url') || parsed.values.has('target-blob-token')) {
+    throw new PostgresSnapshotError(
+      'INVALID_OPTIONS',
+      'restore target credentials must be supplied through PSKILLS_TARGET_DATABASE_URL and PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN',
+    );
+  }
   const targetIdentity = cliValue(parsed.values, 'target-id', environment, 'PSKILLS_BACKUP_TARGET_ID');
   const backupDirectory = resolve(cliValue(parsed.values, 'backup', environment));
   const targetDatabaseUrl = boundedString(
-    parsed.values.get('target-database-url') ?? environment.PSKILLS_TARGET_DATABASE_URL,
+    environment.PSKILLS_TARGET_DATABASE_URL,
     'target-database-url',
     16_384,
   );
@@ -706,7 +712,7 @@ export async function main(
     throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'target database must not equal the source database URL');
   }
   const targetBlobToken = boundedString(
-    parsed.values.get('target-blob-token') ?? environment.PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN,
+    environment.PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN,
     'target-blob-token',
     32_768,
   );
