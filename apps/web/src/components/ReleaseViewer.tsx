@@ -59,6 +59,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
   async function loadManifest() {
     const generation = ++requestGeneration.current
     setManifestLoading(true)
+    setFileLoading(false)
     setError(null)
     setSelectedPath(null)
     setSelectedFile(null)
@@ -84,6 +85,8 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
     setManifest(null)
     setSelectedPath(null)
     setSelectedFile(null)
+    setManifestLoading(false)
+    setFileLoading(false)
     setError(null)
   }, [resourceId])
 
@@ -122,6 +125,8 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
     if (open) {
       requestGeneration.current += 1
       setOpen(false)
+      setManifestLoading(false)
+      setFileLoading(false)
       return
     }
     setOpen(true)
@@ -139,9 +144,9 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
   return <section className="release-viewer">
     <div className="release-viewer-header">
       <div>
-        <span className="eyebrow">Immutable release</span>
-        <h3>Browse release files</h3>
-        <p className="helper">Read-only inspection of the approved artifact. Opening a file does not create a draft or change the release.</p>
+        <span className="eyebrow">Release files</span>
+        <h3>Explore files in this version</h3>
+        <p className="helper">Read-only view of the selected version.</p>
       </div>
       <Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>
     </div>
@@ -157,10 +162,11 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
         {error && <Notice kind="error">{error}</Notice>}
         <OptionalRendererBoundary fallback={nativeSurface}>
           <Suspense fallback={nativeSurface}>
-            {manifest.files.length === 0 ? <div className="release-file-placeholder">This approved release has no readable files.</div> : <PierreReleaseRenderer
+            {manifest.files.length === 0 ? <div className="release-file-placeholder">This version has no readable files.</div> : <PierreReleaseRenderer
               files={manifest.files}
               selectedPath={selectedPath}
               selectedFile={selectedFile}
+              fileLoading={fileLoading}
               onSelect={setSelectedPath}
             />}
           </Suspense>

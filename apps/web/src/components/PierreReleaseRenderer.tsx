@@ -1,17 +1,14 @@
 import { useEffect } from 'react'
-// These are optional client-only surfaces. The registry keeps a native
-// renderer fallback so a deployment can still inspect files while the Pierre
-// packages are loading or unavailable.
-// @ts-ignore Optional M6 dependency installed by the application build.
 import { File } from '@pierre/diffs/react'
-// @ts-ignore Optional M6 dependency installed by the application build.
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import type { ReleaseFileView } from '../lib/types'
+import { Badge, LoadingState } from './Primitives'
 
 export interface PierreReleaseRendererProps {
   files: ReleaseFileView[]
   selectedPath: string | null
   selectedFile: ReleaseFileView | null
+  fileLoading: boolean
   onSelect: (path: string) => void
 }
 
@@ -21,7 +18,7 @@ export interface PierreReleaseRendererProps {
  * shadow-root file tree, while the parent owns all authorization and loading
  * state.
  */
-export function PierreReleaseRenderer({ files, selectedPath, selectedFile, onSelect }: PierreReleaseRendererProps) {
+export function PierreReleaseRenderer({ files, selectedPath, selectedFile, fileLoading, onSelect }: PierreReleaseRendererProps) {
   const paths = files.map((file) => file.path)
   const { model } = useFileTree({
     paths,
@@ -43,12 +40,19 @@ export function PierreReleaseRenderer({ files, selectedPath, selectedFile, onSel
       <FileTree header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
     </div>
     <div className="release-viewer-code">
-      {selectedFile?.previewState === 'text' && typeof selectedFile.contents === 'string' ? <File
+      {fileLoading ? <LoadingState label="Loading file…" /> : selectedFile?.previewState === 'text' && typeof selectedFile.contents === 'string' ? <File
         className="release-pierre-file"
         file={{ name: selectedFile.path, contents: selectedFile.contents, cacheKey: selectedFile.contentDigest }}
         options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }}
         disableWorkerPool
-      /> : <div className="release-file-placeholder">Select a text file to inspect its content.</div>}
+      /> : selectedFile && selectedFile.previewState !== 'text' ? <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(selectedFile)} /><p>This file is available, but this preview type exposes metadata only.</p></div> : <div className="release-file-placeholder">Select a file to inspect its contents.</div>}
     </div>
   </div>
+}
+
+function previewLabel(file: ReleaseFileView): string {
+  if (file.previewState === 'binary') return 'Binary file'
+  if (file.previewState === 'oversize') return 'Too large to preview'
+  if (file.previewState === 'unsupported') return 'Unsupported preview'
+  return 'Text file'
 }
