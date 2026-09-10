@@ -209,7 +209,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
       setMessage({ kind: 'warning', text: 'Wait for the current registry request to finish before closing.' })
       return
     }
-    if (hasChanges && !window.confirm('Keep this draft saved and close the editor? Unsaved changes will stay only in this browser until you save them.')) return
+    if (hasChanges && !window.confirm('Discard unsaved changes and close the editor? Saved draft revisions are not affected.')) return
     onClose()
   }
 
@@ -319,6 +319,12 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     setError(null)
   }
 
+  function switchWorkspaceTab(next: 'files' | 'review'): void {
+    if (busy || next === workspaceTab) return
+    if (next === 'review') setWorkingFiles(syncSurfaceFiles())
+    setWorkspaceTab(next)
+  }
+
   function switchMode(next: 'edit' | 'diff'): void {
     if (busy || next === mode) return
     if (next === 'edit' && !selectedIsEditable) {
@@ -342,7 +348,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     const pathError = validDraftPath(path)
     if (pathError) { setMessage({ kind: 'error', text: pathError }); return }
     if (entries.some((entry) => entry.path === path)) { setMessage({ kind: 'error', text: 'A file with that path already exists in this draft.' }); return }
-    setWorkingFiles((current) => [...current, { path, content: encodeBase64Text('') }])
+    const currentFiles = syncSurfaceFiles()
+    setWorkingFiles([...currentFiles, { path, content: encodeBase64Text('') }])
     setSelectedPath(path)
     setMode('edit')
     setNewPath('')
@@ -448,7 +455,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, closeRequest 
     {!resuming && !draft && <div className="draft-start"><p className="helper">The draft starts with the exact bytes and digest from version <strong>{baseVersion}</strong>. Nothing is saved until you start it.</p><Button kind="secondary" busy={creating} type="button" onClick={() => void startDraft()}>Start draft</Button></div>}
     {!resuming && draft && <>
       <div className="draft-editor-meta"><span>Revision <strong>{draft.revision}</strong></span><span>Files <strong>{workingFiles.length}</strong></span><span>Size <strong>{formatBytes(draft.size)}</strong></span><span title={draft.digest}>Digest <code>{shortDigest(draft.digest)}</code></span>{hasChanges && <span className="draft-dirty">Local changes</span>}</div>
-      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => setWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => setWorkspaceTab('review')}>Review</button></div>
+      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('review')}>Review</button></div>
       {workspaceTab === 'review' ? <DraftReviewPanel draft={draft} disabled={busy} /> : <>
         <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
         {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
