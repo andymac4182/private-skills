@@ -154,3 +154,30 @@ export interface SemanticSearchResult {
 export interface SearchResponse { results: SemanticSearchResult[] }
 export interface SearchStatusResponse { status: 'ok' | 'degraded'; provider: string; profileId?: string; error?: string }
 export interface SearchReindexResponse { indexed: number; profileId: string; truncated: boolean; nextCursor?: string }
+
+/**
+ * The immutable release-file view is deliberately separate from directory
+ * metadata. The manifest never includes file contents; the singular file
+ * route returns bounded text only after the release has passed the server's
+ * current admission checks.
+ */
+export type ReleaseFilePreviewState = 'text' | 'binary' | 'unsupported' | 'oversize'
+export interface ReleaseFileView {
+  path: string
+  size: number
+  contentDigest: `sha256:${string}`
+  previewState: ReleaseFilePreviewState
+  executable?: boolean
+  contents?: string
+}
+export interface ReleaseFilesResponse {
+  release: {
+    id: string
+    name: string
+    skillName: string
+    version: string
+    digest: `sha256:${string}`
+    fileCount: number
+  }
+  files: ReleaseFileView[]
+}

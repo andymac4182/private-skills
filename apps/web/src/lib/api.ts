@@ -5,7 +5,7 @@ import type {
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
-  SkillsPackManifest, FeedListResponse, ProxyResolveResponse,
+  SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -70,6 +70,8 @@ export const api = {
   createPack(input: { name: string; version: string; description: string; skills: Array<{ ref: string; version: string }> }) { return request<PackCreateResponse>('/v1/packs', { method: 'POST', body: input }).then(unwrap) },
   operations() { return request<OperationListResponse>('/v1/operations').then(unwrap) },
   operation(id: string) { return request<OperationResponse>(`/v1/operations/${encodeURIComponent(id)}`).then(unwrap) },
+  releaseFiles(resourceId: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`).then(unwrap) },
+  releaseFile(resourceId: string, path: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path } }).then(unwrap) },
   policy() { return request<PolicyResponse>('/v1/policy').then(unwrap) },
   updatePolicy(policy: Policy) {
     const { revision: _revision, ...next } = policy
