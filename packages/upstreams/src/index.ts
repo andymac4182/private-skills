@@ -10,7 +10,12 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
-import type { OpenClawFeedEntry, OpenClawNormalizedSource } from '../../openclaw/src/types.js';
+import type {
+  OpenClawFeedCompatibilityProfile,
+  OpenClawFeedEntry,
+  OpenClawNormalizedSource,
+  OpenClawSha256,
+} from '../../openclaw/src/types.js';
 import {
   isReservedSkillsDirectoryHost,
   isValidSkillsShGatewayToken,
@@ -182,10 +187,25 @@ export interface OpenClawSourceLocation {
 }
 
 /** Server-owned job extension placed alongside an import request. */
+export interface OpenClawSourceFeedDescriptor {
+  /** The exact feed identity selected by the server. */
+  id: string;
+  sequence: number;
+  digest: OpenClawSha256;
+  sourceUrl: string;
+  /** Immutable producer timestamps used by delayed workers for freshness. */
+  generatedAt?: string;
+  expiresAt?: string;
+  /** Set only for the server-selected, exact ClawHub compatibility profile. */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
+}
+
 export interface OpenClawSourceJobDescriptor {
   source: OpenClawNormalizedSource;
   /** Server-owned feed entry retained for post-approval source-proof recording. */
   entry?: OpenClawFeedEntry;
+  /** Server-owned snapshot identity/freshness bound to this import job. */
+  feed?: OpenClawSourceFeedDescriptor;
 }
 
 export interface OpenClawSourceLocator {

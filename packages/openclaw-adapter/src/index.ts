@@ -8,6 +8,10 @@ import {
   OpenClawFeedCache,
   OpenClawRequestError,
   validateOpenClawFeedUrl,
+  type OpenClawFeedCompatibilityProfile,
+  effectiveOpenClawFeedExpiry,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
+  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
   type OpenClawCacheSnapshot,
@@ -834,6 +838,12 @@ export interface OpenClawTrustedFeedProfile {
   url: string | URL;
   expectedFeedId: string;
   allowedOrigins: readonly string[];
+  /**
+   * Optional revision-pinned producer compatibility. The profile is
+   * server-selected and its implementation verifies the exact ClawHub URL
+   * and feed identity before accepting any relaxed wire details.
+   */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   /** A server-side fetcher may add its own configured auth; it is never returned. */
   fetcher?: OpenClawFetch;
   timeoutMs?: number;
@@ -964,6 +974,9 @@ export async function previewOpenClawFeed(
     url,
     expectedFeedId: profile.expectedFeedId,
     allowedOrigins: profile.allowedOrigins,
+    ...(profile.compatibilityProfile === undefined
+      ? {}
+      : { compatibilityProfile: profile.compatibilityProfile }),
     fetcher: guardedFetcher,
     timeoutMs: profile.timeoutMs,
     maxBodyBytes: profile.maxBodyBytes,

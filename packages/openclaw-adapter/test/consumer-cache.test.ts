@@ -5,6 +5,9 @@ import {
 } from '../src/index.ts';
 import { createMemoryStateRepository } from '../../database/src/index.ts';
 import {
+  OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   parseOpenClawFeed,
   serializeOpenClawFeed,
   sha256,
@@ -43,6 +46,30 @@ async function snapshot(
     lastModified: LAST_MODIFIED,
     acceptedAt,
     sourceUrl,
+  };
+}
+
+async function liveClawHubSkillsSnapshot(acceptedAt = CLOCK): Promise<OpenClawCacheSnapshot> {
+  const body = serializeOpenClawFeed({
+    schemaVersion: 1,
+    id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+    generatedAt: '2030-01-01T00:00:00.000Z',
+    sequence: 1,
+    expiresAt: '2030-01-08T00:00:00.000Z',
+    entries: [],
+  });
+  const bytes = utf8Bytes(body);
+  const digest = await sha256(bytes);
+  return {
+    feed: parseOpenClawFeed(body, { expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID, checkExpiry: false }),
+    body,
+    bytes,
+    sha256: digest,
+    etag: `"${digest}"`,
+    transportEtag: `W/"${digest}-gzip"`,
+    lastModified: LAST_MODIFIED,
+    acceptedAt,
+    sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
   };
 }
 
@@ -158,6 +185,100 @@ describe('durable OpenClaw consumer snapshots', () => {
     expect(seenHeaders[0]?.get('if-modified-since')).toBe(LAST_MODIFIED);
     expect(seenHeaders[1]?.get('if-none-match')).toBe(original.etag);
     expect(seenHeaders[1]?.get('if-modified-since')).toBe(LAST_MODIFIED);
+  });
+
+  it('hydrates a live ClawHub snapshot across restart when the CDN returns its weak gzip ETag', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await liveClawHubSkillsSnapshot();
+    const liveKey = {
+      tenantId: TENANT,
+      feedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+    };
+    const initial = new PersistentOpenClawFeedCache({
+      store,
+      tenantId: TENANT,
+      now: () => CLOCK,
+    });
+    await expect(initial.refresh({
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ['https://clawhub.ai'],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async () => new Response(original.body, {
+        status: 200,
+        headers: {
+          etag: original.transportEtag!,
+          'last-modified': LAST_MODIFIED,
+        },
+      }),
+    })).resolves.toMatchObject({ kind: 'accepted', snapshot: { transportEtag: original.transportEtag } });
+    await expect(store.read(liveKey)).resolves.toMatchObject({ transportEtag: original.transportEtag });
+    const seenHeaders: Headers[] = [];
+    const request = {
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ['https://clawhub.ai'],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenHeaders.push(new Headers(init?.headers));
+        return new Response(null, {
+          status: 304,
+          headers: {
+            etag: `W/"${original.sha256}-gzip"`,
+            'last-modified': LAST_MODIFIED,
+          },
+        });
+      },
+    } as const;
+    const restarted = new PersistentOpenClawFeedCache({
+      store,
+      tenantId: TENANT,
+      now: () => CLOCK,
+      maxStaleMs: 7 * 24 * 60 * 60 * 1_000,
+    });
+    await expect(restarted.refresh(request)).resolves.toMatchObject({
+      kind: 'not-modified',
+      status: 304,
+      snapshot: { sha256: original.sha256, feed: { id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID } },
+    });
+    expect(seenHeaders[0]?.get('if-none-match')).toBe(original.transportEtag);
+  });
+
+  it('updates a bounded CDN transport validator when the canonical body and sequence stay identical', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const original = await liveClawHubSkillsSnapshot();
+    const liveKey = {
+      tenantId: TENANT,
+      feedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+    };
+    await store.put(liveKey, original);
+    const representationChanged = {
+      ...original,
+      bytes: original.bytes.slice(),
+      transportEtag: `"${original.sha256}-gzip"`,
+      lastModified: 'Wed, 01 Jan 2030 01:01:00 GMT',
+    };
+    await expect(store.put(liveKey, representationChanged)).resolves.toBeUndefined();
+    await expect(store.read(liveKey)).resolves.toMatchObject({
+      sha256: original.sha256,
+      feed: { sequence: original.feed.sequence },
+      transportEtag: representationChanged.transportEtag,
+      lastModified: representationChanged.lastModified,
+      acceptedAt: original.acceptedAt,
+    });
+
+    const strictIdentity = await snapshot();
+    strictIdentity.sourceUrl = OPENCLAW_CLAWHUB_SKILLS_API_URL;
+    strictIdentity.transportEtag = `"${strictIdentity.sha256}-gzip"`;
+    await expect(store.put({
+      tenantId: TENANT,
+      feedId: FEED_ID,
+      sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+    }, strictIdentity)).rejects.toMatchObject({ code: 'identity-mismatch' });
   });
 
   it('keeps the durable high-water snapshot when an instance receives an older 200 and then loses the network', async () => {

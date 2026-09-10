@@ -236,6 +236,32 @@ function metadataSnapshot(entry: RegistryOpenClawCandidate['entry']): OpenClawMe
 }
 
 describe('core OpenClaw feed composition', () => {
+  it('rejects an expired selected feed before creating a durable import job', async () => {
+    const repository = new MemoryRepository();
+    const queue = createOpenClawImportQueue({
+      repository,
+      organizationId: ORGANIZATION_ID,
+      namespace: '@team',
+      sourceProviderOrigin: 'https://clawhub.example',
+      now: () => Date.parse('2030-01-02T00:00:00.001Z'),
+    });
+    const selected = candidate();
+    await expect(queue.enqueue({
+      tenantId: ORGANIZATION_ID,
+      principal: principal('reader', ['reader'], ['@team'], ['registry:read']),
+      feedId: 'clawhub-official',
+      feedSequence: 5,
+      feedDigest: FEED_DIGEST,
+      sourceUrl: 'https://clawhub.example/v1/feeds/skills',
+      feedGeneratedAt: '2030-01-01T00:00:00.000Z',
+      feedExpiresAt: '2030-01-02T00:00:00.000Z',
+      externalId: selected.entry.id,
+      entry: selected.entry,
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: 'OPENCLAW_CONSUMER_UNAVAILABLE' });
+    expect(repository.state.jobs).toHaveLength(0);
+  });
+
   it('previews trusted catalog metadata and queues an exact entry through the durable import path', async () => {
     const entry = candidate().entry;
     const generatedAt = new Date(Date.now() - 1_000).toISOString();
@@ -501,6 +527,91 @@ describe('core OpenClaw feed composition', () => {
     }));
     expect(completed.status).toBe(200);
     expect(recorded).toEqual([]);
+  });
+
+  it('rejects an OpenClaw completion whose selected feed expires after acquisition', async () => {
+    const test = setup();
+    const source = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/demo',
+      version: '1.0.0',
+      artifactDigest: SOURCE_DIGEST,
+    } as const;
+    const generatedAt = new Date(Date.now() - 1_000).toISOString();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    await test.repository.transaction(ORGANIZATION_ID, (state) => {
+      const now = new Date().toISOString();
+      state.jobs.push({
+        id: 'job-openclaw-expired-completion',
+        organizationId: ORGANIZATION_ID,
+        kind: 'import',
+        state: 'queued',
+        policyRevision: state.policy.revision,
+        policy: structuredClone(state.policy),
+        import: {
+          upstreamId: 'upstream-openclaw',
+          path: '@acme/demo',
+          externalId: '@acme/demo',
+          name: '@team/demo',
+          version: '1.0.0',
+        },
+        upstream: {
+          id: 'upstream-openclaw',
+          organizationId: ORGANIZATION_ID,
+          name: 'OpenClaw fixture',
+          kind: 'registry',
+          enabled: true,
+          baseUrl: 'https://clawhub.example',
+          namespace: '@team',
+        },
+        openclawSource: {
+          source,
+          entry: candidate().entry,
+          feed: {
+            id: 'clawhub-official',
+            sequence: 6,
+            digest: FEED_DIGEST,
+            sourceUrl: 'https://clawhub.example/v1/feeds/skills',
+            generatedAt,
+            expiresAt,
+          },
+        },
+        createdAt: now,
+        updatedAt: now,
+        attempts: 0,
+      });
+    });
+    const worker = {
+      ...principal('worker', ['worker']),
+      identity: 'worker',
+      scopes: ['jobs:claim', 'jobs:complete'],
+    };
+    test.setPrincipal(worker);
+    const claimed = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    expect(claimed.status).toBe(200);
+    const claimedJob = (await json(claimed)).job as Job & { leaseToken: string };
+    await test.repository.transaction(ORGANIZATION_ID, (state) => {
+      const current = state.jobs.find((job) => job.id === claimedJob.id)!;
+      const descriptor = current.openclawSource as { feed: Record<string, unknown> };
+      descriptor.feed.expiresAt = generatedAt;
+    });
+    const bundle = {
+      format: 'pskills-bundle-v1' as const,
+      files: [{
+        path: 'SKILL.md',
+        content: Buffer.from('---\nname: demo\ndescription: expired fixture\n---\n# Demo\n', 'utf8').toString('base64'),
+      }],
+    };
+    const artifactDigest = await digestBytes(encodeBundle(bundle));
+    const completed = await test.handler(new Request(`${ORIGIN}/internal/jobs/${claimedJob.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': claimedJob.leaseToken },
+      body: JSON.stringify({ leaseToken: claimedJob.leaseToken, artifactDigest, bundle }),
+    }));
+    expect(completed.status).toBe(503);
+    expect((await test.repository.read()).skills).toHaveLength(1);
+    expect((await test.repository.read()).jobs.find((job) => job.id === claimedJob.id)?.state).toBe('running');
   });
 
   it('requires admin refresh and current namespace/policy admission on every read', async () => {

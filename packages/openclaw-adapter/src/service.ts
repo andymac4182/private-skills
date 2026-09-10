@@ -9,6 +9,11 @@ import type {
 } from '../../contracts/src/index.ts';
 import {
   OPENCLAW_OFFICIAL_FEED_ID,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
+  effectiveOpenClawFeedExpiry,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
   normalizeOpenClawCandidate,
   normalizeOpenClawEntry,
   parseOpenClawFeed,
@@ -315,6 +320,11 @@ export interface OpenClawImportQueueRequest {
   feedSequence: number;
   feedDigest: Digest;
   sourceUrl: string;
+  /** Immutable timestamps copied from the accepted source snapshot. */
+  feedGeneratedAt: string;
+  feedExpiresAt: string;
+  /** Server-selected compatibility profile, when the exact profile is active. */
+  feedCompatibilityProfile?: typeof OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE;
   externalId: string;
   entry: OpenClawFeedEntry;
   signal: AbortSignal;
@@ -458,6 +468,11 @@ export class OpenClawTrustedSnapshotImportService {
         feedSequence: feed.sequence,
         feedDigest: snapshot.sha256,
         sourceUrl: key.sourceUrl,
+        feedGeneratedAt: feed.generatedAt,
+        feedExpiresAt: feed.expiresAt,
+        ...(isOpenClawClawHubSkillsCompatibilityIdentity(feed.id, key.sourceUrl)
+          ? { feedCompatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE }
+          : {}),
         externalId,
         entry,
         signal: signal ?? new AbortController().signal,
@@ -509,7 +524,14 @@ async function validateTrustedSnapshot(
     });
     const generatedAt = Date.parse(feed.generatedAt);
     const expiresAt = Date.parse(feed.expiresAt);
-    if (feed.id !== key.feedId || feed.entries.length > 1_000 || !Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || generatedAt > now || expiresAt - generatedAt > MAX_SNAPSHOT_TTL_MS) throw new Error('invalid feed');
+    const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(key.feedId, key.sourceUrl);
+    const maxWireTtl = currentClawHubSkills ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : MAX_SNAPSHOT_TTL_MS;
+    if (key.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !currentClawHubSkills) throw new Error('invalid feed');
+    if (feed.id !== key.feedId || feed.entries.length > 1_000 || !Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || generatedAt > now || expiresAt - generatedAt > maxWireTtl) throw new Error('invalid feed');
+    const effectiveExpiry = effectiveOpenClawFeedExpiry(feed, key.sourceUrl);
+    if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) {
+      throw new OpenClawConsumerSelectionError('snapshot-expired', 'The persisted feed snapshot is expired');
+    }
     return feed;
   } catch (error) {
     if (error instanceof OpenClawConsumerSelectionError) throw error;
@@ -775,9 +797,15 @@ function defaultCanReadEntry(principal: Principal, entry: OpenClawFeedEntry): bo
 function usableMetadata(snapshot: OpenClawMetadataSnapshot, now: number, maxAgeMs: number): boolean {
   const generatedAt = Date.parse(snapshot.feed.generatedAt);
   const expiresAt = Date.parse(snapshot.feed.expiresAt);
-  return snapshot.feed.id === OPENCLAW_OFFICIAL_FEED_ID &&
+  const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(snapshot.feed.id, snapshot.sourceUrl);
+  const identityAccepted = snapshot.feed.id === OPENCLAW_OFFICIAL_FEED_ID || currentClawHubSkills;
+  const maxWireTtl = currentClawHubSkills ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : undefined;
+  return identityAccepted &&
     Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
-    expiresAt > now && snapshot.acceptedAt <= now && now - snapshot.acceptedAt <= maxAgeMs;
+    generatedAt <= now && expiresAt > now &&
+    (maxWireTtl === undefined || expiresAt - generatedAt <= maxWireTtl) &&
+    effectiveOpenClawFeedExpiry(snapshot.feed, snapshot.sourceUrl) > now &&
+    snapshot.acceptedAt <= now && now - snapshot.acceptedAt <= maxAgeMs;
 }
 
 function metadataEntryProjection(snapshot: OpenClawMetadataSnapshot, entry: OpenClawFeedEntry): OpenClawFeedEntry | undefined {

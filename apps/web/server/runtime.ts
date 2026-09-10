@@ -13,6 +13,7 @@ import { createEmbeddingProvider } from '../../../packages/intelligence/src/embe
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
 import { resolveUploadReviewModel, resolveUploadReviewRevision } from '../../../packages/upload-reviews/src/index';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
+import { createOpenClawTrustedFeedProfile } from './openclaw-profile';
 import {
   createSkillsDirectoryClient,
   createSkillsDirectoryClientResolver,
@@ -32,7 +33,6 @@ import {
   StateRepositoryOpenClawPublicationStore,
   type OpenClawMetadataPreviewResult,
   type OpenClawMetadataSnapshot,
-  type OpenClawTrustedFeedProfile,
 } from '../../../packages/openclaw-adapter/src/index';
 import type { OpenClawRefreshResult } from '../../../packages/openclaw/src/index';
 
@@ -115,6 +115,9 @@ async function createRuntime(env: RuntimeEnvironment) {
         url: openClawTrustedFeed.url,
         expectedFeedId: openClawTrustedFeed.expectedFeedId,
         allowedOrigins: openClawTrustedFeed.allowedOrigins,
+        ...(openClawTrustedFeed.compatibilityProfile === undefined
+          ? {}
+          : { compatibilityProfile: openClawTrustedFeed.compatibilityProfile }),
         ...(openClawTrustedFeed.fetcher === undefined ? {} : { fetcher: openClawTrustedFeed.fetcher }),
         signal,
       });
@@ -271,22 +274,6 @@ async function createRuntime(env: RuntimeEnvironment) {
     }
     return response;
   };
-}
-
-function createOpenClawTrustedFeedProfile(env: RuntimeEnvironment): OpenClawTrustedFeedProfile | undefined {
-  const raw = env.PSKILLS_OPENCLAW_TRUSTED_FEED_URL?.trim();
-  if (!raw) return undefined;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return undefined;
-    return {
-      url: url.href,
-      expectedFeedId: env.PSKILLS_OPENCLAW_TRUSTED_FEED_ID?.trim() || 'clawhub-official',
-      allowedOrigins: [url.origin],
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 function openClawConsumerRefreshResult(result: OpenClawRefreshResult): {

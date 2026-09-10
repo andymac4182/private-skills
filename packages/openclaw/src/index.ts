@@ -19,5 +19,8 @@ export {
 export {
   OpenClawFeedCache,
   OpenClawRequestError,
+  effectiveOpenClawFeedExpiry,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
+  isValidOpenClawTransportEtag,
   validateOpenClawFeedUrl,
 } from "./client.ts";

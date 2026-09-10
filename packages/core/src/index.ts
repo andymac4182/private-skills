@@ -88,6 +88,11 @@ import {
   type OpenClawTrustedFeedProfile,
 } from '../../openclaw-adapter/src/index.ts';
 import {
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+  effectiveOpenClawFeedExpiry,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
+  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   normalizeOpenClawCandidate,
   parseOpenClawFeed,
   type OpenClawFeedEntry,
@@ -332,6 +337,8 @@ export function createOpenClawImportQueue(
       if (!canReadNamespace(input.principal, namespace)) {
         throw new RegistryApiError('FORBIDDEN', 'The OpenClaw feed namespace is denied', 403);
       }
+      const queueNow = now();
+      validateOpenClawQueueFeed(input, queueNow);
       const normalized = normalizeOpenClawQueueEntry(input.entry);
       const source = normalized.source;
       const feedDigest = input.feedDigest;
@@ -374,6 +381,9 @@ export function createOpenClawImportQueue(
           sequence: input.feedSequence,
           digest: feedDigest,
           sourceUrl: input.sourceUrl,
+          generatedAt: input.feedGeneratedAt,
+          expiresAt: input.feedExpiresAt,
+          ...(input.feedCompatibilityProfile === undefined ? {} : { compatibilityProfile: input.feedCompatibilityProfile }),
         },
       };
       return await options.repository.transaction(options.organizationId, (state) => {
@@ -383,7 +393,8 @@ export function createOpenClawImportQueue(
           if (job.import.externalId !== input.externalId || job.import.name !== managedName || !job.upstream) return false;
           if (job.upstream.id !== upstream.id || !sameUpstreamOrigin(job.upstream, upstream)) return false;
           const descriptor = job.openclawSource;
-          return isObject(descriptor.source) && stableStringify(descriptor.source) === stableStringify(source);
+          return isObject(descriptor.source) && stableStringify(descriptor.source) === stableStringify(source) &&
+            sameOpenClawQueueFeed(descriptor.feed, sourceDescriptor.feed);
         };
         const candidates = mutable.jobs
           .filter(sameSource)
@@ -393,7 +404,7 @@ export function createOpenClawImportQueue(
         const completed = candidates.find((job) => job.state === 'completed' && job.resourceId);
         if (completed) {
           const skill = mutable.skills.find((candidate) => candidate.id === completed.resourceId);
-          if (skill && skillCurrentlyApproved(mutable, skill, now())) {
+          if (skill && skillCurrentlyApproved(mutable, skill, queueNow)) {
             return { operationId: completed.id, state: 'running' };
           }
           const scan = skill && mutable.jobs.find((job) => job.kind === 'scan' && job.resourceId === skill.id && (job.state === 'queued' || job.state === 'running'));
@@ -412,8 +423,8 @@ export function createOpenClawImportQueue(
           import: importRequest,
           upstream,
           openclawSource: sourceDescriptor,
-          createdAt: new Date(now()).toISOString(),
-          updatedAt: new Date(now()).toISOString(),
+          createdAt: new Date(queueNow).toISOString(),
+          updatedAt: new Date(queueNow).toISOString(),
           attempts: 0,
         };
         mutable.jobs.push(job);
@@ -3450,6 +3461,116 @@ function validateOpenClawSourceProviderOrigin(value: string): string {
   }
 }
 
+/**
+ * Validate the immutable feed freshness copied into a queued import.  The
+ * consumer validates the complete feed before enqueueing; this second check
+ * keeps the durable queue honest if a caller bypasses that adapter and also
+ * prevents an old queued job from being accepted after the local one-day
+ * compatibility window has elapsed.
+ */
+function validateOpenClawQueueFeed(
+  input: OpenClawImportQueueRequest,
+  now: number,
+): void {
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(input.sourceUrl);
+  } catch {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed URL is invalid', 503, { retryable: true });
+  }
+  if (
+    sourceUrl.protocol !== 'https:' ||
+    sourceUrl.username ||
+    sourceUrl.password ||
+    sourceUrl.search ||
+    sourceUrl.hash ||
+    sourceUrl.href !== input.sourceUrl
+  ) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed URL is invalid', 503, { retryable: true });
+  }
+  if (
+    typeof input.feedId !== 'string' ||
+    input.feedId.length === 0 ||
+    input.feedId.length > 512 ||
+    !Number.isSafeInteger(input.feedSequence) ||
+    input.feedSequence < 0 ||
+    !/^sha256:[0-9a-f]{64}$/u.test(input.feedDigest) ||
+    typeof input.feedGeneratedAt !== 'string' ||
+    typeof input.feedExpiresAt !== 'string' ||
+    !Number.isFinite(now)
+  ) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed freshness metadata is invalid', 503, { retryable: true });
+  }
+  const generatedAt = Date.parse(input.feedGeneratedAt);
+  const expiresAt = Date.parse(input.feedExpiresAt);
+  const compatibility = isOpenClawClawHubSkillsCompatibilityIdentity(input.feedId, sourceUrl);
+  if (
+    !Number.isFinite(generatedAt) ||
+    !Number.isFinite(expiresAt) ||
+    generatedAt > now ||
+    expiresAt <= generatedAt ||
+    expiresAt - generatedAt > (compatibility ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : 24 * 60 * 60 * 1_000)
+  ) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed freshness metadata is invalid', 503, { retryable: true });
+  }
+  if (input.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !compatibility) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The ClawHub skills feed identity is bound to its compatibility URL', 503, { retryable: true });
+  }
+  if (compatibility && input.feedCompatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The OpenClaw compatibility profile is not enabled for this feed', 503, { retryable: true });
+  }
+  if (!compatibility && input.feedCompatibilityProfile !== undefined) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The OpenClaw compatibility profile does not match this feed', 503, { retryable: true });
+  }
+  const effectiveExpiry = effectiveOpenClawFeedExpiry({
+    id: input.feedId,
+    generatedAt: input.feedGeneratedAt,
+    expiresAt: input.feedExpiresAt,
+  }, sourceUrl);
+  if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed has expired', 503, { retryable: true });
+  }
+}
+
+function sameOpenClawQueueFeed(left: unknown, right: unknown): boolean {
+  if (!isObject(left) || !isObject(right)) return false;
+  return left.id === right.id &&
+    left.sequence === right.sequence &&
+    left.digest === right.digest &&
+    left.sourceUrl === right.sourceUrl &&
+    left.generatedAt === right.generatedAt &&
+    left.expiresAt === right.expiresAt &&
+    left.compatibilityProfile === right.compatibilityProfile;
+}
+
+/** Validate freshness again at completion/proof admission time. */
+function validateOpenClawJobFeed(job: Job, now: number): void {
+  if (!isObject(job.openclawSource) || job.openclawSource.feed === undefined) return;
+  const feed = job.openclawSource.feed;
+  if (!isObject(feed)) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The queued OpenClaw feed metadata is invalid', 503, { retryable: true });
+  }
+  if (
+    typeof feed.id !== 'string' ||
+    typeof feed.sourceUrl !== 'string' ||
+    typeof feed.sequence !== 'number' ||
+    typeof feed.digest !== 'string' ||
+    typeof feed.generatedAt !== 'string' ||
+    typeof feed.expiresAt !== 'string'
+  ) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The queued OpenClaw feed freshness metadata is invalid', 503, { retryable: true });
+  }
+  validateOpenClawQueueFeed({
+    feedId: feed.id,
+    feedSequence: feed.sequence,
+    feedDigest: feed.digest as Digest,
+    sourceUrl: feed.sourceUrl,
+    feedGeneratedAt: feed.generatedAt,
+    feedExpiresAt: feed.expiresAt,
+    ...(feed.compatibilityProfile === undefined ? {} : { feedCompatibilityProfile: feed.compatibilityProfile }),
+  } as OpenClawImportQueueRequest, now);
+}
+
 function openClawCandidateMatchesMetadata(
   entry: OpenClawFeedEntry,
   metadata: OpenClawMetadataSnapshot,
@@ -3491,9 +3612,12 @@ function openClawTrustedMetadataUsable(
   if (sourceUrl !== expectedSourceUrl) return false;
   const generatedAt = Date.parse(metadata.feed.generatedAt);
   const expiresAt = Date.parse(metadata.feed.expiresAt);
+  const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(metadata.feed.id, sourceUrl);
+  const effectiveExpiry = effectiveOpenClawFeedExpiry(metadata.feed, sourceUrl);
   return Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
-    generatedAt <= now && expiresAt > now &&
-    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now;
+    generatedAt <= now && expiresAt > now && effectiveExpiry > now &&
+    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now &&
+    (!currentClawHubSkills || expiresAt - generatedAt <= OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS);
 }
 
 async function authorizeOpenClawPublication(
@@ -3603,6 +3727,14 @@ function openClawCompletionProof(
   canonicalArtifactDigest: string | undefined,
 ): { entry: OpenClawFeedEntry; sourceArtifact: OpenClawSourceArtifactProof } | undefined {
   if (!isObject(job.openclawSource) || !isObject(job.openclawSource.entry) || !isObject(job.openclawSource.source)) return undefined;
+  try {
+    validateOpenClawJobFeed(job, Date.now());
+  } catch {
+    // A feed may expire between completion and proof recording. The imported
+    // release remains governed by the normal scanner policy, but it cannot be
+    // admitted to the OpenClaw publication after its selected feed window.
+    return undefined;
+  }
   const descriptor = job.openclawSource;
   const entry = descriptor.entry as unknown as OpenClawFeedEntry;
   const source = descriptor.source;
@@ -5228,6 +5360,7 @@ async function completeJob(
   config: Required<RegistryConfiguration>,
   requestId: string,
 ): Promise<Response> {
+  const completionNow = Date.now();
   const leaseToken = stringValue(body.leaseToken);
   if (!leaseToken) throw new RegistryApiError('INVALID_LEASE', 'leaseToken is required', 400);
   const state = await readState(deps.repository, config.organizationId);
@@ -5247,6 +5380,9 @@ async function completeJob(
     throw new RegistryApiError('LEASE_EXPIRED', 'Job lease has expired', 409, { retryable: true });
   }
   if (body.error !== undefined && typeof body.error !== 'string') throw new RegistryApiError('INVALID_JOB_RESULT', 'error must be a string', 400);
+  if (job.kind === 'import' && !body.error) {
+    validateOpenClawJobFeed(job, completionNow);
+  }
 
   let imported: { bundle: SkillBundle; bytes: Uint8Array; stored: StoredBlob; digest: Digest; metadata: { skillName?: string; description?: string } } | undefined;
   if (job.kind === 'import' && !body.error) {
@@ -5301,6 +5437,9 @@ async function completeJob(
       }
       appendAudit(mutable, audit(principal, 'job.requeue.policy-changed', id, { requestId }, config.organizationId));
       return currentJob;
+    }
+    if (currentJob.kind === 'import' && !body.error) {
+      validateOpenClawJobFeed(currentJob, Date.now());
     }
     if (typeof body.error === 'string' && body.error.length > 0) {
       currentJob.state = 'failed';

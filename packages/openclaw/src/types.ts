@@ -20,6 +20,19 @@ export const OPENCLAW_OFFICIAL_FEED_ID = "clawhub-official" as const;
 // second `-skills` identity.
 export const OPENCLAW_SKILLS_FEED_ID = OPENCLAW_OFFICIAL_FEED_ID;
 export const OPENCLAW_FEED_ROUTE = "/v1/feeds/skills" as const;
+/**
+ * Current ClawHub producer compatibility is deliberately separate from the
+ * pinned hosted-feed contract above. The producer at the pinned revision
+ * publishes a distinct skills id, while its RFC still specifies the official
+ * id. Keep this opt-in and revision-pinned until the upstream contract is
+ * reconciled.
+ */
+export const OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE =
+  "clawhub-live-skills-694ff719" as const;
+export const OPENCLAW_CLAWHUB_SKILLS_FEED_ID = "clawhub-official-skills" as const;
+export const OPENCLAW_CLAWHUB_SKILLS_API_URL =
+  "https://clawhub.ai/api/v1/feeds/skills" as const;
+export const OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 export const OPENCLAW_SOURCE_CLAWHUB = "public-clawhub" as const;
 export const OPENCLAW_SOURCE_GITHUB = "public-github" as const;
 // Names used by ClawHub's reference schema package, kept as explicit aliases
@@ -157,6 +170,9 @@ export interface OpenClawParseOptions {
   maxBytes?: number;
 }
 
+export type OpenClawFeedCompatibilityProfile =
+  typeof OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE;
+
 export interface OpenClawNormalizedHostedSource {
   kind: "public-clawhub";
   sourceRef: typeof OPENCLAW_SOURCE_CLAWHUB;
@@ -192,7 +208,14 @@ export interface OpenClawCacheSnapshot {
   body: string;
   bytes: Uint8Array;
   sha256: OpenClawSha256;
+  /** Canonical body validator used by persisted publication boundaries. */
   etag: string;
+  /**
+   * The verified transport validator returned by the source. It may differ
+   * from `etag` for a representation-aware CDN, but is never trusted without
+   * matching the canonical body digest.
+   */
+  transportEtag?: string;
   lastModified?: string;
   acceptedAt: number;
   sourceUrl: string;
@@ -214,6 +237,11 @@ export interface OpenClawFeedRefreshRequest {
   maxBodyBytes?: number;
   /** Optional payload pin, accepted as `sha256:<hex>` or bare 64-character hex. */
   expectedSha256?: string;
+  /**
+   * A revision-pinned compatibility profile for a known producer/CDN
+   * behavior. Omitted means the written hosted-feed contract is enforced.
+   */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   signal?: AbortSignal;
 }
 

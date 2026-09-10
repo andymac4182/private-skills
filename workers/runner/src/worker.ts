@@ -3,6 +3,7 @@ import { artifactDigest, digestBytes, fencingToken, WorkerApiClient, type Worker
 import { normalizePolicies, toContractScanResult, type Policy, type ScanResult } from './protocol.js';
 import {
   acquireImportJob,
+  validateOpenClawSourceFeedFreshness,
   type WorkerAcquisitionOptions,
   type WorkerOpenClawProof,
 } from './acquisition.js';
@@ -188,6 +189,12 @@ export class WorkerRunner {
         files: materialized.files,
         scannerResults: scanResults.map((result) => ({ scannerId: result.scannerId, status: result.status })),
       }, signal);
+      if (importedOpenClawSource) {
+        validateOpenClawSourceFeedFreshness(
+          job.openclawSource,
+          this.options.acquisition?.openClaw?.now?.() ?? Date.now(),
+        );
+      }
       if (importedOpenClawSource && this.options.openClawProofRecorder !== undefined && importedOpenClawProof === undefined) {
         throw new Error('OpenClaw source proof entry is required when proof recording is enabled');
       }
