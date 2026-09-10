@@ -11,9 +11,13 @@ they do not become current-release gates unless the roadmap explicitly moves
 one into the current delivery.
 
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). Its local runtime records
-and pending hosted gates qualify the criteria below; they do not mark C1
-complete without the required production evidence.
+[`verification-current.md`](verification-current.md). The current guarded
+prebuilt rollout is READY and its read-only API/Pack checks are recorded there.
+The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
+and metadata-only Pack preview are partial evidence; they do not mark C1
+complete. Git-trigger observation, positive scanner-to-warm admission, hosted
+recovery, and native CI remain open. Pack-preview UI proof passed during a
+stable-alias cutover, but its exact deployment attribution is unknown.
 
 ## G0 — v0.2.0 shipment
 
@@ -22,12 +26,11 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified:** the accepted Neon integration is provisioned and connected, and
   the main registry has a production database, private object storage, and
   configured secrets, as recorded in the current verification record;
-- **pending:** the owner resolves GitHub repository access setup and a
-  Git-triggered deployment is observed for the final source revision. The
-  project API returned `link: null` (shown in the sanitized evidence as
-  `linkedRepository: null`); a documented `vercel git connect` attempt for
-  `andymac4182/private-skills` failed with `Make sure there aren’t any typos and
-  that you have access to the repository if it’s private`;
+- **pending:** a Git-triggered deployment is observed for the final source
+  revision. The existing Vercel project is now connected to
+  `andymac4182/private-skills` on production branch `main` without an
+  additional grant; the guarded prebuilt rollout did not observe a
+  Git-triggered deployment;
 - **verified for the recorded fixtures:** the production-built registry passes
   an authenticated publish → required SkillsGuard scan → approval → semantic
   search → Rust CLI install/verify → analytics/review flow at its real URL;
@@ -96,29 +99,30 @@ enabled feed exists; with multiple enabled feeds the caller must select one
 explicitly. Explicit feed selection still passes tenant, enabled, origin, and
 policy checks before catalog access.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
-skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
-directory-agent wiring is present, and historical deployment evidence proves the
-authorized request-scoped token is accepted. The current prebuilt rollout is
-`dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z`, from merged main
-`0efd3583bb5902a77c48cbf98f6b7bff88338bcf` and code artifact
-`8c8e41eb4ad172fc033bc5593f400874095ec656`. Its sanitized [rollout evidence](../work/production-rollout-evidence-dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z.json)
-verifies only authenticated read-only health, `/v1/me`, fail-closed policy,
-`/v1/feeds`, and directory list (`feedCount=0`, `total=9738`); no production
-feed is configured, and no source import or CLI installation was exercised. The
-historical E7 deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` and earlier
-`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
-`b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) retain
-the hosted directory/Topics and metadata-only pagination evidence. The current
-source also implements the canonical Topics parser, auth-before-hit bounded
-cache, conflict/drift-aware enumeration, and credential-negative security tests.
-This evidence subset does not count as complete C1 cloud acceptance: a deployment
-must still prove authenticated listing, detail, import, and view behavior together
-before C1 is complete. The previous [API probe](../work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
-is retained as stale-canonical regression evidence. The [historical E7 API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
-made eight GET requests with zero retries or mutations and no credential-pattern
-leakage, and verified health, authenticated `/me`, policy, list (`total=9738`),
-fuzzy search, fresh canonical React and Marketing Topics, and unauthenticated
-Topics rejection with 401. Browser proof for the current rollout remains pending.
+skills.sh on 2026-09-10. The current guarded prebuilt rollout is
+`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`, from merged main
+`fecd6baa1411c2f3c2ad60b13c2c0e37761d2826` with artifact source
+`b1d3b6d77162899491f742e2930abe0b36137d8e`. Its sanitized [rollout evidence](evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
+records 18 authenticated GETs, two unauthenticated negative GETs, one
+metadata-only Pack preview POST, zero private-registry data mutations (no
+feed, import, scan, install, role, or policy writes), fail-closed policy, and
+path-only detail. It does not claim a feed, import, scan, or CLI install.
+
+The prior `dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1` evidence records one quarantined
+`find-skills` import with 30 high findings, including CI-004 command injection,
+and no install override. Its corrected same-root CLI record proves unchanged
+digests and one `upToDateChecks` increment. These are partial, deployment-
+specific C1 evidence; they do not prove positive scanner-to-warm admission.
+Local multi-feed and edge fixtures are recorded in
+[`verification-current.md`](verification-current.md), with `allowUnscanned`
+and provider limits preserved.
+
+The production Pack preview returns schema `0.1.0`, three members, metadata-only
+output, and unauthenticated 401. The browser manifest for its Pack replay
+explicitly names the prior E7 route proof, while its Pack replay crossed a
+stable-alias cutover and has unknown exact deployment attribution. Pack-preview
+UI proof is complete. Full C1 still requires positive scanner-to-warm admission
+and the remaining source, tenant, and provider checks.
 
 Earlier evidence closes the bounded metadata-enumeration portion: 20 all-time
 pages at `per_page=500` returned `totalDeclared=9738`, `totalObserved=9738`,

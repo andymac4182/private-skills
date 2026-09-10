@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-public-pack-preview-metadata-only",
+  "verified": true,
+  "checkedAt": "2026-09-10T07:02:37.560Z",
+  "deployment": {
+    "id": "dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "fecd6baa1411c2f3c2ad60b13c2c0e37761d2826",
+    "fingerprintSha256": "64d3833b2c107546011efc38e34bddea9df519a0e17e36f506b5674c46a504bf"
+  },
+  "provenance": {
+    "packUrl": "https://skills.sh/p/nuK9jo3sTCZGB2Ul",
+    "sourceUrl": "https://github.com/smixs/visual-skills/blob/main/README.md",
+    "sourceDescription": "README-published public pack URL"
+  },
+  "routeContract": {
+    "method": "POST",
+    "path": "/v1/directory/packs/preview",
+    "reason": "frozen core route accepts a JSON URL body; no GET route is defined"
+  },
+  "requestPolicy": {
+    "authenticatedPreviewRequests": 1,
+    "unauthenticatedNegativeRequests": 1,
+    "memberArtifactRequestsByVerifier": 0,
+    "importRequests": 0,
+    "installRequests": 0,
+    "mutationRequests": 0
+  },
+  "authenticated": {
+    "status": 200,
+    "preview": {
+      "packUrl": {
+        "host": "www.skills.sh",
+        "path": "/p/nuK9jo3sTCZGB2Ul"
+      },
+      "manifestUrl": {
+        "host": "www.skills.sh",
+        "path": "/p/nuK9jo3sTCZGB2Ul/.well-known/skills/index.json"
+      },
+      "schema": "0.1.0",
+      "manifestDigest": "sha256:7f645e0ecb838942b93c94e88c68946707b9acc1323092589aa6539225880f3a",
+      "memberCount": 3,
+      "members": [
+        {
+          "name": "creative-director",
+          "type": "files",
+          "descriptionBytes": 939,
+          "artifact": {
+            "host": "www.skills.sh",
+            "path": "/p/nuK9jo3sTCZGB2Ul/.well-known/skills/creative-director/",
+            "hasQuery": false
+          },
+          "externalDigest": null,
+          "fileCount": 594,
+          "filePathSample": [
+            "SKILL.md",
+            "assets/output-templates.md",
+            "references/activation-toolkit.md",
+            "<omitted>",
+            "scripts/generate_links.py",
+            "scripts/generate_mocs.py",
+            "scripts/validate_schema.py"
+          ]
+        },
+        {
+          "name": "image",
+          "type": "files",
+          "descriptionBytes": 623,
+          "artifact": {
+            "host": "www.skills.sh",
+            "path": "/p/nuK9jo3sTCZGB2Ul/.well-known/skills/image/",
+            "hasQuery": false
+          },
+          "externalDigest": null,
+          "fileCount": 23,
+          "filePathSample": [
+            "SKILL.md",
+            "references/characters.md",
+            "references/creative-direction.md",
+            "<omitted>",
+            "references/structural.md",
+            "references/text-rendering.md",
+            "references/vision-decomposer.md"
+          ]
+        },
+        {
+          "name": "video",
+          "type": "files",
+          "descriptionBytes": 735,
+          "artifact": {
+            "host": "www.skills.sh",
+            "path": "/p/nuK9jo3sTCZGB2Ul/.well-known/skills/video/",
+            "hasQuery": false
+          },
+          "externalDigest": null,
+          "fileCount": 13,
+          "filePathSample": [
+            "SKILL.md",
+            "references/animatic-keyframes.md",
+            "references/camera-lighting-vocabulary.md",
+            "<omitted>",
+            "references/seedance.md",
+            "references/universal-rules.md",
+            "references/veo.md"
+          ]
+        }
+      ],
+      "metadataOnly": true
+    }
+  },
+  "unauthenticated": {
+    "status": 401,
+    "errorCode": "UNAUTHORIZED",
+    "expectedStatus": 401,
+    "passed": true
+  }
+}

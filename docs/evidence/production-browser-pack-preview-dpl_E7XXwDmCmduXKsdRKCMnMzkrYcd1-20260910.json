@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-cli-browser-readonly",
+  "verified": true,
+  "deployment": {
+    "origin": "https://private-skills-theta.vercel.app",
+    "routeProof": {
+      "id": "dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1",
+      "sourceSha": "7df1ce6063f57bcf262c228ccde9483be5c2210d",
+      "attribution": "Known for the earlier separate ten-route proof."
+    },
+    "packPreview": {
+      "id": null,
+      "sourceSha": null,
+      "attribution": "The stable-alias pack-preview pass overlapped a deployment cutover; the exact deployment and source SHA were not captured by this browser session."
+    }
+  },
+  "observedWindow": {
+    "startedAt": "2026-09-10T07:03:15.300Z",
+    "endedAt": "2026-09-10T07:07:31.300Z",
+    "scope": "Pack preview replay and result-card screenshot correction only; the full route proof is a separate evidence phase.",
+    "deploymentAttribution": "Unknown exact deployment during stable-alias cutover; do not attribute this window to routeProof.",
+    "browser": "agent-browser 0.37.1",
+    "session": "private-skills-prod-ui",
+    "authentication": "Normal sign-in form using the approved mode-0600 private secret file; token value excluded."
+  },
+  "routeVerification": {
+    "phase": "Earlier authenticated route proof; timestamps are intentionally omitted because it is separate from the pack-preview window.",
+    "viewports": {
+      "desktop": "1280x577",
+      "mobile": "390x844"
+    },
+    "allRoutesHorizontalOverflow": false,
+    "allRoutesTokenLikeDomMatch": false,
+    "routes": [
+      "/app",
+      "/app/catalog",
+      "/app/packs",
+      "/app/directory",
+      "/app/official",
+      "/app/topics",
+      "/app/topic/react",
+      "/app/cloud-audits",
+      "/app/analytics",
+      "/app/reviews"
+    ],
+    "screenshots": [
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-dashboard.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-dashboard-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-catalog.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-catalog-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-packs.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-packs-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-directory.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-directory-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-official.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-topics.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-topics-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-topic-react.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-topic-react-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-audits.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-audits-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-analytics.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-analytics-mobile.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-eve.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-eve-mobile.png"
+    ]
+  },
+  "packPreview": {
+    "deploymentAttribution": "Unknown exact deployment during the observed stable-alias cutover window.",
+    "requestMethod": "POST",
+    "requestPath": "/v1/directory/packs/preview",
+    "status": 200,
+    "packUrl": "https://skills.sh/p/nuK9jo3sTCZGB2Ul",
+    "canonicalSource": "https://www.skills.sh/p/nuK9jo3sTCZGB2Ul",
+    "schema": "0.1.0",
+    "members": ["creative-director", "image", "video"],
+    "manifestDigest": "sha256:7f645e0ecb838942b93c94e88c68946707b9acc1323092589aa6539225880f3a",
+    "metadataOnly": true,
+    "memberBytesImported": false,
+    "privatePackCreated": false,
+    "installOrImportAttempted": false,
+    "uiStatesConfirmed": [
+      "Preview loaded with 3 upstream members.",
+      "No member bytes were imported.",
+      "No private pack was created."
+    ],
+    "screenshots": [
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-pack-preview.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-pack-preview-mobile.png"
+    ],
+    "resultCardScreenshots": [
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-pack-preview-result.png",
+      "/private/tmp/private-skills-public-detail-fix/docs/design/production-cli-pack-preview-result-mobile.png"
+    ]
+  },
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 577,
+      "route": "/app/packs",
+      "overflow": false,
+      "previewLoaded": true,
+      "tokenLikeDomMatch": false
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "route": "/app/packs",
+      "overflow": false,
+      "previewLoaded": true,
+      "tokenLikeDomMatch": false
+    }
+  },
+  "console": {
+    "errorCount": 0
+  },
+  "network": {
+    "capturedFetchXhrCount": 16,
+    "statusCounts": {
+      "200": 15,
+      "401": 1
+    },
+    "expectedPreLoginBoundary401": 1,
+    "postLogin4xxOr5xx": 0,
+    "server5xx": 0,
+    "safeRequestSummary": [
+      {"method": "GET", "status": 401, "path": "/v1/me", "phase": "pre-login auth boundary"},
+      {"method": "POST", "status": 200, "path": "/auth/session", "phase": "normal sign-in"},
+      {"method": "POST", "status": 200, "path": "/v1/directory/packs/preview", "phase": "metadata-only preview"}
+    ],
+    "requestBodiesOrHeadersOpened": false
+  },
+  "credentialSafety": {
+    "tokenPrinted": false,
+    "tokenPlacedInUrl": false,
+    "tokenCapturedInScreenshot": false,
+    "tokenLikeDomMatchAfterLogin": false,
+    "note": "The token was transiently held by the normal sign-in field as required for authentication; its value was never printed, URL-encoded, or included in evidence."
+  },
+  "registryDataMutations": {
+    "authSessionPosts": 1,
+    "metadataPreviewPosts": 1,
+    "imports": 0,
+    "publishes": 0,
+    "privatePackCreations": 0,
+    "installs": 0,
+    "reviewDecisions": 0,
+    "settingsChanges": 0
+  }
+}
