@@ -12,7 +12,7 @@ import {
   workerAcquisitionOptionsFromEnv,
 } from '../src/acquisition.js';
 
-const BASE = 'http://127.0.0.1:32128';
+const BASE = 'https://127.0.0.1:32128';
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -130,5 +130,28 @@ describe('portable worker skills.sh gateway credentials', () => {
 
     expect(callbackCalls).toBe(0);
     expect(seen).toEqual(['']);
+  });
+
+  it('keeps incomplete gateway settings fail-closed and ignores the legacy token', async () => {
+    const incomplete = workerAcquisitionOptionsFromEnv({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: `${BASE}/directory`,
+      PSKILLS_DIRECTORY_TOKEN: 'legacy-token-must-not-be-used',
+    });
+    expect(incomplete.skillsShGatewayCredential?.baseUrl).toBe(`${BASE}/directory`);
+    await expect(incomplete.skillsShGatewayCredential?.getToken()).rejects.toThrow('gateway credential unavailable');
+
+    const legacyOnly = workerAcquisitionOptionsFromEnv({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_TOKEN: 'legacy-token-must-not-be-used',
+    });
+    expect(legacyOnly.skillsShGatewayCredential).toBeUndefined();
+
+    const canonical = workerAcquisitionOptionsFromEnv({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://skills.sh/catalog',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'gateway-token-must-not-be-used',
+    });
+    expect(canonical.skillsShGatewayCredential).toBeUndefined();
   });
 });

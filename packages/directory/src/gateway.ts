@@ -55,10 +55,10 @@ export function createSkillsShGatewayCredential(
   config: SkillsShGatewayCredentialConfig,
 ): SkillsShGatewayCredential {
   const baseUrl = normalizeGatewayBaseURL(config.baseUrl);
-  if (baseUrl === undefined || isReservedSkillsShHost(new URL(baseUrl))) {
+  if (baseUrl === undefined || isReservedSkillsDirectoryHost(new URL(baseUrl))) {
     throw new Error('invalid skills.sh gateway URL');
   }
-  if (!isValidGatewayToken(config.token)) throw new Error('invalid skills.sh gateway credential');
+  if (!isValidSkillsShGatewayToken(config.token)) throw new Error('invalid skills.sh gateway credential');
 
   const token = config.token;
   return {
@@ -91,11 +91,11 @@ export function resolveSkillsDirectoryConnection(
   if (normalizedBaseURL === undefined) return { kind: 'unavailable', reason: 'invalid_gateway_url' };
 
   const parsedURL = new URL(normalizedBaseURL);
-  if (isOfficialSkillsShURL(parsedURL)) return { kind: 'official', baseURL: normalizedBaseURL };
+  if (isOfficialSkillsDirectoryURL(parsedURL)) return { kind: 'official', baseURL: normalizedBaseURL };
 
   // Keep obvious official aliases out of the credential-bearing gateway
   // branch, including www and trailing-dot DNS spellings.
-  if (isReservedSkillsShHost(parsedURL)) {
+  if (isReservedSkillsDirectoryHost(parsedURL)) {
     return { kind: 'unavailable', reason: 'invalid_gateway_url' };
   }
   if (configuredGatewayURL === undefined) {
@@ -104,7 +104,7 @@ export function resolveSkillsDirectoryConnection(
 
   const token = env[SKILLS_DIRECTORY_GATEWAY_TOKEN_ENV];
   if (token === undefined) return { kind: 'unavailable', reason: 'missing_gateway_token' };
-  if (!isValidGatewayToken(token)) return { kind: 'unavailable', reason: 'invalid_gateway_token' };
+  if (!isValidSkillsShGatewayToken(token)) return { kind: 'unavailable', reason: 'invalid_gateway_token' };
 
   // Validation above is repeated inside the constructor as a defense against
   // future changes to the resolver and to keep the worker-facing seam small.
@@ -119,6 +119,30 @@ export function createSkillsDirectoryGatewayTokenProvider(
   gateway: SkillsShGatewayCredential,
 ): SkillsTokenProvider {
   return gateway.getToken;
+}
+
+/** True only for the canonical skills.sh origin (a path may be configured). */
+export function isOfficialSkillsDirectoryURL(value: URL | string): boolean {
+  const url = toURL(value);
+  return url !== undefined
+    && url.protocol === 'https:'
+    && url.hostname === 'skills.sh'
+    && url.port.length === 0
+    && url.username.length === 0
+    && url.password.length === 0
+    && url.search.length === 0
+    && url.hash.length === 0;
+}
+
+/**
+ * Recognize official skills.sh host spellings that must never receive a
+ * nonofficial gateway credential, including www and DNS trailing-dot forms.
+ */
+export function isReservedSkillsDirectoryHost(value: URL | string): boolean {
+  const url = toURL(value);
+  if (url === undefined) return false;
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/u, '');
+  return hostname === 'skills.sh' || hostname === 'www.skills.sh';
 }
 
 /** Provider used by runtimes that do not have a usable directory credential. */
@@ -145,7 +169,7 @@ export function normalizeDirectoryBaseURL(value: string): string | undefined {
 
   // URL parsing canonicalizes dot segments and encoding.  Preserve the full
   // configured path while removing only redundant trailing separators.
-  url.pathname = url.pathname.replace(/\/{2,}$/u, '').replace(/\/$/u, '');
+  url.pathname = url.pathname.replace(/\/{2,}/gu, '/').replace(/\/$/u, '');
   const normalized = url.toString();
   return url.pathname === '/' ? normalized.slice(0, -1) : normalized;
 }
@@ -154,19 +178,9 @@ function normalizeGatewayBaseURL(value: string): string | undefined {
   return normalizeDirectoryBaseURL(value);
 }
 
-function isOfficialSkillsShURL(url: URL): boolean {
-  return url.protocol === 'https:'
-    && url.hostname === 'skills.sh'
-    && url.port.length === 0;
-}
-
-function isReservedSkillsShHost(url: URL): boolean {
-  const hostname = url.hostname.toLowerCase().replace(/\.+$/u, '');
-  return hostname === 'skills.sh' || hostname === 'www.skills.sh';
-}
-
-function isValidGatewayToken(value: string): boolean {
-  if (!isWellFormedString(value) || value.length === 0 || value.trim().length === 0 || value !== value.trim()) {
+/** Validate a gateway bearer without returning or logging its value. */
+export function isValidSkillsShGatewayToken(value: unknown): value is string {
+  if (typeof value !== 'string' || !isWellFormedString(value) || value.length === 0 || value.trim().length === 0 || value !== value.trim()) {
     return false;
   }
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)) return false;
@@ -189,4 +203,12 @@ function isWellFormedString(value: string): boolean {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+}
+
+function toURL(value: URL | string): URL | undefined {
+  try {
+    return typeof value === 'string' ? new URL(value) : value;
+  } catch {
+    return undefined;
+  }
 }

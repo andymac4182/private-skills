@@ -9,8 +9,13 @@ import {
   acquireSkill,
   type AcquireSkillOptions,
   type AcquisitionResult,
-  type SkillsShGatewayCredential,
 } from '../../../packages/upstreams/src/index.js';
+import {
+  isValidSkillsShGatewayToken,
+  normalizeDirectoryBaseURL,
+  resolveSkillsDirectoryConnection,
+  type SkillsShGatewayCredential,
+} from '../../../packages/directory/src/index.js';
 import type { WorkerClaimedJob } from './client.js';
 
 /** Options supplied by the worker supervisor for a source acquisition. */
@@ -31,15 +36,18 @@ export function workerAcquisitionOptionsFromEnv(
   if (env.PSKILLS_DIRECTORY_ENABLED !== 'true') return {};
 
   const baseUrl = env.PSKILLS_DIRECTORY_GATEWAY_URL;
-  const token = env.PSKILLS_DIRECTORY_GATEWAY_TOKEN;
-  if (baseUrl === undefined && token === undefined) return {};
+  const connection = resolveSkillsDirectoryConnection(env);
+  if (connection.kind === 'gateway') return { skillsShGatewayCredential: connection.gateway };
+  if (connection.kind === 'official' || baseUrl === undefined) return {};
 
+  // Preserve a fail-closed marker for an explicitly selected but incomplete
+  // or unsafe gateway.  Without this marker the upstream adapter could fall
+  // through to an ambient credentialEnv token or an anonymous request.
   const credential: SkillsShGatewayCredential = {
-    baseUrl: baseUrl ?? '',
+    baseUrl: normalizeDirectoryBaseURL(baseUrl) ?? '',
     getToken: async (signal?: AbortSignal): Promise<string> => {
       if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
-      if (typeof token !== 'string' || token.length === 0) throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
-      return token;
+      throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
     },
   };
   return { skillsShGatewayCredential: credential };
@@ -128,7 +136,7 @@ function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisiti
       getToken: async (signal?: AbortSignal): Promise<string> => {
         try {
           const token = await credential.getToken(signal);
-          if (typeof token !== 'string' || token.length === 0 || Buffer.byteLength(token, 'utf8') > 4_096 || /[\r\n]/.test(token)) {
+          if (!isValidSkillsShGatewayToken(token)) {
             throw new Error('invalid skills.sh gateway credential');
           }
           return token;

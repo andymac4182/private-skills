@@ -10,7 +10,14 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
+import {
+  isReservedSkillsDirectoryHost,
+  isValidSkillsShGatewayToken,
+} from '../../directory/src/gateway.js';
+import type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 import { parseSkillMetadata } from '../../storage/src/bundle.js';
+
+export type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 
 /**
  * Limits applied while acquiring an upstream skill.  The limits are checked
@@ -110,16 +117,6 @@ export interface AcquireSkillOptions {
    * callback above.
    */
   skillsShGatewayCredential?: SkillsShGatewayCredential;
-}
-
-/**
- * A request-scoped bearer provider bound to one complete catalog API base.
- * The worker keeps the token out of job data and logs; the base is revalidated
- * by the acquisition adapter before the callback can be invoked.
- */
-export interface SkillsShGatewayCredential {
-  baseUrl: string;
-  getToken: (signal?: AbortSignal) => Promise<string>;
 }
 
 export interface AcquireSkillInput extends AcquireSkillOptions {
@@ -2725,6 +2722,15 @@ async function skillsShCatalogCredential(
       const token = await resolveSkillsShGatewayToken(gateway.getToken, options, timeoutMs);
       return `Bearer ${token}`;
     }
+    // An explicitly supplied gateway credential is bound to one exact
+    // origin/path. Never fall back to an ambient credentialEnv token when the
+    // claimed source points elsewhere; that would silently defeat the
+    // credential binding and could forward a secret to a sibling catalog.
+    if (isCanonicalSkillsShCatalogBase(apiBase) && options.getSkillsShToken !== undefined) {
+      const token = await resolveSkillsShToken(options, timeoutMs);
+      return `Bearer ${token}`;
+    }
+    return undefined;
   }
   if (isCanonicalSkillsShCatalogBase(apiBase) && options.getSkillsShToken !== undefined) {
     const token = await resolveSkillsShToken(options, timeoutMs);
@@ -2765,8 +2771,7 @@ function sameCatalogBase(left: URL, right: URL): boolean {
 }
 
 function isCanonicalSkillsShOrigin(value: URL): boolean {
-  const hostname = value.hostname.toLocaleLowerCase('en-US').replace(/\.$/u, '');
-  return value.protocol === 'https:' && (hostname === 'skills.sh' || hostname === 'www.skills.sh');
+  return value.protocol === 'https:' && isReservedSkillsDirectoryHost(value);
 }
 
 async function resolveSkillsShToken(
@@ -2785,7 +2790,11 @@ async function resolveSkillsShGatewayToken(
   options: AcquireSkillOptions,
   timeoutMs: number,
 ): Promise<string> {
-  return resolveCatalogToken(provider, options, timeoutMs);
+  const token = await resolveCatalogToken(provider, options, timeoutMs);
+  if (!isValidSkillsShGatewayToken(token)) {
+    throw new UpstreamAcquisitionError('invalid_credential', 'skills.sh gateway credential is invalid');
+  }
+  return token;
 }
 
 async function resolveCatalogToken(

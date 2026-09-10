@@ -34,6 +34,9 @@ export {
   createSkillsDirectoryGatewayTokenProvider,
   createSkillsShGatewayCredential,
   createUnavailableSkillsDirectoryTokenProvider,
+  isOfficialSkillsDirectoryURL,
+  isReservedSkillsDirectoryHost,
+  isValidSkillsShGatewayToken,
   normalizeDirectoryBaseURL,
   resolveSkillsDirectoryConnection,
 } from './gateway.js';

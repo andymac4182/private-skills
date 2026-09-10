@@ -113,16 +113,25 @@ describe('skills.sh gateway credentials', () => {
       authorization = init?.headers?.authorization;
       return json(detail());
     };
-    const result = await acquireSkillsShSkill({
-      ...input(fetchImpl),
-      skillsShGatewayCredential: {
+    const key = 'PSKILLS_TEST_AMBIENT_GATEWAY_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'ambient-token-must-not-be-forwarded';
+    let result;
+    try {
+      const request = input(fetchImpl);
+      request.upstream = { ...request.upstream!, credentialEnv: key };
+      request.skillsShGatewayCredential = {
         baseUrl: `${BASE}/other-directory`,
         getToken: async () => {
           gatewayCalls += 1;
           return 'must-not-be-sent';
         },
-      },
-    });
+      };
+      result = await acquireSkillsShSkill(request);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
 
     expect(result.bundle.files).toHaveLength(1);
     expect(gatewayCalls).toBe(0);
