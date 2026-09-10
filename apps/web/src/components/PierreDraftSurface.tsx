@@ -28,6 +28,8 @@ interface PierreDraftSurfaceProps {
   mode: 'edit' | 'diff'
   editable: boolean
   busy: boolean
+  baseLoading: boolean
+  baseError: string | null
   onSelect: (path: string) => void
   onEditChange: (contents: string) => void
   onContentChange: (contents: string) => void
@@ -56,7 +58,7 @@ export function pierreEditStateKey(draftId: string, revision: number, digest: `s
   return `draft:${draftId}:${revision}:${digest}:${path}`
 }
 
-export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, mode, editable, busy, onSelect, onEditChange, onContentChange }, ref) {
+export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, mode, editable, busy, baseLoading, baseError, onSelect, onEditChange, onContentChange }, ref) {
   const paths = entries.map((entry) => entry.path)
   const { model } = useFileTree({
     paths,
@@ -95,7 +97,7 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
       {entries.length > 0 && <div className="draft-surface-tree-status"><span>{entries.filter((entry) => entry.status !== 'unchanged').length} changed</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
     </div>
     <div className="draft-surface-code">
-      {mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
+      {baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
         key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
         className="draft-pierre-file"
         file={current}
