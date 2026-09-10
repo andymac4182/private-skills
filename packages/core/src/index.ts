@@ -1085,13 +1085,9 @@ async function createDirectoryImport(
   ) {
     throw new RegistryApiError('DIRECTORY_INTEGRITY', 'Directory detail identity is inconsistent', 502, { retryable: true });
   }
-  // A null catalog snapshot cannot by itself tell the worker whether the
-  // public source is GitHub or a well-known host.  Resolve that one row from
-  // the trusted list/search metadata before queueing; never infer the type
-  // from an ID shape or pass a browser-supplied hint through to the worker.
-  const trustedRow = detail.hash === null || detail.files === null
-    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
-    : undefined;
+  // Check the administrator's source allowlist before any additional catalog
+  // metadata lookup. A denied or ambiguous mapping must not cause a search or
+  // list request against the public catalog.
   const candidates = stateBeforeDetail.upstreams
     .filter((upstream) =>
       upstream.organizationId === config.organizationId &&
@@ -1115,6 +1111,14 @@ async function createDirectoryImport(
       },
     });
   }
+
+  // A null catalog snapshot cannot by itself tell the worker whether the
+  // public source is GitHub or a well-known host. Resolve that one row from
+  // the trusted list/search metadata before queueing; never infer the type
+  // from an ID shape or pass a browser-supplied hint through to the worker.
+  const trustedRow = detail.hash === null || detail.files === null
+    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
+    : undefined;
 
   const importBody: JsonObject = {
     upstreamId: selected.id,
@@ -1213,13 +1217,21 @@ async function directoryLookupRequest<T>(action: () => Promise<T>): Promise<T | 
 }
 
 function exactDirectoryCatalogRow(rows: readonly V1Skill[], detail: SkillDetailResponse): V1Skill | undefined {
-  return rows.find((row) =>
-    row.id === detail.id &&
-    row.source === detail.source &&
-    row.slug === detail.slug &&
-    row.id === `${row.source}/${row.slug}` &&
-    (row.sourceType === 'github' || row.sourceType === 'well-known'),
-  );
+  const sameId = rows.filter((row) => row.id === detail.id);
+  if (sameId.length > 1) {
+    throw new RegistryApiError(
+      'DIRECTORY_INTEGRITY',
+      'The directory returned duplicate source metadata',
+      502,
+      { retryable: true },
+    );
+  }
+  const row = sameId[0];
+  if (!row || row.source !== detail.source || row.slug !== detail.slug || row.id !== `${row.source}/${row.slug}`) {
+    return undefined;
+  }
+  if (row.sourceType !== 'github' && row.sourceType !== 'well-known') return undefined;
+  return row;
 }
 
 function directorySearchOwner(source: string): string | undefined {

@@ -425,6 +425,63 @@ For a selected row, call the detail endpoint and, when `files` is non-null:
    result can be shown alongside local scans but does not satisfy a required
    scanner.
 
+### Null-snapshot metadata hydration in the worker
+
+The documented detail response may contain `files: null` and omit the
+presentation `installUrl` that identifies a scoped well-known source. The
+durable worker must not turn a repository-shaped `source` string into a guessed
+host or silently lose that scope. When the detail has no files or install URL,
+the imported source type is `well-known`, and no explicit operator mapping is
+configured, the worker performs a fresh catalog metadata lookup before source
+acquisition:
+
+1. Recheck the selected upstream's organization, namespace, enablement, and
+   source allowlist first. Catalog metadata cannot broaden an administrator's
+   mapping. An explicit `wellKnownBaseUrl` remains authoritative and skips
+   rehydration; GitHub candidates with an explicitly configured GitHub API base
+   continue through the GitHub resolver.
+2. For a slug of at least two characters, query the authenticated
+   `/api/v1/skills/search` endpoint with `limit=200`. If there is no exact match,
+   walk `/api/v1/skills?view=all-time&page=N&per_page=500` from page zero, up to
+   100 pages, stopping at `hasMore=false`.
+3. Accept exactly one row whose complete `id`, `source`, and `slug` match the
+   detail identity, whose `id` is the canonical `${source}/${slug}`, and whose
+   `sourceType` is `well-known`. A valid absolute `installUrl` is copied into
+   the worker's in-memory detail; metadata lookup never downloads source bytes.
+   Duplicate exact rows, malformed pagination, invalid URLs, or a source-type
+   mismatch fail closed.
+
+The source-location precedence is explicit: operator `wellKnownBaseUrl`, then
+the exact catalog `installUrl` (preserving its path scope), then a safe
+host-shaped `source` fallback. A repository-shaped source without a safe origin
+is unavailable. Discovery tries the preferred and legacy well-known indexes at
+the selected scoped base and never widens a scoped path to that host's root.
+The catalog bearer is sent only to skills.sh catalog requests. On the canonical
+`https://skills.sh` origin, a request-scoped `getSkillsShToken` credential (the
+Vercel project OIDC path) takes precedence over an ambient environment token;
+callback failure is terminal and does not fall back to a stale token. An
+explicit operator `credentialEnv` remains the legacy route when no callback is
+provided, including for non-canonical/private configured catalog destinations;
+it is never a fallback after callback failure. Neither form is forwarded to
+source, artifact, or redirect requests.
+
+The worker metadata lookup has a 30-second aggregate cap, parent cancellation,
+non-retryable search/list requests, a 200-result search bound, a 500-row page
+bound, and a 100-page bound. With the default acquisition profile, each HTTP
+request is limited to 20 seconds and each response to 20 MiB; a lower operator
+profile can tighten those limits. Only catalog `404`/`410` responses are
+treated as an empty search/list result; authorization, outage, malformed-data,
+and rate-limit errors remain unavailable/fail-closed. The API admission path
+uses the same exact-identity rule and a separate 30-second, 100-page bound
+before queueing a null-snapshot import.
+
+This is a source-level worker contract with fixture coverage; it is not current
+production pullthrough evidence. The current production API artifact verifies
+read-only directory list/search/detail routes, but no production selected-row
+`files: null` well-known import, scoped source readback, or scanner admission
+has yet been captured. Keep the pullthrough acceptance state pending until that
+evidence exists.
+
 ### GitHub fallback and exact mapping
 
 The detail API does not document a repository path, branch, or commit. For a

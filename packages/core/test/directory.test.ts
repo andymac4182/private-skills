@@ -422,6 +422,111 @@ describe('skills.sh directory routes', () => {
     expect(await response.json()).toHaveProperty('error.code', 'UPSTREAM_MAPPING_REQUIRED');
   });
 
+  it('checks the selected source mapping before null-snapshot catalog lookup', async () => {
+    const cases = [
+      {
+        label: 'denied-source',
+        repositories: ['other/repo'],
+        mappingNames: ['denied-source'],
+        status: 404,
+        code: 'NOT_AVAILABLE',
+      },
+      {
+        label: 'ambiguous-source',
+        repositories: ['acme/repo'],
+        mappingNames: ['first-source', 'second-source'],
+        status: 409,
+        code: 'UPSTREAM_MAPPING_REQUIRED',
+      },
+    ] as const;
+
+    for (const candidate of cases) {
+      const id = `acme/repo/${candidate.label}`;
+      let metadataCalls = 0;
+      const directory: RegistryDirectoryClient = {
+        ...directoryClient(),
+        detail: async () => ({ id, source: 'acme/repo', slug: candidate.label, installs: 1, hash: null, files: null }),
+        search: async () => {
+          metadataCalls += 1;
+          return { data: [], query: candidate.label, searchType: 'fuzzy' as const, count: 0, durationMs: 1 };
+        },
+        list: async () => {
+          metadataCalls += 1;
+          return { data: [], pagination: { page: 0, perPage: 500, total: 0, hasMore: false } };
+        },
+      };
+      const test = setup(undefined, directory);
+      const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+      for (const name of candidate.mappingNames) {
+        const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ name, kind: 'skills-sh', namespace: '@team', repositories: candidate.repositories, baseUrl: 'https://skills.sh' }),
+        }));
+        expect(upstreamResponse.status, candidate.label).toBe(201);
+      }
+
+      const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ id, name: `@team/${candidate.label}`, version: '1.0.0' }),
+      }));
+      expect(response.status, candidate.label).toBe(candidate.status);
+      expect(await response.json()).toHaveProperty('error.code', candidate.code);
+      expect(metadataCalls, candidate.label).toBe(0);
+      expect((await test.repository.read()).jobs, candidate.label).toHaveLength(0);
+    }
+  });
+
+  it('rejects duplicate catalog identities instead of selecting one metadata row', async () => {
+    for (const conflicting of [false, true]) {
+      const suffix = conflicting ? 'conflicting' : 'exact';
+      const id = `acme/repo/duplicate-${suffix}`;
+      const row = {
+        id,
+        slug: `duplicate-${suffix}`,
+        name: `duplicate-${suffix}`,
+        source: 'acme/repo',
+        installs: 1,
+        sourceType: 'github' as const,
+        installUrl: 'https://github.com/acme/repo',
+        url: `https://skills.sh/${id}`,
+      };
+      const duplicate = conflicting
+        ? { ...row, sourceType: 'well-known' as const, installUrl: 'https://example.test/.well-known/agent-skills/duplicate' }
+        : { ...row };
+      let searchCalls = 0;
+      let listCalls = 0;
+      const directory: RegistryDirectoryClient = {
+        ...directoryClient(),
+        detail: async () => ({ id, source: 'acme/repo', slug: `duplicate-${suffix}`, installs: 1, hash: null, files: null }),
+        search: async (options) => {
+          searchCalls += 1;
+          return { data: [row, duplicate], query: options.q, searchType: 'fuzzy' as const, count: 2, durationMs: 1 };
+        },
+        list: async () => {
+          listCalls += 1;
+          return { data: [], pagination: { page: 0, perPage: 500, total: 0, hasMore: false } };
+        },
+      };
+      const test = setup(undefined, directory);
+      const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+      const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ name: `duplicate-${suffix}`, kind: 'skills-sh', namespace: '@team', repositories: ['acme/repo'], baseUrl: 'https://skills.sh' }),
+      }));
+      expect(upstreamResponse.status, suffix).toBe(201);
+
+      const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ id, name: `@team/duplicate-${suffix}`, version: '1.0.0' }),
+      }));
+      expect(response.status, suffix).toBe(502);
+      expect(await response.json()).toHaveProperty('error.code', 'DIRECTORY_INTEGRITY');
+      expect(searchCalls, suffix).toBe(1);
+      expect(listCalls, suffix).toBe(0);
+      expect((await test.repository.read()).jobs, suffix).toHaveLength(0);
+    }
+  });
+
   it('requires an exact catalog row to trust source type when the snapshot hash is null', async () => {
     const id = 'acme/repo/no-snapshot';
     const trustedRow = {
