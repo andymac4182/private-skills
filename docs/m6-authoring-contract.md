@@ -46,7 +46,10 @@ type ReleaseFileEntry = {
 };
 ```
 
-The file response returns full bounded text only for an authorized exact path:
+The file response returns full bounded text only for an authorized exact path
+from a current approved, scan-valid release. Release-file reads use reader
+authorization; draft-file reads and writes use separate publisher/owner draft
+authorization and never inherit release approval:
 
 ```ts
 type ReleaseFileContent = {
@@ -78,7 +81,10 @@ POST /v1/drafts/:draftId/reviews
 POST /v1/drafts/:draftId/release
 ```
 
-The create body is `{ baseResourceId, idempotencyKey }`. The atomic file-save
+The initial create body is `{ baseResourceId, idempotencyKey }`; this first
+slice starts from an existing immutable release. A later upload-origin slice
+may create a draft from a validated upload, but this contract does not claim
+that new-upload draft creation is implemented. The atomic file-save
 body is `{ expectedRevision, files }`, where `files` is the complete canonical
 draft snapshot returned by the Diffs edit callback. The server validates the
 whole snapshot, applies compare-and-swap on `expectedRevision`, computes the
@@ -177,7 +183,7 @@ upstream credentials.
 | storage/worker owner | immutable draft blobs, review leases/idempotency, scanner completion | No candidate execution; preserve Files SDK verification and existing policy. |
 | Eve/reviewer owner | upload/edit reviewer identity, queue consumer, findings schema, AI Gateway configuration | Separate from daily consolidation Eve; advisory unless an explicit versioned gate is configured. |
 | `web_ui` | read-only file tree/Diffs route, then draft editor/review panel | `@pierre/trees` for paths; `@pierre/diffs` for read/edit/diff; app owns loading and save state. |
-| `e2e_tests` / completion audit | cross-tenant, stale-result, scanner-authority, accessibility, and release evidence | Verify the exact resource IDs/digests and no private-registry-data mutation. |
+| `e2e_tests` / completion audit | cross-tenant, stale-result, scanner-authority, accessibility, and release evidence | Verify exact resource IDs/digests, intended draft/review/new-release writes, and no unintended mutation or change to the immutable base release. |
 
 Implement in this order: M6-VIEW API and fixture, read-only UI, draft CAS and
 reload, editor route, upload/edit review queue, explicit scanner/release
