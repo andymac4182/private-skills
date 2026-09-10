@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-approved-cli-same-root",
+  "verified": true,
+  "deployment": {
+    "id": "dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "7df1ce6063f57bcf262c228ccde9483be5c2210d",
+    "fingerprintSha256": "1c58e44151d6201437cc82e8abfe7a94b1441a8ce176f8e07e4791f9193b086c"
+  },
+  "binary": {
+    "path": "/private/tmp/private-skills-01a08524/target/debug/pskills",
+    "sha256": "6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a",
+    "expectedSha256": "6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a",
+    "sourceCommit": "8c8e41eb4ad172fc033bc5593f400874095ec656"
+  },
+  "selected": {
+    "resourceId": "skill_3f1ae70b-baac-46b3-9420-90671aae376b",
+    "reference": "@acme/production-beta-mtucsw5u-wokpof@1.0.0",
+    "name": "@acme/production-beta-mtucsw5u-wokpof",
+    "version": "1.0.0",
+    "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+    "treeDigest": "sha256:fae3dce4374f3ccf66b6b83159da3ed41208b0e0e4297a088d8189b8e8165775"
+  },
+  "installRoot": "/private/tmp/private-skills-01a08524/work/production-cli-awI279",
+  "argv": [
+    "--json",
+    "--registry",
+    "https://private-skills-theta.vercel.app",
+    "--directory",
+    "/private/tmp/private-skills-01a08524/work/production-cli-awI279",
+    "--agent",
+    "universal",
+    "install",
+    "@acme/production-beta-mtucsw5u-wokpof@1.0.0"
+  ],
+  "credentialHandling": "PSKILLS_TOKEN was read from the mode-0600 private secrets file and is excluded from evidence; HOME was inherited unchanged.",
+  "mutations": {
+    "installTransactionsAttempted": 1,
+    "proxyResolves": 0,
+    "imports": 0,
+    "rescans": 0,
+    "policyChanges": 0,
+    "deletes": 0,
+    "lockOrRootCleanup": false
+  },
+  "before": {
+    "snapshot": {
+      "fileCount": 7,
+      "totalBytes": 4879,
+      "files": [
+        {
+          "path": ".pskills-install.lock",
+          "type": "file",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": ".pskills-journal.json",
+          "type": "file",
+          "bytes": 2054,
+          "sha256": "050fe289d9976df48c87c9d67b991b57d062d932e47fc1771e9f39ca55d702ac"
+        },
+        {
+          "path": "production-alpha-mtuchdsd-ws3c9j/README.md",
+          "type": "file",
+          "bytes": 35,
+          "sha256": "5eebdfc0b691dd7d75d52a261600e46314cea9aa8aad4ea980303e45b96e0e47"
+        },
+        {
+          "path": "production-alpha-mtuchdsd-ws3c9j/SKILL.md",
+          "type": "file",
+          "bytes": 247,
+          "sha256": "6cf107861907b12c8d33f21be3003756f145e66fdfcb2acc5cd2227ec018f67b"
+        },
+        {
+          "path": "production-beta-mtucsw5u-wokpof/README.md",
+          "type": "file",
+          "bytes": 34,
+          "sha256": "0caeea4dc78b501d62b48d7badae7153e09e110176a6f5efe29a1c97c5b0ebd0"
+        },
+        {
+          "path": "production-beta-mtucsw5u-wokpof/SKILL.md",
+          "type": "file",
+          "bytes": 246,
+          "sha256": "13cc9e6a4683748dda3de354a76b0b70f3f84bf5d095d3cbd522e5268144c7a8"
+        },
+        {
+          "path": "pskills.lock.json",
+          "type": "file",
+          "bytes": 2263,
+          "sha256": "e9b56fbc76ae9e591278dcd1cc5d1b0bb9cc7f8d53cc635a257679f5c8998c32"
+        }
+      ],
+      "snapshotSha256": "a6c79d7340c1ed20a1f7b02eccd063fbfae67f0c71ebf11792865643e5dd5827"
+    },
+    "state": {
+      "journalSha256": "050fe289d9976df48c87c9d67b991b57d062d932e47fc1771e9f39ca55d702ac",
+      "lockSha256": "e9b56fbc76ae9e591278dcd1cc5d1b0bb9cc7f8d53cc635a257679f5c8998c32",
+      "betaJournal": {
+        "key": "production-beta-mtucsw5u-wokpof@sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be|tree=sha256:fae3dce4374f3ccf66b6b83159da3ed41208b0e0e4297a088d8189b8e8165775",
+        "destination": "/private/tmp/private-skills-01a08524/work/production-cli-awI279/production-beta-mtucsw5u-wokpof",
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "owners": [
+          "direct:https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof",
+          "pack:https://private-skills-theta.vercel.app:@acme/production-verification-pack@0.2.0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "digest": "sha256:0caeea4dc78b501d62b48d7badae7153e09e110176a6f5efe29a1c97c5b0ebd0",
+            "size": 34
+          },
+          {
+            "path": "SKILL.md",
+            "digest": "sha256:13cc9e6a4683748dda3de354a76b0b70f3f84bf5d095d3cbd522e5268144c7a8",
+            "size": 246
+          }
+        ]
+      },
+      "betaLock": {
+        "key": "https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof@1.0.0",
+        "registry": "https://private-skills-theta.vercel.app",
+        "reference": "@acme/production-beta-mtucsw5u-wokpof",
+        "version": "1.0.0",
+        "skillName": "production-beta-mtucsw5u-wokpof",
+        "artifactDigest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "treeDigest": "sha256:fae3dce4374f3ccf66b6b83159da3ed41208b0e0e4297a088d8189b8e8165775",
+        "owners": [
+          "pack:https://private-skills-theta.vercel.app:@acme/production-verification-pack@0.2.0",
+          "direct:https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof"
+        ],
+        "provenance": {
+          "kind": "native"
+        }
+      }
+    },
+    "analytics": {
+      "installOperations": 2,
+      "skillInstalls": 2,
+      "upToDateChecks": 0,
+      "packInstalls": 0
+    },
+    "activeOperations": 0,
+    "auditEventCount": 72
+  },
+  "verifyBefore": {
+    "stage": "verify-before",
+    "processStatus": 0,
+    "cliOk": true,
+    "stdoutBytes": 1286,
+    "stderrBytes": 0
+  },
+  "install": {
+    "stage": "install",
+    "processStatus": 0,
+    "cliOk": true,
+    "reference": "@acme/production-beta-mtucsw5u-wokpof",
+    "version": "1.0.0",
+    "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+    "changed": false,
+    "stdoutBytes": 308,
+    "stderrBytes": 0,
+    "matchesExpected": true
+  },
+  "afterInstall": {
+    "snapshot": {
+      "fileCount": 7,
+      "totalBytes": 4879,
+      "files": [
+        {
+          "path": ".pskills-install.lock",
+          "type": "file",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": ".pskills-journal.json",
+          "type": "file",
+          "bytes": 2054,
+          "sha256": "050fe289d9976df48c87c9d67b991b57d062d932e47fc1771e9f39ca55d702ac"
+        },
+        {
+          "path": "production-alpha-mtuchdsd-ws3c9j/README.md",
+          "type": "file",
+          "bytes": 35,
+          "sha256": "5eebdfc0b691dd7d75d52a261600e46314cea9aa8aad4ea980303e45b96e0e47"
+        },
+        {
+          "path": "production-alpha-mtuchdsd-ws3c9j/SKILL.md",
+          "type": "file",
+          "bytes": 247,
+          "sha256": "6cf107861907b12c8d33f21be3003756f145e66fdfcb2acc5cd2227ec018f67b"
+        },
+        {
+          "path": "production-beta-mtucsw5u-wokpof/README.md",
+          "type": "file",
+          "bytes": 34,
+          "sha256": "0caeea4dc78b501d62b48d7badae7153e09e110176a6f5efe29a1c97c5b0ebd0"
+        },
+        {
+          "path": "production-beta-mtucsw5u-wokpof/SKILL.md",
+          "type": "file",
+          "bytes": 246,
+          "sha256": "13cc9e6a4683748dda3de354a76b0b70f3f84bf5d095d3cbd522e5268144c7a8"
+        },
+        {
+          "path": "pskills.lock.json",
+          "type": "file",
+          "bytes": 2263,
+          "sha256": "e9b56fbc76ae9e591278dcd1cc5d1b0bb9cc7f8d53cc635a257679f5c8998c32"
+        }
+      ],
+      "snapshotSha256": "a6c79d7340c1ed20a1f7b02eccd063fbfae67f0c71ebf11792865643e5dd5827"
+    },
+    "state": {
+      "journalSha256": "050fe289d9976df48c87c9d67b991b57d062d932e47fc1771e9f39ca55d702ac",
+      "lockSha256": "e9b56fbc76ae9e591278dcd1cc5d1b0bb9cc7f8d53cc635a257679f5c8998c32",
+      "betaJournal": {
+        "key": "production-beta-mtucsw5u-wokpof@sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be|tree=sha256:fae3dce4374f3ccf66b6b83159da3ed41208b0e0e4297a088d8189b8e8165775",
+        "destination": "/private/tmp/private-skills-01a08524/work/production-cli-awI279/production-beta-mtucsw5u-wokpof",
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "owners": [
+          "direct:https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof",
+          "pack:https://private-skills-theta.vercel.app:@acme/production-verification-pack@0.2.0"
+        ],
+        "files": [
+          {
+            "path": "README.md",
+            "digest": "sha256:0caeea4dc78b501d62b48d7badae7153e09e110176a6f5efe29a1c97c5b0ebd0",
+            "size": 34
+          },
+          {
+            "path": "SKILL.md",
+            "digest": "sha256:13cc9e6a4683748dda3de354a76b0b70f3f84bf5d095d3cbd522e5268144c7a8",
+            "size": 246
+          }
+        ]
+      },
+      "betaLock": {
+        "key": "https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof@1.0.0",
+        "registry": "https://private-skills-theta.vercel.app",
+        "reference": "@acme/production-beta-mtucsw5u-wokpof",
+        "version": "1.0.0",
+        "skillName": "production-beta-mtucsw5u-wokpof",
+        "artifactDigest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "treeDigest": "sha256:fae3dce4374f3ccf66b6b83159da3ed41208b0e0e4297a088d8189b8e8165775",
+        "owners": [
+          "pack:https://private-skills-theta.vercel.app:@acme/production-verification-pack@0.2.0",
+          "direct:https://private-skills-theta.vercel.app:@acme/production-beta-mtucsw5u-wokpof"
+        ],
+        "provenance": {
+          "kind": "native"
+        }
+      }
+    },
+    "skillFilesUnchanged": true
+  },
+  "verifyAfter": {
+    "stage": "verify-after",
+    "processStatus": 0,
+    "cliOk": true,
+    "stdoutBytes": 1286,
+    "stderrBytes": 0
+  },
+  "after": {
+    "analytics": {
+      "installOperations": 3,
+      "skillInstalls": 2,
+      "upToDateChecks": 1,
+      "packInstalls": 0
+    },
+    "analyticsDelta": {
+      "installOperations": 1,
+      "skillInstalls": 0,
+      "upToDateChecks": 1,
+      "packInstalls": 0
+    },
+    "receiptAuditEvents": [
+      {
+        "auditEventId": "audit_9b30910e-85ac-45a9-a776-f132fb0c3260",
+        "resourceId": "skill_3f1ae70b-baac-46b3-9420-90671aae376b",
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "changed": false,
+        "agent": "universal",
+        "platform": "macos",
+        "createdAt": "2026-09-10T06:42:08.213Z"
+      }
+    ],
+    "auditEventCount": 76
+  }
+}

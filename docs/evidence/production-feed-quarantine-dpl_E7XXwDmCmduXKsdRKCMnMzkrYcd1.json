@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "verifier": "transparent-feed-production-acceptance",
+  "verified": false,
+  "blocked": true,
+  "failure": {
+    "stage": "required_scanner",
+    "code": "required_scanner_blocked",
+    "reason": "skillsguard completed with blocking findings; no install was attempted"
+  },
+  "deployment": {
+    "id": "dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "7df1ce6063f57bcf262c228ccde9483be5c2210d",
+    "fingerprintSha256": "1c58e44151d6201437cc82e8abfe7a94b1441a8ce176f8e07e4791f9193b086c"
+  },
+  "binary": {
+    "sha256": "6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a",
+    "sourceCommit": "8c8e41eb4ad172fc033bc5593f400874095ec656"
+  },
+  "externalId": "vercel-labs/skills/find-skills",
+  "preflight": {
+    "health": {
+      "status": 200,
+      "version": "0.3.0",
+      "service": "private-skills"
+    },
+    "organizationId": "default",
+    "roles": [
+      "owner"
+    ],
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "allowUnscanned": false,
+    "requiredScanners": [
+      {
+        "id": "skillsguard",
+        "mode": "required"
+      }
+    ]
+  },
+  "feed": {
+    "id": "feed_eaa83418-bc50-443c-a3f4-e13792331f28",
+    "name": "skills-sh",
+    "kind": "skills-sh",
+    "enabled": true,
+    "repositories": [
+      "*"
+    ],
+    "baseUrl": "https://skills.sh",
+    "namespace": "@acme",
+    "configRevision": "feed-config_77feaf66-779f-4e84-999b-1a5ce9b46ec9",
+    "createdByThisRun": true
+  },
+  "operation": {
+    "id": "job_b9a0d7b6-d112-4d54-9a1a-83749fe45127",
+    "state": "completed",
+    "resourceId": "skill_6caff0fc-3935-4f5e-ac61-c764a880047a",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "import": {
+      "externalId": "vercel-labs/skills/find-skills",
+      "path": "vercel-labs/skills/find-skills",
+      "repository": "vercel-labs/skills",
+      "feedId": "feed_eaa83418-bc50-443c-a3f4-e13792331f28",
+      "feedName": "skills-sh",
+      "feedConfigRevision": "feed-config_77feaf66-779f-4e84-999b-1a5ce9b46ec9",
+      "name": "@acme/skills-sh-1ef4b40b9e39fabd002550718ccaff9eb9955184360c9f8e",
+      "version": "0.0.0+skills-sh.sionfc473d7a-a4be-4cae-ae51-3a51adbadc73"
+    }
+  },
+  "skill": {
+    "id": "skill_6caff0fc-3935-4f5e-ac61-c764a880047a",
+    "name": "@acme/skills-sh-1ef4b40b9e39fabd002550718ccaff9eb9955184360c9f8e",
+    "version": "0.0.0+skills-sh.sionfc473d7a-a4be-4cae-ae51-3a51adbadc73",
+    "state": "quarantined",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "artifactDigest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+    "artifactSize": 7369,
+    "scanIds": [
+      "b7d36f98-ce7e-4035-ab6c-c292b466d76a"
+    ]
+  },
+  "scans": [
+    {
+      "id": "b7d36f98-ce7e-4035-ab6c-c292b466d76a",
+      "scannerId": "skillsguard",
+      "status": "completed",
+      "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+      "artifactDigest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+      "coverage": {
+        "filesEnumerated": 1,
+        "filesAnalyzed": 1,
+        "filesSkipped": 0,
+        "filesUnsupported": 0
+      },
+      "findingCount": 30
+    }
+  ],
+  "findingSeverityCounts": {
+    "high": 30
+  },
+  "mutationSummary": {
+    "feedCreate": 1,
+    "proxyResolve": 1,
+    "imports": 1,
+    "installs": 0,
+    "receiptsForResource": 0
+  },
+  "analyticsTotals": {
+    "installOperations": 0,
+    "skillInstalls": 0,
+    "packInstalls": 0,
+    "upToDateChecks": 0
+  },
+  "operationCount": 7,
+  "credentialSafety": {
+    "tokenStored": false,
+    "rawFindingTextStored": false,
+    "skillContentsStored": false
+  },
+  "observedAt": "2026-09-10T06:14:54.933Z"
+}

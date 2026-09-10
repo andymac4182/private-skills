@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-c1-feed-rollout",
+  "recordedAt": "2026-09-10T07:06:18.717Z",
+  "project": {
+    "name": "private-skills",
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "orgId": "team_74K7woAfF1e48ypNcBTJ8NSC",
+    "stableAlias": "https://private-skills-theta.vercel.app"
+  },
+  "merge": {
+    "pullRequest": 22,
+    "mergedMainSha": "fecd6baa1411c2f3c2ad60b13c2c0e37761d2826",
+    "reviewedHeadSha": "ad65ae5cb51c49fc86eaa44175dce1f65d58f765",
+    "appArtifactSourceSha": "b1d3b6d77162899491f742e2930abe0b36137d8e",
+    "postBuildDelta": "tests/multi-feed-e2e.test.ts only"
+  },
+  "artifact": {
+    "manifestPath": "/private/tmp/private-skills-c1-feed-vercel-output-b1d3b6d.manifest.jsonl",
+    "manifestSha256": "64d3833b2c107546011efc38e34bddea9df519a0e17e36f506b5674c46a504bf",
+    "records": 2084,
+    "files": 2057,
+    "symlinks": 27,
+    "nodeRuntime": "24.x",
+    "sdkProbes": [
+      "@vercel/sandbox",
+      "@vercel/oidc",
+      "@computesdk/vercel",
+      "@computesdk/provider",
+      "computesdk"
+    ]
+  },
+  "deployment": {
+    "id": "dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE",
+    "readyState": "READY",
+    "target": "production",
+    "uniqueUrl": "https://private-skills-pvsgvckvq-andrewmcclenaghan-6046s-projects.vercel.app",
+    "aliases": [
+      "https://private-skills-theta.vercel.app",
+      "https://private-skills-andrewmcclenaghan-6046s-projects.vercel.app"
+    ],
+    "method": "guarded-prebuilt",
+    "projectLinkPreflight": {
+      "verified": true,
+      "cwd": "/private/tmp/private-skills-c1-feed-release"
+    },
+    "gitTriggeredDeploymentObservedBeforeDeploy": false
+  },
+  "readonlyAcceptance": {
+    "apiEvidencePath": "/private/tmp/private-skills-01a08524/work/production-c1-feed-readonly-evidence-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json",
+    "c1EvidencePath": "/private/tmp/private-skills-01a08524/work/production-c1-api-evidence-1789023724772-92605-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json",
+    "packPreviewEvidencePath": "/private/tmp/private-skills-01a08524/work/public-pack-preview-production-evidence-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE-1789023757559.json",
+    "requestClasses": {
+      "readonlyProbeAuthenticatedGets": 11,
+      "readonlyProbeUnauthenticatedNegativeGets": 1,
+      "c1ApiAuthenticatedGets": 7,
+      "c1ApiUnauthenticatedNegativeGets": 1,
+      "totalAuthenticatedGets": 18,
+      "totalUnauthenticatedNegativeGets": 2,
+      "totalGetRequests": 20,
+      "metadataOnlyPackPreviewPosts": 1,
+      "registryMutations": 0
+    },
+    "policy": {
+      "status": 200,
+      "allowUnscanned": false,
+      "requiredScanner": "skillsguard",
+      "disabledScanners": [
+        "cisco-skill-scanner",
+        "nvidia-skillspector"
+      ]
+    },
+    "detail": {
+      "status": 200,
+      "pathOnlyFiles": true,
+      "contentsAbsent": true,
+      "unauthenticatedRejected": true
+    }
+  },
+  "errorLogCheck": {
+    "deploymentId": "dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE",
+    "since": "2026-09-10T07:00:06Z",
+    "until": "2026-09-10T07:05:37.603Z",
+    "parsedErrorEvents": 0,
+    "statusCodes": [],
+    "messagesRetained": false,
+    "cliStderrDetailsRetained": false
+  },
+  "mutationScope": {
+    "productionDeploymentChanged": true,
+    "registryWritesPerformed": false,
+    "rolesChanged": false,
+    "policyChanged": false,
+    "feedsChanged": false,
+    "importsPerformed": false,
+    "scansTriggered": false,
+    "installsPerformed": false
+  }
+}

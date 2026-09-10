@@ -14,16 +14,23 @@ source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
-[`docs/verification-current.md`](docs/verification-current.md). The older
-deployment paragraphs below and the `docs/verification-v0.3.0.md` deployment
-pointers remain historical and are superseded for current status; they retain
-their original evidence links.
+[`docs/verification-current.md`](docs/verification-current.md). PR22 is merged
+on `origin/main`, and the guarded prebuilt rollout
+`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE` is READY. Its current probes are read-only:
+18 authenticated GETs, two unauthenticated negative GETs, one metadata-only
+Pack preview POST, and zero private-registry data mutations (no feed, import,
+scan, install, role, or policy writes). The connected GitHub project
+still needs an observed Git-triggered deployment. Pack-preview UI proof passed
+during a stable-alias cutover whose exact deployment attribution is unknown;
+positive scanner-to-warm evidence, hosted restore, and native CI remain
+pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
+remain future milestones.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
 | Web registry surface | Implemented with TanStack Start/Router, React, and native CSS | Uses live same-origin API data and reports loading, empty, and error states |
 | Registry API | Implemented as a portable `Request`/`Response` handler with Nitro adapters | Directory lookups are bounded; workers acquire and scan release artifacts, and uploaded content is never executed |
-| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; the historical E7 directory deployment verified server-side skills.sh Vercel project OIDC for that deployment, while the current rollout only has authenticated read-only checks and no configured feed; device flow/interactive identity providers are not part of this baseline |
+| Authentication | Implemented bearer-token bootstrap and signed `HttpOnly` browser sessions | Primary user login remains token-based; the current guarded rollout uses the existing server-side skills.sh Vercel project OIDC path, while device flow/interactive identity providers are not part of this baseline |
 | Artifacts | Implemented bounded canonical `pskills-bundle-v1` JSON, digest checks, private sealed-object storage, and transfer grants | Bundle content is data; the registry never runs skill scripts or install hooks |
 | State | Implemented file state for a single API process, PostgreSQL JSONB transactions, and an authenticated HTTP CAS repository | The selected state provider and recovery procedure are deployment configuration |
 | Storage | Implemented Files SDK filesystem/provider adapters and an authenticated HTTP gateway | Each provider still needs its own credentials and conformance evidence before production use |
@@ -31,48 +38,42 @@ their original evidence links.
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| CLI | Implemented Rust package and binary named `pskills`; historical native checks are recorded | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; the later transparent-feed CLI evidence is a loopback fixture run, not current CI or release evidence, and GitHub billing currently blocks a fresh native job |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, and security checks are implemented in the current source checkpoint `8c8e41e`; the historical E7 source `0f9da75` has its own hosted evidence | The current prebuilt rollout proves only authenticated read-only health, `/me`, policy, feeds, and list checks (`feedCount=0`, `total=9738`); no production feed setup/import/CLI test has run. The loopback fixture and historical E7 Topics/security/pagination evidence are kept separate; selected imports, nested upstream detail, Packs preview, and tenant/secrecy evidence remain pending. The earlier `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` probe remains stale-canonical regression evidence |
+| CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_8ru…` rollout proves authenticated read-only API/detail/policy and metadata-only Pack preview with zero private-registry data mutations. Pack-preview UI proof passed during a stable-alias cutover with unknown exact deployment attribution. Prior production evidence covers a quarantined `find-skills` import and a same-root CLI repeat; local multi-feed and edge records cover fixture-only behavior. Positive scanner-to-warm admission, hosted restore, and tenant/secrecy acceptance remain pending |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The current prebuilt registry rollout is
-[`dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z`](https://private-skills-theta.vercel.app),
+The current guarded prebuilt registry rollout is
+[`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`](https://private-skills-theta.vercel.app),
 at the stable alias [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app)
 and unique URL
-`https://private-skills-nyfgk0kyh-andrewmcclenaghan-6046s-projects.vercel.app`.
-It is the prebuilt artifact for merged main `0efd3583bb5902a77c48cbf98f6b7bff88338bcf`
-and code artifact `8c8e41eb4ad172fc033bc5593f400874095ec656`, with output
-fingerprint `fd71b9627eb0fd1a3bcd8d17ebbf867992516c14cb5f61327a9a1ff292a1169a`.
-The artifact contains 2,057 regular files, 27 symlinks, and 19,585,540 bytes;
-no Git-triggered deployment was found. The sanitized
-[rollout evidence](work/production-rollout-evidence-dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z.json)
-records authenticated read-only `health`, `/v1/me`, `/v1/policy`, `/v1/feeds`,
-and directory-list checks. The policy is fail-closed (`allowUnscanned=false`),
-the feed registry is empty, and the list check returned two of 9,738 rows with
-more available. No production feed setup, source import, or CLI installation was
-exercised.
+`https://private-skills-pvsgvckvq-andrewmcclenaghan-6046s-projects.vercel.app`.
+It is from merged main `fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`, with
+artifact source `b1d3b6d77162899491f742e2930abe0b36137d8e` and manifest
+fingerprint `64d3833b2c107546011efc38e34bddea9df519a0e17e36f506b5674c46a504bf`.
+The [sanitized rollout evidence](docs/evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
+records the read-only probes, fail-closed policy (`allowUnscanned=false`),
+SkillsGuard required, Cisco/NVIDIA disabled, metadata-only detail, and zero
+private-registry data mutations. It does not claim a feed, import, scan, or
+CLI install.
 
-The Vercel project API returned `link: null` (shown in the sanitized evidence
-as `linkedRepository: null`). A documented `vercel git connect` attempt for
-`andymac4182/private-skills` failed with `Make sure there aren’t any typos and
-that you have access to the repository if it’s private`. Repository access
-setup still needs owner attention.
+The existing Vercel project is connected to GitHub repository
+`andymac4182/private-skills` on production branch `main`, without an additional
+grant, as shown by the sanitized [Git-link readback](docs/evidence/vercel-git-link-20260910T070859Z.json).
+The guarded prebuilt rollout did not observe a Git-triggered deployment; that
+observation remains pending.
 
-The historical E7 deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` and source
-`0f9da75` retain their own OIDC, Topics, security, pagination, and browser
-evidence in the v0.3.0 record; they are not evidence for the current prebuilt
-rollout. The later transparent-feed implementation has a separate
-[loopback-only local acceptance record](work/transparent-proxy-cli-final-evidence-1789011005495.json)
-using source/runtime and CLI build `8c8e41eb4ad172fc033bc5593f400874095ec656`;
-it is not current CI, native-release, hosted-feed, or production-scanner evidence.
-The earlier
-[sanitized API probe](work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
-records safe list/search and credential-negative behavior but stale-canonical
-Topics. Previously recorded authenticated publishing, search, CLI pack
-installation, analytics, and Eve review flows remain evidence from the verified
-private-registry run; they were not re-exercised by this read-only rollout. The
+Prior deployment-specific OIDC, Topics, security, pagination, browser, feed
+quarantine, and CLI evidence remains linked from
+[`docs/verification-current.md`](docs/verification-current.md) and
+[`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md); it is not silently
+promoted to current `dpl_8ru…` proof. The current rollout is read-only, and the
+local multi-feed/edge records remain fixture evidence.
+
+Previously recorded authenticated publishing, search, CLI pack installation,
+analytics, and Eve review flows remain evidence from the verified private
+registry run; they were not re-exercised by this read-only rollout. The
 separate reviewer runs at
 [`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
 with a registered daily `0 22 * * *` UTC schedule (22:00 UTC, subject to the
@@ -88,23 +89,12 @@ Git-triggered deployment verification, full C1 catalog acceptance, and hosted
 restore remain pending.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
-The v0.3.0 E7 checkpoint adds the external directory and ComputeSDK integration.
-Its source `0f9da75` has the Topics canonical-page parser, bounded metadata
-cache, conflict-aware enumeration, and credential-negative tests; its review
-reports 286 tests passed and two environment-dependent skips. Those hosted
-directory, scan, pagination, and captured 390px/1280px browser results remain
-historical deployment-specific evidence. The current prebuilt rollout has only
-the read-only checks listed above: no production feed is configured, and no
-selected import or CLI production install has been exercised. Full C1 acceptance
-remains open while current browser proof, selected import, nested detail, Packs
-preview, and tenant/secrecy checks are completed. The historical disconnected
-deployment, prior ComputeSDK pre-analysis failure, and stale-canonical Topics
-result remain preserved in the verification record. The later transparent-feed
-source and CLI/UI pinning changes are covered by the explicitly identified local
-fixture and source/build evidence only; current GitHub CI, native release,
-hosted-feed behavior, and production scanner verification for that later work
-remain open.
-See [`docs/skills-sh.md`](docs/skills-sh.md) and
+The v0.3.0 and C1 records preserve earlier deployment-specific source, scan,
+pagination, browser, and Topics evidence with their own provenance. Current
+C1 remains open because the new rollout is read-only and the positive
+scanner-to-warm, hosted restore, and Git-triggered deployment gates are not
+complete. Pack-preview UI proof is complete, with exact deployment attribution
+left unknown by the stable-alias cutover. See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.
 

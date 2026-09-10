@@ -2,89 +2,111 @@
 
 **Date:** 2026-09-10
 
-**Status:** current source, local portability, and production read-only evidence
-recorded for the portable directory gateway work. The older deployment-specific
-records in [`verification-v0.3.0.md`](verification-v0.3.0.md) remain historical
-evidence and are not rewritten here.
+**Status:** PR22 is merged on `origin/main` at
+`fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`. Its guarded prebuilt production
+rollout is READY as `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`; the current read-only
+API and metadata-only Pack checks are recorded below. The existing Vercel GitHub
+link is connected, but no Git-triggered deployment has been observed. The
+browser UI proof is complete; its Pack-preview window crossed a stable-alias
+deployment cutover, so the exact deployment attribution is recorded as unknown.
+Positive scanner-to-warm evidence and hosted recovery remain open. M6
+Diffs/editor plus upload-review Eve and M7 OpenClaw remain
+future milestones.
 
-## Source and artifact provenance
+## Current production rollout
 
-PR20 is merged on `origin/main` at `db2d886bb30a31cdffcd75394ddbd0236e17fc0c`.
-The reviewed application artifact was built exactly from
-`7df1ce6063f57bcf262c228ccde9483be5c2210d`, whose application code is
-equivalent to `7c4c877fa7036517cb2a8563ad10ec273724606c`, with output fingerprint
-`1c58e44151d6201437cc82e8abfe7a94b1441a8ce176f8e07e4791f9193b086c`.
-The artifact inventory reports 2,057 files, 27 symlinks, and 19,596,584 bytes;
-its output checks cover five SDK probes and 27 relocated links. The single
-`CI=true pnpm check` result reports 47 test files passed with two skips and 374
-tests passed with two skips. No v0.3 release tag or prerelease CLI package is
-claimed.
+The reviewed artifact source is `b1d3b6d77162899491f742e2930abe0b36137d8e`,
+with the rollout record reporting only `tests/multi-feed-e2e.test.ts` as a
+post-build delta from reviewed head `ad65ae5cb51c49fc86eaa44175dce1f65d58f765`.
+Its manifest fingerprint is
+`64d3833b2c107546011efc38e34bddea9df519a0e17e36f506b5674c46a504bf`, with
+2,057 files, 27 symlinks, five SDK probes, and Node 24.x. The deployment uses a
+guarded prebuilt path; it is not Git-trigger evidence.
 
-The current production deployment is READY as
-`dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1`, created at
-`2026-09-10T05:40:51.645Z`, at
+The deployment is READY at
 [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
 with unique URL
-`https://private-skills-g9gp1gk6k-andrewmcclenaghan-6046s-projects.vercel.app`.
-The sanitized production gateway rollout evidence at
-`/private/tmp/private-skills-01a08524/work/production-gateway-rollout-evidence-dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1.json`
-is a mode-`0600` local artifact. The pass made 12 GET requests: public health
-200, ten authenticated requests 200 (including one policy-envelope correction),
-and unauthenticated detail 401. Metadata routes are reported by HTTP status
-only. The detail response retained the expected key shape and exposed file
-paths without source contents.
-The strongest policy shape is SkillsGuard `required`, the other scanners
-`disabled`, and `allowUnscanned=false`. A bounded log query for
-`05:40:51–05:45:53 UTC` returned zero error records, and deployment preflight
-validated the project, organization, and deployment arguments. No custom
-gateway was enabled. This read-only pass did not create feeds, import skills,
-run scanners, install via the CLI, or change roles/configuration;
-canonical `https://skills.sh` request-scoped Vercel OIDC remains the production
-directory path.
+`https://private-skills-pvsgvckvq-andrewmcclenaghan-6046s-projects.vercel.app`.
+The sanitized [rollout evidence](evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
+records 18 authenticated GET requests across the route readback and C1 API
+probe, two unauthenticated negative GETs, one metadata-only Pack preview POST,
+and zero private-registry data mutations (no feed, import, scan, install, role,
+or policy writes). The policy returned 200 with SkillsGuard
+required, Cisco and NVIDIA disabled, and `allowUnscanned=false`; detail
+returned 200 with file paths only, while unauthenticated detail was rejected
+with 401. The deployment error-log window returned zero parsed error events.
 
-## Local portability evidence
+The rollout made no feed, import, scan, install, role, or policy changes. The
+sanitized [Git-link readback](evidence/vercel-git-link-20260910T070859Z.json)
+confirms the existing Vercel project is connected to
+`andymac4182/private-skills` on production branch `main` without an additional
+grant. It does not prove a Git-triggered deployment; that observation remains a
+release gate.
 
-- The Node gateway E2E harness produced the sanitized local record at
-  `/private/tmp/private-skills-directory-gateway/work/directory-gateway-evidence-1789018602440.json`
-  (evidence SHA prefix `a65a05`, mode `0600`). It used the real Rust binary
-  SHA prefix `6a048c`, built from source `8c8e41e`, and covered cold required
-  admission through the deterministic fixture scanner plus warm reuse after
-  the upstream was stopped. The 13 upstream fixture transport requests stayed
-  within the disposable loopback HTTPS-shaped fixtures, with no external calls, source/artifact
-  bearer forwarding, or uploaded-instruction execution. This is
-  loopback/runtime evidence; the fixture scanner is not a live external
-  scanner result.
-- The native edge `workerd` record at
-  `/private/tmp/private-skills-edge-portable-gateway-7c4c877.evidence.json`
-  covers reader-only directory list/detail and unauthorized responses through
-  an HTTPS mock with metadata-only detail. It does not prove Files SDK blob
-  transfer, TLS certificate validation, a live provider, or a hosted Cloudflare
-  deployment; the fixture made no external network calls and did not exercise
-  a scanner. A separate earlier `2a0e212` edge fixture covers Files SDK gateway
-  transfer under `allowUnscanned=true`; it is local portability evidence, not a
-  live provider or hosted Cloudflare result.
-- The earlier Docker production-mode Node/container run at source-equivalent
-  `2a0e212` passed health/authentication and publish (`202`, queued), with
-  Cisco required, NVIDIA Skillspector advisory, SkillsGuard advisory, and
-  `allowUnscanned=false`. Its worker image built, but no completed scanner run
-  was recorded; this remains historical container evidence.
+## Partial C1 evidence and portability
+
+The prior production record for
+`dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1` records one owner-authorized `skills-sh`
+feed, one resolve, and one `vercel-labs/skills/find-skills` import. Required
+SkillsGuard analyzed one file and quarantined the release with 30 high
+findings, including the reported CI-004 command-injection finding. No install
+was attempted and no `allowUnscanned` override was used. The sanitized
+[quarantine record](evidence/production-feed-quarantine-dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1.json)
+is negative scanner evidence; it does not prove a positive cold-scan-to-warm
+path.
+
+The corrected [same-root CLI record](evidence/production-cli-same-root-dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1.json)
+verifies an approved beta skill after its fresh install and a different pack
+root owner was added. The same-root repeat completed with unchanged artifact
+and tree digests, `changed:false`, and one `upToDateChecks` increment. Direct
+and pack ownership remained in the same root; credentials and source contents
+are excluded.
+
+The current source follow-ups are local evidence: `cd50e1f` has a 48-file,
+403-test, two-skip baseline. Worker compatibility `0f4e00c` has a focused
+9-test verification; final reviewed head `ad65ae5` has a focused two-file,
+10-test check (nine worker tests plus one integration test). The committed
+multi-feed E2E records at `293abfa` and
+`4f15e9b` cover two custom origins, origin-bound selection, sealed bundle
+contents, and warm reuse with zero upstream HTTP calls. Their deterministic
+SkillsGuard fixture uses `allowUnscanned=false`; it is not a production
+scanner result. The [native edge record](evidence/edge-portability-cd50e1ff.json)
+proves reader-only list/detail/auth for two gateway profiles; it does not prove
+TLS validation, live Cloudflare, production data, or scanner execution.
+
+The production [Pack preview record](evidence/production-pack-preview-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
+passed the authenticated POST contract for
+[`https://skills.sh/p/nuK9jo3sTCZGB2Ul`](https://skills.sh/p/nuK9jo3sTCZGB2Ul),
+schema `0.1.0`, three members, canonical `www.skills.sh` provenance, and
+metadata-only output; unauthenticated access returned 401.
+
+The [browser manifest](evidence/production-browser-pack-preview-dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1-20260910.json)
+records the earlier ten-route desktop/mobile proof as `dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1`
+from source `7df1ce6`, with no horizontal overflow. Its Pack-preview replay
+and result-card screenshots passed with 200, 15 successful requests plus the
+expected pre-login 401, and zero console errors or private-registry data
+mutations. The expected auth-session and metadata-preview requests occurred,
+with no imports, publishes, private-pack creations, installs, reviews, or
+settings changes. That
+replay crossed the stable-alias deployment cutover; the manifest deliberately
+leaves its exact deployment/source attribution null. Pack-preview UI proof is
+complete, but it is not promoted as `dpl_8ru…` evidence.
 
 ## Remaining gates
 
-The production read-only deployment check is complete for the routes listed
-above. The remaining product/operational gates are:
+- Observe a Git-triggered production deployment from the connected
+  `andymac4182/private-skills` `main` branch.
+- Prove a clean representative source import through required scanning and a
+  warm approved-cache install. The quarantined CI-004 record proves fail-closed
+  denial, not positive admission.
+- Complete hosted Neon/object-storage backup and restore. Native CI admission
+  currently stops before any job step with the account payments/spending-limit
+  message; no test failure is claimed.
+- Recheck nested upstream detail and any remaining provider limits recorded in
+  the C1 criteria.
 
-- browser login and current hosted browser flow checks;
-- a configured feed, representative source import, scanner-admission readback,
-  production scanner execution, and production CLI installation;
-- hosted Neon/object-storage backup and restore;
-- Vercel repository-link/Git-triggered deployment setup, with native CI still
-  constrained by GitHub billing/access;
-- operator-supplied Packs preview and live nested-detail availability, subject
-  to the upstream route limitations already recorded in the historical probe.
-
-These records do not establish complete C1 catalog acceptance. Required
-scanner policy remains authoritative, and no uploaded skill content is executed.
-M6 Diffs file viewing/editing with immutable draft releases and a separate
-upload/edit Eve reviewer, plus M7 OpenClaw feed interoperability, remain future
-roadmap milestones and are not release gates here.
+These records do not establish complete C1 catalog acceptance. Scanner policy
+remains authoritative, and uploaded skill content is never executed. M6 Diffs
+file viewing/editing with immutable draft releases and a separate upload/edit
+Eve reviewer, plus M7 OpenClaw feed interoperability, remain future roadmap
+milestones and are not release gates here.

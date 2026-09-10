@@ -1,0 +1,44 @@
+{
+  "observedAt": "2026-09-10T07:08:59Z",
+  "method": "authenticated Vercel CLI GET /v9/projects/private-skills (sanitized readback)",
+  "project": {
+    "id": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "name": "private-skills",
+    "teamId": "team_74K7woAfF1e48ypNcBTJ8NSC"
+  },
+  "git": {
+    "provider": "github",
+    "organization": "andymac4182",
+    "repository": "private-skills",
+    "repositoryId": 1362387041,
+    "productionBranch": "main"
+  },
+  "latestProductionDeployment": {
+    "id": "dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE",
+    "readyState": "READY",
+    "readySubstate": "PROMOTED",
+    "sourceCommit": "ad65ae5cb51c49fc86eaa44175dce1f65d58f765",
+    "sourceRef": "feat/c1-feed-release",
+    "aliases": [
+      "private-skills-theta.vercel.app",
+      "private-skills-andrewmcclenaghan-6046s-projects.vercel.app"
+    ],
+    "createdAtEpochMs": 1789023606813
+  },
+  "priorProductionDeployment": {
+    "id": "dpl_E7XXwDmCmduXKsdRKCMnMzkrYcd1",
+    "readyState": "READY",
+    "readySubstate": "PROMOTED",
+    "sourceCommit": "7df1ce6063f57bcf262c228ccde9483be5c2210d",
+    "sourceRef": "feat/portable-directory-gateway-release",
+    "aliases": [
+      "private-skills-theta.vercel.app",
+      "private-skills-andrewmcclenaghan-6046s-projects.vercel.app"
+    ],
+    "createdAtEpochMs": 1789018851645
+  },
+  "notes": [
+    "Git link was connected through the existing Vercel project UI after exact personal namespace and repository selection.",
+    "No tokens, environment values, install grants, new projects, or deployment mutation are recorded."
+  ]
+}

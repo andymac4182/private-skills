@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "edge-portability-v1",
+  "observedAt": "2026-09-10T06:49:59.487Z",
+  "source": {
+    "worktree": "/private/tmp/private-skills-edge-portability-final",
+    "sha": "cd50e1ff119904b146b3f6f03d354e9f484fb54d",
+    "state": "detached clean worktree"
+  },
+  "build": {
+    "preset": "cloudflare_module",
+    "runtimeProfile": "edge",
+    "command": "PSKILLS_RUNTIME_PROFILE=edge PSKILLS_ENVIRONMENT=production PSKILLS_STATE_PROVIDER=http PSKILLS_STORAGE_PROVIDER=http NITRO_PRESET=cloudflare_module node <vite-package>/bin/vite.js build",
+    "node": "v24.20.0",
+    "pnpm": "11.19.0",
+    "vite": "8.2.2",
+    "nitro": "3.0.260903-beta",
+    "miniflare": "5.20260908.0-alpha",
+    "workerd": "1.20260908.1"
+  },
+  "harness": {
+    "path": "/private/tmp/private-skills-edge-portability-harness.mjs",
+    "sha256": "db4d1268b2b2a6c93ff28c0a371dd5d9025972cfe7e642d7e25f2bff3d32c2e0",
+    "evidenceReadback": "/private/tmp/private-skills-edge-portability-final-harness.json"
+  },
+  "result": {
+    "buildArtifact": {
+      "outputDir": "/private/tmp/private-skills-edge-portability-final/apps/web/.output/server",
+      "serverOutputFiles": 34,
+      "serverOutputTreeSha256": "2603f8caf1167f4dd47f660f2bc1f6868c62d7c7c62f6e25f1fbd015a12ebda9",
+      "directOidcImportMarker": false
+    },
+    "nativeRuntime": {
+      "engine": "Miniflare/workerd",
+      "transport": "Miniflare outboundService HTTPS request mock; no external network",
+      "scenarios": [
+        {
+          "label": "feed-a",
+          "selectedBase": "https://catalog-a.fixture.invalid/api",
+          "requests": 2,
+          "allRequestsAuthorized": true,
+          "observedOrigin": "https://catalog-a.fixture.invalid",
+          "listStatus": 200,
+          "detailStatus": 200,
+          "unauthorizedStatus": 401
+        },
+        {
+          "label": "feed-b",
+          "selectedBase": "https://catalog-b.fixture.invalid/catalog",
+          "requests": 2,
+          "allRequestsAuthorized": true,
+          "observedOrigin": "https://catalog-b.fixture.invalid",
+          "listStatus": 200,
+          "detailStatus": 200,
+          "unauthorizedStatus": 401
+        }
+      ],
+      "officialDirectoryUnavailable": {
+        "status": 503,
+        "responseShape": [
+          "error"
+        ],
+        "outboundRequests": 0
+      },
+      "catalogRequests": 4,
+      "unexpectedOutbound": 0,
+      "sourceCanaryLeaked": false,
+      "credentialLeaked": false,
+      "scanner": "not exercised; fixture sets allowUnscanned=true for reader-only portability proof"
+    },
+    "configuration": {
+      "explicitGatewayProfileCount": 2,
+      "defaultUiBaseSelection": true,
+      "jsonProfileTokensSerialized": false,
+      "officialOidcAvailableOnEdge": false
+    },
+    "limitations": [
+      "outboundService exercises native workerd fetch, URL routing, and bearer forwarding but not TLS certificate validation",
+      "fixture catalog responses are local deterministic metadata; no public catalog, production state, scanner, model, or external credentials were contacted",
+      "allowUnscanned=true is explicit fixture-only configuration and is not scanner evidence",
+      "the Miniflare fixture disposes each workerd instance after the run"
+    ]
+  },
+  "controls": {
+    "externalNetwork": false,
+    "productionData": false,
+    "providerModelScanner": false,
+    "fixtureAllowUnscanned": true,
+    "fixtureAllowUnscannedMeaning": "reader-only portability proof; scanner evidence not established",
+    "sourceOrCredentialContentRetained": false
+  }
+}

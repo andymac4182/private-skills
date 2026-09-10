@@ -171,13 +171,15 @@ Install planning uses explicit project/global scope, target-agent adapters (`cod
 
 The repository includes a production Node image and compose profile, a Vercel
 Nitro template, and a Cloudflare Workers template using the edge HTTP adapters.
-The main registry is now deployed at
-[private-skills-theta.vercel.app](https://private-skills-theta.vercel.app),
-with recorded deployment `dpl_9hojtmSKjjUGi8AqEaeauPJEhqja`. Its free Neon
-PostgreSQL integration is provisioned and connected, and private object
-storage is configured. The GitHub workflow still defines Node web checks,
-native Linux/macOS/Windows Rust jobs, and a container build; the historical
-checkpoint result remains evidence only for its recorded revision.
+The current guarded prebuilt registry rollout is
+[`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`](https://private-skills-theta.vercel.app),
+from merged main `fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`. Its current
+read-only probe and policy boundary are recorded in
+[`verification-current.md`](verification-current.md); feed/import, scanner,
+and install mutations were not part of that rollout. The GitHub workflow still
+defines Node web checks, native Linux/macOS/Windows Rust jobs, and a container
+build; the historical checkpoint result remains evidence only for its recorded
+revision.
 
 The v0.2.0 verification record reports passing root/Eve TypeScript checks, 110
 tests with two optional integration suites skipped locally, Rust formatting/
@@ -205,14 +207,15 @@ calendar-trigger observation. A negative failed-scanner check returned `404`
 before install authorization, demonstrating fail-closed behavior for a
 required scan failure.
 
-GitHub's Vercel app security-key confirmation remains pending, so a
-Git-triggered deployment is not claimed. `skills.sh` discovery and Compute
-SDK features were not completed v0.2.0 features; the current v0.3.0 status,
-including the owner's later authorization for skills.sh project-OIDC
-forwarding and its still-pending live proof, is recorded in
-[`verification-v0.3.0.md`](verification-v0.3.0.md). OIDC/device authentication
-for primary user login, if required, remains a separate feature rather than an
-implied capability of bootstrap-token authentication.
+The existing Vercel project is connected to
+`andymac4182/private-skills` on production branch `main` without an additional
+grant, but no Git-triggered deployment has been observed. The current rollout
+uses the authorized skills.sh project-OIDC path for its read-only checks;
+skills.sh discovery/import acceptance and ComputeSDK production execution
+remain separately bounded in [`verification-current.md`](verification-current.md).
+OIDC/device authentication for primary user login, if required, remains a
+separate feature rather than an implied capability of bootstrap-token
+authentication.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence
