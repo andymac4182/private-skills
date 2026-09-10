@@ -292,7 +292,10 @@ export function resolveCurrentUploadReviewBinding(
   const base = draft.baseResourceId === undefined
     ? undefined
     : state.skills.find((candidate) => candidate.id === draft.baseResourceId);
-  if (draft.baseResourceId !== undefined && (!base || !skillCurrentlyApproved(state, base))) return undefined;
+  if (
+    draft.baseResourceId !== undefined &&
+    (!base || !skillCurrentlyApproved(state, base) || draft.baseDigest !== base.artifact.digest)
+  ) return undefined;
   return {
     draftId: draft.id,
     draftRevision: draft.revision,

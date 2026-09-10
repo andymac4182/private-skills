@@ -12,8 +12,11 @@ import type {
   Authenticator,
   BlobStore,
   BundleFile,
+  Digest,
   Principal,
   RegistryState,
+  SkillDraft,
+  SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
 
@@ -292,5 +295,56 @@ describe('M6 registry/runtime composition', () => {
       body: { name: '@team/native-review', files: nativeFiles(1) },
     }));
     expect(missingScope.status).toBe(403);
+  });
+
+  it('rejects a fork review binding when the approved base artifact digest changed', () => {
+    const state = defaultRegistryState({ production: false, allowUnscanned: true });
+    state.policy.revision = 'policy-test';
+    const baseDigest = `sha256:${'a'.repeat(64)}` as Digest;
+    const draftDigest = `sha256:${'b'.repeat(64)}` as Digest;
+    const now = new Date().toISOString();
+    const base: SkillVersion = {
+      id: 'base-release',
+      organizationId: ORGANIZATION,
+      name: '@team/base-release',
+      skillName: 'base-release',
+      version: '1.0.0',
+      description: 'base release',
+      artifact: { key: 'base-artifact', digest: baseDigest, size: 1 },
+      state: 'approved',
+      policyRevision: 'policy-test',
+      createdAt: now,
+      approvedAt: now,
+      provenance: { kind: 'native' },
+      fileCount: 1,
+      scanIds: [],
+    };
+    const draft: SkillDraft = {
+      id: 'fork-draft',
+      organizationId: ORGANIZATION,
+      origin: 'release',
+      name: '@team/fork-draft',
+      skillName: 'fork-draft',
+      description: 'fork draft',
+      baseResourceId: base.id,
+      baseDigest: draftDigest,
+      revision: 1,
+      digest: draftDigest,
+      artifact: { key: 'draft-artifact', digest: draftDigest, size: 1 },
+      files: [],
+      status: 'open',
+      actor: 'publisher-1',
+      createdAt: now,
+      updatedAt: now,
+    };
+    state.skills.push(base);
+    state.drafts = [draft];
+
+    expect(resolveCurrentUploadReviewBinding(state, draft.id)).toBeUndefined();
+    draft.baseDigest = baseDigest;
+    expect(resolveCurrentUploadReviewBinding(state, draft.id)).toMatchObject({
+      baseReleaseId: base.id,
+      baseDigest,
+    });
   });
 });
