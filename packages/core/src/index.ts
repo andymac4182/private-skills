@@ -184,6 +184,8 @@ export interface RegistryDirectoryPackClient {
 
 export type RegistryHandlerDependencies = RegistryDependencies & {
   directory?: RegistryDirectoryClient;
+  /** Resolve the metadata client bound to one exact transparent feed base. */
+  directoryForBase?: (baseUrl: string) => RegistryDirectoryClient | undefined;
   directoryPacks?: RegistryDirectoryPackClient;
 };
 
@@ -2928,7 +2930,11 @@ async function resolveTransparentProxyRequest(
     if (cached) return transparentProxyResponse(cached, feed, request.externalId);
   }
 
-  const directory = deps.directory;
+  // The global directory client serves browse/default API routes only. A
+  // transparent import must use a client whose origin and configured path are
+  // bound to the selected feed; silently reusing a client for another feed
+  // could hydrate the wrong catalog row under the caller's external ID.
+  const directory = deps.directoryForBase?.(feed.baseUrl);
   if (!directory) throw directoryUnavailable();
   const detail = await directoryRequest(() => directory.detail(request.externalId, { signal: requestSignal }));
   if (
