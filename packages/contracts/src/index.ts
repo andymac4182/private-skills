@@ -90,6 +90,36 @@ export interface ExternalProvenance {
   frontmatterDescription?: string;
 }
 export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; }
+export type SkillDraftStatus = 'open' | 'publishing' | 'published' | 'discarded';
+export interface SkillDraftIdempotencyRecord {
+  key: string;
+  subject: string;
+  requestDigest: Digest;
+  revision: number;
+  digest: Digest;
+  artifact: StoredBlob;
+  files: BundleFile[];
+  updatedAt: string;
+}
+/** Tenant-scoped mutable authoring state; the referenced artifact is always a fresh sealed object. */
+export interface SkillDraft {
+  id: string;
+  organizationId: string;
+  name: string;
+  skillName: string;
+  baseResourceId: string;
+  baseDigest: Digest;
+  revision: number;
+  digest: Digest;
+  artifact: StoredBlob;
+  files: BundleFile[];
+  status: SkillDraftStatus;
+  actor: string;
+  createdAt: string;
+  updatedAt: string;
+  createIdempotency?: SkillDraftIdempotencyRecord;
+  idempotency?: SkillDraftIdempotencyRecord[];
+}
 export interface PackMember { resourceId: string; name: string; version: string; digest: Digest; }
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }
 export interface Resolution { kind: 'skill' | 'pack'; resourceId: string; organizationId: string; name: string; version: string; digest: Digest; members: SkillVersion[]; }
@@ -228,6 +258,8 @@ export interface RegistryState {
   metadataRevision?: number;
   schemaVersion: 1;
   skills: SkillVersion[];
+  /** Optional so states written before M6 authoring remain readable. */
+  drafts?: SkillDraft[];
   packs: PackVersion[];
   jobs: Job[];
   scans: ScanResult[];

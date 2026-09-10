@@ -151,6 +151,9 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
   if (arrayFields.some((field) => !Array.isArray(value[field]))) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid collection');
   }
+  if (value.drafts !== undefined && !Array.isArray(value.drafts)) {
+    throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid drafts collection');
+  }
   // Analytics was added after the first state schema.  Keep these collections
   // optional so older persisted documents remain readable, while rejecting a
   // malformed value when a newer writer has supplied one.

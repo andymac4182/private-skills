@@ -1,0 +1,515 @@
+import type {
+  BundleFile,
+  Digest,
+  Principal,
+  RegistryState,
+  SkillDraft,
+  SkillDraftIdempotencyRecord,
+  SkillVersion,
+  StoredBlob,
+} from '../../contracts/src/index.js';
+import {
+  AuthoringApiError,
+  assertPublisher,
+  canReadNamespace,
+  errorResponse,
+  jsonResponse,
+  readAuthorizedReleaseSnapshot,
+  type AuthoringHandler,
+  type AuthoringHandlerDependencies,
+} from './index.js';
+import {
+  decodeBundle,
+  digestBytes,
+  encodeBundle,
+  validateBundle,
+} from '../../storage/src/index.js';
+
+const MAX_IDEMPOTENCY_RECORDS = 32;
+const MAX_IDEMPOTENCY_KEY_BYTES = 256;
+
+export interface PublicSkillDraft {
+  id: string;
+  name: string;
+  skillName: string;
+  baseResourceId: string;
+  baseDigest: Digest;
+  revision: number;
+  digest: Digest;
+  size: number;
+  files: BundleFile[];
+  status: SkillDraft['status'];
+  actor: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Create the explicit draft routes. The handler intentionally owns no
+ * publication transition: saving a draft only creates a fresh sealed object
+ * and changes the tenant's draft record.
+ *
+ * Routes:
+ *   POST /v1/skills/:resourceId/drafts
+ *   GET  /v1/drafts/:draftId
+ *   PUT  /v1/drafts/:draftId
+ */
+export function createDraftHandler(deps: AuthoringHandlerDependencies): AuthoringHandler {
+  const maxBodyBytes = normalizeBodyLimit(deps.config.maxBodyBytes);
+
+  return async function draftHandler(request: Request): Promise<Response> {
+    try {
+      const principal = await deps.auth.authenticate(request);
+      if (!principal || principal.organizationId !== deps.config.organizationId) {
+        throw new AuthoringApiError('UNAUTHORIZED', 'Authentication is required', 401);
+      }
+      const url = parseRequestUrl(request);
+      const segments = splitPath(url.pathname);
+
+      if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'skills' && segments[3] === 'drafts') {
+        if (request.method.toUpperCase() !== 'POST') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only POST is supported', 405);
+        }
+        assertPublisher(principal);
+        const resourceId = decodePathPart(segments[2]);
+        if (!isSafeId(resourceId)) throw unavailableDraft();
+        const body = await readJson(request, maxBodyBytes);
+        return await createDraft(body, request, resourceId, principal, deps);
+      }
+
+      if (segments.length === 3 && segments[0] === 'v1' && segments[1] === 'drafts') {
+        const draftId = decodePathPart(segments[2]);
+        if (!isSafeId(draftId)) throw unavailableDraft();
+        assertPublisher(principal);
+        if (request.method.toUpperCase() === 'GET') {
+          return await getDraft(draftId, principal, deps);
+        }
+        if (request.method.toUpperCase() === 'PUT') {
+          const body = await readJson(request, maxBodyBytes);
+          return await updateDraft(body, request, draftId, principal, deps);
+        }
+        throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET and PUT are supported', 405);
+      }
+
+      throw new AuthoringApiError('NOT_FOUND', 'Route not found', 404);
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
+}
+
+async function createDraft(
+  body: Record<string, unknown>,
+  request: Request,
+  resourceId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const idempotencyKey = requireIdempotencyKey(request);
+  const baseDigest = requireDigest(body.baseDigest, 'baseDigest');
+  const requestDigest = await digestText(JSON.stringify({ resourceId, baseDigest }));
+  const existingState = await deps.repository.read(deps.config.organizationId);
+  const existing = existingState.drafts?.find(
+    (candidate) =>
+      candidate.organizationId === deps.config.organizationId &&
+      candidate.actor === principal.subject &&
+      candidate.createIdempotency?.key === idempotencyKey,
+  );
+  if (existing) {
+    if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
+    if (existing.createIdempotency?.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    const existingDraft = draftFromCreateRecord(existing);
+    return jsonResponse({ draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
+      'cache-control': 'private, no-store',
+    });
+  }
+  const snapshot = await readAuthorizedReleaseSnapshot(deps, principal, resourceId);
+  if (snapshot.release.artifact.digest !== baseDigest) {
+    throw new AuthoringApiError('DIGEST_MISMATCH', 'The selected release digest changed', 409);
+  }
+  const stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
+  const now = new Date().toISOString();
+  const draftId = randomId('draft');
+  const record: SkillDraftIdempotencyRecord = {
+    key: idempotencyKey,
+    subject: principal.subject,
+    requestDigest,
+    revision: 1,
+    digest: snapshot.release.artifact.digest,
+    artifact: stored,
+    files: snapshot.bundle.files,
+    updatedAt: now,
+  };
+  const draft: SkillDraft = {
+    id: draftId,
+    organizationId: deps.config.organizationId,
+    name: snapshot.release.name,
+    skillName: snapshot.release.skillName,
+    baseResourceId: snapshot.release.id,
+    baseDigest,
+    revision: 1,
+    digest: snapshot.release.artifact.digest,
+    artifact: stored,
+    files: snapshot.bundle.files,
+    status: 'open',
+    actor: principal.subject,
+    createdAt: now,
+    updatedAt: now,
+    createIdempotency: record,
+    idempotency: [],
+  };
+
+  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    ensureDrafts(state);
+    const existing = state.drafts!.find(
+      (candidate) =>
+        candidate.organizationId === deps.config.organizationId &&
+        candidate.actor === principal.subject &&
+        candidate.createIdempotency?.key === idempotencyKey,
+    );
+    if (existing) {
+      if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
+      if (existing.createIdempotency?.requestDigest !== requestDigest) {
+        throw idempotencyConflict();
+      }
+      return { draft: draftFromCreateRecord(existing), idempotent: true };
+    }
+
+    const current = state.skills.find((candidate) => candidate.id === resourceId);
+    if (!current || !sameReadableBase(current, snapshot.release, state, principal, baseDigest)) {
+      throw unavailableDraft();
+    }
+    state.drafts!.push(draft);
+    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
+    return { draft, idempotent: false };
+  });
+
+  const bundle = { format: 'pskills-bundle-v1' as const, files: result.draft.files };
+  return jsonResponse({ draft: toPublicDraft(result.draft, bundle) }, result.idempotent ? 200 : 201, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function getDraft(
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+  const bundle = await readDraftBundle(draft, deps);
+  return jsonResponse({ draft: toPublicDraft(draft, bundle) }, 200, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+async function updateDraft(
+  body: Record<string, unknown>,
+  request: Request,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const idempotencyKey = requireIdempotencyKey(request);
+  const expectedRevision = requireRevision(body.expectedRevision);
+  if (!Array.isArray(body.files)) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'files must be an array', 400);
+  }
+  let bundle;
+  try {
+    bundle = validateBundle({ format: 'pskills-bundle-v1', files: body.files });
+  } catch {
+    throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
+  }
+  const digest = await digestBytes(encodeBundle(bundle));
+  const requestDigest = await digestText(JSON.stringify({ expectedRevision, digest }));
+  const stateBefore = await deps.repository.read(deps.config.organizationId);
+  const before = findDraft(stateBefore, draftId, principal, deps.config.organizationId);
+  const prior = findIdempotency(before, idempotencyKey, principal.subject);
+  if (prior) {
+    if (prior.requestDigest !== requestDigest) throw idempotencyConflict();
+    return jsonResponse({ draft: toPublicDraft(draftFromIdempotency(before, prior), { format: 'pskills-bundle-v1', files: prior.files }), idempotent: true }, 200, {
+      'cache-control': 'private, no-store',
+    });
+  }
+  if (before.revision !== expectedRevision) {
+    throw revisionConflict(before.revision);
+  }
+  if (before.status !== 'open') {
+    throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+  }
+
+  const encoded = encodeBundle(bundle);
+  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  const now = new Date().toISOString();
+  const record: SkillDraftIdempotencyRecord = {
+    key: idempotencyKey,
+    subject: principal.subject,
+    requestDigest,
+    revision: expectedRevision + 1,
+    digest,
+    artifact: stored,
+    files: bundle.files,
+    updatedAt: now,
+  };
+
+  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const current = findDraft(state, draftId, principal, deps.config.organizationId);
+    const concurrent = findIdempotency(current, idempotencyKey, principal.subject);
+    if (concurrent) {
+      if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
+      return { draft: draftFromIdempotency(current, concurrent), idempotent: true };
+    }
+    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+    if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+    current.revision = expectedRevision + 1;
+    current.digest = digest;
+    current.artifact = stored;
+    current.files = bundle.files;
+    current.updatedAt = now;
+    current.idempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
+    appendDraftAudit(state, principal, 'draft.update', current, deps.config.organizationId);
+    return { draft: current, idempotent: false };
+  });
+
+  const responseBundle = { format: 'pskills-bundle-v1' as const, files: result.draft.files };
+  return jsonResponse({ draft: toPublicDraft(result.draft, responseBundle), idempotent: result.idempotent }, 200, {
+    'cache-control': 'private, no-store',
+  });
+}
+
+function findDraft(state: RegistryState, draftId: string, principal: Principal, organizationId: string): SkillDraft {
+  const draft = state.drafts?.find(
+    (candidate) => candidate.id === draftId && candidate.organizationId === organizationId && canReadNamespace(principal, candidate.name),
+  );
+  if (!draft) throw unavailableDraft();
+  return draft;
+}
+
+async function readDraftBundle(draft: SkillDraft, deps: AuthoringHandlerDependencies): Promise<ReturnType<typeof decodeBundle>> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.blobs.get(draft.artifact.key);
+  } catch {
+    throw new AuthoringApiError('DRAFT_UNAVAILABLE', 'Draft content is temporarily unavailable', 503);
+  }
+  const actual = await digestBytes(bytes);
+  if (actual !== draft.digest || actual !== draft.artifact.digest || bytes.byteLength !== draft.artifact.size) {
+    throw new AuthoringApiError('DIGEST_MISMATCH', 'Draft content failed integrity verification', 409);
+  }
+  let bundle: ReturnType<typeof decodeBundle>;
+  try {
+    bundle = decodeBundle(bytes);
+  } catch {
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft content is not a canonical bundle', 409);
+  }
+  const manifestDigest = await digestBytes(encodeBundle(bundle));
+  if (manifestDigest !== draft.digest || !sameFiles(bundle.files, draft.files)) {
+    throw new AuthoringApiError('DRAFT_INVALID', 'Draft manifest does not match its sealed content', 409);
+  }
+  return bundle;
+}
+
+function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): PublicSkillDraft {
+  return {
+    id: draft.id,
+    name: draft.name,
+    skillName: draft.skillName,
+    baseResourceId: draft.baseResourceId,
+    baseDigest: draft.baseDigest,
+    revision: draft.revision,
+    digest: draft.digest,
+    size: draft.artifact.size,
+    files: bundle.files,
+    status: draft.status,
+    actor: draft.actor,
+    createdAt: draft.createdAt,
+    updatedAt: draft.updatedAt,
+  };
+}
+
+function draftFromCreateRecord(draft: SkillDraft): SkillDraft {
+  const record = draft.createIdempotency;
+  if (!record) return draft;
+  return {
+    ...draft,
+    revision: record.revision,
+    digest: record.digest,
+    artifact: record.artifact,
+    files: record.files,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function draftFromIdempotency(draft: SkillDraft, record: SkillDraftIdempotencyRecord): SkillDraft {
+  return {
+    ...draft,
+    revision: record.revision,
+    digest: record.digest,
+    artifact: record.artifact,
+    files: record.files,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function findIdempotency(draft: SkillDraft, key: string, subject: string): SkillDraftIdempotencyRecord | undefined {
+  return (draft.idempotency ?? []).find((record) => record.key === key && record.subject === subject);
+}
+
+function sameReadableBase(
+  current: SkillVersion,
+  expected: SkillVersion,
+  state: RegistryState,
+  principal: Principal,
+  digest: Digest,
+): boolean {
+  return current.id === expected.id &&
+    current.organizationId === expected.organizationId &&
+    current.artifact.digest === digest &&
+    current.state === 'approved' &&
+    current.policyRevision === state.policy.revision &&
+    canReadNamespace(principal, current.name);
+}
+
+function ensureDrafts(state: RegistryState): void {
+  state.drafts ??= [];
+}
+
+function appendDraftAudit(state: RegistryState, principal: Principal, action: string, draft: SkillDraft, organizationId: string): void {
+  state.audit.push({
+    id: randomId('audit'),
+    organizationId,
+    subject: principal.subject,
+    action,
+    resourceId: draft.id,
+    createdAt: draft.updatedAt,
+    details: {
+      baseResourceId: draft.baseResourceId,
+      baseDigest: draft.baseDigest,
+      revision: draft.revision,
+      digest: draft.digest,
+    },
+  });
+}
+
+async function putVerifiedDraftBlob(deps: AuthoringHandlerDependencies, bytes: Uint8Array, digest: Digest): Promise<StoredBlob> {
+  let stored: StoredBlob;
+  try {
+    stored = await deps.blobs.put(bytes);
+  } catch {
+    throw new AuthoringApiError('STORAGE_UNAVAILABLE', 'Draft storage is temporarily unavailable', 503);
+  }
+  if (!stored || stored.digest !== digest || stored.size !== bytes.byteLength || !stored.key) {
+    throw new AuthoringApiError('DIGEST_MISMATCH', 'Draft storage returned unexpected bytes', 409);
+  }
+  return stored;
+}
+
+async function digestText(value: string): Promise<Digest> {
+  return digestBytes(new TextEncoder().encode(value));
+}
+
+function requireIdempotencyKey(request: Request): string {
+  const key = request.headers.get('idempotency-key')?.trim();
+  if (!key || key.length > MAX_IDEMPOTENCY_KEY_BYTES || /[\u0000-\u001f\u007f]/u.test(key)) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'Idempotency-Key is required', 400);
+  }
+  return key;
+}
+
+function requireDigest(value: unknown, field: string): Digest {
+  if (typeof value !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(value)) {
+    throw new AuthoringApiError('INVALID_REQUEST', `${field} must be a sha256 digest`, 400);
+  }
+  return value as Digest;
+}
+
+function requireRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || typeof value !== 'number' || value < 1) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'expectedRevision must be a positive integer', 400);
+  }
+  return value;
+}
+
+async function readJson(request: Request, maxBodyBytes: number): Promise<Record<string, unknown>> {
+  const declared = request.headers.get('content-length');
+  if (declared && Number.isSafeInteger(Number(declared)) && Number(declared) > maxBodyBytes) {
+    throw new AuthoringApiError('PAYLOAD_TOO_LARGE', 'Request body exceeds the configured limit', 413);
+  }
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await request.arrayBuffer();
+  } catch {
+    throw new AuthoringApiError('INVALID_REQUEST', 'Request body could not be read', 400);
+  }
+  if (bytes.byteLength > maxBodyBytes) {
+    throw new AuthoringApiError('PAYLOAD_TOO_LARGE', 'Request body exceeds the configured limit', 413);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch {
+    throw new AuthoringApiError('INVALID_JSON', 'Request body must be valid JSON', 400);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AuthoringApiError('INVALID_JSON', 'Request body must be an object', 400);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function normalizeBodyLimit(value: number | undefined): number {
+  if (value === undefined) return 10 * 1024 * 1024;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('maxBodyBytes must be a positive safe integer');
+  return value;
+}
+
+function parseRequestUrl(request: Request): URL {
+  try {
+    return new URL(request.url);
+  } catch {
+    throw new AuthoringApiError('INVALID_REQUEST', 'Request URL is invalid', 400);
+  }
+}
+
+function splitPath(pathname: string): string[] {
+  return pathname.replaceAll('\\', '/').split('/').filter(Boolean);
+}
+
+function decodePathPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw unavailableDraft();
+  }
+}
+
+function isSafeId(value: string): boolean {
+  return value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f/\\]/u.test(value);
+}
+
+function unavailableDraft(): AuthoringApiError {
+  return new AuthoringApiError('NOT_FOUND', 'Draft is unavailable', 404);
+}
+
+function idempotencyConflict(): AuthoringApiError {
+  return new AuthoringApiError('IDEMPOTENCY_CONFLICT', 'Idempotency-Key was already used with a different request', 409);
+}
+
+function revisionConflict(currentRevision: number): AuthoringApiError {
+  return new AuthoringApiError('DRAFT_CONFLICT', 'Draft revision is stale; rebase before saving', 409, { currentRevision });
+}
+
+function sameFiles(left: BundleFile[], right: BundleFile[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((file, index) => {
+    const other = right[index];
+    return file.path === other?.path && file.content === other.content && file.executable === other.executable;
+  });
+}
+
+function randomId(prefix: string): string {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${globalThis.crypto.randomUUID()}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
