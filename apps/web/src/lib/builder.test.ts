@@ -39,6 +39,13 @@ function proposal(state: 'pending' | 'applied' | 'rejected' = 'pending') {
   }
 }
 
+function proposalWithPreview(state: 'pending' | 'applied' | 'rejected' = 'pending') {
+  return {
+    ...proposal(state),
+    operations: [{ op: 'edit', path: 'SKILL.md', contentBytes: 12, before: '# Before\n', after: '# After\n' }],
+  }
+}
+
 function draft() {
   return {
     id: binding.draftId,
@@ -67,6 +74,7 @@ describe('same-origin skill builder BFF adapter', () => {
       .mockResolvedValueOnce(response(session({
         turns: [{ id: 'turn-1', role: 'assistant', content: 'Ready.', createdAt: '2026-09-10T00:00:00.000Z' }],
       })))
+      .mockResolvedValueOnce(response({ proposals: [] }))
     vi.stubGlobal('fetch', fetchMock)
 
     const adapter = createSkillBuilderAdapter()
@@ -91,11 +99,13 @@ describe('same-origin skill builder BFF adapter', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(session()))
       .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response({ proposals: [] }))
       .mockResolvedValueOnce(response(session({
         state: 'running',
         turns: [{ id: 'turn-2', role: 'user', content: 'Improve the introduction.', createdAt: '2026-09-10T00:01:00.000Z' }],
         proposal: proposal(),
       }), 202))
+      .mockResolvedValueOnce(response({ proposals: [proposalWithPreview()] }))
       .mockResolvedValueOnce(response(undefined, 204))
     vi.stubGlobal('fetch', fetchMock)
     const adapter = createSkillBuilderAdapter()
@@ -114,14 +124,24 @@ describe('same-origin skill builder BFF adapter', () => {
     expect(result.session.state).toBe('running')
     expect(result.proposal?.id).toBe('proposal-1')
     expect(progress).toEqual(['reading-context', 'thinking', 'preparing-proposal'])
-    const [promptPath, promptInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+    const [promptPath, promptInit] = fetchMock.mock.calls[3] as [string, RequestInit]
     const promptUrl = new URL(promptPath, 'https://registry.test')
     expect(promptUrl.pathname).toBe('/v1/drafts/draft-1/builder/session/session-1/prompt')
     expect(promptUrl.searchParams.get('revision')).toBe('4')
     expect(promptUrl.searchParams.get('digest')).toBe('sha256:base')
     expect(JSON.parse(String(promptInit.body))).toEqual({ prompt: 'Improve the introduction.', requestId: 'prompt-1', selectedPath: 'SKILL.md' })
     expect(new Headers(promptInit.headers).get('authorization')).toBeNull()
-    const [stopPath, stopInit] = fetchMock.mock.calls[3] as [string, RequestInit]
+    const [previewPath, previewInit] = fetchMock.mock.calls[4] as [string, RequestInit]
+    const previewUrl = new URL(previewPath, 'https://registry.test')
+    expect(previewUrl.pathname).toBe('/v1/drafts/draft-1/proposals')
+    expect(previewUrl.searchParams.get('revision')).toBe('4')
+    expect(previewUrl.searchParams.get('digest')).toBe('sha256:base')
+    expect(previewInit.credentials).toBe('include')
+    expect(new Headers(previewInit.headers).get('authorization')).toBeNull()
+    const hydratedProposal = result.proposal
+    expect(hydratedProposal?.operations[0]?.before).toBe('# Before\n')
+    expect(hydratedProposal?.operations[0]?.after).toBe('# After\n')
+    const [stopPath, stopInit] = fetchMock.mock.calls[5] as [string, RequestInit]
     const stopUrl = new URL(stopPath, 'https://registry.test')
     expect(stopUrl.pathname).toBe('/v1/drafts/draft-1/builder/session/session-1/stop')
     expect(stopUrl.searchParams.get('revision')).toBe('4')
@@ -152,8 +172,75 @@ describe('same-origin skill builder BFF adapter', () => {
   })
 
   it('fails closed when the BFF returns a session bound to another revision', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(session({ binding: { ...binding, revision: 5 } }))))
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(session({ binding: { ...binding, revision: 5 } })))
+      .mockResolvedValueOnce(response({ proposals: [] })))
     const adapter = createSkillBuilderAdapter()
     await expect(adapter.loadSession({ binding, signal: new AbortController().signal })).rejects.toMatchObject({ code: 'STALE_BINDING', status: 409 })
+  })
+
+  it('polls a 202 running prompt until the ID-addressed session exposes a proposal', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ state: 'running', turns: [{ id: 'turn-3', role: 'user', content: 'Add a usage example.', createdAt: '2026-09-10T00:03:00.000Z' }] }), 202))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ state: 'completed', proposal: proposal() })))
+      .mockResolvedValueOnce(response({ proposals: [proposalWithPreview()] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = createSkillBuilderAdapter()
+    const loaded = await adapter.loadSession({ binding, signal: new AbortController().signal })
+    const observedStates: string[] = []
+    const result = await adapter.sendPrompt({
+      binding,
+      sessionId: loaded.id,
+      prompt: 'Add a usage example.',
+      requestId: 'prompt-poll-1',
+      signal: new AbortController().signal,
+      onSession: (next) => observedStates.push(`${next.state}:${next.proposal ? 'proposal' : 'pending'}`),
+    })
+
+    expect(result.session.state).toBe('completed')
+    expect(result.proposal?.operations[0]?.before).toBe('# Before\n')
+    expect(observedStates[0]).toBe('running:pending')
+    expect(observedStates.at(-1)).toBe('completed:proposal')
+    expect(fetchMock).toHaveBeenCalledTimes(7)
+    const pollUrl = new URL(String(fetchMock.mock.calls[5]?.[0]), 'https://registry.test')
+    expect(pollUrl.pathname).toBe('/v1/drafts/draft-1/builder/session/session-1')
+    expect(pollUrl.searchParams.get('revision')).toBe('4')
+  })
+
+  it('resumes polling for a running session returned by the reload path', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response(session({ state: 'running' })))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ state: 'completed', proposal: proposal() })))
+      .mockResolvedValueOnce(response({ proposals: [proposalWithPreview()] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = createSkillBuilderAdapter()
+    const loaded = await adapter.loadSession({ binding, signal: new AbortController().signal })
+
+    expect(loaded.state).toBe('completed')
+    expect(loaded.proposal?.operations[0]?.after).toBe('# After\n')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('keeps an applied proposal as history when the session has rebound to its new draft', async () => {
+    const reboundBinding = { draftId: binding.draftId, revision: 5, digest: 'sha256:next' as const }
+    const historical = { ...proposal('applied'), baseRevision: binding.revision, baseDigest: binding.digest }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ session: { id: 'session-1', binding: reboundBinding, state: 'completed', turns: [], proposal: historical } }))
+      .mockResolvedValueOnce(response({ session: { id: 'session-1', binding: reboundBinding, state: 'completed', turns: [], proposal: historical } }))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = createSkillBuilderAdapter()
+    const loaded = await adapter.loadSession({ binding: reboundBinding, signal: new AbortController().signal })
+
+    expect(loaded.binding.revision).toBe(5)
+    expect(loaded.proposal?.state).toBe('applied')
+    expect(loaded.proposal?.baseRevision).toBe(4)
+    expect(loaded.proposal?.baseDigest).toBe('sha256:base')
   })
 })

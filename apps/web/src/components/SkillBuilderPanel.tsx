@@ -86,6 +86,8 @@ export interface SkillBuilderPromptInput {
   readonly requestId: string
   readonly signal: AbortSignal
   readonly onProgress?: (progress: SkillBuilderProgress) => void
+  /** Called when the BFF has accepted a prompt before polling completes. */
+  readonly onSession?: (session: SkillBuilderSession) => void
 }
 
 export interface SkillBuilderPromptResult {
@@ -251,11 +253,13 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   const generation = useRef(0)
   const activeRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
   const proposalRequestIds = useRef(new Map<string, string>())
+  const stopRequestIds = useRef(new Map<string, string>())
   const draftRef = useRef<SkillBuilderDraftContext | null>(draft)
   draftRef.current = draft
 
   const bindingKey = contextKey(draft)
-  const busy = loading || sending || stopping || proposalAction !== null
+  const sessionActive = session?.state === 'running'
+  const busy = loading || sending || stopping || proposalAction !== null || sessionActive
   const turns = useMemo(() => (session?.turns ?? []).slice(-MAX_DISPLAYED_TURNS), [session?.turns])
   const effectiveProposal = proposal ?? session?.proposal ?? null
 
@@ -296,6 +300,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     setStopping(false)
     setProposalAction(null)
     proposalRequestIds.current.clear()
+    stopRequestIds.current.clear()
     const currentDraft = draftRef.current
     if (!currentDraft || availability?.enabled !== true) {
       setLoading(false)
@@ -336,6 +341,11 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
         requestId: request.requestId,
         signal: controller.signal,
         onProgress: setProgress,
+        onSession: (next) => {
+          if (currentGeneration !== generation.current || next.id !== session.id) return
+          setSession(next)
+          setProposal(next.proposal ?? null)
+        },
       })
       if (currentGeneration !== generation.current || controller.signal.aborted) return
       setSession(result.session)
@@ -346,7 +356,6 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     } catch (cause: unknown) {
       if (currentGeneration !== generation.current) return
       if (controller.signal.aborted) {
-        setStopped(true)
         setProgress(null)
       } else {
         setError(displayError(cause, 'The builder could not complete that request.'))
@@ -363,13 +372,21 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   async function stopPrompt(): Promise<void> {
     const active = activeRequest.current
     const currentDraft = draft
-    if (!active || !currentDraft || !session || stopping) return
+    if (!currentDraft || !session || (!active && session.state !== 'running') || stopping) return
     const currentGeneration = generation.current
-    const activeRequestId = active.requestId
+    const stopKey = `${contextKey(currentDraft)}:${session.id}`
+    const activeRequestId = active?.requestId ?? stopRequestIds.current.get(stopKey) ?? requestId('stop')
+    stopRequestIds.current.set(stopKey, activeRequestId)
     setStopping(true)
-    active.controller.abort()
+    active?.controller.abort()
+    let confirmed = false
     try {
       await adapter.stop({ binding: currentDraft, sessionId: session.id, requestId: activeRequestId })
+      confirmed = true
+      if (currentGeneration === generation.current) {
+        setSession((current) => current && current.id === session.id ? { ...current, state: 'stopped' } : current)
+        setStopped(true)
+      }
     } catch (cause: unknown) {
       if (currentGeneration === generation.current && !isAbortLike(cause)) setError(displayError(cause, 'The builder could not be stopped.'))
     } finally {
@@ -377,8 +394,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
       if (currentGeneration === generation.current) {
         setSending(false)
         setStopping(false)
-        setProgress(null)
-        setStopped(true)
+        if (confirmed) setProgress(null)
       }
     }
   }
@@ -488,7 +504,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
         <h2>Shape this draft with a conversation.</h2>
         <p className={styles.subtle}>Eve can suggest bounded file changes. You review and apply every proposal.</p>
       </div>
-      <span className={`${styles.status} ${sending ? styles.statusBusy : session.state === 'failed' ? styles.statusError : styles.statusReady}`}>{sending ? 'Working' : session.state}</span>
+      <span className={`${styles.status} ${sending || sessionActive ? styles.statusBusy : session.state === 'failed' ? styles.statusError : styles.statusReady}`}>{sending || sessionActive ? 'Working' : session.state}</span>
     </header>
     <div className={styles.contextBar}>
       <span><strong>Draft</strong> {draft.draftId}</span>
@@ -503,11 +519,11 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
       {stopped && <div className={styles.stopped} role="status">This request was cancelled in the browser. The server may finish it without applying changes; you can retry when ready.</div>}
     </div>
     {effectiveProposal && <ProposalCard proposal={effectiveProposal} busy={proposalAction !== null} canApply={canApply} applyDisabledReason={applyDisabledReason} onApply={() => void applyProposal()} onReject={() => void rejectProposal()} />}
-    {error && <div className={styles.errorNotice} role="alert"><span>{error}</span>{lastRequest && !sending && <button className={styles.retryButton} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
+    {error && <div className={styles.errorNotice} role="alert"><span>{error}</span>{lastRequest && !sending && !sessionActive && <button className={styles.retryButton} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
     <form className={styles.composer} onSubmit={submit}>
       <label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label>
       <textarea id="skill-builder-prompt" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
-      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{sending && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending ? 'Working…' : 'Send prompt'}</button></div></div>
+      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
     </form>
   </section>
 }
