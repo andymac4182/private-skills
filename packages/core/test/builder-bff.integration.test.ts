@@ -91,7 +91,13 @@ interface Fixture {
   releaseFirstModel?: () => void;
 }
 
-async function makeFixture(options: { holdFirstModel?: boolean } = {}): Promise<Fixture> {
+interface FixtureOptions {
+  holdFirstModel?: boolean;
+  providerSessionId?: unknown;
+  streamBody?: string;
+}
+
+async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const state = defaultRegistryState({
     production: false,
     allowUnscanned: true,
@@ -153,8 +159,8 @@ async function makeFixture(options: { holdFirstModel?: boolean } = {}): Promise<
   const auth: Authenticator = {
     authenticate: async (request) => {
       const header = request.headers.get('authorization');
-      if (!header?.startsWith('Bearer ')) return null;
-      return tokens.get(header.slice('Bearer '.length)) ?? null;
+      if (header?.startsWith('Bearer ')) return tokens.get(header.slice('Bearer '.length)) ?? null;
+      return request.headers.get('cookie') === 'pskills-session=publisher-cookie' ? PUBLISHER : null;
     },
   };
 
@@ -219,12 +225,14 @@ async function makeFixture(options: { holdFirstModel?: boolean } = {}): Promise<
       if (proposalResponse.status !== 201 && proposalResponse.status !== 200) {
         return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
       }
-      return Response.json({ sessionId: 'eve-session-1' });
+      return Response.json({ sessionId: options.providerSessionId ?? 'eve-session-1' });
     }
 
-    if (url.startsWith(`${SERVICE_ORIGIN}/eve/v1/session/eve-session-1/stream`)) {
+    const providerSessionIdValue = options.providerSessionId ?? 'eve-session-1';
+    const providerSessionId = encodeURIComponent(typeof providerSessionIdValue === 'string' ? providerSessionIdValue : 'invalid-provider-session');
+    if (url.startsWith(`${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/stream`)) {
       streamCalls += 1;
-      const stream = [
+      const stream = options.streamBody ?? [
         JSON.stringify({
           type: 'message.received',
           meta: { id: 'turn-user', at: '2026-09-10T00:01:00.000Z' },
@@ -242,7 +250,7 @@ async function makeFixture(options: { holdFirstModel?: boolean } = {}): Promise<
       });
     }
 
-    if (url === `${SERVICE_ORIGIN}/eve/v1/session/eve-session-1/cancel`) {
+    if (url === `${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/cancel`) {
       cancellations.push(call);
       return Response.json({ ok: true });
     }
@@ -504,6 +512,87 @@ describe('builder BFF draft contract', () => {
     const stoppedSession = stoppedState.builderSessions?.find((candidate) => candidate.id === session.id);
     expect(stoppedSession).toMatchObject({ state: 'stopped' });
     expect(stoppedSession).not.toHaveProperty('activeTurnId');
+  });
+
+  it('denies cookie-authenticated mutations without same-origin evidence and rejects cross-origin mutations', async () => {
+    const fixture = await makeFixture();
+    const draft = await createReleaseDraft(fixture, 'csrf-draft');
+    const missingOrigin = await request(fixture, `/v1/drafts/${draft.id}/builder/session?${bindingQuery(draft)}`, {
+      method: 'POST',
+      headers: { cookie: 'pskills-session=publisher-cookie' },
+      body: { revision: draft.revision, digest: draft.digest, requestId: 'cookie-no-origin' },
+    });
+    expect(missingOrigin.status).toBe(403);
+    expect((await json(missingOrigin)).code).toBe('CSRF_DENIED');
+
+    const crossOrigin = await request(fixture, `/v1/drafts/${draft.id}/builder/session?${bindingQuery(draft)}`, {
+      method: 'POST',
+      token: 'publisher-token',
+      headers: {
+        origin: 'https://attacker.example.test',
+        'sec-fetch-site': 'cross-site',
+      },
+      body: { revision: draft.revision, digest: draft.digest, requestId: 'cross-origin' },
+    });
+    expect(crossOrigin.status).toBe(403);
+    expect((await json(crossOrigin)).code).toBe('CSRF_DENIED');
+    expect((await fixture.repository.read(ORGANIZATION)).builderSessions ?? []).toHaveLength(0);
+  });
+
+  it('fails closed on malformed or oversized provider session identifiers before opening Eve streams', async () => {
+    const malformed = await makeFixture({ providerSessionId: 123 });
+    const malformedDraft = await createReleaseDraft(malformed, 'malformed-provider-draft');
+    const malformedSession = await createSession(malformed, malformedDraft, 'malformed-provider-session');
+    const malformedResponse = await prompt(malformed, malformedDraft, malformedSession.id, 'malformed-provider-prompt');
+    expect(malformedResponse.status).toBe(502);
+    expect((await json(malformedResponse)).code).toBe('BUILDER_UPSTREAM');
+    expect(malformed.streamCalls).toBe(0);
+
+    const oversized = await makeFixture({ providerSessionId: 's'.repeat(257) });
+    const oversizedDraft = await createReleaseDraft(oversized, 'oversized-provider-draft');
+    const oversizedSession = await createSession(oversized, oversizedDraft, 'oversized-provider-session');
+    const oversizedResponse = await prompt(oversized, oversizedDraft, oversizedSession.id, 'oversized-provider-prompt');
+    expect(oversizedResponse.status).toBe(400);
+    expect((await json(oversizedResponse)).code).toBe('INVALID_REQUEST');
+    expect(oversized.streamCalls).toBe(0);
+  });
+
+  it('does not expose raw Eve stream secrets and bounds oversized stream payloads', async () => {
+    const unsafeStream = [
+      JSON.stringify({
+        type: 'message.received',
+        meta: { id: 'unsafe-user', at: '2026-09-10T00:02:00.000Z' },
+        data: { message: 'safe prompt', turnId: 'turn-1', accessToken: EVE_TOKEN, serviceToken: SERVICE_TOKEN },
+      }),
+      JSON.stringify({
+        type: 'message.completed',
+        meta: { id: 'unsafe-assistant', at: '2026-09-10T00:02:01.000Z' },
+        data: { message: 'safe answer', credential: EVE_TOKEN },
+      }),
+    ].join('\n') + '\n';
+    const fixture = await makeFixture({ streamBody: unsafeStream });
+    const draft = await createReleaseDraft(fixture, 'stream-safety-draft');
+    const session = await createSession(fixture, draft, 'stream-safety-session');
+    const prompted = await prompt(fixture, draft, session.id, 'stream-safety-prompt');
+    expect(prompted.status).toBe(202);
+    const promptedBody = await json(prompted);
+    expect(JSON.stringify(promptedBody)).not.toContain(EVE_TOKEN);
+    expect(JSON.stringify(promptedBody)).not.toContain(SERVICE_TOKEN);
+
+    const stream = await request(fixture, `/v1/drafts/${draft.id}/builder/session/${session.id}/stream?${bindingQuery(draft)}`, { token: 'publisher-token' });
+    expect([404, 405, 200]).toContain(stream.status);
+    if (stream.status === 200) {
+      const body = await stream.text();
+      expect(body).not.toContain(EVE_TOKEN);
+      expect(body).not.toContain(SERVICE_TOKEN);
+    }
+
+    const oversized = await makeFixture({ streamBody: 'x'.repeat(2 * 1024 * 1024 + 1) });
+    const oversizedDraft = await createReleaseDraft(oversized, 'stream-size-draft');
+    const oversizedSession = await createSession(oversized, oversizedDraft, 'stream-size-session');
+    const oversizedPrompt = await prompt(oversized, oversizedDraft, oversizedSession.id, 'stream-size-prompt');
+    expect(oversizedPrompt.status).toBe(502);
+    expect((await json(oversizedPrompt)).code).toBe('BUILDER_UPSTREAM');
   });
 
   it('serializes concurrent proposal apply and reject so one terminal state owns the draft CAS', async () => {
