@@ -13,7 +13,10 @@ as recorded in the sanitized [Git-main
 deployment evidence](evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json).
 The browser UI proof is complete; its Pack-preview window crossed a stable-alias
 deployment cutover, so the exact deployment attribution is recorded as unknown.
-Positive scanner-to-warm evidence and hosted recovery remain open. M6
+A later source-specific production record now proves one snapshot-only
+candidate admission, required-scan approval, isolated CLI install/repeat, and
+install analytics. It does not prove physical GitHub or well-known source
+resolution, direct upstream-zero instrumentation, or hosted recovery. M6
 Diffs/editor plus upload-review Eve and M7 OpenClaw remain
 future milestones.
 
@@ -97,11 +100,46 @@ replay crossed the stable-alias deployment cutover; the manifest deliberately
 leaves its exact deployment/source attribution null. Pack-preview UI proof is
 complete, but it is not promoted as `dpl_8ru…` evidence.
 
+## Snapshot candidate admission and install evidence
+
+Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` from source
+`e6a4b33e3a0077d716ee455e31d8c077839b730b` used the existing `skills-sh` feed
+(`feed_eaa83418-bc50-443c-a3f4-e13792331f28`) and made no feed or policy
+mutation. The authenticated metadata read selected
+`vercel-labs/agent-skills/web-design-guidelines`; its detail returned one
+`SKILL.md` path and no file contents. The [detail record](evidence/production-candidate-web-design-guidelines-detail-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+keeps the provider snapshot hash as opaque metadata.
+
+The [pull-through record](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+records the single cold operation `job_705564e4-e555-41f9-bde6-02aa15a095f1`,
+approved resource `skill_976be6b7-1dc6-4ab0-b64a-e7c7f9192be0`, and artifact
+digest `sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4`.
+The production policy kept `allowUnscanned=false` with SkillGuard required;
+its evidence analyzed one file with zero findings. The server-owned reference
+is `@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines`, so
+this record closes snapshot admission only. The one warm request returned
+HTTP 200 and created no new import operation, but the initial verifier had a
+member-shape assertion bug; the response was not replayed, and the record
+preserves `responseValidated:false` rather than claiming a direct body-shape
+check. The Rust binary was SHA-verified before use; its isolated first install
+changed once, the identical same-root repeat was up to date, `verify` exited
+zero, and analytics increased by two operations, one skill install, and one
+up-to-date check. The [negative record](evidence/production-candidate-web-design-guidelines-negative-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+records unauthenticated `401` and unknown-feed `404 FEED_NOT_FOUND` without an
+accepted import.
+
+The production record does not claim a real external scanner provider beyond
+the deployed SkillGuard result, does not execute candidate content, and does
+not claim zero upstream HTTP calls from a 200 cache response. The prior
+`find-skills` quarantine remains separate negative evidence.
+
 ## Remaining gates
 
-- Prove a clean representative source import through required scanning and a
-  warm approved-cache install. The quarantined CI-004 record proves fail-closed
-  denial, not positive admission.
+- Prove representative physical GitHub and well-known source resolution,
+  concurrent cold deduplication, and direct instrumentation that a warm cache
+  path makes no upstream request. The snapshot candidate record above closes
+  snapshot admission/install/analytics only; the quarantined CI-004 record
+  remains separate fail-closed evidence.
 - Complete hosted Neon/object-storage backup and restore. Native CI admission
   currently stops before any job step with the account payments/spending-limit
   message; no test failure is claimed.

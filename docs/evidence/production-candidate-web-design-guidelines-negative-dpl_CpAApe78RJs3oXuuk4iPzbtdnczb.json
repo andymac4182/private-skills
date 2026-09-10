@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-transparent-candidate-negative",
+  "deployment": {
+    "id": "dpl_CpAApe78RJs3oXuuk4iPzbtdnczb",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "e6a4b33e3a0077d716ee455e31d8c077839b730b"
+  },
+  "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+  "requestPolicy": {
+    "postCount": 2,
+    "mutationAccepted": false,
+    "upstreamImportAccepted": false
+  },
+  "unauthenticated": {
+    "status": 401,
+    "errorCode": "UNAUTHORIZED"
+  },
+  "unknownFeed": {
+    "status": 404,
+    "errorCode": "FEED_NOT_FOUND"
+  },
+  "verified": true
+}

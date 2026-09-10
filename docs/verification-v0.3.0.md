@@ -383,6 +383,18 @@ roadmap features into release blockers.
   `/v1/feeds`, and directory list; feeds are empty and list reports two of
   `total=9738` rows with more available. No production feed setup, source import,
   or CLI installation was exercised, so this does not close C1.
+- **Verified snapshot candidate admission and install:** deployment
+  `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` from source `e6a4b33` used the existing
+  `skills-sh` feed to resolve `vercel-labs/agent-skills/web-design-guidelines`.
+  Required SkillGuard evidence analyzed one file with zero findings while
+  `allowUnscanned=false`; the server returned the snapshot-only reference
+  `@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines`. An
+  isolated Rust CLI install changed once, the identical same-root repeat was
+  up to date, `verify` exited zero, and analytics increased by two operations,
+  one install, and one up-to-date check. The [sanitized candidate evidence](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+  preserves the warm response's HTTP 200/no-new-operation result and its
+  `responseValidated:false` verifier limitation; it does not claim direct
+  zero-upstream instrumentation or physical GitHub/well-known resolution.
 - **E7 implementation, awaiting current browser proof:** source `0f9da75` includes the
   canonical Topics parser, auth-before-hit bounded cache, conflict/drift-aware
   enumeration, and credential-negative tests. The historical E7 deployment
@@ -393,10 +405,11 @@ roadmap features into release blockers.
   the recorded runtime and CLI SHAs, including cold/warm/refresh, feed guards,
   tenant isolation, and fail-closed deterministic scanner behavior. It does not
   prove a hosted deployment, real scanner, current branch, or browser flow.
-- **Pending:** representative GitHub and well-known source pullthrough/import
-  (the restricted-source approval is separate; the isolated CLI folder is only
-  conditionally approved), upstream nested detail availability, local
-  scanner-admission readback, current browser proof for Topics/cache/enumeration,
+- **Pending:** representative physical GitHub and well-known source
+  pullthrough/import, concurrent cold deduplication and direct warm-path
+  upstream instrumentation (the restricted-source approval is separate),
+  upstream nested detail availability, current browser proof for
+  Topics/cache/enumeration,
   metadata-only Packs preview with an operator URL, browser/log credential-negative checks,
   error/rate handling, and tenant/secrecy evidence. No pack preview is claimed
   from the skipped fixture.

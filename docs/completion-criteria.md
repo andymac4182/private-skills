@@ -14,9 +14,12 @@ The latest source, portability, and deployment status is recorded in
 [`verification-current.md`](verification-current.md). The current guarded
 prebuilt rollout is READY and its read-only API/Pack checks are recorded there.
 The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
-and metadata-only Pack preview are partial evidence; they do not mark C1
-complete. Positive scanner-to-warm admission, hosted recovery, and native CI
-remain open. Pack-preview UI proof passed during a
+and metadata-only Pack preview are partial evidence. A later production record
+also closes snapshot-only candidate admission, required scanning, isolated CLI
+install/repeat, and analytics for one selected row; it does not establish
+physical GitHub or well-known source resolution, direct zero-upstream
+instrumentation, or complete C1. Hosted recovery and native CI remain open.
+Pack-preview UI proof passed during a
 stable-alias cutover, but its exact deployment attribution is unknown.
 
 ## G0 — v0.2.0 shipment
@@ -134,6 +137,20 @@ Representative GitHub/well-known pullthrough, scanner admission, warm-cache,
 and concurrent-deduplication evidence remains pending; a conditionally
 approved isolated CLI folder is not import acceptance evidence. Optional source
 restrictions must not become a prerequisite for the default catalog path.
+
+The current production [snapshot candidate record](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+closes the snapshot-admission slice for
+`vercel-labs/agent-skills/web-design-guidelines`: the existing feed and
+fail-closed policy were read back, one cold operation reached approved after
+required SkillGuard evidence, and an isolated original-external-ID CLI install
+and same-root repeat produced the expected analytics delta. Its server
+reference remains `@snapshot/skills-sh/<externalId>`. The one warm request was
+HTTP 200 with no new import operation, while its body-shape assertion was
+preserved as `responseValidated:false` after a verifier mismatch; this record
+does not claim direct zero-upstream instrumentation. The companion
+[negative record](evidence/production-candidate-web-design-guidelines-negative-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+proves unauthenticated and unknown-feed rejection. The prior `find-skills`
+quarantine remains separate negative evidence.
 
 Completion requires all of the following:
 
