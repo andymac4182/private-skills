@@ -828,6 +828,217 @@ describe('skills.sh directory routes', () => {
     expect(await traversal.json()).toHaveProperty('error.code', 'INVALID_REQUEST');
   });
 
+  it('recovers a nested detail route only from a fresh exact row and ignores row snapshot hints', async () => {
+    const id = 'claude-office-skills/skills/facebook/meta-ads';
+    const row = {
+      id,
+      slug: 'facebook/meta-ads',
+      name: 'meta-ads',
+      source: 'claude-office-skills/skills',
+      installs: 240,
+      sourceType: 'github' as const,
+      installUrl: 'https://github.com/claude-office-skills/skills',
+      url: `https://skills.sh/${id}`,
+      // A catalog row is metadata only; a malicious extra field must not be
+      // mistaken for the immutable snapshot pin used by acquisition.
+      hash: 'caller-or-catalog-hint-must-not-be-used',
+    } as unknown as import('../../directory/src/index.js').V1Skill;
+    let detailCalls = 0;
+    let exactCalls = 0;
+    let exactSignal: AbortSignal | undefined;
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async () => {
+        detailCalls += 1;
+        // The adapter reaches this branch only after validating a 200 detail
+        // body and finding its full identity differs from the request.
+        throw new SkillsDirectoryError('invalid_response', 'normalized detail identity mismatch', {
+          detailIdentityMismatch: true,
+        });
+      },
+      findExact: async (requestedId, options) => {
+        exactCalls += 1;
+        exactSignal = options?.signal;
+        expect(requestedId).toBe(id);
+        return row;
+      },
+    };
+    const test = setup(undefined, directory);
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        name: 'nested-catalog',
+        kind: 'skills-sh',
+        namespace: '@team',
+        repositories: ['claude-office-skills/skills'],
+        baseUrl: 'https://skills.sh',
+      }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        id,
+        name: '@team/meta-ads',
+        version: '1.0.0',
+        // The worker source type must come from the revalidated catalog row.
+        externalSourceType: 'well-known',
+      }),
+    }));
+    expect(response.status).toBe(202);
+    expect(detailCalls).toBe(1);
+    expect(exactCalls).toBe(1);
+    expect(exactSignal).toBeDefined();
+    const operation = await response.json() as { operation: { import: Record<string, unknown> } };
+    expect(operation.operation.import).toMatchObject({
+      path: id,
+      externalId: id,
+      repository: 'claude-office-skills/skills',
+      externalSourceType: 'github',
+      externalSnapshotHash: null,
+    });
+    expect(operation.operation.import).not.toHaveProperty('hash');
+  });
+
+  it('does not use exact-row recovery for non-route detail failures', async () => {
+    const failures = [
+      new SkillsDirectoryError('unauthorized', 'unauthorized', { status: 401 }),
+      new SkillsDirectoryError('redirect_denied', 'redirect', { status: 302 }),
+      new SkillsDirectoryError('rate_limited', 'rate limited', { status: 429, retryAfterMs: 25 }),
+      new SkillsDirectoryError('request_timeout', 'timeout'),
+      new SkillsDirectoryError('unavailable', 'unavailable', { status: 503 }),
+      // A generic 400 does not establish that the detail route rejected a
+      // nested path; only the adapter's explicit invalid-path classification
+      // can authorize exact-row recovery.
+      new SkillsDirectoryError('http_error', 'generic bad request', { status: 400 }),
+      new SkillsDirectoryError('invalid_response', 'malformed detail'),
+    ];
+    for (const failure of failures) {
+      const id = 'claude-office-skills/skills/facebook/meta-ads';
+      let exactCalls = 0;
+      const directory: RegistryDirectoryClient = {
+        ...directoryClient(),
+        detail: async () => { throw failure; },
+        findExact: async () => {
+          exactCalls += 1;
+          throw new Error('exact-row fallback must not run');
+        },
+      };
+      const test = setup(undefined, directory);
+      const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+      const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          name: 'nested-catalog',
+          kind: 'skills-sh',
+          namespace: '@team',
+          repositories: ['claude-office-skills/skills'],
+          baseUrl: 'https://skills.sh',
+        }),
+      }));
+      expect(upstreamResponse.status).toBe(201);
+
+      const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ id, name: '@team/meta-ads', version: '1.0.0' }),
+      }));
+      expect(response.status).toBe(503);
+      expect(exactCalls).toBe(0);
+      expect((await test.repository.read()).jobs).toHaveLength(0);
+    }
+  });
+
+  it('does not queue an ordinary GitHub row when a candidate detail fallback lacks a nested slug', async () => {
+    const id = 'owner/repository/meta-ads';
+    let exactCalls = 0;
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async () => {
+        throw new SkillsDirectoryError('not_found', 'detail route unavailable', { status: 404 });
+      },
+      findExact: async () => {
+        exactCalls += 1;
+        return {
+          id,
+          slug: 'meta-ads',
+          name: 'meta-ads',
+          source: 'owner/repository',
+          installs: 1,
+          sourceType: 'github',
+          installUrl: 'https://github.com/owner/repository',
+          url: `https://skills.sh/${id}`,
+        };
+      },
+    };
+    const test = setup(undefined, directory);
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        name: 'ordinary-github-catalog',
+        kind: 'skills-sh',
+        namespace: '@team',
+        repositories: ['owner/repository'],
+        baseUrl: 'https://skills.sh',
+      }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id, name: '@team/meta-ads', version: '1.0.0' }),
+    }));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toHaveProperty('error.code', 'NOT_AVAILABLE');
+    expect(exactCalls).toBe(1);
+    expect((await test.repository.read()).jobs).toHaveLength(0);
+  });
+
+  it('rechecks the selected source allowlist after nested exact-row recovery', async () => {
+    const id = 'other-office/skills/facebook/meta-ads';
+    const directory: RegistryDirectoryClient = {
+      ...directoryClient(),
+      detail: async () => {
+        throw new SkillsDirectoryError('not_found', 'nested detail route unavailable', { status: 404 });
+      },
+      findExact: async () => ({
+        id,
+        slug: 'facebook/meta-ads',
+        name: 'meta-ads',
+        source: 'other-office/skills',
+        installs: 1,
+        sourceType: 'github',
+        installUrl: 'https://github.com/other-office/skills',
+        url: `https://skills.sh/${id}`,
+      }),
+    };
+    const test = setup(undefined, directory);
+    const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };
+    const upstreamResponse = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        name: 'restricted-catalog',
+        kind: 'skills-sh',
+        namespace: '@team',
+        repositories: ['allowed-office/skills'],
+        baseUrl: 'https://skills.sh',
+      }),
+    }));
+    expect(upstreamResponse.status).toBe(201);
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/directory/import`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ id, name: '@team/meta-ads', version: '1.0.0' }),
+    }));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toHaveProperty('error.code', 'NOT_AVAILABLE');
+    expect((await test.repository.read()).jobs).toHaveLength(0);
+  });
+
   it('preflights generic skills.sh imports with the bounded Unicode-safe ID rules', async () => {
     const test = setup();
     const headers = { authorization: 'Bearer user', 'content-type': 'application/json' };

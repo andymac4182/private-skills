@@ -13,6 +13,7 @@ import type {
   SkillListResponse,
   SkillSearchResponse,
 } from '../../directory/src/index.js';
+import { SkillsDirectoryError } from '../../directory/src/index.js';
 import {
   digestBytes,
   encodeBundle,
@@ -346,6 +347,59 @@ describe('transparent directory pull-through', () => {
       operation: { id: expect.any(String) },
     });
     expect((await test.repository.read(ORGANIZATION_ID)).jobs).toHaveLength(1);
+  });
+
+  it('recovers a nested detail route for transparent resolve from a fresh exact row', async () => {
+    const nested = new DirectoryFixture({
+      source: 'claude-office-skills/skills',
+      slug: 'facebook/meta-ads',
+    });
+    const nestedClient = nested as RegistryDirectoryClient;
+    let detailCalls = 0;
+    let exactCalls = 0;
+    nestedClient.detail = async () => {
+      detailCalls += 1;
+      // This is the adapter's signal for a validated detail body whose full
+      // identity differed from the requested nested ID.
+      throw new SkillsDirectoryError('invalid_response', 'normalized detail identity mismatch', {
+        detailIdentityMismatch: true,
+      });
+    };
+    nestedClient.findExact = async (id) => {
+      exactCalls += 1;
+      return {
+        id,
+        slug: 'facebook/meta-ads',
+        name: 'meta-ads',
+        source: 'claude-office-skills/skills',
+        installs: 1,
+        sourceType: 'github',
+        installUrl: 'https://github.com/claude-office-skills/skills',
+        url: `https://skills.sh/${id}`,
+      };
+    };
+    const test = setup({
+      directoryBindings: new Map([['https://skills.sh', nestedClient]]),
+    });
+    await createFeed(test, {
+      repositories: ['claude-office-skills/skills'],
+    });
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: nested.externalId }),
+    }));
+    expect(response.status).toBe(202);
+    expect(detailCalls).toBe(1);
+    expect(exactCalls).toBe(1);
+    expect((await test.repository.read(ORGANIZATION_ID)).jobs[0]?.import).toMatchObject({
+      path: nested.externalId,
+      externalId: nested.externalId,
+      repository: 'claude-office-skills/skills',
+      externalSourceType: 'github',
+      externalSnapshotHash: null,
+    });
   });
 
   it('keeps legacy explicit imports publisher-only', async () => {
