@@ -20,8 +20,8 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 | `POST /auth/revoke` | Revoke the caller's CLI session/token |
 | `GET /v1/skills?q=...` | Search accessible skills, cursor pagination |
 | `GET /v1/skills/{id}/versions` | Authorized version/provenance metadata |
-| `GET /v1/skills/{resourceId}/files` | Authorized immutable release digest and canonical file manifest; full bounded UTF-8 text plus explicit binary/unsupported/oversize preview states; read-only and scanner/policy gated |
-| `GET /v1/skills/{resourceId}/file?path=...` | Authorized exact file read for one canonical relative path; repeats the release/digest binding and returns no content for binary, unsupported, or oversize files |
+| `GET /v1/skills/{resourceId}/files` | Authorized immutable release digest and canonical file manifest with per-file content digests and explicit binary/unsupported/oversize preview states; metadata-only and scanner/policy gated |
+| `GET /v1/skills/{resourceId}/file?path=...` | Authorized exact file read for one canonical relative path; repeats the release/digest binding and returns full bounded UTF-8 text only for that selected file |
 | `POST /v1/resolve` | Resolve `{kind, ref, version?, sourceRevision?}` to pinned resource/member records; `200` resolved or `202` ingestion operation |
 | `POST /v1/imports` | Import approved upstream/source/subdirectory/revision; `202` operation |
 | `POST /v1/proxy/resolve` | Transparent feed resolution for `{feed?, externalId, refresh?}`; response `{feed, externalId, reference, operation \| resolution}`; a `202` operation may omit `reference`, while a `200` resolution includes the verified source reference; both echo the original external ID; server owns internal ID/revision |

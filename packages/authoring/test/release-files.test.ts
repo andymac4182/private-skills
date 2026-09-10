@@ -76,12 +76,15 @@ interface Fixture {
   setPrincipal(value: Principal | null): void;
 }
 
-async function fixture(options: { admitted?: boolean } = {}): Promise<Fixture> {
+async function fixture(options: { admitted?: boolean; manyFiles?: boolean } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const largeText = 'x'.repeat(DEFAULT_RELEASE_TEXT_PREVIEW_BYTES + 1);
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
-    files: [
+    files: options.manyFiles ? Array.from({ length: 100 }, (_, index) => ({
+      path: `nested/path-${String(index).padStart(3, '0')}.md`,
+      content: base64Text(`nested file ${index}\n`),
+    })) : [
       { path: 'SKILL.md', content: base64Text('---\nname: demo\ndescription: Demo skill\n---\n# Demo\n') },
       { path: 'docs/guide.md', content: base64Text('# Guide\n\nExact bytes.\n') },
       { path: 'assets/image.png', content: base64Bytes(new Uint8Array([137, 80, 78, 71, 0, 1, 2])) },
@@ -154,11 +157,11 @@ describe('immutable release file view', () => {
     });
     expect(body.files.find((file: any) => file.path === 'SKILL.md')).toMatchObject({
       previewState: 'text',
-      contents: '---\nname: demo\ndescription: Demo skill\n---\n# Demo\n',
+      contentDigest: await digestBytes(new TextEncoder().encode('---\nname: demo\ndescription: Demo skill\n---\n# Demo\n')),
     });
     expect(body.files.find((file: any) => file.path === 'docs/guide.md')).toMatchObject({
       previewState: 'text',
-      contents: '# Guide\n\nExact bytes.\n',
+      contentDigest: await digestBytes(new TextEncoder().encode('# Guide\n\nExact bytes.\n')),
     });
     expect(body.files.find((file: any) => file.path === 'assets/image.png')).toMatchObject({
       size: 7,
@@ -185,6 +188,7 @@ describe('immutable release file view', () => {
       {
         path: 'docs/guide.md',
         size: 22,
+        contentDigest: await digestBytes(new TextEncoder().encode('# Guide\n\nExact bytes.\n')),
         previewState: 'text',
         contents: '# Guide\n\nExact bytes.\n',
       },
@@ -231,6 +235,26 @@ describe('immutable release file view', () => {
     expect(await json(response)).toEqual({
       error: { code: 'DIGEST_MISMATCH', message: 'Release content failed integrity verification' },
     });
+  });
+
+  it('keeps a large manifest metadata-only until one file is explicitly selected', async () => {
+    const test = await fixture({ manyFiles: true });
+    const response = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/files`));
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body.files).toHaveLength(100);
+    expect(body.files.every((file: any) => file.previewState === 'text')).toBe(true);
+    expect(body.files.every((file: any) => !Object.prototype.hasOwnProperty.call(file, 'contents'))).toBe(true);
+    expect(body.files.every((file: any) => /^sha256:[0-9a-f]{64}$/u.test(file.contentDigest))).toBe(true);
+
+    const selected = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/file?path=nested%2Fpath-042.md`));
+    expect(selected.status).toBe(200);
+    const selectedBody = await json(selected);
+    expect(selectedBody.files).toEqual([expect.objectContaining({
+      path: 'nested/path-042.md',
+      previewState: 'text',
+      contents: 'nested file 42\n',
+    })]);
   });
 
   it('does not create or mutate durable state while reading', async () => {

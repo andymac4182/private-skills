@@ -1,6 +1,7 @@
 import type {
   Authenticator,
   BlobStore,
+  Digest,
   Principal,
   RegistryState,
   SkillVersion,
@@ -21,6 +22,7 @@ export type ReleaseFilePreviewState = 'text' | 'binary' | 'unsupported' | 'overs
 export interface ReleaseFileView {
   path: string;
   size: number;
+  contentDigest: Digest;
   previewState: ReleaseFilePreviewState;
   executable?: boolean;
   /** Full UTF-8 text, present only when previewState is `text`. */
@@ -41,6 +43,7 @@ export interface ReleaseFilesResponse {
 
 export interface AuthoringHandlerConfig {
   organizationId: string;
+  maxBodyBytes?: number;
   maxTextPreviewBytes?: number;
 }
 
@@ -67,15 +70,24 @@ export interface AuthoringHandler {
   (request: Request): Promise<Response>;
 }
 
-class AuthoringApiError extends Error {
+export interface AuthorizedReleaseSnapshot {
+  state: RegistryState;
+  release: SkillVersion;
+  bytes: Uint8Array;
+  bundle: ReturnType<typeof decodeBundle>;
+}
+
+export class AuthoringApiError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: string, message: string, status: number) {
+  constructor(code: string, message: string, status: number, details?: Record<string, unknown>) {
     super(message);
     this.name = 'AuthoringApiError';
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -130,57 +142,18 @@ export function createReleaseFilesHandler(deps: AuthoringHandlerDependencies): A
         throw new AuthoringApiError('INVALID_REQUEST', 'Use the singular file route for a selected path', 400);
       }
 
-      const state = await deps.repository.read(deps.config.organizationId);
-      const release = state.skills.find(
-        (candidate) =>
-          candidate.id === releaseId &&
-          candidate.organizationId === deps.config.organizationId &&
-          canReadNamespace(principal, candidate.name),
-      );
+      const snapshot = await readAuthorizedReleaseSnapshot(deps, principal, releaseId);
+      const { release, bundle } = snapshot;
 
-      // Keep existence, namespace, and admission failures indistinguishable.
-      // In particular, pending/quarantined/revoked releases never reach the
-      // blob store even if the caller knows an internal release id.
-      if (!release || release.state !== 'approved' || release.policyRevision !== state.policy.revision) {
-        throw unavailable();
-      }
-      let admitted = false;
-      try {
-        admitted = await deps.releaseAdmission(state, release, principal);
-      } catch {
-        throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified', 503);
-      }
-      if (!admitted) {
-        throw unavailable();
-      }
-
-      let bytes: Uint8Array;
-      try {
-        bytes = await deps.blobs.get(release.artifact.key);
-      } catch {
-        throw new AuthoringApiError('ARTIFACT_UNAVAILABLE', 'Release content is temporarily unavailable', 503);
-      }
-      const actualDigest = await digestBytes(bytes);
-      if (actualDigest !== release.artifact.digest || bytes.byteLength !== release.artifact.size) {
-        throw new AuthoringApiError('DIGEST_MISMATCH', 'Release content failed integrity verification', 409);
-      }
-      if (!isSha256Digest(release.artifact.digest)) {
-        throw new AuthoringApiError('INTERNAL_STATE_INVALID', 'Release digest is invalid', 500);
-      }
-
-      let bundle;
-      try {
-        bundle = decodeBundle(bytes);
-      } catch {
-        throw new AuthoringApiError('ARTIFACT_INVALID', 'Release content is not a canonical bundle', 409);
-      }
-      if (release.fileCount !== bundle.files.length) {
-        throw new AuthoringApiError('INTERNAL_STATE_INVALID', 'Release file manifest does not match its artifact', 409);
-      }
-
-      const files = bundle.files
+      const files = await Promise.all(bundle.files
         .filter((file) => selectedPath === undefined || file.path === selectedPath)
-        .map((file) => viewFile(file.path, file.content, file.executable === true, maxTextPreviewBytes));
+        .map((file) => viewFile(
+          file.path,
+          file.content,
+          file.executable === true,
+          maxTextPreviewBytes,
+          selectedPath !== undefined,
+        )));
       if (selectedPath !== undefined && files.length === 0) {
         throw unavailable();
       }
@@ -201,6 +174,66 @@ export function createReleaseFilesHandler(deps: AuthoringHandlerDependencies): A
       return errorResponse(error);
     }
   };
+}
+
+/**
+ * Load one approved, policy-admitted release and verify its sealed object.
+ * Draft creation reuses this exact gate so the read-only view and authoring
+ * path cannot drift into separate release authorization rules.
+ */
+export async function readAuthorizedReleaseSnapshot(
+  deps: AuthoringHandlerDependencies,
+  principal: Principal,
+  releaseId: string,
+): Promise<AuthorizedReleaseSnapshot> {
+  const state = await deps.repository.read(deps.config.organizationId);
+  const release = state.skills.find(
+    (candidate) =>
+      candidate.id === releaseId &&
+      candidate.organizationId === deps.config.organizationId &&
+      canReadNamespace(principal, candidate.name),
+  );
+
+  // Keep existence, namespace, and admission failures indistinguishable. In
+  // particular, pending/quarantined/revoked releases never reach the blob
+  // store even if the caller knows an internal release id.
+  if (!release || release.state !== 'approved' || release.policyRevision !== state.policy.revision) {
+    throw unavailable();
+  }
+  let admitted = false;
+  try {
+    admitted = await deps.releaseAdmission(state, release, principal);
+  } catch {
+    throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified', 503);
+  }
+  if (!admitted) {
+    throw unavailable();
+  }
+
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.blobs.get(release.artifact.key);
+  } catch {
+    throw new AuthoringApiError('ARTIFACT_UNAVAILABLE', 'Release content is temporarily unavailable', 503);
+  }
+  const actualDigest = await digestBytes(bytes);
+  if (actualDigest !== release.artifact.digest || bytes.byteLength !== release.artifact.size) {
+    throw new AuthoringApiError('DIGEST_MISMATCH', 'Release content failed integrity verification', 409);
+  }
+  if (!isSha256Digest(release.artifact.digest)) {
+    throw new AuthoringApiError('INTERNAL_STATE_INVALID', 'Release digest is invalid', 500);
+  }
+
+  let bundle: ReturnType<typeof decodeBundle>;
+  try {
+    bundle = decodeBundle(bytes);
+  } catch {
+    throw new AuthoringApiError('ARTIFACT_INVALID', 'Release content is not a canonical bundle', 409);
+  }
+  if (release.fileCount !== bundle.files.length) {
+    throw new AuthoringApiError('INTERNAL_STATE_INVALID', 'Release file manifest does not match its artifact', 409);
+  }
+  return { state, release, bytes, bundle };
 }
 
 function normalizePreviewLimit(value: number | undefined): number {
@@ -248,7 +281,7 @@ function isSafeReleaseId(value: string): boolean {
   return value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f/\\]/u.test(value);
 }
 
-function assertReader(principal: Principal): void {
+export function assertReader(principal: Principal): void {
   const roles = principal.roles;
   if (!Array.isArray(roles)) {
     throw new AuthoringApiError('FORBIDDEN', 'Principal roles are invalid', 403);
@@ -270,7 +303,24 @@ function assertReader(principal: Principal): void {
   }
 }
 
-function canReadNamespace(principal: Principal, name: string): boolean {
+export function assertPublisher(principal: Principal): void {
+  if (!Array.isArray(principal.roles)) {
+    throw new AuthoringApiError('FORBIDDEN', 'Principal roles are invalid', 403);
+  }
+  const identity = (principal as Principal & { identity?: unknown }).identity;
+  if (identity === 'worker' || (!principal.roles.includes('publisher') && !principal.roles.includes('admin') && !principal.roles.includes('owner'))) {
+    throw new AuthoringApiError('FORBIDDEN', 'Publisher role required', 403);
+  }
+  const scopes = (principal as Principal & { scopes?: unknown }).scopes;
+  if (scopes !== undefined && (!Array.isArray(scopes) || scopes.some((scope) => typeof scope !== 'string'))) {
+    throw new AuthoringApiError('FORBIDDEN', 'Principal scopes are invalid', 403);
+  }
+  if (Array.isArray(scopes) && !scopes.includes('*') && !scopes.includes('registry:*') && !scopes.includes('skills:write') && !scopes.includes('skills:publish')) {
+    throw new AuthoringApiError('FORBIDDEN', 'The principal lacks the required scope', 403);
+  }
+}
+
+export function canReadNamespace(principal: Principal, name: string): boolean {
   if (principal.roles.includes('owner') || principal.roles.includes('admin')) return true;
   if (!principal.roles.includes('reader') && !principal.roles.includes('publisher')) return false;
   if (!principal.namespaces || principal.namespaces.length === 0) return true;
@@ -278,11 +328,19 @@ function canReadNamespace(principal: Principal, name: string): boolean {
   return principal.namespaces.some((candidate) => candidate === namespace || candidate === namespace.slice(1));
 }
 
-function viewFile(path: string, encodedContent: string, executable: boolean, maxTextPreviewBytes: number): ReleaseFileView {
+async function viewFile(
+  path: string,
+  encodedContent: string,
+  executable: boolean,
+  maxTextPreviewBytes: number,
+  includeContents: boolean,
+): Promise<ReleaseFileView> {
   const bytes = decodeBase64(encodedContent);
+  const contentDigest = await digestBytes(bytes);
   const base = {
     path,
     size: bytes.byteLength,
+    contentDigest,
     ...(executable ? { executable: true } : {}),
   };
   if (isBinaryPath(path) || bytes.includes(0)) {
@@ -300,7 +358,7 @@ function viewFile(path: string, encodedContent: string, executable: boolean, max
   if (bytes.byteLength > maxTextPreviewBytes) {
     return { ...base, previewState: 'oversize' };
   }
-  return { ...base, previewState: 'text', contents: text };
+  return { ...base, previewState: 'text', ...(includeContents ? { contents: text } : {}) };
 }
 
 function decodeBase64(value: string): Uint8Array {
@@ -340,11 +398,11 @@ function isSupportedTextPath(path: string): boolean {
   return TEXT_FILENAMES.has(basename) || TEXT_EXTENSIONS.has(fileExtension(path));
 }
 
-function unavailable(): AuthoringApiError {
+export function unavailable(): AuthoringApiError {
   return new AuthoringApiError('NOT_FOUND', 'Release is unavailable', 404);
 }
 
-function jsonResponse(value: unknown, status: number, headers: Record<string, string> = {}): Response {
+export function jsonResponse(value: unknown, status: number, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
@@ -354,9 +412,15 @@ function jsonResponse(value: unknown, status: number, headers: Record<string, st
   });
 }
 
-function errorResponse(error: unknown): Response {
+export function errorResponse(error: unknown): Response {
   if (error instanceof AuthoringApiError) {
-    return jsonResponse({ error: { code: error.code, message: error.message } }, error.status, { 'cache-control': 'no-store' });
+    return jsonResponse({
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      },
+    }, error.status, { 'cache-control': 'no-store' });
   }
   return jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'The request could not be completed' } }, 500, { 'cache-control': 'no-store' });
 }
