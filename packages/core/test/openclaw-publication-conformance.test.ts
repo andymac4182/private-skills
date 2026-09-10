@@ -334,6 +334,17 @@ describe('composed OpenClaw publication conformance', () => {
           allowedOrigins: ['https://clawhub.example'],
           fetcher: feedFetcher,
         },
+        currentTrustedMetadata: async () => {
+          const current = await previewOpenClawFeed({
+            url: FEED_URL,
+            expectedFeedId: 'clawhub-official',
+            allowedOrigins: ['https://clawhub.example'],
+            fetcher: feedFetcher,
+          });
+          return current.kind === 'accepted' || current.kind === 'not-modified'
+            ? current.snapshot
+            : undefined;
+        },
         candidatesForTenant: async () => [candidate],
         now: () => NOW,
       },
