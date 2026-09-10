@@ -24,7 +24,7 @@ interface DraftEditorProps {
 }
 
 type DraftFile = SkillBundle['files'][number]
-type ReleaseBaselineEntry = Pick<ReleaseFileView, 'path' | 'previewState' | 'executable'> & { contents?: string }
+type ReleaseBaselineEntry = Pick<ReleaseFileView, 'path' | 'size' | 'previewState' | 'executable'> & { contentDigest?: `sha256:${string}`; contents?: string }
 interface ImmutableReleaseBaseline { entries: ReleaseBaselineEntry[]; files: DraftFile[] }
 type DraftOperation = { draftId: string; revision: number; version?: string; payloadFingerprint: string; key: string }
 interface DraftPersistence { draftId?: string; createKey: string }
@@ -53,6 +53,60 @@ function encodeBase64Text(value: string): string {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary)
+}
+
+interface DigestResult { digest: `sha256:${string}` | null; size: number | null }
+interface DigestTask { content: string; resolve: (result: DigestResult) => void }
+const digestCache = new Map<string, Promise<DigestResult>>()
+const digestQueue: DigestTask[] = []
+let activeDigestTasks = 0
+const MAX_DIGEST_CACHE = 512
+const MAX_ACTIVE_DIGESTS = 8
+
+function decodeBase64Bytes(value: string): Uint8Array | null {
+  try {
+    const binary = atob(value)
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+async function digestBytes(content: string): Promise<DigestResult> {
+  const bytes = decodeBase64Bytes(content)
+  if (!bytes) return { digest: null, size: null }
+  const cryptoApi = typeof globalThis.crypto === 'undefined' ? undefined : globalThis.crypto
+  if (!cryptoApi?.subtle) return { digest: null, size: bytes.byteLength }
+  try {
+    const digest = await cryptoApi.subtle.digest('SHA-256', bytes as unknown as BufferSource)
+    return { digest: `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`, size: bytes.byteLength }
+  } catch {
+    return { digest: null, size: bytes.byteLength }
+  }
+}
+
+function pumpDigestQueue(): void {
+  while (activeDigestTasks < MAX_ACTIVE_DIGESTS && digestQueue.length > 0) {
+    const task = digestQueue.shift()
+    if (!task) return
+    activeDigestTasks += 1
+    void digestBytes(task.content).then(task.resolve).finally(() => {
+      activeDigestTasks -= 1
+      pumpDigestQueue()
+    })
+  }
+}
+
+function digestForContent(content: string): Promise<DigestResult> {
+  const cached = digestCache.get(content)
+  if (cached) return cached
+  const promise = new Promise<DigestResult>((resolve) => { digestQueue.push({ content, resolve }); pumpDigestQueue() })
+  if (digestCache.size >= MAX_DIGEST_CACHE) {
+    const oldest = digestCache.keys().next().value
+    if (typeof oldest === 'string') digestCache.delete(oldest)
+  }
+  digestCache.set(content, promise)
+  return promise
 }
 
 function extensionFor(path: string): string {
@@ -160,7 +214,9 @@ export async function loadImmutableReleaseBaseline(resourceId: string, expectedD
   if (manifest.release.digest !== expectedDigest) throw new Error('The release file manifest changed while opening the draft.')
   const entries = (manifest.files ?? []).map((entry): ReleaseBaselineEntry => ({
     path: entry.path,
+    size: entry.size,
     previewState: entry.previewState,
+    contentDigest: entry.contentDigest,
     ...(entry.executable === undefined ? {} : { executable: entry.executable }),
     ...(typeof entry.contents === 'string' ? { contents: entry.contents } : {}),
   }))
@@ -173,19 +229,22 @@ export async function loadImmutableReleaseBaseline(resourceId: string, expectedD
 function baselineEntriesFromFiles(files: DraftFile[]): ReleaseBaselineEntry[] {
   return files.map((file) => ({
     path: file.path,
+    size: decodeBase64Bytes(file.content)?.byteLength ?? 0,
     previewState: editableText(file) === null ? 'binary' : 'text',
     ...(file.executable === undefined ? {} : { executable: file.executable }),
   }))
 }
 
-export function releaseBaselineStatus(entry: ReleaseBaselineEntry | undefined, baseFile: DraftFile | undefined, currentFile: DraftFile | undefined): DraftSurfaceEntry['status'] {
+export function releaseBaselineStatus(entry: ReleaseBaselineEntry | undefined, baseFile: DraftFile | undefined, currentFile: DraftFile | undefined, currentDigest?: `sha256:${string}` | null, currentSize?: number | null): DraftSurfaceEntry['status'] {
   if (!currentFile) return 'removed'
   if (!entry) return 'added'
-  // The manifest establishes that this path belongs to the immutable release.
-  // A text byte comparison becomes possible after the selected file is loaded;
-  // binary/unsupported files intentionally remain unchanged by metadata alone.
-  if (!baseFile) return 'unchanged'
-  return baseFile.content !== currentFile.content || baseFile.executable !== currentFile.executable ? 'changed' : 'unchanged'
+  if (baseFile) return baseFile.content !== currentFile.content || baseFile.executable !== currentFile.executable ? 'changed' : 'unchanged'
+  if (entry.executable !== currentFile.executable) return 'changed'
+  if (currentDigest === undefined) return 'checking'
+  if (currentDigest === null || !entry.contentDigest) return 'unknown'
+  if (currentDigest !== entry.contentDigest) return 'changed'
+  if (entry.size !== undefined && currentSize !== null && currentSize !== undefined && entry.size !== currentSize) return 'changed'
+  return 'unchanged'
 }
 
 interface ErrorBoundaryProps { fallback: ReactNode; children: ReactNode }
@@ -220,6 +279,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [error, setError] = useState<string | null>(null)
   const [baseLoadingPath, setBaseLoadingPath] = useState<string | null>(null)
   const [baseLoadError, setBaseLoadError] = useState<{ path: string; text: string } | null>(null)
+  const [currentDigests, setCurrentDigests] = useState<Record<string, { content: string; result: DigestResult }>>({})
   const requestGeneration = useRef(0)
   const persistence = useRef<DraftPersistence | null>(null)
   const saveOperation = useRef<DraftOperation | null>(null)
@@ -228,6 +288,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const releaseBaseEntriesRef = useRef<ReleaseBaselineEntry[]>([])
   const releaseBaselineLoadedRef = useRef(false)
   const baseLoadGeneration = useRef(0)
+  const digestGeneration = useRef(0)
   const surfaceRef = useRef<DraftSurfaceHandle | null>(null)
   const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
 
@@ -249,9 +310,11 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       const entry = releaseBaseEntries.find((candidate) => candidate.path === path)
       const base = releaseBaseFiles.find((file) => file.path === path)
       const current = workingFiles.find((file) => file.path === path)
-      return { path, status: releaseBaselineStatus(entry, base, current) }
+      const digest = current ? currentDigests[path] : undefined
+      const currentDigest = current && digest?.content === current.content ? digest : undefined
+      return { path, status: releaseBaselineStatus(entry, base, current, currentDigest?.result.digest, currentDigest?.result.size) }
     })
-  }, [releaseBaseEntries, releaseBaseFiles, workingFiles])
+  }, [currentDigests, releaseBaseEntries, releaseBaseFiles, workingFiles])
   const hasFileChanges = draft !== null && !filesEqual(savedFiles, workingFiles)
   const liveText = useMemo(() => surfaceRef.current?.readCurrent(), [selectedPath, selectedText, surfaceRevision])
   const hasLiveEdit = mode === 'edit' && selectedIsEditable && liveText !== null && liveText !== selectedText
@@ -355,6 +418,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setError(null)
     setBaseLoadingPath(null)
     setBaseLoadError(null)
+    setCurrentDigests({})
     setResuming(true)
     persistence.current = readPersistence(storageKey)
     saveOperation.current = null
@@ -443,6 +507,28 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       if (generation === baseLoadGeneration.current) baseLoadGeneration.current += 1
     }
   }, [baseDigest, releaseBaseFiles, resourceId, selectedBaseEntry, selectedBasePath])
+
+  useEffect(() => {
+    const generation = ++digestGeneration.current
+    const baselinePaths = new Set(releaseBaseEntries.map((entry) => entry.path))
+    setCurrentDigests({})
+    for (const file of workingFiles) {
+      if (!baselinePaths.has(file.path)) continue
+      const path = file.path
+      const content = file.content
+      void digestForContent(content).then((result) => {
+        if (generation !== digestGeneration.current) return
+        setCurrentDigests((current) => {
+          const previous = current[path]
+          if (previous?.content === content && previous.result.digest === result.digest && previous.result.size === result.size) return current
+          return { ...current, [path]: { content, result } }
+        })
+      })
+    }
+    return () => {
+      if (generation === digestGeneration.current) digestGeneration.current += 1
+    }
+  }, [releaseBaseEntries, workingFiles])
 
   useEffect(() => {
     if (closeRequest > 0) requestClose()

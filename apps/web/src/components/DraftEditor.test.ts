@@ -60,6 +60,8 @@ describe('immutable release baseline loading', () => {
     const baseline = await loadImmutableReleaseBaseline('resource-1', 'sha256:release', new AbortController().signal)
 
     expect(baseline.entries.map((entry) => entry.path)).toEqual(['SKILL.md', 'assets/logo.bin', 'LICENSE', 'README.md'])
+    expect(baseline.entries[0]).toMatchObject({ size: 128, contentDigest: 'sha256:skill' })
+    expect(baseline.entries[1]).toMatchObject({ size: 16, contentDigest: 'sha256:binary' })
     expect(baseline.files).toEqual([{ path: 'README.md', content: 'cmVhZA==' }])
     expect(releaseFile).not.toHaveBeenCalled()
   })
@@ -69,10 +71,20 @@ describe('immutable release baseline loading', () => {
     const textBase = { path: 'SKILL.md', content: 'b2xk' }
     const textCurrent = { path: 'SKILL.md', content: 'bmV3' }
 
-    expect(releaseBaselineStatus({ path: 'assets/logo.bin', previewState: 'binary' }, undefined, binary)).toBe('unchanged')
-    expect(releaseBaselineStatus({ path: 'SKILL.md', previewState: 'text' }, undefined, textBase)).toBe('unchanged')
+    expect(releaseBaselineStatus({ path: 'assets/logo.bin', size: 1, contentDigest: 'sha256:binary', previewState: 'binary' }, undefined, binary, 'sha256:binary', 1)).toBe('unchanged')
+    expect(releaseBaselineStatus({ path: 'SKILL.md', size: 3, contentDigest: 'sha256:original', previewState: 'text' }, undefined, textBase, undefined, undefined)).toBe('checking')
     expect(releaseBaselineStatus(undefined, undefined, { path: 'new.md', content: 'bmV3' })).toBe('added')
-    expect(releaseBaselineStatus({ path: 'removed.md', previewState: 'unsupported' }, undefined, undefined)).toBe('removed')
-    expect(releaseBaselineStatus({ path: 'SKILL.md', previewState: 'text' }, textBase, textCurrent)).toBe('changed')
+    expect(releaseBaselineStatus({ path: 'removed.md', size: 0, contentDigest: 'sha256:removed', previewState: 'unsupported' }, undefined, undefined)).toBe('removed')
+    expect(releaseBaselineStatus({ path: 'SKILL.md', size: 3, contentDigest: 'sha256:original', previewState: 'text' }, undefined, textBase, 'sha256:original', 3)).toBe('unchanged')
+    expect(releaseBaselineStatus({ path: 'SKILL.md', size: 3, contentDigest: 'sha256:original', previewState: 'text' }, undefined, textCurrent, 'sha256:new', 3)).toBe('changed')
+  })
+
+  it('marks a resumed replacement as changed without loading its release bytes', () => {
+    const manifestEntry = { path: 'SKILL.md', size: 3, contentDigest: 'sha256:release' as const, previewState: 'text' as const }
+    const resumedText = { path: 'SKILL.md', content: 'bmV3' }
+    const originalBinary = { path: 'assets/logo.bin', content: 'AA==' }
+    expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:draft', 3)).toBe('changed')
+    expect(releaseBaselineStatus({ path: 'assets/logo.bin', size: 1, contentDigest: 'sha256:binary', previewState: 'binary' }, undefined, originalBinary, 'sha256:binary', 1)).toBe('unchanged')
+    expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:release', 3)).toBe('unchanged')
   })
 })

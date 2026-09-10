@@ -10,7 +10,7 @@ type DraftFile = SkillBundle['files'][number]
 
 export interface DraftSurfaceEntry {
   path: string
-  status: 'added' | 'changed' | 'removed' | 'unchanged'
+  status: 'added' | 'changed' | 'removed' | 'unchanged' | 'checking' | 'unknown'
 }
 
 export interface DraftSurfaceHandle {
@@ -94,7 +94,7 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
   return <div className="draft-surface">
     <div className="draft-surface-tree" aria-label="Draft files">
       <FileTree header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
-      {entries.length > 0 && <div className="draft-surface-tree-status"><span>{entries.filter((entry) => entry.status !== 'unchanged').length} changed</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
+      {entries.length > 0 && <div className="draft-surface-tree-status"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
     </div>
     <div className="draft-surface-code">
       {baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
