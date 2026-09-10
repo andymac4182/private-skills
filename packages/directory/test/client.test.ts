@@ -424,6 +424,36 @@ describe('SkillsDirectoryClient', () => {
     expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 1, stores: 1, entries: 1, totalBytes: expect.any(Number) });
   });
 
+  it('does not cache detail snapshots while keeping each request authenticated', async () => {
+    let responseNumber = 0;
+    const getToken = vi.fn(async () => `detail-token-${responseNumber + 1}`);
+    const fetch = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string>).authorization;
+      const current = responseNumber;
+      responseNumber += 1;
+      expect(authorization).toBe(`Bearer detail-token-${current + 1}`);
+      return response({
+        id: skill.id,
+        source: skill.source,
+        slug: skill.slug,
+        installs: current + 1,
+        hash: current === 0 ? 'snapshot-one' : null,
+        files: current === 0 ? [{ path: 'SKILL.md', contents: '---\nname: find-skills\ndescription: first snapshot\n---\n' }] : null,
+      });
+    });
+    const client = new SkillsDirectoryClient({ fetch, getToken });
+
+    const first = await client.detail(skill.id);
+    const second = await client.detail(skill.id);
+
+    expect(first.files?.[0]?.contents).toContain('first snapshot');
+    expect(second.files).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(getToken).toHaveBeenCalledTimes(2);
+    expect(client.cacheStats()).toMatchObject({ hits: 0, misses: 0, stores: 0, entries: 0, totalBytes: 0 });
+    expect(client.cacheStats()?.cached).toEqual([]);
+  });
+
   it('fails a warm lookup when its fresh credential provider fails', async () => {
     let unavailable = false;
     const getToken = vi.fn(async () => {
