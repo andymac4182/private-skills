@@ -5,6 +5,7 @@ import { shortDigest } from '../lib/format'
 import { useAuth } from '../lib/auth'
 import type {
   Job,
+  DirectoryFeed,
   SkillDetailResponse,
   SkillSearchResponse,
   SkillView,
@@ -37,8 +38,13 @@ export function DirectoryView() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [detailDisconnected, setDetailDisconnected] = useState(false)
+  const [feeds, setFeeds] = useState<DirectoryFeed[] | null>(null)
+  const [feedsLoading, setFeedsLoading] = useState(true)
+  const [feedsError, setFeedsError] = useState<string | null>(null)
+  const [selectedFeedName, setSelectedFeedName] = useState('')
   const loadGeneration = useRef(0)
   const detailGeneration = useRef(0)
+  const feedGeneration = useRef(0)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -50,6 +56,26 @@ export function DirectoryView() {
     }
     setTopicReady(true)
   }, [])
+
+  async function loadFeeds() {
+    const generation = ++feedGeneration.current
+    setFeedsLoading(true)
+    setFeedsError(null)
+    try {
+      const response = await api.feeds()
+      if (generation !== feedGeneration.current) return
+      setFeeds(response.feeds)
+      setSelectedFeedName((current) => response.feeds.some((feed) => feed.name === current)
+        ? current
+        : response.feeds.find((feed) => feed.enabled)?.name ?? response.feeds[0]?.name ?? '')
+    } catch (cause) {
+      if (generation !== feedGeneration.current) return
+      setFeeds(null)
+      setFeedsError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load configured source feeds.')
+    } finally {
+      if (generation === feedGeneration.current) setFeedsLoading(false)
+    }
+  }
 
   async function load() {
     const generation = ++loadGeneration.current
@@ -84,6 +110,7 @@ export function DirectoryView() {
     }
   }
 
+  useEffect(() => { if (topicReady) void loadFeeds() }, [topicReady])
   useEffect(() => { if (topicReady) void load() }, [page, submittedQuery, topicReady, view])
 
   async function inspect(skill: V1Skill) {
@@ -183,13 +210,17 @@ export function DirectoryView() {
         <div className="directory-search-row"><input id="directory-search" onChange={(event) => setQuery(event.target.value)} placeholder="Search by skill, source, or description" value={query} /><Button type="submit">Search</Button>{submittedQuery && <Button kind="quiet" type="button" onClick={() => { setQuery(''); setSubmittedQuery(''); setPage(0) }}>Clear</Button>}</div>
         <small>Search results are a bounded upstream result set, not a complete catalog enumeration.</small>
       </form>
+      <div className="directory-feed-control">
+        <label className="directory-search-label" htmlFor="directory-feed">Source discovery feed</label>
+        {feedsLoading ? <small>Loading discovery feed configuration…</small> : feedsError ? <Notice kind="warning">Discovery feed configuration is unavailable. Source requests stay disabled until the registry responds.</Notice> : feeds && feeds.length > 0 ? <><select id="directory-feed" onChange={(event) => setSelectedFeedName(event.target.value)} value={selectedFeedName}>{feeds.map((feed) => <option key={feed.id} value={feed.name}>{feed.name} · {feed.kind}{feed.enabled ? '' : ' · disabled'}</option>)}</select><small>{feeds.find((feed) => feed.name === selectedFeedName)?.enabled ? 'Choose which configured feed discovers this source. The server returns its canonical source reference after resolution.' : 'This discovery feed is disabled for new source requests.'}</small></> : <Notice kind="warning">No source discovery feed is configured. Browse remains available; source requests stay disabled.</Notice>}
+      </div>
     </Panel>
     {disconnected ? <DisconnectedState title="Cloud directory is disconnected" message="The public skills.sh connection is not configured for this registry. Your private catalog, packs, and policy remain available." action={<a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>} /> : error && <ErrorState message={error} onRetry={() => void load()} />}
     <Panel title={submittedQuery ? `Search results for “${submittedQuery}”` : `${browseViews.find((item) => item.id === view)?.label} skills`} description={resultDescription}>
       {loading ? <LoadingState label="Loading cloud metadata…" /> : disconnected ? <Notice kind="info">Directory results are paused until the public source connection is configured.</Notice> : error ? <Notice kind="warning">No directory results are shown while the source is unavailable.</Notice> : skills.length === 0 ? <EmptyState title={submittedQuery ? 'No cloud matches' : 'No skills on this page'} description={submittedQuery ? 'Try a broader source or skill description.' : 'The directory returned no rows for this page.'} /> : <div className="directory-grid">{skills.map((skill) => <DirectorySkillCard key={skill.id} skill={skill} selected={selected?.id === skill.id} onInspect={() => void inspect(skill)} />)}</div>}
       {!submittedQuery && list && <DirectoryPagination pagination={list.pagination} page={page} onPageChange={(nextPage) => { setPage(nextPage); setSelected(null); setDetail(null) }} />}
     </Panel>
-    {selected && <DirectoryDetailPanel key={selected.id} detail={detail} detailDisconnected={detailDisconnected} detailError={detailError} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
+    {selected && <DirectoryDetailPanel key={`${selected.id}:${selectedFeedName || 'unknown'}`} detail={detail} detailDisconnected={detailDisconnected} detailError={detailError} feedsError={feedsError} feedsLoading={feedsLoading} feed={feeds?.find((candidate) => candidate.name === selectedFeedName) ?? null} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
   </div>
 }
 
@@ -212,25 +243,34 @@ function DirectoryPagination({ pagination, page, onPageChange }: { pagination: D
   return <div className="directory-pagination"><span>Page {pagination.page + 1} of {totalPages} · {formatNumber(pagination.total)} total rows</span><div className="row-actions"><Button disabled={page <= 0} kind="quiet" type="button" onClick={() => onPageChange(Math.max(0, page - 1))}>Previous</Button><Button disabled={!pagination.hasMore} kind="secondary" type="button" onClick={() => onPageChange(page + 1)}>Next</Button></div></div>
 }
 
-function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailDisconnected: boolean; detailError: string | null; loading: boolean; selected: V1Skill; onRetry: () => void }) {
+function DirectoryDetailPanel({ detail, detailDisconnected, detailError, feed, feedsError, feedsLoading, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailDisconnected: boolean; detailError: string | null; feed: DirectoryFeed | null; feedsError: string | null; feedsLoading: boolean; loading: boolean; selected: V1Skill; onRetry: () => void }) {
   const navigate = useNavigate()
   const { principal } = useAuth()
   const [busy, setBusy] = useState(false)
   const [operation, setOperation] = useState<Job | null>(null)
   const [ready, setReady] = useState(false)
+  const [reference, setReference] = useState<string | null>(null)
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
-  const canImport = principal?.roles.some((role) => role === 'owner' || role === 'admin' || role === 'publisher') ?? false
+  const hasReaderRole = principal?.roles.some((role) => role === 'reader' || role === 'owner' || role === 'admin' || role === 'publisher') ?? false
+  const canImport = hasReaderRole && !feedsLoading && !feedsError && feed?.enabled === true
 
   async function requestProxy(refresh = false) {
+    if (!feed) {
+      setMessage({ kind: 'error', text: 'Choose a configured import feed before requesting this source.' })
+      return
+    }
     setBusy(true)
     setMessage(null)
     setOperation(null)
     setReady(false)
+    setReference(null)
     try {
-      const response = await api.proxyResolve({ externalId: selected.id, ...(refresh ? { refresh: true } : {}) })
-      if (response.externalId !== selected.id) {
-        setMessage({ kind: 'error', text: 'The registry returned a different external identity, so this request was not accepted.' })
+      const response = await api.proxyResolve({ feed: feed.name, externalId: selected.id, ...(refresh ? { refresh: true } : {}) })
+      const canonicalReference = verifiedSourceReference(response.reference)
+      if (response.feed !== feed.name || response.externalId !== selected.id || (response.reference !== undefined && !canonicalReference)) {
+        setMessage({ kind: 'error', text: 'The registry returned a different feed or external identity, so this request was not accepted.' })
       } else if (response.operation) {
+        setReference(canonicalReference)
         setOperation(response.operation)
         if (response.operation.state === 'failed') {
           setMessage({ kind: 'error', text: response.operation.error ?? 'The registry operation failed before this source became ready.' })
@@ -239,9 +279,12 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading
         } else {
           setMessage({ kind: 'success', text: `The registry is fetching, scanning, and caching ${response.externalId}.` })
         }
-      } else if (response.resolution) {
+      } else if (response.resolution && canonicalReference) {
+        setReference(canonicalReference)
         setReady(true)
-        setMessage({ kind: 'success', text: `This source is ready through the private registry. The original skills.sh ID remains the install identity.` })
+        setMessage({ kind: 'success', text: 'This source is ready through the private registry. Use the original catalog ID and selected feed to install it.' })
+      } else if (response.resolution) {
+        setMessage({ kind: 'error', text: 'The registry returned a resolution without a verified canonical source reference.' })
       } else {
         setMessage({ kind: 'error', text: 'The registry returned no operation or approved resolution for this source.' })
       }
@@ -267,13 +310,18 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading
           setMessage({ kind: 'error', text: response.operation.error ?? 'The registry operation failed before this source became ready.' })
         } else if (response.operation.state === 'completed') {
           try {
-            const resolved = await api.proxyResolve({ externalId: selected.id })
-            if (!stopped && resolved.externalId !== selected.id) {
+            const resolved = await api.proxyResolve({ feed: feed?.name ?? '', externalId: selected.id })
+            const canonicalReference = verifiedSourceReference(resolved.reference)
+            if (!stopped && (resolved.feed !== feed?.name || resolved.externalId !== selected.id || !feed || (resolved.reference !== undefined && !canonicalReference))) {
               setReady(false)
-              setMessage({ kind: 'error', text: 'The registry returned a different external identity, so readiness was not claimed.' })
-            } else if (!stopped && resolved.resolution) {
+              setMessage({ kind: 'error', text: 'The registry returned a different feed or external identity, so readiness was not claimed.' })
+            } else if (!stopped && resolved.resolution && canonicalReference) {
+              setReference(canonicalReference)
               setReady(true)
-              setMessage({ kind: 'success', text: 'The source passed the registry flow and is ready to install by its original skills.sh ID.' })
+              setMessage({ kind: 'success', text: 'The source passed the registry flow and is ready to install with the original catalog ID.' })
+            } else if (!stopped && resolved.resolution) {
+              setReady(false)
+              setMessage({ kind: 'error', text: 'The source completed without a verified canonical source reference.' })
             } else if (!stopped) {
               setMessage({ kind: 'error', text: 'The registry operation completed without an approved resolution.' })
             }
@@ -301,8 +349,15 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading
       <div className="detail-heading"><div><span className="eyebrow eyebrow-cloud">skills.sh listing</span><h2>{selected.name}</h2><p>{selected.source}/{selected.slug}</p></div><Badge value={detail.files === null ? 'metadata-only' : 'snapshot-available'} /></div>
       <div className="detail-meta"><div className="meta-row"><span>External ID</span><span>{detail.id}</span></div><div className="meta-row"><span>Source type</span><span>{selected.sourceType === 'github' ? 'GitHub' : 'Well-known provider'}</span></div><div className="meta-row"><span>skills.sh installs</span><span>{formatNumber(detail.installs)}</span></div><div className="meta-row"><span>External snapshot hash</span><span>{detail.hash ? shortDigest(detail.hash) : 'Unavailable'}</span></div></div>
       {detail.files === null ? <Notice kind="info">This row has metadata only. The first request below asks the registry to resolve the source, retain the external identity, scan the bytes, and cache the result.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Snapshot files</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · text is retained as source data</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
-    </div><div className="directory-import"><h3 className="subheading">Use this skill privately</h3><p className="helper">The original skills.sh ID is the source identity. No rename, version, or source mapping is required here; the registry fetches, scans, and caches it on the first request.</p><div className="proxy-identity"><span>External skill ID</span><code>{selected.id}</code></div>{message && <Notice kind={message.kind}>{message.text}</Notice>}{operation && <div className="proxy-operation"><div className="meta-row"><span>Registry operation</span><Badge value={operation.state} /></div><div className="meta-row"><span>Operation ID</span><code>{operation.id}</code></div>{operation.error && <Notice kind="error">{operation.error}</Notice>}</div>}{ready && <Notice kind="success">Approved resolution available through this registry.</Notice>}{!canImport && <Notice kind="warning">Your role cannot request a private source resolution.</Notice>}<div className="proxy-actions"><Button busy={busy} disabled={!canImport} type="button" onClick={() => void requestProxy()}>{ready ? 'Check source again' : 'Fetch and check source'}</Button>{ready && <Button busy={busy} disabled={!canImport} kind="quiet" type="button" onClick={() => void requestProxy(true)}>Refresh source</Button>}</div><div className="proxy-command"><span className="helper">CLI command using the configured private registry</span><code>pskills install {selected.id} --registry {registryOrigin()} --agent codex</code><span className="helper">The command keeps this same external ID and waits for the registry’s scanner and policy state.</span></div>{operation && <Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link>}</div></div>}
+    </div><div className="directory-import"><h3 className="subheading">Use this skill privately</h3><p className="helper">The catalog ID below is the source identity while the registry resolves it. No rename, version, or mapping form is required; the registry fetches, scans, and caches it on the first request.</p><div className="proxy-identity"><span>Catalog source ID</span><code>{selected.id}</code></div>{reference && <div className="proxy-reference"><span>Verified source reference</span><code>{reference}</code></div>}{message && <Notice kind={message.kind}>{message.text}</Notice>}{operation && <div className="proxy-operation"><div className="meta-row"><span>Registry operation</span><Badge value={operation.state} /></div><div className="meta-row"><span>Operation ID</span><code>{operation.id}</code></div>{operation.error && <Notice kind="error">{operation.error}</Notice>}</div>}{ready && <Notice kind="success">Approved resolution available through this registry.</Notice>}{feedsLoading && <Notice kind="info">Loading configured discovery feeds…</Notice>}{!feedsLoading && feedsError && <Notice kind="warning">Discovery feed configuration is unavailable; source requests stay disabled.</Notice>}{!feedsLoading && !feedsError && !feed && <Notice kind="warning">No matching discovery feed is available for this source.</Notice>}{!feedsLoading && !feedsError && feed && !feed.enabled && <Notice kind="warning">This discovery feed is disabled for new source requests.</Notice>}{!feedsLoading && !feedsError && feed?.enabled && !hasReaderRole && <Notice kind="warning">Your role cannot request a private source resolution.</Notice>}<div className="proxy-actions"><Button busy={busy} disabled={!canImport} type="button" onClick={() => void requestProxy()}>{ready ? 'Check source again' : 'Fetch and check source'}</Button>{ready && <Button busy={busy} disabled={!canImport} kind="quiet" type="button" onClick={() => void requestProxy(true)}>Refresh source</Button>}</div><div className="proxy-command"><span className="helper">{ready && reference ? 'CLI command using the configured private registry' : 'Canonical source reference pending'}</span>{ready && reference ? <code>pskills install {selected.id} --feed {feed?.name ?? ''} --registry {registryOrigin()} --agent codex</code> : <div className="proxy-command-pending"><code>{selected.id}</code><span className="helper">Request the source to receive its canonical registry reference before installing.</span></div>}<span className="helper">{ready && reference ? 'Install uses this catalog ID with the selected discovery feed; the verified source reference above records what the registry resolved.' : 'The catalog ID remains visible while the registry fetches, scans, and caches the source.'}</span></div>{operation && <Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link>}</div></div>}
   </Panel>
+}
+
+function verifiedSourceReference(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length < 4 || value.length > 2_048 || !value.startsWith('@') || /[\u0000-\u001f\u007f\\?#%\s]/u.test(value)) return null
+  const parts = value.slice(1).split('/')
+  if (parts.length < 2 || !['github', 'web', 'snapshot'].includes(parts[0] ?? '') || parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._~-]+$/u.test(part))) return null
+  return value
 }
 
 function registryOrigin() {

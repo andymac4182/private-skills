@@ -376,6 +376,8 @@ tr.row-selected td { background: #f4f8f3; }
 .directory-search-row { display: flex; align-items: center; gap: 8px; }
 .directory-search-row input { flex: 1; min-width: 0; }
 .directory-search small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.directory-feed-control { display: grid; max-width: 520px; gap: 8px; }
+.directory-feed-control select { min-width: 0; }
 .directory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; padding: 20px; }
 .directory-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); transition: border-color .15s, box-shadow .15s, transform .15s; }
 .directory-card:hover, .directory-card-selected { border-color: #c9bbed; box-shadow: 0 8px 22px rgba(98, 71, 161, .1); transform: translateY(-1px); }
@@ -410,10 +412,13 @@ tr.row-selected td { background: #f4f8f3; }
 .proxy-identity { margin-top: 15px; padding: 11px 12px; border: 1px solid #ded2fb; border-radius: 9px; background: rgba(255, 255, 255, .72); color: var(--muted); font-size: 10px; }
 .proxy-identity code, .proxy-operation code, .proxy-command code { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .proxy-identity code { color: var(--ink); font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.proxy-reference { display: grid; min-width: 0; gap: 7px; margin-top: 10px; padding: 11px 12px; border: 1px solid #cfe4d2; border-radius: 9px; background: rgba(248, 255, 248, .86); color: var(--muted); font-size: 10px; }
+.proxy-reference code { min-width: 0; color: var(--ink); overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .proxy-operation { margin-top: 14px; padding: 12px; border: 1px solid #ded2fb; border-radius: 9px; background: rgba(255, 255, 255, .58); }
 .proxy-actions { display: grid; gap: 8px; margin-top: 14px; }
 .proxy-command { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ded2fb; }
 .proxy-command code { padding: 10px; border: 1px solid #d8d0ee; border-radius: 8px; background: rgba(255, 255, 255, .78); color: var(--ink); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.proxy-command-pending { display: grid; min-width: 0; gap: 7px; }
 .directory-import > a { display: inline-block; margin-top: 13px; }
 .directory-summary { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 15px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 11px; }
 .directory-summary strong { margin-right: 4px; color: var(--ink); font-size: 19px; letter-spacing: -.04em; }

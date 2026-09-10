@@ -91,8 +91,20 @@ export interface ScanActionResponse { operation?: Job; skill?: SkillVersion }
 export interface PackCreateResponse { pack: PackVersion }
 export interface UpstreamResponse { upstream: Upstream }
 export interface ImportResponse { operation: Job }
+export interface DirectoryFeed {
+  id: string
+  name: string
+  kind: 'skills-sh'
+  enabled: boolean
+  configRevision: string
+  repositories?: string[]
+  baseUrl: string
+}
+export interface FeedListResponse { feeds: DirectoryFeed[] }
 export interface ProxyResolveResponse {
+  feed: string
   externalId: string
+  reference?: string
   operation?: Job
   resolution?: Resolution
 }
