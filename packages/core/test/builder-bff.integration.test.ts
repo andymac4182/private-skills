@@ -198,6 +198,8 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
         revision?: number;
         digest?: string;
         message?: string;
+        requestId?: string;
+        requestDigest?: string;
       };
       const current = await repository.read(ORGANIZATION);
       const session = current.builderSessions?.find((candidate) => candidate.sessionKey === payload.sessionKey);
@@ -227,7 +229,14 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
       if (proposalResponse.status !== 201 && proposalResponse.status !== 200) {
         return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
       }
-      return Response.json({ sessionId: options.providerSessionId ?? 'eve-session-1' });
+      return Response.json({
+        sessionId: options.providerSessionId ?? 'eve-session-1',
+        draftId: payload.draftId,
+        revision: payload.revision,
+        digest: payload.digest,
+        requestId: payload.requestId,
+        requestDigest: payload.requestDigest,
+      });
     }
 
     const providerSessionIdValue = options.providerSessionId ?? 'eve-session-1';
@@ -254,7 +263,7 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
 
     if (url === `${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/cancel`) {
       cancellations.push(call);
-      return Response.json({ ok: true });
+      return Response.json({ ok: true, status: 'accepted' });
     }
 
     return Response.json({ error: 'unexpected-upstream-request' }, { status: 404 });
