@@ -54,7 +54,11 @@ digest/size-verified target objects, and post-restore target cleanup. The copy
 window uses operator-quiescence attestation and does not claim a provider
 lifecycle guarantee or restored-origin health/scanner run. The earlier PR32
 activation and PR30 read-only records retain their own source/deployment
-provenance below.
+provenance below. The current source-34e4f56 local [Compose reproducibility
+proof](evidence/local-compose-required-scan-34e4f56.json) and [source-built CLI
+proof](evidence/transparent-proxy-cli-evidence-1789055769960.json) close the
+earlier dependency-alignment and unattested-build-source qualifications while
+retaining their local transport, scanner, native-CI, and syscall-capture limits.
 
 ## Recorded local required-scan portability proof
 
@@ -103,7 +107,7 @@ publication, feed activation, scanner admission, or hosted production
 acceptance. The adapter behavior was checked against tested registry commit
 `0ab50abcaf4bc7f924bdeb501d78462f4c16497b`.
 
-## Recorded local transparent-proxy CLI fixture
+## Historical local transparent-proxy CLI fixture
 
 The sanitized [CLI fixture record](evidence/transparent-proxy-cli-evidence-1789051607574.json)
 is a verified local HTTP plus Files SDK filesystem and deterministic-scanner
@@ -126,7 +130,23 @@ This is local fixture evidence, not native CLI syscall tracing, native CI,
 Docker scanner execution, or production acceptance. It does not establish
 hosted source availability or a separately attested CLI build source.
 
-## Recorded local Compose required-scan proof
+## Recorded PR34 source-built transparent-proxy CLI fixture
+
+As of source commit `34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`, the sanitized
+[source-built CLI record](evidence/transparent-proxy-cli-evidence-1789055769960.json)
+attests a locked offline Cargo build of `pskills 0.3.0` for Darwin/arm64. The
+binary SHA-256, Cargo lockfile SHA-256, verifier SHA-256, and exact build-source
+commit are retained. The local fixture listed three feeds, exercised unknown and
+disabled-feed guards, completed two cold installs, required-scan failure and
+rescan behavior, and completed a warm repeat with exit 0. The source-origin
+boundary counted 38 attempts before and after the warm stop (delta zero), then
+zero attempts after the source server stopped; warm import jobs remained 6 → 6.
+
+This remains deterministic local scanner-fixture evidence using a local HTTP
+origin and Files SDK filesystem adapter. It does not prove native CLI syscall
+capture, Windows/Linux CI, hosted source availability, or production acceptance.
+
+## Historical local Compose required-scan proof
 
 As of `2026-09-10T14:50:30Z`, source commit
 `62c4a58ab9075a8267d784f1ed7bfaf3634cb309` has a sanitized [local Compose
@@ -152,6 +172,24 @@ evidence, not hosted Cloudflare/TLS or production deployment proof, and does
 not close the broader container, provider, or semantic-search gates. No
 credentials, raw artifact bytes, scanner report content, or grant URL were
 retained.
+
+## Recorded PR34 local Compose reproducibility proof
+
+As of `2026-09-10T15:50:37Z`, source commit
+`34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2` has a sanitized [local Compose
+reproducibility record](evidence/local-compose-required-scan-34e4f56.json).
+Both the isolated host WorkerRunner and API Docker image passed frozen-lockfile
+installation checks without shared `node_modules` drift. The production-mode
+local stack used PostgreSQL `17.6`, the Files SDK filesystem adapter, and
+SkillsGuard `1.1.1` as the required scanner with `allowUnscanned=false`; 2/2
+files were analyzed with zero findings, worker completion allowed approval, and
+the authorized transfer matched the published digest for 367 bytes.
+
+The proof is loopback HTTP with HTTPS-shaped public-origin validation and did
+not provision a TLS terminator. It is local Compose evidence, not hosted
+Cloudflare/TLS, provider, production object-storage, semantic-search, or native
+CI proof. No credentials, raw artifact bytes, scanner report content, or grant
+URL were retained.
 
 ## Recorded Git-triggered M6 read-only release-file checkpoint
 

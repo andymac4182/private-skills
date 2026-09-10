@@ -1,0 +1,93 @@
+{
+  "kind": "private-skills.local-production-compose-proof",
+  "schemaVersion": 2,
+  "capturedAt": "2026-09-10T15:50:37Z",
+  "source": {
+    "sha": "34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2"
+  },
+  "dependencyAlignment": {
+    "hostWorkerInstall": "CI=true pnpm install --frozen-lockfile passed",
+    "hostWorkerEntrypoint": "pnpm worker reached required missing-environment validation without auto-install or purge",
+    "hostWorkerNodeModules": "isolated worktree-local frozen install; package links resolve within the same worktree",
+    "apiDockerInstall": "Dockerfile pnpm install --frozen-lockfile passed",
+    "sharedNodeModulesDriftUsed": false
+  },
+  "runtime": {
+    "environment": "production",
+    "stateProvider": "postgres",
+    "storageProvider": "filesystem (Files SDK fs adapter)",
+    "allowUnscanned": false,
+    "transportLimitation": "Loopback HTTP with HTTPS-shaped public-origin validation; no TLS terminator was provisioned."
+  },
+  "images": {
+    "api": {
+      "imageDigest": "sha256:9c3ab426ced00693d42f9ec81862d178126286428c7e018b6e0ac4889797c4fd",
+      "architecture": "arm64",
+      "os": "linux"
+    },
+    "postgres": {
+      "image": "postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
+      "imageDigest": "sha256:29e645e20571728f22df398b9954bb6c1cefec390d99ed4e26308fc2f52d6a37"
+    },
+    "skillsguard": {
+      "engineVersion": "1.1.1",
+      "imageDigest": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+      "architecture": "arm64",
+      "os": "linux"
+    }
+  },
+  "policy": {
+    "allowUnscanned": false,
+    "scanners": [
+      {
+        "id": "cisco-skill-scanner",
+        "mode": "disabled"
+      },
+      {
+        "id": "nvidia-skillspector",
+        "mode": "disabled"
+      },
+      {
+        "id": "skillsguard",
+        "mode": "required",
+        "engineVersion": "1.1.1"
+      }
+    ],
+    "responseStatus": 200
+  },
+  "scan": {
+    "scanner": "skillsguard",
+    "engineVersion": "1.1.1",
+    "status": "completed",
+    "filesEnumerated": 2,
+    "filesAnalyzed": 2,
+    "findingsCount": 0,
+    "workerCompletionAllow": true
+  },
+  "approval": {
+    "state": "approved",
+    "version": "1.0.0",
+    "responseStatus": 200
+  },
+  "authorizedInstall": {
+    "resolutionDigest": "sha256:5c3d654cf002a5c26b3a4ae7c16df7f65ce482d9d64030db8a7d90592abd6423",
+    "memberCount": 1,
+    "authorizationStatus": 201,
+    "downloadDescriptorStatus": 200,
+    "transferStatus": 200,
+    "downloadBytes": 367,
+    "downloadDigest": "sha256:5c3d654cf002a5c26b3a4ae7c16df7f65ce482d9d64030db8a7d90592abd6423",
+    "digestMatchesPublished": true
+  },
+  "redaction": {
+    "containsCredentials": false,
+    "containsRawArtifactBytes": false,
+    "containsScannerReportContent": false,
+    "containsGrantUrl": false
+  },
+  "limitations": [
+    "This is a local Compose proof using PostgreSQL, Files SDK filesystem storage, and a local scanner image.",
+    "Loopback HTTP and HTTPS-shaped origin validation do not prove hosted TLS, Cloudflare, provider, or production object-storage behavior.",
+    "The proof does not close semantic-search or native CI gates."
+  ]
+}

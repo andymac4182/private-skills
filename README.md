@@ -37,6 +37,10 @@ CI remain pending. A bounded hosted Neon/object-storage logical restore is
 recorded in the [sanitized restore evidence](docs/evidence/hosted-restore-20260910.json);
 it verifies an exact target revision and digest-checked objects but does not
 claim a provider lifecycle guarantee or restored-origin health/scanner run.
+The current source-34e4f56 local Compose reproducibility and source-built CLI
+records are linked from [`docs/verification-current.md`](docs/verification-current.md);
+they close local dependency/build-source qualifications while retaining local
+transport, scanner, native-CI, and syscall-capture limits.
 OpenClaw remains disabled pending review and explicit activation; its public
 metadata probe is interoperability evidence only and does not prove hosted
 artifact import or private publication. M6 and M7 remain outside the current
