@@ -26,6 +26,13 @@ const sessionRequestKeys = new Map<string, string>()
 const BUILDER_POLL_INTERVAL_MS = 500
 const MAX_BUILDER_POLL_ATTEMPTS = 40
 
+export interface SkillBuilderAdapterOptions {
+  /** Poll interval override for deterministic adapter tests. */
+  readonly pollIntervalMs?: number
+  /** Maximum session reads per bounded polling window. */
+  readonly maxPollAttempts?: number
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -222,7 +229,7 @@ function sessionNeedsPolling(session: SkillBuilderSession): boolean {
   return session.state === 'running' && session.proposal == null
 }
 
-function waitForPollInterval(signal: AbortSignal): Promise<void> {
+function waitForPollInterval(signal: AbortSignal, intervalMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(new DOMException('The builder request was aborted.', 'AbortError'))
@@ -235,21 +242,33 @@ function waitForPollInterval(signal: AbortSignal): Promise<void> {
     const timer = setTimeout(() => {
       signal.removeEventListener('abort', abort)
       resolve()
-    }, BUILDER_POLL_INTERVAL_MS)
+    }, intervalMs)
     signal.addEventListener('abort', abort, { once: true })
   })
 }
 
-async function pollSession(binding: SkillBuilderDraftContext, session: SkillBuilderSession, signal: AbortSignal, onSession?: (session: SkillBuilderSession) => void): Promise<SkillBuilderSession> {
+async function fetchSession(binding: SkillBuilderDraftContext, sessionId: string, signal: AbortSignal): Promise<SkillBuilderSession> {
+  const raw = await api.builderSession(binding.draftId, sessionId, {
+    revision: binding.revision,
+    digest: binding.digest,
+  }, signal)
+  let session = mapSession(raw, binding, sessionId)
+  session = await hydrateProposal(session, binding, signal)
+  return session
+}
+
+async function pollSession(
+  binding: SkillBuilderDraftContext,
+  session: SkillBuilderSession,
+  signal: AbortSignal,
+  onSession: ((session: SkillBuilderSession) => void) | undefined,
+  intervalMs: number,
+  maxAttempts: number,
+): Promise<SkillBuilderSession> {
   let latest = session
-  for (let attempt = 0; attempt < MAX_BUILDER_POLL_ATTEMPTS && sessionNeedsPolling(latest); attempt += 1) {
-    if (attempt > 0) await waitForPollInterval(signal)
-    const raw = await api.builderSession(binding.draftId, latest.id, {
-      revision: binding.revision,
-      digest: binding.digest,
-    }, signal)
-    latest = mapSession(raw, binding, latest.id)
-    latest = await hydrateProposal(latest, binding, signal)
+  for (let attempt = 0; attempt < maxAttempts && sessionNeedsPolling(latest); attempt += 1) {
+    if (attempt > 0) await waitForPollInterval(signal, intervalMs)
+    latest = await fetchSession(binding, latest.id, signal)
     onSession?.(latest)
   }
   return latest
@@ -279,15 +298,21 @@ function validateReboundDraft(response: DraftResponse, binding: SkillBuilderDraf
   return draft
 }
 
-export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
+export function createSkillBuilderAdapter(options: SkillBuilderAdapterOptions = {}): SkillBuilderPanelAdapter {
   const sessions = new Map<string, SkillBuilderSession>()
+  const pollIntervalMs = Number.isFinite(options.pollIntervalMs) && options.pollIntervalMs !== undefined
+    ? Math.max(0, Math.min(options.pollIntervalMs, 60_000))
+    : BUILDER_POLL_INTERVAL_MS
+  const maxPollAttempts = Number.isSafeInteger(options.maxPollAttempts) && options.maxPollAttempts !== undefined
+    ? Math.max(1, Math.min(options.maxPollAttempts, 240))
+    : MAX_BUILDER_POLL_ATTEMPTS
 
   return {
     async getAvailability({ draftId, signal }) {
       return mapAvailability(await api.builderAvailability(draftId, signal))
     },
 
-    async loadSession({ binding, signal }) {
+    async loadSession({ binding, signal, onSession }) {
       const created = await api.builderCreateSession(binding.draftId, {
         revision: binding.revision,
         digest: binding.digest,
@@ -302,8 +327,21 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
         digest: binding.digest,
       }, signal)
       let session = mapSession(hydrated, binding, createdSession.id)
+      // Publish the authoritative session DTO before the bounded preview
+      // hydration request. A running session must be visible, and stoppable,
+      // even while its proposal list is still being read.
+      onSession?.(session)
       session = await hydrateProposal(session, binding, signal)
-      session = await pollSession(binding, session, signal)
+      onSession?.(session)
+      session = await pollSession(binding, session, signal, onSession, pollIntervalMs, maxPollAttempts)
+      sessions.set(session.id, session)
+      return session
+    },
+
+    async refreshSession({ binding, sessionId, signal, onSession }) {
+      let session = await fetchSession(binding, sessionId, signal)
+      onSession?.(session)
+      session = await pollSession(binding, session, signal, onSession, pollIntervalMs, maxPollAttempts)
       sessions.set(session.id, session)
       return session
     },
@@ -323,7 +361,7 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
       input.onSession?.(session)
       session = await hydrateProposal(session, input.binding, input.signal)
       input.onSession?.(session)
-      session = await pollSession(input.binding, session, input.signal, input.onSession)
+      session = await pollSession(input.binding, session, input.signal, input.onSession, pollIntervalMs, maxPollAttempts)
       sessions.set(session.id, session)
       return { session, proposal: session.proposal ?? null }
     },

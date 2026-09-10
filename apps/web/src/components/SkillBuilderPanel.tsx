@@ -117,7 +117,9 @@ export type SkillBuilderAppliedResult = Omit<SkillBuilderProposalResult, 'draft'
  */
 export interface SkillBuilderPanelAdapter {
   getAvailability?: (input: { draftId: string; signal?: AbortSignal }) => Promise<SkillBuilderAvailability>
-  loadSession: (input: { binding: SkillBuilderDraftContext; signal: AbortSignal }) => Promise<SkillBuilderSession>
+  loadSession: (input: { binding: SkillBuilderDraftContext; signal: AbortSignal; onSession?: (session: SkillBuilderSession) => void }) => Promise<SkillBuilderSession>
+  /** Refresh an already-loaded running session after a bounded poll window. */
+  refreshSession?: (input: { binding: SkillBuilderDraftContext; sessionId: string; signal: AbortSignal; onSession?: (session: SkillBuilderSession) => void }) => Promise<SkillBuilderSession>
   sendPrompt: (input: SkillBuilderPromptInput) => Promise<SkillBuilderPromptResult>
   /** Reload the exact draft after apply; this is the authoritative CAS result. */
   reloadDraft: (input: { binding: SkillBuilderDraftContext; signal: AbortSignal }) => Promise<DraftView>
@@ -245,7 +247,9 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   const [error, setError] = useState<string | null>(null)
   const [stopped, setStopped] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [sessionPolling, setSessionPolling] = useState(false)
   const [sending, setSending] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [proposalAction, setProposalAction] = useState<'apply' | 'reject' | null>(null)
   const [lastRequest, setLastRequest] = useState<{ prompt: string; requestId: string } | null>(null)
@@ -259,7 +263,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   const bindingKey = contextKey(draft)
   const sessionActive = session?.state === 'running'
-  const busy = loading || sending || stopping || proposalAction !== null || sessionActive
+  const busy = loading || sessionPolling || sending || refreshing || stopping || proposalAction !== null || sessionActive
   const turns = useMemo(() => (session?.turns ?? []).slice(-MAX_DISPLAYED_TURNS), [session?.turns])
   const effectiveProposal = proposal ?? session?.proposal ?? null
 
@@ -297,6 +301,8 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     setStopped(false)
     setLastRequest(null)
     setSending(false)
+    setSessionPolling(false)
+    setRefreshing(false)
     setStopping(false)
     setProposalAction(null)
     proposalRequestIds.current.clear()
@@ -307,19 +313,74 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
       return () => { generation.current += 1 }
     }
     const controller = new AbortController()
+    const loadRequestId = requestId('load')
+    activeRequest.current = { requestId: loadRequestId, controller }
+    setSessionPolling(true)
     setLoading(true)
-    void adapter.loadSession({ binding: currentDraft, signal: controller.signal }).then((next) => {
+    void adapter.loadSession({
+      binding: currentDraft,
+      signal: controller.signal,
+      onSession: (next) => {
+        if (currentGeneration !== generation.current || controller.signal.aborted) return
+        setSession(next)
+        setProposal(next.proposal ?? null)
+        setLoading(false)
+        setProgress(next.state === 'running' && next.proposal == null ? { phase: 'thinking', message: 'Eve is finishing the builder request…' } : null)
+      },
+    }).then((next) => {
       if (currentGeneration !== generation.current || controller.signal.aborted) return
       setSession(next)
       setProposal(next.proposal ?? null)
       setLoading(false)
+      setProgress(null)
     }).catch((cause: unknown) => {
       if (currentGeneration !== generation.current || controller.signal.aborted) return
       setError(displayError(cause, 'Could not load the builder conversation.'))
       setLoading(false)
+    }).finally(() => {
+      if (currentGeneration !== generation.current) return
+      setSessionPolling(false)
+      if (activeRequest.current?.requestId === loadRequestId) activeRequest.current = null
     })
     return () => { controller.abort(); generation.current += 1 }
   }, [adapter, availability?.enabled, bindingKey, loadAttempt])
+
+  async function refreshStatus(): Promise<void> {
+    const currentDraft = draft
+    const currentSession = session
+    if (!currentDraft || !currentSession || currentSession.state !== 'running' || !adapter.refreshSession || sessionPolling || refreshing || stopping || proposalAction) return
+    const currentGeneration = generation.current
+    const controller = new AbortController()
+    const refreshRequestId = requestId('refresh')
+    activeRequest.current = { requestId: refreshRequestId, controller }
+    setRefreshing(true)
+    setError(null)
+    setProgress({ phase: 'thinking', message: 'Refreshing the builder session status…' })
+    try {
+      const next = await adapter.refreshSession({
+        binding: currentDraft,
+        sessionId: currentSession.id,
+        signal: controller.signal,
+        onSession: (updated) => {
+          if (currentGeneration !== generation.current || controller.signal.aborted) return
+          setSession(updated)
+          setProposal(updated.proposal ?? null)
+          setProgress(updated.state === 'running' && updated.proposal == null ? { phase: 'thinking', message: 'Eve is finishing the builder request…' } : null)
+        },
+      })
+      if (currentGeneration !== generation.current || controller.signal.aborted) return
+      setSession(next)
+      setProposal(next.proposal ?? null)
+      setProgress(null)
+    } catch (cause: unknown) {
+      if (currentGeneration !== generation.current || controller.signal.aborted) return
+      setError(displayError(cause, 'Could not refresh the builder session.'))
+      setProgress(null)
+    } finally {
+      if (activeRequest.current?.requestId === refreshRequestId) activeRequest.current = null
+      if (currentGeneration === generation.current) setRefreshing(false)
+    }
+  }
 
   async function sendPrompt(value = prompt, retryRequestId?: string): Promise<void> {
     const text = value.trim()
@@ -494,7 +555,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   if (!draft) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Choose a draft to build with Eve" message="Open a saved draft to give the builder a revision and digest to work against." /></section>
   if (availability?.enabled === false) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Skill builder unavailable" message={availability.reason ?? 'The skill builder is disabled for this registry.'} /></section>
-  if (availability === null || loading) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
+  if (availability === null || (loading && !session)) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
   if (!session) return <section className={styles.panel} aria-label="Skill builder"><div className={styles.errorBlock}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
 
   return <section className={styles.panel} aria-label="Skill builder">
@@ -519,11 +580,11 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
       {stopped && <div className={styles.stopped} role="status">This request was cancelled in the browser. The server may finish it without applying changes; you can retry when ready.</div>}
     </div>
     {effectiveProposal && <ProposalCard proposal={effectiveProposal} busy={proposalAction !== null} canApply={canApply} applyDisabledReason={applyDisabledReason} onApply={() => void applyProposal()} onReject={() => void rejectProposal()} />}
-    {error && <div className={styles.errorNotice} role="alert"><span>{error}</span>{lastRequest && !sending && !sessionActive && <button className={styles.retryButton} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
+    {error && <div className={styles.errorNotice} role="alert"><span>{error}</span>{lastRequest && !sending && !sessionActive && !sessionPolling && !refreshing && <button className={styles.retryButton} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
     <form className={styles.composer} onSubmit={submit}>
       <label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label>
       <textarea id="skill-builder-prompt" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
-      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
+      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
     </form>
   </section>
 }

@@ -220,11 +220,37 @@ describe('same-origin skill builder BFF adapter', () => {
       .mockResolvedValueOnce(response({ proposals: [proposalWithPreview()] }))
     vi.stubGlobal('fetch', fetchMock)
     const adapter = createSkillBuilderAdapter()
-    const loaded = await adapter.loadSession({ binding, signal: new AbortController().signal })
+    const observedStates: string[] = []
+    const loaded = await adapter.loadSession({ binding, signal: new AbortController().signal, onSession: (next) => observedStates.push(next.state) })
 
     expect(loaded.state).toBe('completed')
     expect(loaded.proposal?.operations[0]?.after).toBe('# After\n')
+    expect(observedStates[0]).toBe('running')
+    expect(observedStates.at(-1)).toBe('completed')
     expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('leaves a bounded running session recoverable through refreshSession', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response(session({ state: 'running' })))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ state: 'running' })))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ state: 'completed', proposal: proposal() })))
+      .mockResolvedValueOnce(response({ proposals: [proposalWithPreview()] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const adapter = createSkillBuilderAdapter({ pollIntervalMs: 0, maxPollAttempts: 1 })
+    const loaded = await adapter.loadSession({ binding, signal: new AbortController().signal })
+
+    expect(loaded.state).toBe('running')
+    const refreshSession = adapter.refreshSession
+    expect(refreshSession).toBeDefined()
+    const resumed = await refreshSession!({ binding, sessionId: loaded.id, signal: new AbortController().signal })
+
+    expect(resumed.state).toBe('completed')
+    expect(resumed.proposal?.operations[0]?.after).toBe('# After\n')
+    expect(fetchMock).toHaveBeenCalledTimes(7)
   })
 
   it('keeps an applied proposal as history when the session has rebound to its new draft', async () => {
