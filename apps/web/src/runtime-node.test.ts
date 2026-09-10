@@ -7,7 +7,7 @@ const oidc = vi.hoisted(() => ({
 
 vi.mock('@vercel/oidc', () => oidc);
 
-import { createDirectoryTokenProvider } from '../server/runtime-node.js';
+import { createDirectoryTokenProvider, createOfficialDirectoryTokenProvider } from '../server/runtime-node.js';
 
 describe('node directory token provider', () => {
   beforeEach(() => {
@@ -46,6 +46,21 @@ describe('node directory token provider', () => {
 
     await expect(getToken()).resolves.toBe('gateway-token');
     expect(oidc.getVercelOidcToken).not.toHaveBeenCalled();
+  });
+
+  it('keeps canonical OIDC available when the UI default is a custom gateway', async () => {
+    oidc.getVercelOidcToken.mockResolvedValue('canonical-project-token');
+    const env = {
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://gateway.example.test/catalog',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'gateway-token',
+    };
+    const uiToken = createDirectoryTokenProvider(env);
+    const canonicalToken = createOfficialDirectoryTokenProvider(env);
+
+    await expect(uiToken()).resolves.toBe('gateway-token');
+    await expect(canonicalToken()).resolves.toBe('canonical-project-token');
+    expect(oidc.getVercelOidcToken).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the official OIDC provider separate when a gateway token is also present', async () => {
@@ -94,6 +109,19 @@ describe('node directory token provider', () => {
     const getToken = createDirectoryTokenProvider({});
 
     await expect(getToken()).rejects.toThrow('directory authentication is not configured');
+    expect(oidc.getVercelOidcToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for malformed multi-gateway configuration', async () => {
+    const env = {
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAYS_JSON: '{',
+    };
+    const getToken = createDirectoryTokenProvider(env);
+    const canonicalToken = createOfficialDirectoryTokenProvider(env);
+
+    await expect(getToken()).rejects.toThrow('directory authentication is not configured');
+    await expect(canonicalToken()).rejects.toThrow('directory authentication is not configured');
     expect(oidc.getVercelOidcToken).not.toHaveBeenCalled();
   });
 

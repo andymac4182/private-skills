@@ -6,6 +6,8 @@ export {
   createSkillsDirectoryClient,
 } from './client.js';
 
+export { createSkillsDirectoryClientResolver } from './runtime.js';
+
 export {
   DEFAULT_DIRECTORY_CACHE_OPTIONS,
   DIRECTORY_CACHE_MAX_TTL_MS,
@@ -29,8 +31,11 @@ export {
   SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
   SKILLS_DIRECTORY_ENABLED_ENV,
   SKILLS_DIRECTORY_GATEWAY_TOKEN_ENV,
+  SKILLS_DIRECTORY_GATEWAYS_JSON_ENV,
   SKILLS_DIRECTORY_GATEWAY_URL_ENV,
   SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
+  MAX_SKILLS_DIRECTORY_GATEWAYS,
+  MAX_SKILLS_DIRECTORY_GATEWAYS_JSON_BYTES,
   createSkillsDirectoryGatewayTokenProvider,
   createSkillsShGatewayCredential,
   createUnavailableSkillsDirectoryTokenProvider,
@@ -38,6 +43,7 @@ export {
   isReservedSkillsDirectoryHost,
   isValidSkillsShGatewayToken,
   normalizeDirectoryBaseURL,
+  resolveSkillsDirectoryGateways,
   resolveSkillsDirectoryConnection,
 } from './gateway.js';
 
@@ -91,8 +97,13 @@ export type {
   V1Skill,
 } from './types.js';
 
+export type { SkillsDirectoryClientResolverOptions } from './runtime.js';
+
 export type {
   SkillsDirectoryConnection,
+  SkillsDirectoryGatewayProfile,
+  SkillsDirectoryGatewayResolution,
+  SkillsDirectoryGatewayUnavailableReason,
   SkillsDirectoryRuntimeEnvironment,
   SkillsDirectoryUnavailableReason,
   SkillsShGatewayCredential,

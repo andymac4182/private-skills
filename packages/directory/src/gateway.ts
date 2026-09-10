@@ -12,9 +12,12 @@ export const SKILLS_DIRECTORY_OFFICIAL_BASE_URL = 'https://skills.sh' as const;
 
 export const SKILLS_DIRECTORY_GATEWAY_URL_ENV = 'PSKILLS_DIRECTORY_GATEWAY_URL' as const;
 export const SKILLS_DIRECTORY_GATEWAY_TOKEN_ENV = 'PSKILLS_DIRECTORY_GATEWAY_TOKEN' as const;
+export const SKILLS_DIRECTORY_GATEWAYS_JSON_ENV = 'PSKILLS_DIRECTORY_GATEWAYS_JSON' as const;
 export const SKILLS_DIRECTORY_ENABLED_ENV = 'PSKILLS_DIRECTORY_ENABLED' as const;
 
 const MAX_GATEWAY_TOKEN_BYTES = 4_096;
+export const MAX_SKILLS_DIRECTORY_GATEWAYS = 16 as const;
+export const MAX_SKILLS_DIRECTORY_GATEWAYS_JSON_BYTES = 32_768 as const;
 
 export type SkillsDirectoryRuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -33,11 +36,29 @@ export interface SkillsShGatewayCredentialConfig {
   readonly token: string;
 }
 
-export type SkillsDirectoryUnavailableReason =
+/** One operator-owned environment binding in PSKILLS_DIRECTORY_GATEWAYS_JSON. */
+export interface SkillsDirectoryGatewayProfile {
+  readonly baseUrl: string;
+  readonly tokenEnv: string;
+}
+
+export type SkillsDirectoryGatewayUnavailableReason =
+  | 'invalid_gateway_profiles'
+  | 'gateway_profiles_too_large'
+  | 'gateway_profile_limit'
+  | 'duplicate_gateway_base'
   | 'invalid_gateway_url'
   | 'gateway_url_requires_explicit_config'
   | 'missing_gateway_token'
   | 'invalid_gateway_token';
+
+export type SkillsDirectoryGatewayResolution =
+  | { readonly kind: 'disabled' }
+  | { readonly kind: 'ready'; readonly gateways: readonly SkillsShGatewayCredential[] }
+  | { readonly kind: 'unavailable'; readonly reason: SkillsDirectoryGatewayUnavailableReason };
+
+export type SkillsDirectoryUnavailableReason =
+  SkillsDirectoryGatewayUnavailableReason;
 
 export type SkillsDirectoryConnection =
   | { readonly kind: 'disabled' }
@@ -71,6 +92,72 @@ export function createSkillsShGatewayCredential(
 }
 
 /**
+ * Resolve all explicitly configured nonofficial directory gateways.
+ *
+ * The JSON setting contains only base URLs and names of operator-owned
+ * environment variables. Tokens are read once while constructing the
+ * request-scoped callback and are never returned as configuration data.
+ * A malformed profile invalidates the complete set so callers cannot silently
+ * fall back to an unintended catalog.
+ */
+export function resolveSkillsDirectoryGateways(
+  env: SkillsDirectoryRuntimeEnvironment,
+): SkillsDirectoryGatewayResolution {
+  if (env[SKILLS_DIRECTORY_ENABLED_ENV] !== 'true') return { kind: 'disabled' };
+
+  const profiles: Array<{ baseUrl: string; token: string }> = [];
+  const seenBases = new Set<string>();
+  const addProfile = (profile: SkillsDirectoryGatewayProfile, legacy = false): SkillsDirectoryGatewayGatewayResult => {
+    const baseUrl = normalizeDirectoryBaseURL(profile.baseUrl);
+    if (baseUrl === undefined) return { kind: 'unavailable', reason: 'invalid_gateway_url' };
+    const parsed = new URL(baseUrl);
+    if (isOfficialSkillsDirectoryURL(parsed)) {
+      return legacy ? { kind: 'skip' } : { kind: 'unavailable', reason: 'invalid_gateway_url' };
+    }
+    if (isReservedSkillsDirectoryHost(parsed)) return { kind: 'unavailable', reason: 'invalid_gateway_url' };
+    if (seenBases.has(baseUrl)) return { kind: 'unavailable', reason: 'duplicate_gateway_base' };
+    const token = env[profile.tokenEnv];
+    if (token === undefined) return { kind: 'unavailable', reason: 'missing_gateway_token' };
+    if (!isValidSkillsShGatewayToken(token)) return { kind: 'unavailable', reason: 'invalid_gateway_token' };
+    seenBases.add(baseUrl);
+    profiles.push({ baseUrl, token });
+    return { kind: 'added' };
+  };
+
+  const legacyURL = env[SKILLS_DIRECTORY_GATEWAY_URL_ENV];
+  if (legacyURL !== undefined) {
+    const result = addProfile({ baseUrl: legacyURL, tokenEnv: SKILLS_DIRECTORY_GATEWAY_TOKEN_ENV }, true);
+    if (result.kind === 'unavailable') return result;
+  }
+
+  const encodedProfiles = env[SKILLS_DIRECTORY_GATEWAYS_JSON_ENV];
+  if (encodedProfiles !== undefined) {
+    if (!isWellFormedString(encodedProfiles) || new TextEncoder().encode(encodedProfiles).byteLength > MAX_SKILLS_DIRECTORY_GATEWAYS_JSON_BYTES) {
+      return { kind: 'unavailable', reason: 'gateway_profiles_too_large' };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(encodedProfiles);
+    } catch {
+      return { kind: 'unavailable', reason: 'invalid_gateway_profiles' };
+    }
+    if (!Array.isArray(parsed)) return { kind: 'unavailable', reason: 'invalid_gateway_profiles' };
+    if (parsed.length > MAX_SKILLS_DIRECTORY_GATEWAYS) return { kind: 'unavailable', reason: 'gateway_profile_limit' };
+    for (const value of parsed) {
+      if (!isStrictGatewayProfile(value)) return { kind: 'unavailable', reason: 'invalid_gateway_profiles' };
+      const result = addProfile(value);
+      if (result.kind === 'unavailable') return result;
+    }
+  }
+
+  if (profiles.length > MAX_SKILLS_DIRECTORY_GATEWAYS) {
+    return { kind: 'unavailable', reason: 'gateway_profile_limit' };
+  }
+  const gateways = profiles.map(({ baseUrl, token }) => createSkillsShGatewayCredential({ baseUrl, token }));
+  return { kind: 'ready', gateways: Object.freeze(gateways) };
+}
+
+/**
  * Select the directory authentication profile for one server runtime.
  *
  * `PSKILLS_SKILLS_SH_BASE_URL` remains an official-origin override for
@@ -82,6 +169,9 @@ export function resolveSkillsDirectoryConnection(
   env: SkillsDirectoryRuntimeEnvironment,
 ): SkillsDirectoryConnection {
   if (env[SKILLS_DIRECTORY_ENABLED_ENV] !== 'true') return { kind: 'disabled' };
+
+  const gatewayResolution = resolveSkillsDirectoryGateways(env);
+  if (gatewayResolution.kind === 'unavailable') return gatewayResolution;
 
   const configuredGatewayURL = env[SKILLS_DIRECTORY_GATEWAY_URL_ENV];
   const requestedBaseURL = configuredGatewayURL
@@ -99,6 +189,10 @@ export function resolveSkillsDirectoryConnection(
     return { kind: 'unavailable', reason: 'invalid_gateway_url' };
   }
   if (configuredGatewayURL === undefined) {
+    if (gatewayResolution.kind === 'ready') {
+      const configuredGateway = gatewayResolution.gateways.find((gateway) => gateway.baseUrl === normalizedBaseURL);
+      if (configuredGateway !== undefined) return { kind: 'gateway', gateway: configuredGateway };
+    }
     return { kind: 'unavailable', reason: 'gateway_url_requires_explicit_config' };
   }
 
@@ -112,6 +206,21 @@ export function resolveSkillsDirectoryConnection(
     kind: 'gateway',
     gateway: createSkillsShGatewayCredential({ baseUrl: normalizedBaseURL, token }),
   };
+}
+
+type SkillsDirectoryGatewayGatewayResult =
+  | { readonly kind: 'added' }
+  | { readonly kind: 'skip' }
+  | { readonly kind: 'unavailable'; readonly reason: SkillsDirectoryGatewayUnavailableReason };
+
+function isStrictGatewayProfile(value: unknown): value is SkillsDirectoryGatewayProfile {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.includes('baseUrl') || !keys.includes('tokenEnv')) return false;
+  const profile = value as Record<string, unknown>;
+  return typeof profile.baseUrl === 'string'
+    && typeof profile.tokenEnv === 'string'
+    && /^[A-Z][A-Z0-9_]{0,127}$/u.test(profile.tokenEnv);
 }
 
 /** Construct a stable provider for an already validated gateway credential. */
