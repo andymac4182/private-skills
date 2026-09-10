@@ -132,5 +132,17 @@
     "containsRawArtifactBytes": false,
     "containsScannerReportContent": false,
     "containsGrantUrl": false
+  },
+  "dependencyQualification": {
+    "apiImage": {
+      "install": "Dockerfile frozen-lockfile install",
+      "nodeImage": "pinned Node image",
+      "sourceAlignment": "aligned with source 62c4a58"
+    },
+    "hostWorker": {
+      "dependencyAlignment": "unverified",
+      "observedSetup": "shared node_modules linked to the BFF worktree with a different installed lockfile",
+      "reproducibleWorkerArtifact": false
+    }
   }
 }

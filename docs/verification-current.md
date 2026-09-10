@@ -116,6 +116,14 @@ NVIDIA disabled, and SkillsGuard required. The required scan completed with
 The authorized install resolved the same artifact digest and transferred 347
 bytes with matching download digest.
 
+The API image used the Dockerfile's frozen-lockfile install and a pinned Node
+image, so its dependency set is aligned with source `62c4a58`. The host
+WorkerRunner instead ran against shared `node_modules` linked to the BFF
+worktree with a different installed lockfile; dependency alignment to
+`62c4a58` and a fully reproducible worker artifact therefore remain unverified.
+This qualification does not negate the recorded required-scan or
+digest-matched download evidence.
+
 The API origin was loopback HTTP with an HTTPS-shaped local public-origin
 validation; this proof did not provision a TLS terminator. It is local Compose
 evidence, not hosted Cloudflare/TLS or production deployment proof, and does
