@@ -228,11 +228,14 @@ function waitForPollInterval(signal: AbortSignal): Promise<void> {
       reject(new DOMException('The builder request was aborted.', 'AbortError'))
       return
     }
-    const timer = setTimeout(resolve, BUILDER_POLL_INTERVAL_MS)
     const abort = () => {
       clearTimeout(timer)
       reject(new DOMException('The builder request was aborted.', 'AbortError'))
     }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, BUILDER_POLL_INTERVAL_MS)
     signal.addEventListener('abort', abort, { once: true })
   })
 }
