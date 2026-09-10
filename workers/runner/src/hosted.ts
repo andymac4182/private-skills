@@ -12,6 +12,7 @@ import {
   type LocalStageHook,
   type RunOnceResult,
   type WorkerEvent,
+  type WorkerOpenClawSourceProofRecorder,
   type WorkerRunnerOptions,
 } from './worker.js';
 
@@ -45,6 +46,8 @@ export interface HostedWorkerOptions {
   adapters?: Map<string, ScannerAdapter> | ScannerAdapter[];
   maxBundleJsonBytes?: number;
   acquisition?: WorkerAcquisitionOptions;
+  /** Durable registry-owned sink for verified OpenClaw source proofs. */
+  openClawProofRecorder?: WorkerOpenClawSourceProofRecorder;
   stageHooks?: LocalStageHook[];
   onEvent?: (event: WorkerEvent) => void | Promise<void>;
   /** Allows route tests or deployment wrappers to decorate WorkerRunner. */
@@ -93,6 +96,7 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
       ...(options.adapters ? { adapters: options.adapters } : {}),
       ...(options.maxBundleJsonBytes === undefined ? {} : { maxBundleJsonBytes: options.maxBundleJsonBytes }),
       ...(options.acquisition ? { acquisition: options.acquisition } : {}),
+      ...(options.openClawProofRecorder ? { openClawProofRecorder: options.openClawProofRecorder } : {}),
       ...(options.stageHooks ? { stageHooks: options.stageHooks } : {}),
       ...(options.onEvent ? { onEvent: options.onEvent } : {}),
     };

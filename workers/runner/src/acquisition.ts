@@ -6,10 +6,15 @@ import type {
   Upstream,
 } from '../../../packages/contracts/src/index.js';
 import {
+  acquireOpenClawSource,
   acquireSkill,
   type AcquireSkillOptions,
   type AcquisitionResult,
+  type OpenClawSourceFetcher,
+  type OpenClawSourceJobDescriptor,
 } from '../../../packages/upstreams/src/index.js';
+import { normalizeOpenClawEntry } from '../../../packages/openclaw/src/feed.js';
+import type { OpenClawFeedEntry, OpenClawNormalizedSource } from '../../../packages/openclaw/src/types.js';
 import {
   MAX_SKILLS_DIRECTORY_GATEWAYS,
   isValidSkillsShGatewayToken,
@@ -21,7 +26,32 @@ import {
 import type { WorkerClaimedJob } from './client.js';
 
 /** Options supplied by the worker supervisor for a source acquisition. */
-export interface WorkerAcquisitionOptions extends AcquireSkillOptions {}
+export interface WorkerOpenClawAcquisitionOptions {
+  /** Safe fetcher built from an operator-owned source locator. */
+  fetcher: OpenClawSourceFetcher;
+  /** Deployment allowlist, never taken from the claimed job. */
+  allowedArtifactOrigins: readonly string[];
+  /** Optional fixed source identity origin for the configured adapter. */
+  sourceProviderOrigin?: string;
+}
+
+/** Options supplied by the worker supervisor for a source acquisition. */
+export interface WorkerAcquisitionOptions extends AcquireSkillOptions {
+  /** Enabled only for server-owned jobs carrying an OpenClaw source proof target. */
+  openClaw?: WorkerOpenClawAcquisitionOptions;
+}
+
+export interface WorkerOpenClawSourceArtifactProof {
+  verified: true;
+  digest: `sha256:${string}`;
+  format: 'clawhub-skill-v1' | 'github-skill-folder-v1';
+  identity: string;
+}
+
+export interface WorkerOpenClawProof {
+  entry: OpenClawFeedEntry;
+  sourceArtifact: WorkerOpenClawSourceArtifactProof;
+}
 
 const GATEWAY_CREDENTIAL_UNAVAILABLE = 'skills.sh gateway credential unavailable';
 
@@ -87,6 +117,10 @@ export function workerAcquisitionOptionsFromEnv(
 export interface AcquiredImport {
   bundle: SkillBundle;
   provenance: Provenance;
+  /** True when the import was selected from an OpenClaw source job. */
+  openClawSource?: boolean;
+  /** Source proof material for the post-completion recorder, if queued. */
+  openClawProof?: WorkerOpenClawProof;
 }
 
 /**
@@ -113,6 +147,42 @@ export async function acquireImportJob(
     throw new Error('claimed upstream belongs to a different organization');
   }
 
+  const openClawJob = parseOpenClawSourceJob(job.openclawSource);
+  if (openClawJob !== undefined) {
+    const configured = options.openClaw;
+    if (configured === undefined) {
+      throw new Error('OpenClaw source worker is not configured');
+    }
+    const source = openClawJob.source;
+    const externalId = importRequest.externalId ?? importRequest.path;
+    if (source.kind === 'public-clawhub' && source.version !== importRequest.version) {
+      throw new Error('OpenClaw hosted source version does not match the import request');
+    }
+    if (source.kind === 'public-github' && importRequest.repository !== undefined && importRequest.repository !== source.repo) {
+      throw new Error('OpenClaw GitHub source repository does not match the import request');
+    }
+    const result = await acquireOpenClawSource({
+      source,
+      fetcher: configured.fetcher,
+      allowedArtifactOrigins: configured.allowedArtifactOrigins,
+      ...(configured.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: configured.sourceProviderOrigin }),
+      upstreamId: upstream.id,
+      externalId,
+      ...(importRequest.externalSourceType === undefined ? {} : { externalSourceType: importRequest.externalSourceType }),
+      ...(importRequest.externalSnapshotHash === undefined ? {} : { externalSnapshotHash: importRequest.externalSnapshotHash }),
+      signal: options.signal,
+      limits: options.limits,
+    });
+    const openClawProof = openClawJob.entry === undefined
+      ? undefined
+      : buildOpenClawProof(openClawJob.entry, source, externalId);
+    return {
+      ...result,
+      openClawSource: true,
+      ...(openClawProof === undefined ? {} : { openClawProof }),
+    };
+  }
+
   // The worker receives a frozen job policy/source mapping from the registry.
   // Pass only the source adapter options through; authorization from the
   // browser or registry caller is deliberately not inherited here.
@@ -123,6 +193,67 @@ export async function acquireImportJob(
     ...safeSkillsShOptions(options),
   });
   return result;
+}
+
+function parseOpenClawSourceJob(value: unknown): OpenClawSourceJobDescriptor | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isRecord(value.source)) {
+    throw new Error('claimed OpenClaw source job descriptor is invalid');
+  }
+  if (value.entry !== undefined && !isRecord(value.entry)) {
+    throw new Error('claimed OpenClaw source proof entry is invalid');
+  }
+  const source = value.source;
+  if (source.sourceRef === 'public-clawhub' && source.kind === 'public-clawhub' &&
+    typeof source.packageName === 'string' && typeof source.version === 'string' &&
+    typeof source.artifactDigest === 'string') {
+    return { source: source as unknown as OpenClawSourceJobDescriptor['source'], ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }) };
+  }
+  if (source.sourceRef === 'public-github' && source.kind === 'public-github' &&
+    typeof source.repo === 'string' && typeof source.path === 'string' &&
+    typeof source.commit === 'string' && typeof source.contentHash === 'string') {
+    return { source: source as unknown as OpenClawSourceJobDescriptor['source'], ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }) };
+  }
+  throw new Error('claimed OpenClaw source identity is invalid');
+}
+
+function buildOpenClawProof(
+  entry: OpenClawFeedEntry,
+  source: OpenClawNormalizedSource,
+  externalId: string,
+): WorkerOpenClawProof {
+  if (entry.id !== externalId || entry.type !== 'skill' || entry.state !== 'available') {
+    throw new Error('OpenClaw source proof entry does not match the import identity');
+  }
+  let normalized: ReturnType<typeof normalizeOpenClawEntry>;
+  try {
+    normalized = normalizeOpenClawEntry(entry);
+  } catch {
+    throw new Error('OpenClaw source proof entry is invalid');
+  }
+  const matches = normalized.filter((candidate) => {
+    if (source.kind === 'public-clawhub') {
+      return candidate.source.kind === source.kind && candidate.source.packageName === source.packageName && candidate.source.version === source.version && candidate.source.artifactDigest === source.artifactDigest;
+    }
+    return candidate.source.kind === source.kind && candidate.source.repo === source.repo && candidate.source.path === source.path && candidate.source.commit === source.commit && candidate.source.contentHash === source.contentHash;
+  });
+  if (matches.length !== 1) throw new Error('OpenClaw source proof candidate is ambiguous or mismatched');
+  return {
+    entry,
+    sourceArtifact: source.kind === 'public-clawhub'
+      ? {
+        verified: true,
+        digest: source.artifactDigest as `sha256:${string}`,
+        format: 'clawhub-skill-v1',
+        identity: `${source.packageName}@${source.version}`,
+      }
+      : {
+        verified: true,
+        digest: `sha256:${source.contentHash}`,
+        format: 'github-skill-folder-v1',
+        identity: `${source.repo}:${source.path}@${source.commit}`,
+      },
+  };
 }
 
 /**

@@ -10,12 +10,14 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
+import type { OpenClawFeedEntry, OpenClawNormalizedSource } from '../../openclaw/src/types.js';
 import {
   isReservedSkillsDirectoryHost,
   isValidSkillsShGatewayToken,
 } from '../../directory/src/gateway.js';
 import type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 import { parseSkillMetadata } from '../../storage/src/bundle.js';
+import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 
 export type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 
@@ -141,6 +143,84 @@ export interface AcquireSkillInput extends AcquireSkillOptions {
 export interface AcquisitionResult {
   bundle: SkillBundle;
   provenance: Provenance;
+}
+
+/**
+ * The source transport deliberately returns the bytes that were fetched.  It
+ * does not return a display snapshot or a catalog URL, and the resolver below
+ * never asks it to execute or interpret skill content.  A directory/core
+ * adapter owns the actual HTTPS client and must use redirect:error, an
+ * explicit source-origin allowlist, and no catalog credentials on source
+ * requests.
+ */
+export interface OpenClawFetchedSource {
+  bytes: Uint8Array;
+  requestedUrl: string;
+  finalUrl: string;
+  status: number;
+  redirected?: boolean;
+  contentType?: string;
+  /** Verified source identity origin, distinct from a codeload transport URL. */
+  sourceProviderOrigin?: string;
+}
+
+export interface OpenClawSourceFetcher {
+  fetch(
+    source: OpenClawNormalizedSource,
+    signal?: AbortSignal,
+  ): Promise<OpenClawFetchedSource>;
+}
+
+/**
+ * A deployment-owned source location. OpenClaw feed entries intentionally do
+ * not contain registry URLs, so the caller must bind a selected candidate to
+ * a configured artifact endpoint before the worker can fetch bytes.
+ */
+export interface OpenClawSourceLocation {
+  url: string;
+  allowedArtifactOrigins: readonly string[];
+  sourceProviderOrigin: string;
+}
+
+/** Server-owned job extension placed alongside an import request. */
+export interface OpenClawSourceJobDescriptor {
+  source: OpenClawNormalizedSource;
+  /** Server-owned feed entry retained for post-approval source-proof recording. */
+  entry?: OpenClawFeedEntry;
+}
+
+export interface OpenClawSourceLocator {
+  locate(
+    source: OpenClawNormalizedSource,
+    signal?: AbortSignal,
+  ): OpenClawSourceLocation | Promise<OpenClawSourceLocation>;
+}
+
+export interface OpenClawHttpFetcherOptions {
+  locator: OpenClawSourceLocator;
+  fetchImpl?: FetchLike;
+  limits?: Partial<AcquisitionLimits>;
+  allowLoopbackForTests?: boolean;
+}
+
+export interface OpenClawSourceAcquireInput {
+  source: OpenClawNormalizedSource;
+  fetcher: OpenClawSourceFetcher;
+  /** Exact operator-approved origins for the source transport. */
+  allowedArtifactOrigins: readonly string[];
+  /** Verified source-provider origin (for example https://github.com). */
+  sourceProviderOrigin?: string;
+  upstreamId?: string;
+  externalId?: string;
+  externalSourceType?: 'github' | 'well-known';
+  externalSnapshotHash?: string | null;
+  limits?: Partial<AcquisitionLimits>;
+  signal?: AbortSignal;
+}
+
+export interface OpenClawSourceResolution extends AcquisitionResult {
+  source: OpenClawNormalizedSource;
+  externalDigest: `sha256:${string}`;
 }
 
 /**
@@ -398,6 +478,139 @@ export async function acquireSkillsShSkill(
   }
   assertUpstreamEnabled(normalized.upstream);
   return acquireSkillsSh(normalized);
+}
+
+/**
+ * Resolve one explicit OpenClaw feed candidate into the canonical worker
+ * bundle.  Feed normalization is intentionally separate from this function:
+ * callers must choose a candidate, and this function is the only operation
+ * that asks a source adapter for bytes.  A metadata/feed refresh therefore
+ * cannot accidentally become an install or scan fetch.
+ */
+export async function acquireOpenClawSource(
+  input: OpenClawSourceAcquireInput,
+): Promise<OpenClawSourceResolution> {
+  const limits = mergeLimits(input.limits);
+  const allowedOrigins = normalizeOpenClawArtifactOrigins(input.allowedArtifactOrigins);
+  if (input.signal?.aborted) {
+    throw new UpstreamAcquisitionError('cancelled', 'OpenClaw source acquisition cancelled');
+  }
+  const fetched = await input.fetcher.fetch(input.source, input.signal);
+  const fetchedAt = sourceFetchedAt();
+  const transport = validateOpenClawFetchedSource(fetched, allowedOrigins, limits);
+  const sourceProviderOrigin = normalizeOpenClawSourceProviderOrigin(
+    input.sourceProviderOrigin ?? fetched.sourceProviderOrigin,
+  );
+  const source = input.source;
+  if (source.kind === 'public-clawhub') {
+    const bundle = resolveOpenClawHostedArtifact(transport, source.artifactDigest, limits);
+    const sourceDigest = digestBytes(serializeSkillBundle(bundle));
+    return {
+      source,
+      externalDigest: source.artifactDigest as `sha256:${string}`,
+      bundle,
+      provenance: {
+        kind: 'registry',
+        ...(input.upstreamId === undefined ? {} : { upstreamId: input.upstreamId }),
+        // Core's import contract binds repository/path to the selected
+        // upstream. For a hosted ClawHub artifact the provider origin is the
+        // repository identity and the package coordinate is the exact path;
+        // the artifact CDN URL remains separate source transport evidence.
+        repository: sourceProviderOrigin,
+        path: source.packageName,
+        revision: source.version,
+        sourceDigest,
+        externalId: input.externalId ?? source.packageName,
+        externalSnapshotHash: input.externalSnapshotHash,
+        externalDigest: source.artifactDigest as `sha256:${string}`,
+        sourceUrl: transport.finalUrl,
+        sourceProviderOrigin,
+        sourceResolutionKind: 'snapshot',
+        fetchedAt,
+      },
+    };
+  }
+
+  const resolved = resolveOpenClawGithubArchive(transport, source, limits);
+  const sourceDigest = digestBytes(serializeSkillBundle(resolved.bundle));
+  return {
+    source,
+    externalDigest: `sha256:${source.contentHash}`,
+    bundle: resolved.bundle,
+    provenance: {
+      kind: 'github',
+      ...(input.upstreamId === undefined ? {} : { upstreamId: input.upstreamId }),
+      repository: source.repo,
+      // Preserve an explicitly verified repository root path.  An empty path
+      // means the repository root and must not be rewritten as "unknown".
+      path: source.path,
+      revision: source.commit,
+      sourceDigest,
+      externalId: input.externalId ?? `${source.repo}/${source.path}`,
+      externalSourceType: input.externalSourceType,
+      externalSnapshotHash: input.externalSnapshotHash,
+      sourceUrl: transport.finalUrl,
+      sourceProviderOrigin,
+      sourceResolutionKind: 'github',
+      fetchedAt,
+      resolvedCommit: source.commit,
+      externalDigest: `sha256:${source.contentHash}`,
+    },
+  };
+}
+
+/** Alias with the source-layer name used by directory adapters. */
+export const resolveOpenClawSource = acquireOpenClawSource;
+
+/**
+ * Build the production Node-side fetcher used by a worker. The locator is
+ * deployment-owned and must map an already selected feed source to an
+ * operator-configured endpoint; this function never invents a ClawHub route
+ * from package metadata. Every request uses the existing bounded HTTP client,
+ * DNS/SSRF checks, manual redirects, and no credential headers.
+ */
+export function createOpenClawHttpFetcher(
+  options: OpenClawHttpFetcherOptions,
+): OpenClawSourceFetcher {
+  if (!options || typeof options.locator?.locate !== 'function') {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source locator is not configured');
+  }
+  const limits = mergeLimits(options.limits);
+  const fetchImpl = options.fetchImpl ?? DEFAULT_FETCH;
+  return {
+    async fetch(source, signal): Promise<OpenClawFetchedSource> {
+      if (signal?.aborted) throw new UpstreamAcquisitionError('cancelled', 'OpenClaw source acquisition cancelled');
+      const location = await options.locator.locate(source, signal);
+      const allowedOrigins = normalizeOpenClawArtifactOrigins(location.allowedArtifactOrigins);
+      const url = validateOpenClawTransportURL(location.url, allowedOrigins, options.allowLoopbackForTests ?? false);
+      const sourceProviderOrigin = normalizeOpenClawSourceProviderOrigin(location.sourceProviderOrigin);
+      const clientOptions: AcquireSkillOptions = {
+        fetchImpl,
+        limits,
+        ...(options.allowLoopbackForTests === undefined ? {} : { allowLoopbackForTests: options.allowLoopbackForTests }),
+        ...(signal === undefined ? {} : { signal }),
+      };
+      const client = new HttpClient(fetchImpl, limits, clientOptions, url.origin);
+      const response = await client.bytes(url, {
+        headers: {
+          accept: 'application/octet-stream, application/gzip, application/zip, application/json',
+          'user-agent': 'private-skills-openclaw-worker/0.1',
+        },
+        retryable: false,
+        signal,
+        rejectRedirects: true,
+      });
+      return {
+        bytes: response.bytes,
+        requestedUrl: url.href,
+        finalUrl: url.href,
+        status: response.response.status,
+        redirected: false,
+        contentType: response.response.headers.get('content-type') ?? undefined,
+        sourceProviderOrigin,
+      };
+    },
+  };
 }
 
 function assertUpstreamEnabled(upstream: Upstream): void {
@@ -1454,6 +1667,126 @@ function readSkillFrontmatter(bundle: SkillBundle): { name: string; description:
   }
 }
 
+/**
+ * ClawHub permits the standard nested `metadata.openclaw` map in SKILL.md.
+ * The Private Skills metadata parser intentionally accepts only flat string
+ * metadata for ordinary uploads, so OpenClaw acquisition uses this separate
+ * bounded, data-only validator while preserving the original bytes. It never
+ * resolves or executes values from the nested map.
+ */
+function readOpenClawFrontmatter(bundle: SkillBundle): { name: string; description: string } {
+  const file = bundle.files.find((candidate) => candidate.path === 'SKILL.md');
+  if (!file) throw new UpstreamAcquisitionError('missing_skill_file', 'OpenClaw source has no SKILL.md');
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(file.content, 'base64'));
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md is not valid UTF-8');
+  }
+  const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  if (lines[0] !== '---') throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is missing');
+  const end = lines.findIndex((line, index) => index > 0 && line === '---');
+  if (end < 0 || end > 4_096) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is invalid');
+  const frontmatter = lines.slice(0, end + 1).join('\n');
+  if (Buffer.byteLength(frontmatter, 'utf8') > 128 * 1024) {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is too large');
+  }
+  let document: ReturnType<typeof parseDocument>;
+  try {
+    document = parseDocument(lines.slice(1, end).join('\n'), {
+      customTags: [],
+      merge: false,
+      prettyErrors: false,
+      resolveKnownTags: false,
+      schema: 'core',
+      strict: true,
+      stringKeys: true,
+      uniqueKeys: true,
+      version: '1.2',
+    });
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is invalid YAML');
+  }
+  const directives = document.directives;
+  if (!directives || document.errors.length > 0 || document.warnings.length > 0 || directives.docStart !== null || directives.docEnd || directives.yaml.explicit || Object.keys(directives.tags).some((tag) => tag !== '!!') || !isMap(document.contents)) {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter is not safe YAML');
+  }
+  if (document.contents.items.length > 256) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md frontmatter has too many fields');
+  const budget = { nodes: 0 };
+  assertOpenClawYamlNode(document.contents, 0, budget);
+  let name: string | undefined;
+  let description: string | undefined;
+  for (const pair of document.contents.items) {
+    const key = openClawYamlMapKey(pair.key);
+    const normalized = key.toLocaleLowerCase('en-US');
+    if (isOpenClawDangerousKey(key)) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md enables a blocked feature');
+    if (normalized === 'metadata') {
+      if (!isMap(pair.value)) throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md metadata must be a map');
+      continue;
+    }
+    if (!isScalar(pair.value) || typeof pair.value.value !== 'string' || pair.value.value.length === 0) {
+      throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md root metadata must be scalar');
+    }
+    if (normalized === 'name') name = pair.value.value;
+    if (normalized === 'description') description = pair.value.value;
+  }
+  if (name === undefined || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name) || [...name].length > 64) {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md name is invalid');
+  }
+  if (description === undefined || description.trim().length === 0 || [...description].length > 1_024) {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md description is invalid');
+  }
+  return { name, description };
+}
+
+function openClawYamlMapKey(node: unknown): string {
+  if (!isScalar(node) || typeof node.value !== 'string' || node.value.length === 0 || node.value.length > 64 || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(node.value) || /[\u0000-\u001f\u007f]/u.test(node.value)) {
+    throw new UpstreamAcquisitionError('invalid_frontmatter', 'OpenClaw SKILL.md contains an invalid metadata key');
+  }
+  return node.value;
+}
+
+function assertOpenClawYamlNode(node: unknown, depth: number, budget: { nodes: number }): void {
+  budget.nodes += 1;
+  if (budget.nodes > 2_048 || depth > 8 || node === null || typeof node !== 'object' || isAlias(node)) {
+    throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata exceeds safe bounds');
+  }
+  if (isScalar(node)) {
+    if (typeof node.value === 'string') {
+      if (node.value.length > 16_384 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(node.value)) {
+        throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains unsafe text');
+      }
+      return;
+    }
+    if (typeof node.value === 'boolean' || (typeof node.value === 'number' && Number.isFinite(node.value))) return;
+    throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains an unsupported scalar');
+  }
+  if (isSeq(node)) {
+    if (node.items.length > 128) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata sequence is too large');
+    for (const item of node.items) assertOpenClawYamlNode(item, depth + 1, budget);
+    return;
+  }
+  if (!isMap(node) || node.items.length > 256) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata map is invalid');
+  const seen = new Set<string>();
+  for (const pair of node.items) {
+    const key = openClawYamlMapKey(pair.key);
+    const normalized = key.toLocaleLowerCase('en-US').replaceAll(/[-_]/gu, '');
+    if (seen.has(normalized) || isOpenClawDangerousKey(key)) throw new UpstreamAcquisitionError('unsafe_frontmatter', 'OpenClaw SKILL.md metadata contains a duplicate or blocked key');
+    seen.add(normalized);
+    assertOpenClawYamlNode(pair.value, depth + 1, budget);
+  }
+}
+
+function isOpenClawDangerousKey(value: string): boolean {
+  const normalized = value.toLocaleLowerCase('en-US');
+  const compact = normalized.replaceAll(/[-_]/gu, '');
+  const exact = new Set(['plugin', 'plugins', 'pluginjson', 'extension', 'extensions', 'mcp', 'mcpserver', 'mcpservers', 'hook', 'hooks', 'command', 'commands', 'script', 'scripts', 'runtime', 'runtimes', 'entrypoint', 'install', 'installer', 'tool', 'tools']);
+  if (compact === 'allowedtools') return false;
+  if (exact.has(compact)) return true;
+  const segments = normalized.replaceAll(/([a-z])([A-Z])/gu, '$1-$2').split(/[-_]+/u);
+  return ['plugin', 'extension', 'mcp', 'hook', 'command', 'script', 'runtime', 'entrypoint', 'install', 'execute'].some((part) => segments.includes(part) || compact.startsWith(part) || compact.endsWith(part));
+}
+
 function assertFrontmatterIdentity(
   frontmatter: { name: string; description: string },
   detail: ParsedSkillsShDetail,
@@ -1950,6 +2283,19 @@ function clientAllowsLoopback(client: HttpClient): boolean {
 const WELL_KNOWN_MAX_ARCHIVE_FILES = 1_000;
 const WELL_KNOWN_MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
 
+interface ArchiveDirectoryEntry {
+  path: string;
+  kind: 'directory';
+}
+
+interface ArchiveFileEntry {
+  path: string;
+  bytes: Uint8Array;
+  kind?: 'file';
+}
+
+type ArchiveEntry = ArchiveDirectoryEntry | ArchiveFileEntry;
+
 function extractWellKnownArchive(
   bytes: Uint8Array,
   contentType: string,
@@ -1982,7 +2328,291 @@ function extractWellKnownArchive(
   throw new UpstreamAcquisitionError('unsupported_archive', 'Well-known archive is not a supported ZIP, tar, or tar.gz file');
 }
 
-function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }> {
+function extractOpenClawArchive(
+  bytes: Uint8Array,
+  contentType: string,
+  artifactUrl: string,
+  limits: AcquisitionLimits,
+): ArchiveEntry[] {
+  const lowerType = contentType.toLocaleLowerCase('en-US');
+  const lowerURL = artifactUrl.toLocaleLowerCase('en-US');
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
+    return extractZipArchive(bytes, limits, true);
+  }
+  if ((bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) || lowerType.includes('gzip') || lowerURL.endsWith('.tar.gz') || lowerURL.endsWith('.tgz')) {
+    try {
+      const expandedLimit = Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES);
+      const decompressed = gunzipSync(Buffer.from(bytes), {
+        maxOutputLength: expandedLimit + Math.min(limits.maxFiles, WELL_KNOWN_MAX_ARCHIVE_FILES) * 1_024 + 1_024,
+      });
+      return extractTarArchive(decompressed, limits, true);
+    } catch (error) {
+      if (error instanceof UpstreamAcquisitionError) throw error;
+      throw new UpstreamAcquisitionError('invalid_archive', 'OpenClaw gzip archive is invalid');
+    }
+  }
+  if (lowerType.includes('tar') || lowerURL.endsWith('.tar')) {
+    return extractTarArchive(bytes, limits, true);
+  }
+  throw new UpstreamAcquisitionError('unsupported_archive', 'OpenClaw source is not a supported ZIP, tar, or tar.gz file');
+}
+
+function normalizeOpenClawArtifactOrigins(origins: readonly string[]): string[] {
+  if (!Array.isArray(origins) || origins.length === 0 || origins.length > 8) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source transport requires a bounded origin allowlist');
+  }
+  const normalized = new Set<string>();
+  for (const value of origins) {
+    if (typeof value !== 'string' || value.length > 256) {
+      throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source transport origin is invalid');
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source transport origin is invalid');
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+      throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source transport origin must be an HTTPS origin');
+    }
+    normalized.add(parsed.origin);
+  }
+  return [...normalized];
+}
+
+function normalizeOpenClawSourceProviderOrigin(value: string | undefined): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source provider origin is missing');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source provider origin is invalid');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source provider origin must be an HTTPS origin');
+  }
+  return parsed.origin;
+}
+
+function validateOpenClawTransportURL(
+  value: string,
+  allowedOrigins: readonly string[],
+  allowLoopbackForTests: boolean,
+): URL {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 8_192) {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source URL is invalid');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source URL is invalid');
+  }
+  if (parsed.protocol !== 'https:' && !(allowLoopbackForTests && parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname))) {
+    throw new UpstreamAcquisitionError('insecure_upstream', 'OpenClaw source connections require HTTPS');
+  }
+  if (parsed.username || parsed.password || parsed.hash || !allowedOrigins.includes(parsed.origin)) {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source URL is not bound to its configured origin');
+  }
+  return parsed;
+}
+
+function validateOpenClawFetchedSource(
+  fetched: OpenClawFetchedSource,
+  allowedOrigins: readonly string[],
+  limits: AcquisitionLimits,
+): OpenClawFetchedSource {
+  if (!(fetched.bytes instanceof Uint8Array)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source adapter did not return bytes');
+  }
+  if (fetched.bytes.byteLength > limits.maxResponseBytes) {
+    throw new UpstreamAcquisitionError('response_size_limit', `OpenClaw source exceeds the ${limits.maxResponseBytes}-byte response limit`);
+  }
+  if (fetched.status !== 200) {
+    throw new UpstreamAcquisitionError('unexpected_status', `OpenClaw source returned HTTP ${String(fetched.status)}`, fetched.status);
+  }
+  if (fetched.redirected === true) {
+    throw new UpstreamAcquisitionError('redirect_denied', 'OpenClaw source redirects are not accepted');
+  }
+  let requested: URL;
+  let final: URL;
+  try {
+    requested = new URL(fetched.requestedUrl);
+    final = new URL(fetched.finalUrl);
+  } catch {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source adapter returned an invalid URL');
+  }
+  if (requested.protocol !== 'https:' || final.protocol !== 'https:' || requested.username || requested.password || final.username || final.password) {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source transport must use HTTPS without URL credentials');
+  }
+  if (requested.href !== final.href || requested.origin !== final.origin) {
+    throw new UpstreamAcquisitionError('redirect_denied', 'OpenClaw source redirects are not accepted');
+  }
+  if (!allowedOrigins.includes(requested.origin)) {
+    throw new UpstreamAcquisitionError('source_origin_denied', 'OpenClaw source transport origin is not allowlisted');
+  }
+  return { ...fetched, bytes: fetched.bytes.slice() };
+}
+
+function resolveOpenClawHostedArtifact(
+  fetched: OpenClawFetchedSource,
+  expectedDigest: string,
+  limits: AcquisitionLimits,
+): SkillBundle {
+  const digest = digestBytes(fetched.bytes);
+  if (!/^sha256:[0-9a-f]{64}$/.test(expectedDigest) || digest !== expectedDigest) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'OpenClaw hosted artifact digest did not match its feed integrity');
+  }
+  const firstNonWhitespace = new TextDecoder('utf-8').decode(fetched.bytes).trimStart().slice(0, 1);
+  if (firstNonWhitespace === '{') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes)) as unknown;
+    } catch {
+      throw new UpstreamAcquisitionError('invalid_bundle', 'OpenClaw hosted artifact JSON is invalid');
+    }
+    const bundle = validateSkillBundle(parsed, limits);
+    readOpenClawFrontmatter(bundle);
+    return bundle;
+  }
+  const files = extractWellKnownArchive(
+    fetched.bytes,
+    fetched.contentType ?? '',
+    fetched.finalUrl,
+    limits,
+  );
+  const bundle = bundleFromRawFiles(files, limits);
+  readOpenClawFrontmatter(bundle);
+  return bundle;
+}
+
+function resolveOpenClawGithubArchive(
+  fetched: OpenClawFetchedSource,
+  source: Extract<OpenClawNormalizedSource, { kind: 'public-github' }>,
+  limits: AcquisitionLimits,
+): { bundle: SkillBundle; contentHash: string } {
+  if (!/^[0-9a-f]{40}$/.test(source.commit) || !/^[0-9a-f]{64}$/.test(source.contentHash)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw GitHub source identity is not immutable');
+  }
+  const selectedPath = source.path === '' ? '' : validateSkillPath(source.path, limits);
+  const entries = extractOpenClawArchive(
+    fetched.bytes,
+    fetched.contentType ?? '',
+    fetched.finalUrl,
+    limits,
+  );
+  const archiveRoot = inferOpenClawGithubArchiveRoot(entries, source.commit, limits);
+  const selected = selectOpenClawGithubFolder(entries, archiveRoot, selectedPath, limits);
+  const contentHash = digestOpenClawFolder(selected);
+  if (contentHash !== source.contentHash) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'OpenClaw GitHub folder content hash did not match its feed integrity');
+  }
+  const files = selected
+    .filter((entry): entry is ArchiveFileEntry => entry.kind !== 'directory')
+    .filter((entry) => {
+      const first = entry.path.split('/')[0];
+      return first !== '.clawhub' && first !== '.clawdhub';
+    })
+    .map((entry) => ({ path: entry.path, bytes: entry.bytes }));
+  const bundle = bundleFromRawFiles(files, limits);
+  readOpenClawFrontmatter(bundle);
+  return { bundle, contentHash };
+}
+
+function inferOpenClawGithubArchiveRoot(
+  entries: readonly ArchiveEntry[],
+  commit: string,
+  limits: AcquisitionLimits,
+): string {
+  const roots = new Set<string>();
+  for (const entry of entries) {
+    const first = entry.path.split('/')[0];
+    if (!first || first === '.' || first === '..') {
+      throw new UpstreamAcquisitionError('invalid_path', 'OpenClaw GitHub archive has no safe repository root');
+    }
+    roots.add(first);
+    if (roots.size > 1) throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw GitHub archive has multiple repository roots');
+  }
+  const root = [...roots][0];
+  if (!root || !root.endsWith(`-${commit}`)) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'OpenClaw GitHub archive is not pinned to the requested commit');
+  }
+  // Validate the archive root as a path segment even though it is removed
+  // before bundle validation; this rejects encoded/control path surprises.
+  validateSkillPath(root, limits, false);
+  return root;
+}
+
+function selectOpenClawGithubFolder(
+  entries: readonly ArchiveEntry[],
+  archiveRoot: string,
+  selectedPath: string,
+  limits: AcquisitionLimits,
+): ArchiveEntry[] {
+  const prefix = `${archiveRoot}/`;
+  const selectedPrefix = selectedPath ? `${selectedPath}/` : '';
+  const output: ArchiveEntry[] = [];
+  for (const entry of entries) {
+    if (!entry.path.startsWith(prefix)) continue;
+    const withoutRoot = entry.path.slice(prefix.length);
+    if (!withoutRoot || withoutRoot === selectedPath) continue;
+    const relative = selectedPath
+      ? withoutRoot.startsWith(selectedPrefix) ? withoutRoot.slice(selectedPrefix.length) : undefined
+      : withoutRoot;
+    if (relative === undefined || relative === '') continue;
+    // ClawHub's source identity hash includes its install metadata files. Keep
+    // those entries through verification, then omit them only when building
+    // the canonical installed bundle below. They still receive path safety
+    // checks, but are not treated as executable plugin payload.
+    const safe = validateSkillPath(relative, limits, false);
+    output.push(entry.kind === 'directory' ? { path: safe, kind: 'directory' } : { path: safe, bytes: entry.bytes, kind: 'file' });
+  }
+  if (!output.some((entry) => entry.kind !== 'directory' && entry.path === 'SKILL.md')) {
+    throw new UpstreamAcquisitionError('source_not_found', 'OpenClaw GitHub archive does not contain the selected SKILL.md');
+  }
+  return output;
+}
+
+function digestOpenClawFolder(entries: readonly ArchiveEntry[]): string {
+  const files = new Map<string, Uint8Array>();
+  const directories = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === 'directory') {
+      if (files.has(entry.path)) {
+        throw new UpstreamAcquisitionError('path_collision', `OpenClaw source path ${entry.path} is both a file and directory`);
+      }
+      directories.add(entry.path);
+      continue;
+    }
+    if (files.has(entry.path)) throw new UpstreamAcquisitionError('path_collision', `OpenClaw source contains duplicate path ${entry.path}`);
+    if (directories.has(entry.path)) throw new UpstreamAcquisitionError('path_collision', `OpenClaw source path ${entry.path} is both a file and directory`);
+    files.set(entry.path, entry.bytes);
+    const parts = entry.path.split('/');
+    for (let index = 1; index < parts.length; index += 1) {
+      const directory = parts.slice(0, index).join('/');
+      if (files.has(directory)) throw new UpstreamAcquisitionError('path_collision', `OpenClaw source path ${directory} is both a file and directory`);
+      directories.add(directory);
+    }
+  }
+  // Pinned ClawHub folder identity: file paths are sorted and represented as
+  // relative path, byte length, and content digest. Directory records are not
+  // hashed, while install metadata files remain part of source identity.
+  const lines = [...files.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, bytes]) => `${path}\0${bytes.byteLength}\0${createHash('sha256').update(bytes).digest('hex')}`);
+  if (lines.length === 0) throw new UpstreamAcquisitionError('source_not_found', 'OpenClaw source folder contains no files');
+  return createHash('sha256').update(lines.join('\n'), 'utf8').digest('hex');
+}
+
+function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }>;
+function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits, includeDirectories: true): ArchiveEntry[];
+function extractZipArchive(
+  bytes: Uint8Array,
+  limits: AcquisitionLimits,
+  includeDirectories = false,
+): ArchiveEntry[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocd = findZipEndOfCentralDirectory(bytes);
   if (eocd < 0) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP archive has no end record');
@@ -2002,9 +2632,10 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
   if (entryCount > Math.min(WELL_KNOWN_MAX_ARCHIVE_FILES, limits.maxFiles) || centralOffset + centralSize !== eocd) {
     throw new UpstreamAcquisitionError('archive_limit', 'ZIP archive exceeds entry or size limits');
   }
-  const files: Array<{ path: string; bytes: Uint8Array }> = [];
+  const files: ArchiveEntry[] = [];
   const seen = new Set<string>();
   const dataRanges: Array<{ start: number; end: number }> = [];
+  const localOffsets = collectZipLocalOffsets(view, centralOffset, centralSize, entryCount);
   let cursor = centralOffset;
   let total = 0;
   for (let index = 0; index < entryCount; index += 1) {
@@ -2020,8 +2651,8 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
     const commentLength = readU16(view, cursor + 32, 'ZIP comment length');
     const localOffset = readU32(view, cursor + 42, 'ZIP local header offset');
     const recordEnd = cursor + 46 + nameLength + extraLength + commentLength;
-    if (recordEnd > bytes.length || (flags & 0x1) !== 0 || (flags & 0x8) !== 0) {
-      throw new UpstreamAcquisitionError('unsupported_archive', 'Encrypted or descriptor-based ZIP entries are not supported');
+    if (recordEnd > centralOffset + centralSize || (flags & 0x1) !== 0) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'Encrypted ZIP entries are not supported');
     }
     if (method !== 0 && method !== 8) throw new UpstreamAcquisitionError('unsupported_archive', 'ZIP compression method is unsupported');
     if (uncompressedSize > limits.maxFileBytes || uncompressedSize > WELL_KNOWN_MAX_ARCHIVE_BYTES || compressedSize > limits.maxResponseBytes) {
@@ -2049,7 +2680,12 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
     }
     if (rawName.endsWith('/')) {
       const directoryName = rawName.slice(0, -1);
-      if (directoryName) validateArchivePath(directoryName, limits);
+      if (directoryName) {
+        const path = validateArchivePath(directoryName, limits);
+        if (seen.has(path)) throw new UpstreamAcquisitionError('path_collision', `ZIP archive contains duplicate path ${path}`);
+        seen.add(path);
+        if (includeDirectories) files.push({ path, kind: 'directory' });
+      }
       cursor = recordEnd;
       continue;
     }
@@ -2070,10 +2706,20 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
     const localUncompressedSize = readU32(view, localOffset + 22, 'ZIP local uncompressed size');
     const localNameLength = readU16(view, localOffset + 26, 'ZIP local name length');
     const localExtraLength = readU16(view, localOffset + 28, 'ZIP local extra length');
-    if (localFlags !== flags || localMethod !== method || localCrc !== readU32(view, cursor + 16, 'ZIP CRC') || localCompressedSize !== compressedSize || localUncompressedSize !== uncompressedSize) {
+    const centralCrc = readU32(view, cursor + 16, 'ZIP CRC');
+    const hasDataDescriptor = (flags & 0x8) !== 0;
+    if (localFlags !== flags || localMethod !== method) {
       throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header does not match its central record');
     }
-    if (localOffset + 30 + localNameLength + localExtraLength > centralOffset) {
+    if (hasDataDescriptor
+      ? ((localCrc !== 0 && localCrc !== centralCrc)
+        || (localCompressedSize !== 0 && localCompressedSize !== compressedSize)
+        || (localUncompressedSize !== 0 && localUncompressedSize !== uncompressedSize))
+      : (localCrc !== centralCrc || localCompressedSize !== compressedSize || localUncompressedSize !== uncompressedSize)) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header does not match its central record');
+    }
+    const localBoundary = nextZipLocalOffset(localOffsets, localOffset, centralOffset);
+    if (localOffset + 30 + localNameLength + localExtraLength > localBoundary) {
       throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header is truncated');
     }
     const localName = bytes.subarray(localOffset + 30, localOffset + 30 + localNameLength);
@@ -2082,10 +2728,27 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
     }
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
     const dataEnd = dataStart + compressedSize;
-    if (dataEnd > centralOffset) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP file data overlaps its central directory');
-    const priorRange = dataRanges.find((range) => localOffset < range.end && dataEnd > range.start);
+    if (dataEnd > localBoundary) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP file data overlaps its next record');
+    let entryEnd = dataEnd;
+    if (hasDataDescriptor) {
+      const descriptorBytes = localBoundary - dataEnd;
+      const hasSignature = descriptorBytes === 16 && readU32(view, dataEnd, 'ZIP data descriptor signature') === 0x08074b50;
+      const descriptorLength = hasSignature ? 16 : 12;
+      if (descriptorBytes !== descriptorLength) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'ZIP data descriptor has an invalid boundary');
+      }
+      const descriptorOffset = hasSignature ? dataEnd + 4 : dataEnd;
+      const descriptorCrc = readU32(view, descriptorOffset, 'ZIP data descriptor CRC');
+      const descriptorCompressedSize = readU32(view, descriptorOffset + 4, 'ZIP data descriptor compressed size');
+      const descriptorUncompressedSize = readU32(view, descriptorOffset + 8, 'ZIP data descriptor uncompressed size');
+      if (descriptorCrc !== centralCrc || descriptorCompressedSize !== compressedSize || descriptorUncompressedSize !== uncompressedSize) {
+        throw new UpstreamAcquisitionError('digest_mismatch', 'ZIP data descriptor does not match its central record');
+      }
+      entryEnd = dataEnd + descriptorLength;
+    }
+    const priorRange = dataRanges.find((range) => localOffset < range.end && entryEnd > range.start);
     if (priorRange) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP file data overlaps another entry');
-    dataRanges.push({ start: localOffset, end: dataEnd });
+    dataRanges.push({ start: localOffset, end: entryEnd });
     let content: Uint8Array;
     try {
       content = method === 0
@@ -2097,14 +2760,54 @@ function extractZipArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
       throw new UpstreamAcquisitionError('invalid_archive', `ZIP entry ${path} could not be decompressed`);
     }
     if (content.length !== uncompressedSize) throw new UpstreamAcquisitionError('size_mismatch', `ZIP entry ${path} size mismatch`);
-    if (crc32Bytes(content) !== readU32(view, cursor + 16, 'ZIP CRC')) throw new UpstreamAcquisitionError('digest_mismatch', `ZIP entry ${path} CRC mismatch`);
+    if (crc32Bytes(content) !== centralCrc) throw new UpstreamAcquisitionError('digest_mismatch', `ZIP entry ${path} CRC mismatch`);
     total += content.length;
     if (total > Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES)) throw new UpstreamAcquisitionError('archive_limit', 'ZIP archive exceeds expanded size limits');
-    files.push({ path, bytes: content });
+    files.push({ path, bytes: content, kind: 'file' });
     cursor = recordEnd;
   }
   if (cursor !== centralOffset + centralSize) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory size is inconsistent');
   return files;
+}
+
+function collectZipLocalOffsets(
+  view: DataView,
+  centralOffset: number,
+  centralSize: number,
+  entryCount: number,
+): number[] {
+  const centralEnd = centralOffset + centralSize;
+  const offsets: number[] = [];
+  const seen = new Set<number>();
+  let cursor = centralOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > centralEnd || readU32(view, cursor, 'ZIP central signature') !== 0x02014b50) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory is malformed');
+    }
+    const nameLength = readU16(view, cursor + 28, 'ZIP file name length');
+    const extraLength = readU16(view, cursor + 30, 'ZIP extra length');
+    const commentLength = readU16(view, cursor + 32, 'ZIP comment length');
+    const recordEnd = cursor + 46 + nameLength + extraLength + commentLength;
+    if (recordEnd > centralEnd) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory record is truncated');
+    const localOffset = readU32(view, cursor + 42, 'ZIP local header offset');
+    if (localOffset >= centralOffset || seen.has(localOffset)) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header offsets are invalid');
+    }
+    seen.add(localOffset);
+    offsets.push(localOffset);
+    cursor = recordEnd;
+  }
+  if (cursor !== centralEnd) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP central directory size is inconsistent');
+  return offsets;
+}
+
+function nextZipLocalOffset(offsets: readonly number[], current: number, centralOffset: number): number {
+  let boundary = centralOffset;
+  for (const offset of offsets) {
+    if (offset > current && offset < boundary) boundary = offset;
+  }
+  if (boundary <= current) throw new UpstreamAcquisitionError('invalid_archive', 'ZIP local header ordering is invalid');
+  return boundary;
 }
 
 function findZipEndOfCentralDirectory(bytes: Uint8Array): number {
@@ -2144,8 +2847,14 @@ function crc32Bytes(value: Uint8Array): number {
   return (result ^ 0xffffffff) >>> 0;
 }
 
-function extractTarArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }> {
-  const files: Array<{ path: string; bytes: Uint8Array }> = [];
+function extractTarArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<{ path: string; bytes: Uint8Array }>;
+function extractTarArchive(bytes: Uint8Array, limits: AcquisitionLimits, includeDirectories: true): ArchiveEntry[];
+function extractTarArchive(
+  bytes: Uint8Array,
+  limits: AcquisitionLimits,
+  includeDirectories = false,
+): ArchiveEntry[] {
+  const files: ArchiveEntry[] = [];
   const seen = new Set<string>();
   let offset = 0;
   let total = 0;
@@ -2184,9 +2893,15 @@ function extractTarArchive(bytes: Uint8Array, limits: AcquisitionLimits): Array<
       const content = bytes.slice(offset, offset + size);
       total += content.length;
       if (total > Math.min(limits.maxExpandedBytes, WELL_KNOWN_MAX_ARCHIVE_BYTES)) throw new UpstreamAcquisitionError('archive_limit', 'tar archive exceeds expanded size limits');
-      files.push({ path, bytes: content });
+      files.push({ path, bytes: content, kind: 'file' });
     } else if (type === 0x35) {
-      if (rawPath) validateArchivePath(rawPath, limits);
+      if (rawPath) {
+        const directoryPath = rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
+        const path = validateArchivePath(directoryPath, limits);
+        if (seen.has(path)) throw new UpstreamAcquisitionError('path_collision', `tar archive contains duplicate path ${path}`);
+        seen.add(path);
+        if (includeDirectories) files.push({ path, kind: 'directory' });
+      }
     } else {
       throw new UpstreamAcquisitionError('unsupported_archive', 'tar archive contains a link or unsupported entry');
     }
@@ -3216,6 +3931,9 @@ class HttpClient {
       });
       const status = response.status;
       if (isRedirectStatus(status)) {
+        if (request.rejectRedirects) {
+          throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirects are not accepted', status);
+        }
         const location = response.headers.get('location');
         if (!location || redirects >= this.limits.maxRedirects) {
           throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirect limit exceeded', status);
@@ -3351,6 +4069,8 @@ interface ClientRequest {
   allowCrossOriginRedirectWithoutAuth?: boolean;
   /** Strip credentials on same-origin redirects for bound catalog requests. */
   stripCredentialsOnRedirect?: boolean;
+  /** Reject redirects before any location/body is consumed. */
+  rejectRedirects?: boolean;
   expectJson?: boolean;
 }
 
