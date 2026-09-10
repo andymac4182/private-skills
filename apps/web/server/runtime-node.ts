@@ -29,6 +29,8 @@ import {
   type SkillsTokenProvider,
 } from '../../../packages/directory/src/index';
 
+export { createBuilderBffRuntime } from './builder-runtime';
+
 export type RuntimeEnvironment = Record<string, string | undefined>;
 
 export interface UploadReviewRuntime {

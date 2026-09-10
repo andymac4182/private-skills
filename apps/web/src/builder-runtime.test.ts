@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBuilderBffRuntime } from '../server/builder-runtime';
+import { createBuilderBffRuntime as createNodeBuilderBffRuntime } from '../server/runtime-node';
+import { createBuilderBffRuntime as createEdgeBuilderBffRuntime } from '../server/runtime-edge';
 
 const TOKENS = {
   PSKILLS_BUILDER_SERVICE_TOKEN: 'service-token',
@@ -64,5 +66,7 @@ describe('builder runtime configuration', () => {
     expect(runtime?.appOrigin).toBe('https://builder.example.test');
     expect(runtime?.serviceToken).toBe('service-token');
     expect(runtime?.eveToken).toBe('eve-token');
+    expect(createNodeBuilderBffRuntime(env)).toEqual(runtime);
+    expect(createEdgeBuilderBffRuntime(env)).toEqual(runtime);
   });
 });

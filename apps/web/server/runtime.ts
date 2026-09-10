@@ -15,6 +15,7 @@ import {
   SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
+import { createBuilderBffRuntime } from './builder-runtime';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -51,6 +52,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     officialTokenProvider: infrastructure.directoryOfficialTokenProvider,
   });
   const auth = await createAuthenticatorFromEnv(env);
+  const builder = createBuilderBffRuntime(env);
   // Directory access is an explicit server-side opt-in. The selected
   // infrastructure profile owns the credential callback: Node resolves the
   // official Vercel OIDC helper per request for skills.sh, while edge keeps
@@ -74,6 +76,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     directory,
     directoryPacks,
     directoryForBase,
+    ...(builder === undefined ? {} : { builder }),
     ...(uploadReviewRuntime?.configured !== true ? {} : {
       uploadReview: {
         service: uploadReviewRuntime.service,

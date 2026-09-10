@@ -9,6 +9,7 @@ import {
   resolveSkillsDirectoryConnection,
   type SkillsTokenProvider,
 } from '../../../packages/directory/src/index';
+export { createBuilderBffRuntime } from './builder-runtime';
 export type RuntimeEnvironment = Record<string, string | undefined>;
 
 /** Edge does not import the Vercel OIDC or provider SDK; custom gateway auth is explicit and separate. */
