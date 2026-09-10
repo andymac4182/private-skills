@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus } from './DraftEditor'
+import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
 
 const draft: DraftView = {
@@ -38,6 +38,28 @@ describe('draft editor persistence identities', () => {
     const firstKey = operationKey(ref, 'draft-save', draft, firstFingerprint)
     expect(operationKey(ref, 'draft-save', draft, sameFingerprint)).toBe(firstKey)
     expect(operationKey(ref, 'draft-save', draft, changedFingerprint)).not.toBe(firstKey)
+  })
+
+  it('binds sparse save identity to references and their saved revision', async () => {
+    const digest = 'sha256:' + 'a'.repeat(64) as `sha256:${string}`
+    const sparse = [{ path: 'assets/final.bin', sourcePath: 'assets/original.bin', digest }]
+    const same = await draftPayloadFingerprint(sparse, { expectedRevision: 2, expectedDigest: 'sha256:revision-2' })
+    const differentSource = await draftPayloadFingerprint([{ ...sparse[0], sourcePath: 'assets/other.bin' }], { expectedRevision: 2, expectedDigest: 'sha256:revision-2' })
+    const differentRevision = await draftPayloadFingerprint(sparse, { expectedRevision: 3, expectedDigest: 'sha256:revision-3' })
+
+    expect(canonicalDraftFiles(sparse)).toContain(`"sourcePath":"assets/original.bin"`)
+    expect(canonicalDraftFiles(sparse)).toContain(`"digest":"${digest}"`)
+    expect(same).not.toBe(differentSource)
+    expect(same).not.toBe(differentRevision)
+  })
+
+  it('preserves the original saved source across a multi-step rename chain', () => {
+    expect(renameOriginForPath(
+      'assets/final.bin',
+      { 'assets/final.bin': 'assets/original.bin' },
+      [{ path: 'assets/original.bin', content: 'b3JpZ2luYWw=' }, { path: 'assets/final.bin', content: 'b2xk' }],
+      [{ path: 'assets/original.bin' }, { path: 'assets/final.bin' }],
+    )).toBe('assets/original.bin')
   })
 
   it('sends unchanged large and renamed files as digest references while omitting deletions', async () => {

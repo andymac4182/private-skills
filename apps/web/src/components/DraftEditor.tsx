@@ -193,18 +193,35 @@ function cloneFiles(files: DraftFile[]): DraftFile[] {
 /**
  * The idempotency identity is the canonical submitted file payload. Sorting
  * by path makes retries stable even when a caller rebuilt the same manifest
- * in a different order; executable is included because it changes the bundle.
+ * in a different order; the shape mirrors the server's delta canonicalizer.
  */
-export function canonicalDraftFiles(files: DraftFile[]): string {
-  return JSON.stringify([...files].sort((left, right) => left.path.localeCompare(right.path)).map((file) => ({
-    path: file.path,
-    content: file.content,
-    ...(file.executable === undefined ? {} : { executable: file.executable }),
-  })))
+export function canonicalDraftFiles(files: DraftFileUpdate[]): string {
+  return JSON.stringify([...files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0).map((file) => {
+    if ('digest' in file) {
+      return {
+        path: file.path,
+        ...(file.sourcePath === undefined ? {} : { sourcePath: file.sourcePath }),
+        digest: file.digest,
+      }
+    }
+    return {
+      path: file.path,
+      content: file.content,
+      ...(file.executable === true ? { executable: true } : {}),
+    }
+  }))
 }
 
-export async function draftPayloadFingerprint(files: DraftFile[]): Promise<string> {
-  const canonical = canonicalDraftFiles(files)
+export async function draftPayloadFingerprint(
+  files: DraftFileUpdate[],
+  binding?: { expectedRevision?: number; expectedDigest?: string },
+): Promise<string> {
+  const canonicalFiles = JSON.parse(canonicalDraftFiles(files)) as unknown
+  const canonical = JSON.stringify({
+    ...(binding?.expectedRevision === undefined ? {} : { expectedRevision: binding.expectedRevision }),
+    ...(binding?.expectedDigest === undefined ? {} : { expectedDigest: binding.expectedDigest }),
+    files: canonicalFiles,
+  })
   if (typeof crypto !== 'undefined' && crypto.subtle) {
     const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
     return `sha256:${Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
@@ -258,6 +275,19 @@ export async function buildDraftDeltaFiles(
   }
 
   return delta
+}
+
+/** Carry a rename chain back to the saved path that still owns its bytes. */
+export function renameOriginForPath(
+  selectedPath: string,
+  renameOrigins: Readonly<Record<string, string>>,
+  savedFiles: DraftFile[],
+  releaseBaseEntries: ReadonlyArray<Pick<ReleaseBaselineEntry, 'path'>>,
+): string | undefined {
+  const carriedOrigin = renameOrigins[selectedPath]
+  if (carriedOrigin && carriedOrigin !== selectedPath) return carriedOrigin
+  if (savedFiles.some((file) => file.path === selectedPath)) return selectedPath
+  return releaseBaseEntries.some((entry) => entry.path === selectedPath) ? selectedPath : undefined
 }
 
 function filesEqual(left: DraftFile[], right: DraftFile[]): boolean {
@@ -754,9 +784,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     // A reference must point into the currently saved draft revision. Prefer
     // the selected saved path when it exists; the release path can be older
     // than a resumed draft that was already renamed in a previous revision.
-    const origin = savedFiles.some((file) => file.path === selectedPath)
-      ? selectedPath
-      : renameOrigins[selectedPath] ?? (releaseBaseEntries.some((entry) => entry.path === selectedPath) ? selectedPath : undefined)
+    const origin = renameOriginForPath(selectedPath, renameOrigins, savedFiles, releaseBaseEntries)
     const nextFiles = syncSurfaceFiles().map((file) => file.path === selectedPath ? { ...file, path } : file)
     setWorkingFiles(nextFiles)
     setRenameOrigins((current) => {
@@ -798,10 +826,10 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setError(null)
     setMessage(null)
     try {
-      const payloadFingerprint = await draftPayloadFingerprint(snapshot)
-      if (generation !== requestGeneration.current) return
-      const key = operationKey(saveOperation, 'draft-save', draft, payloadFingerprint)
       const files = await buildDraftDeltaFiles(savedFiles, snapshot, renameOrigins)
+      if (generation !== requestGeneration.current) return
+      const payloadFingerprint = await draftPayloadFingerprint(files, { expectedRevision: draft.revision, expectedDigest: draft.digest })
+      const key = operationKey(saveOperation, 'draft-save', draft, payloadFingerprint)
       if (generation !== requestGeneration.current) return
       const response = await api.updateDraft(draft.id, {
         expectedRevision: draft.revision,
