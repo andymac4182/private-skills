@@ -77,7 +77,8 @@ new content and execution boundaries.
   The PR34 release checkpoint has READY registry, builder, and upload-reviewer
   services. The [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
   records authenticated release-file rendering and responsive/keyboard checks,
-  without production writes or model calls. The [local synthetic editor/browser
+  without authoring mutations or publication; `modelCalls` was false for that
+  viewer capture. The [local synthetic editor/browser
   evidence](evidence/m6-editor-browser-local-29f7.json) passes bounded
   desktop/mobile draft checks; live upload-review/model execution, durable
   upload-draft resume, and screenreader/contrast/reduced-motion acceptance

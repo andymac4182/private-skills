@@ -17,17 +17,25 @@ registry import, or model job.
 The authenticated [hosted M6 viewer checkpoint](evidence/production-m6-hosted-viewer-34e4f56.json)
 used the stable production alias and the named deployment from this release.
 It returned auth 200 and rendered the genuine Pierre viewer. The selected
-`SKILL.md` was 1,231 bytes and its browser-computed digest matched the release
-digest; keyboard tree focus, desktop 1280px/mobile 390px no-overflow behavior,
-and inner code scrolling were observed, with no console or page errors. This is
-read-only viewer evidence: it records no production writes, model calls, or
-publication, and does not prove the M6 model/apply/review/scan workflow,
+`SKILL.md` was 1,231 bytes and its browser-computed digest matched the
+selected-file content digest; keyboard tree focus, desktop 1280px/mobile 390px
+no-overflow behavior, and inner code scrolling were observed, with no console
+or page errors. This is read-only viewer evidence: the capture recorded no
+authoring mutations or publication, with `modelCalls: false` for this viewer
+capture, and does not prove the M6 model/apply/review/scan workflow,
 screenreader, contrast, or reduced-motion acceptance. The upload-draft resume
 gap remains active because `PublishView` keeps an upload draft in memory while
 the catalog release query is not a compatible upload-draft resume route. The
 OpenClaw feed remains disabled pending review and explicit activation, and
 native CI remains open. This checkpoint does not claim all G0, C1, or M6
 criteria complete.
+
+A separate bounded [M6 Eve session record](evidence/production-m6-eve-session-34e4f56.json)
+captures one accepted prompt in a ready two-turn session. No proposal was
+created, and the assistant reported that proposal tools were unavailable. This
+is a same-origin session-body observation only; it does not identify the cause,
+prove model/tool integration, or establish proposal application. Source and log
+review remains pending.
 
 The editor API and authoring source remain shipped, the local synthetic
 [editor-browser record](evidence/m6-editor-browser-local-29f7.json) retains its
