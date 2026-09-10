@@ -1,0 +1,34 @@
+{
+  "schema": "private-skills-builder-callback-auth-preflight-v1",
+  "capturedAt": "2026-09-10T13:59:48.473758Z",
+  "registryOrigin": "https://private-skills-theta.vercel.app",
+  "registryDeploymentId": "dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL",
+  "builderDeploymentId": "dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF",
+  "uploadReviewerDeploymentId": "dpl_5towM6j191dG7rPGzefwhh68uYm6",
+  "sourceRef": "main",
+  "sourceSha": "fa13c5689380ab2e71784f72a36b7cac7296bbc8",
+  "allThreeReady": true,
+  "method": "GET",
+  "endpoint": "/v1/me",
+  "redirectFollowed": false,
+  "headerIdentity": "skill-builder",
+  "httpStatus": 200,
+  "contentType": "application/json",
+  "principalMatches": {
+    "organizationId": "default",
+    "namespace": "@acme",
+    "subject": "private-skills-builder-bff",
+    "publisherRole": true,
+    "workerRoleAbsent": true,
+    "identityNonWorker": true,
+    "scopes": [
+      "skills:builder"
+    ]
+  },
+  "tokenHashMatchesPrivateConfig": true,
+  "tokenPlaintextRetained": false,
+  "bodyRecorded": false,
+  "modelSessionStarted": false,
+  "draftContextSent": false,
+  "mutatingRequestIssued": false
+}

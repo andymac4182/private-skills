@@ -1,16 +1,19 @@
 # Current verification checkpoint
 
-**Date:** 2026-09-10
+**As of:** 2026-09-10T13:59:48Z
 
-**Status:** PR31 is merged on `origin/main` at
-`9caf2c178e92821cb9f3176a91a8ff5dafe2942f`. Its Git-triggered registry and
-upload-reviewer deployments are READY as
-`dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq` and `dpl_GPEcNFJe1uymD9yWcPfkfVZziE3g`.
-The sanitized [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json)
-records upload-review enablement/configuration, the credential-rotation
-boundary, 12 read-only registry checks, zero registry writes, and no scanner
-policy change; it records no secret values and no live model session. The
-earlier [M6 read-only release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+**Latest verified deployment checkpoint:** PR32 source SHA
+`fa13c5689380ab2e71784f72a36b7cac7296bbc8` has Git-triggered READY registry,
+builder, and upload-reviewer deployments
+`dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL`, `dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF`, and
+`dpl_5towM6j191dG7rPGzefwhh68uYm6`. The sanitized [activation readback](evidence/production-activation-readback-fa13c568.json)
+records seven bounded GET checks, the fail-closed callback method boundary,
+zero registry writes, and no model session. The sanitized [builder callback
+preflight](evidence/builder-callback-auth-preflight-fa13c568.json) records an
+enabled builder service, the non-worker `skills:builder` principal, and no
+mutating request, draft context, or model session. This is an
+as-of/source-scoped deployment record; it does not stand in for a later source
+commit's deployment. The earlier [M6 read-only release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
 retains its own source/deployment provenance. The editor API and authoring
 source are shipped. A local synthetic [editor-browser record](evidence/m6-editor-browser-local-29f7.json)
 from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7` passes the desktop/mobile
@@ -26,11 +29,11 @@ revision 114, five referenced objects totaling 10,381 bytes, exact target
 revision 114, five digest/size-verified target objects, and post-restore target
 cleanup. The copy window uses operator-quiescence attestation and does not
 claim a provider lifecycle guarantee or a restored-origin health/scanner run.
-The OpenClaw backend is shipped but remains disabled, with no live
-interoperability evidence. M6 and M7 remain outside the current C1 release
-gate.
+The OpenClaw backend is shipped but its feed remains disabled pending review and
+explicit activation, with no live interoperability evidence. M6 and M7 remain
+outside the current C1 release gate.
 
-## Current Git-triggered M6 read-only release-file checkpoint
+## Recorded Git-triggered M6 read-only release-file checkpoint
 
 The earlier READY registry deployment `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3` was
 built from main commit `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`. The
@@ -45,11 +48,13 @@ file's server-reported digest matched its transiently read contents, response
 bodies and credentials were not retained, and the pass recorded zero
 private-registry writes. This is production HTTP/API evidence for the M6
 read-only release-file slice; it does not prove the full editor/reviewer/builder
-workflow or browser acceptance. The current PR31 registry and upload-reviewer
-deployments are recorded in the [activation evidence](evidence/production-activation-rotation-dpl_DEgATrBE5jp4itwS4bH1QUkyCXvq.json);
-upload review is enabled/configured, but no live model session has started.
+workflow or browser acceptance. The latest verified PR32 registry, builder, and
+upload-reviewer deployment set is recorded in the [activation readback](evidence/production-activation-readback-fa13c568.json)
+and [builder callback preflight](evidence/builder-callback-auth-preflight-fa13c568.json);
+the checkpoint records enabled services and authenticated boundaries, but no
+live model session or draft context has started.
 
-## Current M6 local editor/browser checkpoint
+## Recorded M6 local editor/browser checkpoint
 
 The sanitized [local editor-browser evidence](evidence/m6-editor-browser-local-29f7.json)
 records a synthetic 123-file fixture from source `29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7`.

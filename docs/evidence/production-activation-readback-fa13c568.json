@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 1,
+  "releaseSource": "fa13c5689380ab2e71784f72a36b7cac7296bbc8",
+  "deploymentIds": {
+    "registry": "dpl_AiWF6qqzdggkJq6qVhoUg6Lh5AVL",
+    "builder": "dpl_8E23dQ4WzQnpuYKx6UBMPRt89MoF",
+    "reviewer": "dpl_5towM6j191dG7rPGzefwhh68uYm6"
+  },
+  "stableAliases": {
+    "registry": "https://private-skills-theta.vercel.app",
+    "builder": "https://private-skills-builder.vercel.app",
+    "reviewer": "https://private-skills-upload-reviewer.vercel.app"
+  },
+  "requests": [
+    {
+      "name": "registry_health",
+      "method": "GET",
+      "origin": "https://private-skills-theta.vercel.app",
+      "path": "/health",
+      "expectedStatuses": [
+        200
+      ],
+      "authenticated": true,
+      "status": 200,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "ok",
+          "service",
+          "version"
+        ],
+        "ok": true,
+        "servicePresent": true,
+        "versionPresent": true
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "registry_me",
+      "method": "GET",
+      "origin": "https://private-skills-theta.vercel.app",
+      "path": "/v1/me",
+      "expectedStatuses": [
+        200
+      ],
+      "authenticated": true,
+      "status": 200,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "organizationId",
+          "subject",
+          "roles",
+          "namespaces",
+          "scopes"
+        ]
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "registry_policy",
+      "method": "GET",
+      "origin": "https://private-skills-theta.vercel.app",
+      "path": "/v1/policy",
+      "expectedStatuses": [
+        200
+      ],
+      "authenticated": true,
+      "status": 200,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "policy"
+        ],
+        "allowUnscanned": false,
+        "scannerModes": [
+          {
+            "id": "cisco-skill-scanner",
+            "mode": "disabled"
+          },
+          {
+            "id": "nvidia-skillspector",
+            "mode": "disabled"
+          },
+          {
+            "id": "skillsguard",
+            "mode": "required"
+          }
+        ]
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "registry_callback_auth_probe",
+      "method": "GET",
+      "origin": "https://private-skills-theta.vercel.app",
+      "path": "/internal/upload-review/prepare",
+      "expectedStatuses": [
+        405
+      ],
+      "authenticated": true,
+      "status": 405,
+      "allow": "POST",
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "error"
+        ]
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "builder_status",
+      "method": "GET",
+      "origin": "https://private-skills-builder.vercel.app",
+      "path": "/internal/builder/status",
+      "expectedStatuses": [
+        200
+      ],
+      "authenticated": true,
+      "status": 200,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "enabled",
+          "model",
+          "gatewayConfigured",
+          "registryConfigured",
+          "serviceConfigured",
+          "eveConfigured",
+          "reasonCodes"
+        ],
+        "enabled": true,
+        "reasonCodeCount": 0
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "reviewer_info",
+      "method": "GET",
+      "origin": "https://private-skills-upload-reviewer.vercel.app",
+      "path": "/eve/v1/info",
+      "expectedStatuses": [
+        200
+      ],
+      "authenticated": true,
+      "status": 200,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "agent",
+          "capabilities",
+          "channels",
+          "composition",
+          "connections",
+          "diagnostics",
+          "hooks",
+          "instructions",
+          "kernelEffects",
+          "kind",
+          "memories",
+          "mode",
+          "remoteAgents",
+          "sandbox",
+          "schedules",
+          "skills",
+          "subagents",
+          "tools",
+          "version",
+          "workflow",
+          "workspace"
+        ]
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    },
+    {
+      "name": "reviewer_health",
+      "method": "GET",
+      "origin": "https://private-skills-upload-reviewer.vercel.app",
+      "path": "/health",
+      "expectedStatuses": [
+        200,
+        404
+      ],
+      "authenticated": false,
+      "status": 404,
+      "allow": null,
+      "contentType": "application/json",
+      "shape": {
+        "bodyType": "object",
+        "keys": [
+          "error",
+          "status",
+          "message"
+        ]
+      },
+      "expected": true,
+      "credentialPatternAbsent": true
+    }
+  ],
+  "requestCount": 7,
+  "methods": [
+    "GET"
+  ],
+  "registryWrites": 0,
+  "secretValuesRead": true,
+  "secretValuesEmitted": false,
+  "modelSessionStarted": false
+}
