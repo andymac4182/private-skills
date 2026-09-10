@@ -62,6 +62,12 @@ interface SourceFixture {
   sourceFetch: ReturnType<typeof vi.fn>;
 }
 
+interface DirectoryCallCounts {
+  detail: number;
+  search: number;
+  list: number;
+}
+
 function deterministicScanner(): ScannerAdapter {
   return {
     id: 'skillsguard',
@@ -238,11 +244,22 @@ async function createFixtureHarness(fixture: SourceFixture): Promise<{
   feed: Feed;
   runner: WorkerRunner;
   workerFailures: string[];
+  directoryCalls: DirectoryCallCounts;
 }> {
+  const directoryCalls: DirectoryCallCounts = { detail: 0, search: 0, list: 0 };
   const directory: RegistryDirectoryClient = {
-    detail: async () => structuredClone(fixture.detail),
-    search: async () => ({ data: [fixture.row], query: fixture.slug, searchType: 'fuzzy', count: 1, durationMs: 1 }),
-    list: async () => ({ data: [fixture.row], pagination: { page: 0, perPage: 500, total: 1, hasMore: false } }),
+    detail: async () => {
+      directoryCalls.detail += 1;
+      return structuredClone(fixture.detail);
+    },
+    search: async () => {
+      directoryCalls.search += 1;
+      return { data: [fixture.row], query: fixture.slug, searchType: 'fuzzy', count: 1, durationMs: 1 };
+    },
+    list: async () => {
+      directoryCalls.list += 1;
+      return { data: [fixture.row], pagination: { page: 0, perPage: 500, total: 1, hasMore: false } };
+    },
     curated: async () => ({ data: [], totalOwners: 0, totalSkills: 0, generatedAt: new Date(0).toISOString() }),
     audit: async () => ({ id: fixture.externalId, source: fixture.source, slug: fixture.slug, audits: [] }),
   };
@@ -284,7 +301,7 @@ async function createFixtureHarness(fixture: SourceFixture): Promise<{
     adapters: [deterministicScanner()],
     executor: { run: async () => { throw new Error('fixture scanner must bypass command execution'); } },
   });
-  return { harness, feed, runner, workerFailures };
+  return { harness, feed, runner, workerFailures, directoryCalls };
 }
 
 async function resolveRequest(harness: LocalRegistryHarness, feed: Feed, externalId: string): Promise<Response> {
@@ -348,7 +365,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
 
   it('deduplicates concurrent no-snapshot GitHub root resolves and transfers the approved root bytes', async () => {
     const fixture = makeFixture('github', 'root-skill');
-    const { harness, feed, runner, workerFailures } = await createFixtureHarness(fixture);
+    const { harness, feed, runner, workerFailures, directoryCalls } = await createFixtureHarness(fixture);
     harnesses.push(harness);
 
     const queued = await Promise.all([
@@ -377,6 +394,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
       return url.origin === CATALOG_ORIGIN && url.pathname === catalogDetailPath;
     })).toHaveLength(1);
     const sourceFetchesAfterApproval = fixture.sourceFetch.mock.calls.length;
+    const directoryCallsAfterApproval = { ...directoryCalls };
 
     const warm = await resolveRequest(harness, feed, fixture.externalId);
     expect(warm.status, await warm.clone().text()).toBe(200);
@@ -398,6 +416,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
     });
     expect(warmBody.reference).toBe(`@github/${fixture.source}`);
     expect(fixture.sourceFetch.mock.calls.length).toBe(sourceFetchesAfterApproval);
+    expect(directoryCalls).toEqual(directoryCallsAfterApproval);
 
     const transferred = await approveAndTransfer(harness, resolution);
     expect(transferred.skill.artifact.digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -406,7 +425,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
 
   it('acquires a no-snapshot nested GitHub directory, preserving its verified commit and path', async () => {
     const fixture = makeFixture('github', 'nested-skill');
-    const { harness, feed, runner } = await createFixtureHarness(fixture);
+    const { harness, feed, runner, directoryCalls } = await createFixtureHarness(fixture);
     harnesses.push(harness);
 
     const queued = await resolveRequest(harness, feed, fixture.externalId);
@@ -417,6 +436,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
     const run = await runner.runOnce();
     expect(run.error).toBeUndefined();
     expect(run.allow).toBe(true);
+    const directoryCallsAfterApproval = { ...directoryCalls };
     const warm = await resolveRequest(harness, feed, fixture.externalId);
     expect(warm.status, await warm.clone().text()).toBe(200);
     const { resolution } = await jsonResponse<{ resolution: Resolution }>(warm);
@@ -427,13 +447,14 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
       skillPath: 'skills/nested-skill',
       resolvedCommit: 'a'.repeat(40),
     });
+    expect(directoryCalls).toEqual(directoryCallsAfterApproval);
     const transferred = await approveAndTransfer(harness, resolution);
     assertStoredFixtureBytes(fixture, transferred.bytes);
   });
 
   it('acquires a no-snapshot well-known source through its discovery index and transfers only after scanning', async () => {
     const fixture = makeFixture('well-known', 'well-known-guide');
-    const { harness, feed, runner } = await createFixtureHarness(fixture);
+    const { harness, feed, runner, directoryCalls } = await createFixtureHarness(fixture);
     harnesses.push(harness);
 
     const queued = await resolveRequest(harness, feed, fixture.externalId);
@@ -441,6 +462,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
     const run = await runner.runOnce();
     expect(run.error).toBeUndefined();
     expect(run.allow).toBe(true);
+    const directoryCallsAfterApproval = { ...directoryCalls };
 
     const warm = await resolveRequest(harness, feed, fixture.externalId);
     expect(warm.status, await warm.clone().text()).toBe(200);
@@ -455,6 +477,7 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
       wellKnownEntryName: fixture.slug,
       wellKnownIndexUrl: `${CATALOG_BASE.replace('/catalog', '/published')}/.well-known/agent-skills/index.json`,
     });
+    expect(directoryCalls).toEqual(directoryCallsAfterApproval);
     const transferred = await approveAndTransfer(harness, resolution);
     assertStoredFixtureBytes(fixture, transferred.bytes);
   });
