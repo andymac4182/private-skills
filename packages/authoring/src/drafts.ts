@@ -6,6 +6,7 @@ import type {
   RegistryState,
   SkillDraft,
   SkillDraftFileManifestEntry,
+  SkillDraftFileView,
   SkillDraftIdempotencyRecord,
   SkillDraftOrigin,
   SkillDraftPublicationRecord,
@@ -27,11 +28,14 @@ import {
   AuthoringApiError,
   assertPublisher,
   canReadNamespace,
+  DEFAULT_RELEASE_TEXT_PREVIEW_BYTES,
   errorResponse,
   jsonResponse,
   readAuthorizedReleaseSnapshot,
+  selectedFilePath,
   type AuthoringHandler,
   type AuthoringHandlerDependencies,
+  viewFile,
 } from './index.js';
 import {
   decodeBundle,
@@ -51,6 +55,12 @@ import {
 
 const MAX_IDEMPOTENCY_RECORDS = 32;
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
+/**
+ * Keep every public draft envelope below the hosted function response cap.
+ * The internal sealed bundle remains available through readDraftRevision and
+ * the bounded selected-file route; this limit only governs JSON responses.
+ */
+export const MAX_PUBLIC_DRAFT_RESPONSE_BYTES = 4_500_000;
 
 export interface PublicSkillDraft {
   id: string;
@@ -63,7 +73,7 @@ export interface PublicSkillDraft {
   revision: number;
   digest: Digest;
   size: number;
-  files: BundleFile[];
+  files: SkillDraftFileManifestEntry[];
   status: SkillDraft['status'];
   actor: string;
   createdAt: string;
@@ -143,6 +153,7 @@ export interface DraftRevisionSnapshot {
  * Routes:
  *   POST /v1/skills/:resourceId/drafts
  *   GET  /v1/drafts/:draftId
+ *   GET  /v1/drafts/:draftId/files?path=...&revision=...&digest=...
  *   PUT  /v1/drafts/:draftId
  *   POST /v1/drafts/:draftId/publish
  *   GET/POST /v1/drafts/:draftId/reviews
@@ -181,6 +192,16 @@ export function createDraftHandler(deps: AuthoringHandlerDependencies): Authorin
         if (!isSafeId(resourceId)) throw unavailableDraft();
         const body = await readJson(request, maxBodyBytes);
         return await createDraft(body, request, resourceId, principal, deps);
+      }
+
+      if (segments.length === 4 && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'files') {
+        if (request.method.toUpperCase() !== 'GET') {
+          throw new AuthoringApiError('METHOD_NOT_ALLOWED', 'Only GET is supported', 405);
+        }
+        const draftId = decodePathPart(segments[2]);
+        if (!isSafeId(draftId)) throw unavailableDraft();
+        assertPublisher(principal);
+        return await getDraftFile(url, draftId, principal, deps);
       }
 
       if (segments.length === 3 && segments[0] === 'v1' && segments[1] === 'drafts') {
@@ -502,9 +523,9 @@ async function applyBuilderProposal(
     const currentDraft = state.drafts?.find((candidate) => candidate.id === draftId && candidate.organizationId === deps.config.organizationId);
     if (!currentDraft || !canReadNamespace(principal, currentDraft.name)) throw unavailableDraft();
     const currentBundle = await readDraftBundle(currentDraft, deps);
-    return jsonResponse({
+    return draftResponse({
       proposal: publicBuilderProposal(proposal),
-      draft: toPublicDraft(currentDraft, currentBundle),
+      draft: await toPublicDraft(currentDraft, currentBundle),
     }, 200, { 'cache-control': 'private, no-store' });
   }
   if (proposal.state === 'rejected' || proposal.state === 'stale') throw new AuthoringApiError('DRAFT_CONFLICT', 'The builder proposal is no longer pending', 409);
@@ -557,9 +578,9 @@ async function applyBuilderProposal(
     }
     updated = refreshedProposal;
   }
-  return jsonResponse({
+  return draftResponse({
     proposal: publicBuilderProposal(updated, before),
-    draft: toPublicDraft(written.draft, written.bundle),
+    draft: await toPublicDraft(written.draft, written.bundle),
   }, 200, { 'cache-control': 'private, no-store' });
 }
 
@@ -768,7 +789,7 @@ async function createDraft(
     // describes the current revision; syncDraftReview's binding guard makes a
     // historical replay a no-op.
     await syncDraftReview(existingDraft, existingDraft.files, deps, false);
-    return jsonResponse({ draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
+    return draftResponse({ draft: await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }), idempotent: true }, 200, {
       'cache-control': 'private, no-store',
     });
   }
@@ -838,7 +859,7 @@ async function createDraft(
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   const bundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
   await syncDraftReview(responseDraft, bundle.files, deps, false);
-  return jsonResponse({ draft: toPublicDraft(responseDraft, bundle) }, result.idempotent ? 200 : 201, {
+  return draftResponse({ draft: await toPublicDraft(responseDraft, bundle) }, result.idempotent ? 200 : 201, {
     'cache-control': 'private, no-store',
   });
 }
@@ -878,8 +899,8 @@ async function createUploadDraft(
     }
     const existingDraft = await draftFromCreateRecord(existing, deps);
     await syncDraftReview(existingDraft, existingDraft.files, deps, false);
-    return jsonResponse({
-      draft: toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }),
+    return draftResponse({
+      draft: await toPublicDraft(existingDraft, { format: 'pskills-bundle-v1', files: existingDraft.files }),
       idempotent: true,
     }, 200, { 'cache-control': 'private, no-store' });
   }
@@ -937,8 +958,8 @@ async function createUploadDraft(
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   await syncDraftReview(responseDraft, responseDraft.files, deps, false);
-  return jsonResponse({
-    draft: toPublicDraft(responseDraft, { format: 'pskills-bundle-v1', files: responseDraft.files }),
+  return draftResponse({
+    draft: await toPublicDraft(responseDraft, { format: 'pskills-bundle-v1', files: responseDraft.files }),
   }, result.idempotent ? 200 : 201, { 'cache-control': 'private, no-store' });
 }
 
@@ -950,9 +971,52 @@ async function getDraft(
   const state = await deps.repository.read(deps.config.organizationId);
   const draft = findDraft(state, draftId, principal, deps.config.organizationId);
   const bundle = await readDraftBundle(draft, deps);
-  return jsonResponse({ draft: toPublicDraft(draft, bundle) }, 200, {
+  return draftResponse({ draft: await toPublicDraft(draft, bundle) }, 200, {
     'cache-control': 'private, no-store',
   });
+}
+
+/**
+ * Read one file from the exact current sealed draft revision. Draft manifests
+ * are intentionally metadata-only; this route is the bounded lazy-content
+ * seam used by the editor when it needs to inspect a selected file.
+ */
+async function getDraftFile(
+  url: URL,
+  draftId: string,
+  principal: Principal,
+  deps: AuthoringHandlerDependencies,
+): Promise<Response> {
+  const path = selectedFilePath(url);
+  if (path === undefined) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'path is required', 400);
+  }
+  const revision = requiredQueryRevision(url, 'revision');
+  const digest = requireDigest(requiredQueryValue(url, 'digest'), 'digest');
+  const state = await deps.repository.read(deps.config.organizationId);
+  const draft = findDraft(state, draftId, principal, deps.config.organizationId);
+  if (draft.revision !== revision) throw revisionConflict(draft.revision);
+  if (draft.digest !== digest) throw draftDigestConflict(draft.revision);
+
+  const bundle = await readDraftBundle(draft, deps);
+  const file = bundle.files.find((candidate) => candidate.path === path);
+  if (!file) throw unavailableDraft();
+  const preview = await viewFile(
+    file.path,
+    file.content,
+    file.executable === true,
+    DEFAULT_RELEASE_TEXT_PREVIEW_BYTES,
+    false,
+  );
+  const response: SkillDraftFileView = {
+    path: preview.path,
+    size: preview.size,
+    digest: preview.contentDigest,
+    previewState: preview.previewState,
+    ...(preview.executable === true ? { executable: true } : {}),
+    ...(preview.previewState === 'text' ? { content: file.content } : {}),
+  };
+  return jsonResponse({ file: response }, 200, { 'cache-control': 'private, no-store' });
 }
 
 async function updateDraft(
@@ -976,7 +1040,7 @@ async function updateDraft(
     principal,
     deps,
   });
-  return jsonResponse({ draft: toPublicDraft(result.draft, result.bundle), idempotent: result.idempotent }, 200, {
+  return draftResponse({ draft: await toPublicDraft(result.draft, result.bundle), idempotent: result.idempotent }, 200, {
     'cache-control': 'private, no-store',
   });
 }
@@ -1621,7 +1685,27 @@ async function readDraftBundle(draft: SkillDraft, deps: AuthoringHandlerDependen
   return bundle;
 }
 
-export function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): PublicSkillDraft {
+function draftResponse(value: unknown, status: number, headers: Record<string, string> = {}): Response {
+  const body = JSON.stringify(value);
+  if (new TextEncoder().encode(body).byteLength > MAX_PUBLIC_DRAFT_RESPONSE_BYTES) {
+    throw new AuthoringApiError(
+      'DRAFT_RESPONSE_TOO_LARGE',
+      'Draft metadata exceeds the supported response size; read selected files individually',
+      413,
+      { maxBytes: MAX_PUBLIC_DRAFT_RESPONSE_BYTES },
+    );
+  }
+  return new Response(body, {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...headers,
+    },
+  });
+}
+
+export async function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bundle-v1'; files: BundleFile[] }): Promise<PublicSkillDraft> {
+  const files = await publicDraftManifest(draft, bundle.files);
   return {
     id: draft.id,
     origin: draftOrigin(draft),
@@ -1633,7 +1717,7 @@ export function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bund
     revision: draft.revision,
     digest: draft.digest,
     size: draft.artifact.size,
-    files: bundle.files,
+    files,
     status: draft.status,
     actor: draft.actor,
     createdAt: draft.createdAt,
@@ -1651,6 +1735,25 @@ export function toPublicDraft(draft: SkillDraft, bundle: { format: 'pskills-bund
       }
       : {}),
   };
+}
+
+async function publicDraftManifest(
+  draft: SkillDraft,
+  files: BundleFile[],
+): Promise<SkillDraftFileManifestEntry[]> {
+  const currentRecord = [
+    ...(draft.idempotency ?? []),
+    ...(draft.createIdempotency === undefined ? [] : [draft.createIdempotency]),
+  ].find((record) => record.revision === draft.revision && record.digest === draft.digest);
+  if (currentRecord?.manifest !== undefined) {
+    return currentRecord.manifest.map((file) => ({
+      path: file.path,
+      size: file.size,
+      digest: file.digest,
+      ...(file.executable === true ? { executable: true } : {}),
+    }));
+  }
+  return await compactManifest(files);
 }
 
 async function draftFromCreateRecord(draft: SkillDraft, deps: AuthoringHandlerDependencies): Promise<SkillDraft> {
@@ -2037,6 +2140,22 @@ function parseRequestUrl(request: Request): URL {
   } catch {
     throw new AuthoringApiError('INVALID_REQUEST', 'Request URL is invalid', 400);
   }
+}
+
+function requiredQueryValue(url: URL, name: string): string {
+  const values = url.searchParams.getAll(name);
+  if (values.length !== 1 || !values[0]) {
+    throw new AuthoringApiError('INVALID_REQUEST', `${name} is required once`, 400);
+  }
+  return values[0];
+}
+
+function requiredQueryRevision(url: URL, name: string): number {
+  const value = requiredQueryValue(url, name);
+  if (!/^[1-9]\d*$/u.test(value)) {
+    throw new AuthoringApiError('INVALID_REQUEST', `${name} must be a positive integer`, 400);
+  }
+  return requireRevision(Number(value));
 }
 
 function splitPath(pathname: string): string[] {

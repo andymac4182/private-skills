@@ -24,6 +24,7 @@ import type {
   Principal,
   RegistryConfiguration,
   ScanResult,
+  SkillDraftFileManifestEntry,
   SkillBundle,
   SkillVersion,
 } from '../packages/contracts/src/index.js';
@@ -64,6 +65,18 @@ interface AuthoringFixture {
 
 function base64(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64');
+}
+
+async function draftManifest(files: SkillBundle['files']): Promise<SkillDraftFileManifestEntry[]> {
+  return await Promise.all(files.map(async (file) => {
+    const bytes = Uint8Array.from(Buffer.from(file.content, 'base64'));
+    return {
+      path: file.path,
+      size: bytes.byteLength,
+      digest: await digestBytes(bytes),
+      ...(file.executable === true ? { executable: true } : {}),
+    };
+  }));
 }
 
 function bundleWith(description: string, guide: string, safe: boolean): SkillBundle {
@@ -394,7 +407,7 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
       draftCreateRequest(fixture.baseRelease.artifact.digest, 'create-1'),
     );
     expect(createdResponse.status, await createdResponse.clone().text()).toBe(201);
-    const created = await json<{ draft: { id: string; revision: number; digest: string; files: SkillBundle['files'] } }>(createdResponse);
+    const created = await json<{ draft: { id: string; revision: number; digest: string; files: SkillDraftFileManifestEntry[] } }>(createdResponse);
     expect(created.draft).toMatchObject({
       baseResourceId: fixture.baseRelease.id,
       baseDigest: fixture.baseRelease.artifact.digest,
@@ -412,10 +425,10 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
       draftUpdateRequest(1, 'update-1', changedBundle.files),
     );
     expect(updateResponse.status, await updateResponse.clone().text()).toBe(200);
-    const updated = await json<{ draft: { revision: number; digest: string; files: SkillBundle['files'] } }>(updateResponse);
+    const updated = await json<{ draft: { revision: number; digest: string; files: SkillDraftFileManifestEntry[] } }>(updateResponse);
     expect(updated.draft.revision).toBe(2);
     expect(updated.draft.digest).not.toBe(fixture.baseRelease.artifact.digest);
-    expect(updated.draft.files).toEqual(changedBundle.files);
+    expect(updated.draft.files).toEqual(await draftManifest(changedBundle.files));
 
     const reloadedResponse = await call(
       fixture.handler,
@@ -551,13 +564,13 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
       draftUpdateRequest(1, 'reverse-update', reversedFiles),
     );
     expect(updatedResponse.status, await updatedResponse.clone().text()).toBe(200);
-    const updated = await json<{ draft: { digest: string; files: SkillBundle['files'] } }>(updatedResponse);
+    const updated = await json<{ draft: { digest: string; files: SkillDraftFileManifestEntry[] } }>(updatedResponse);
     const canonicalFiles = [...changedBundle.files].sort((left, right) => {
       if (left.path < right.path) return -1;
       if (left.path > right.path) return 1;
       return 0;
     });
-    expect(updated.draft.files).toEqual(canonicalFiles);
+    expect(updated.draft.files).toEqual(await draftManifest(canonicalFiles));
     expect(updated.draft.digest).toBe(await digestBytes(encodeBundle({ format: 'pskills-bundle-v1', files: canonicalFiles })));
 
     const reloadedResponse = await call(

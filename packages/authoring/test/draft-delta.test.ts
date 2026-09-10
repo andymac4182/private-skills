@@ -180,9 +180,12 @@ describe('bounded draft delta saves', () => {
     expect(firstBody.idempotent).toBe(false);
     expect(firstBody.draft).toMatchObject({ revision: 2, skillName: 'large-skill' });
     expect(firstBody.draft.files.find((file: { path: string }) => file.path === 'renamed/large.bin')).toMatchObject({
-      content: largeContent,
+      path: 'renamed/large.bin',
+      size: LARGE_FILE_BYTES,
+      digest: largeDigest,
       executable: true,
     });
+    expect(firstBody.draft.files.find((file: { path: string }) => file.path === 'renamed/large.bin')).not.toHaveProperty('content');
     expect(blobs.putCalls).toBe(2);
 
     const savedState = await repository.read(ORGANIZATION);

@@ -103,6 +103,13 @@ export interface SkillDraftIdempotencyRecord {
   updatedAt: string;
 }
 export interface SkillDraftFileManifestEntry { path: string; size: number; digest: Digest; executable?: boolean; }
+export type SkillDraftFilePreviewState = 'text' | 'binary' | 'unsupported' | 'oversize';
+/** Metadata returned for one lazily readable draft file. */
+export interface SkillDraftFileView extends SkillDraftFileManifestEntry {
+  previewState: SkillDraftFilePreviewState;
+  /** Canonical base64, present only for bounded supported text files. */
+  content?: string;
+}
 export interface SkillDraftPublicationRecord {
   key: string;
   subject: string;

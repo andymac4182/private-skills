@@ -27,6 +27,8 @@ import type {
   Policy,
   Principal,
   ScanResult,
+  SkillBuilderSessionRecord,
+  SkillDraftFileManifestEntry,
   SkillBundle,
   SkillVersion,
   StoredBlob,
@@ -61,8 +63,8 @@ interface PublicDraftResponse {
   draft: {
     id: string;
     revision: number;
-    digest: string;
-    files: SkillBundle['files'];
+    digest: SkillVersion['artifact']['digest'];
+    files: SkillDraftFileManifestEntry[];
   };
   idempotent?: boolean;
 }
@@ -84,6 +86,18 @@ function base64Bytes(bytes: Uint8Array): string {
 
 function base64Text(value: string): string {
   return base64Bytes(new TextEncoder().encode(value));
+}
+
+async function draftManifest(files: SkillBundle['files']): Promise<SkillDraftFileManifestEntry[]> {
+  return await Promise.all(files.map(async (file) => {
+    const bytes = Uint8Array.from(Buffer.from(file.content, 'base64'));
+    return {
+      path: file.path,
+      size: bytes.byteLength,
+      digest: await digestBytes(bytes),
+      ...(file.executable === true ? { executable: true } : {}),
+    };
+  }));
 }
 
 function deterministicLargeBytes(): Uint8Array {
@@ -121,7 +135,7 @@ function publisher(): Principal {
     subject: 'large-draft-publisher',
     roles: ['owner', 'admin', 'publisher', 'reader'],
     namespaces: ['@team'],
-    scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish'],
+    scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish', 'skills:builder'],
   };
 }
 
@@ -242,7 +256,7 @@ async function makeFixture(): Promise<LargeDraftFixture> {
     subject: publisher().subject,
     roles: publisher().roles,
     namespaces: ['@team'],
-    scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish'],
+    scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish', 'skills:builder'],
   };
   const auth = new TokenAuthenticator({
     environment: 'test',
@@ -301,6 +315,10 @@ async function json<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
+async function responseBytes(response: Response): Promise<number> {
+  return (await response.clone().arrayBuffer()).byteLength;
+}
+
 function deltaFiles(largeDigest: `sha256:${string}`): DraftFileInput[] {
   return [
     {
@@ -354,6 +372,7 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
       },
     );
     expect(createdResponse.status, await createdResponse.clone().text()).toBe(201);
+    expect(await responseBytes(createdResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
     const created = await json<PublicDraftResponse>(createdResponse);
     expect(created.draft).toMatchObject({
       id: expect.any(String),
@@ -366,8 +385,9 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
       'docs/guide.md',
       'rules.json',
     ]);
-    expect(created.draft.files).toEqual([...fixture.baseBundle.files].sort((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    expect(created.draft.files).toEqual(await draftManifest([...fixture.baseBundle.files].sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0)));
+    expect(created.draft.files.every((file) => !('content' in file))).toBe(true);
 
     const payload = {
       expectedRevision: 1,
@@ -402,6 +422,7 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
       },
     );
     expect(updatedResponse.status, await updatedResponse.clone().text()).toBe(200);
+    expect(await responseBytes(updatedResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
     const updated = await json<PublicDraftResponse>(updatedResponse);
     expect(updated.draft.revision).toBe(2);
     expect(updated.draft.digest).not.toBe(created.draft.digest);
@@ -412,15 +433,65 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
       'rules.json',
     ]);
     expect(updated.draft.files.some((file) => file.path === LARGE_FILE_PATH)).toBe(false);
-    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, RENAMED_LARGE_FILE_PATH).content)
-      .toBe(fixture.largeContent);
-    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, 'SKILL.md').content)
-      .toBe(base64Text('---\nname: large-draft\ndescription: Edited large draft\n---\n\n# Edited\n'));
-    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, 'docs/guide.md').content)
-      .toBe(base64Text('Edited guide\n'));
-    expect(fileByPath({ format: 'pskills-bundle-v1', files: updated.draft.files }, 'rules.json').content)
-      .toBe(base64Text('{"revision":2,"safe":true}\n'));
+    const expectedUpdatedFiles: SkillBundle['files'] = [
+      {
+        path: RENAMED_LARGE_FILE_PATH,
+        content: fixture.largeContent,
+      },
+      {
+        path: 'SKILL.md',
+        content: base64Text('---\nname: large-draft\ndescription: Edited large draft\n---\n\n# Edited\n'),
+      },
+      { path: 'docs/guide.md', content: base64Text('Edited guide\n') },
+      { path: 'rules.json', content: base64Text('{"revision":2,"safe":true}\n') },
+    ].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+    expect(updated.draft.files).toEqual(await draftManifest(expectedUpdatedFiles));
+    expect(updated.draft.files.every((file) => !('content' in file))).toBe(true);
     expect(fixture.blobs.putCalls).toBe(putsBeforeUpdate + 1);
+
+    const loadedResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}`,
+    );
+    expect(loadedResponse.status, await loadedResponse.clone().text()).toBe(200);
+    expect(await responseBytes(loadedResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
+    const loaded = await json<PublicDraftResponse>(loadedResponse);
+    expect(loaded.draft).toEqual(updated.draft);
+
+    const selectedTextResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=${encodeURIComponent('SKILL.md')}&revision=2&digest=${encodeURIComponent(updated.draft.digest)}`,
+    );
+    expect(selectedTextResponse.status, await selectedTextResponse.clone().text()).toBe(200);
+    expect(await responseBytes(selectedTextResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
+    const selectedText = await json<{ file: { path: string; size: number; digest: string; previewState: string; content?: string } }>(selectedTextResponse);
+    expect(selectedText.file).toMatchObject({
+      path: 'SKILL.md',
+      previewState: 'text',
+      content: base64Text('---\nname: large-draft\ndescription: Edited large draft\n---\n\n# Edited\n'),
+    });
+    expect(selectedText.file).not.toHaveProperty('contents');
+
+    const selectedBinaryResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=${encodeURIComponent(RENAMED_LARGE_FILE_PATH)}&revision=2&digest=${encodeURIComponent(updated.draft.digest)}`,
+    );
+    expect(selectedBinaryResponse.status, await selectedBinaryResponse.clone().text()).toBe(200);
+    expect(await responseBytes(selectedBinaryResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
+    const selectedBinary = await json<{ file: { path: string; size: number; digest: string; previewState: string; content?: string } }>(selectedBinaryResponse);
+    expect(selectedBinary.file).toMatchObject({
+      path: RENAMED_LARGE_FILE_PATH,
+      size: LARGE_FILE_BYTES,
+      digest: largeDigest,
+      previewState: 'binary',
+    });
+    expect(selectedBinary.file).not.toHaveProperty('content');
+
+    const staleSelected = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=1&digest=${encodeURIComponent(created.draft.digest)}`,
+    );
+    expect(staleSelected.status).toBe(409);
 
     const stateAfterUpdate = await fixture.repository.read(ORGANIZATION);
     const draftAfterUpdate = stateAfterUpdate.drafts?.find((draft) => draft.id === created.draft.id);
@@ -461,5 +532,66 @@ describe('large draft delta authoring over the real handler and Files SDK fs ada
     const finalDraft = finalState.drafts?.find((draft) => draft.id === created.draft.id);
     expect(finalDraft?.revision).toBe(2);
     expect(finalDraft?.digest).toBe(updated.draft.digest);
-  }, 20_000);
+
+    const builderSession: SkillBuilderSessionRecord = {
+      id: 'large-draft-builder-session',
+      organizationId: ORGANIZATION,
+      subject: publisher().subject,
+      draftId: created.draft.id,
+      draftRevision: 2,
+      draftDigest: updated.draft.digest,
+      sessionKey: 'large-draft-builder-session-key',
+      eveSessionId: 'large-draft-eve-session',
+      state: 'ready',
+      requests: [],
+      proposals: [],
+      createdAt: '2026-09-10T00:00:00.000Z',
+      updatedAt: '2026-09-10T00:00:00.000Z',
+    };
+    await fixture.repository.transaction(ORGANIZATION, (state) => {
+      state.builderSessions = [builderSession];
+    });
+    const builderContent = base64Text(
+      '---\nname: large-draft\ndescription: Builder applied large draft\n---\n\n# Builder applied\n',
+    );
+    const proposalResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/proposals`,
+      {
+        method: 'POST',
+        headers: {
+          'idempotency-key': 'large-draft-builder-proposal',
+          'x-pskills-tool-identity': 'skill-builder',
+        },
+        json: {
+          draftId: created.draft.id,
+          revision: 2,
+          digest: updated.draft.digest,
+          sessionId: builderSession.id,
+          operations: [{ op: 'edit', path: 'SKILL.md', content: Buffer.from(builderContent, 'base64').toString('utf8') }],
+        },
+      },
+    );
+    expect(proposalResponse.status, await proposalResponse.clone().text()).toBe(201);
+    const proposal = await json<{ proposal: { id: string } }>(proposalResponse);
+    const applyResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/proposals/${encodeURIComponent(proposal.proposal.id)}/apply`,
+      {
+        method: 'POST',
+        headers: { 'idempotency-key': 'large-draft-builder-apply' },
+        json: {
+          draftId: created.draft.id,
+          revision: 2,
+          digest: updated.draft.digest,
+          sessionId: builderSession.id,
+        },
+      },
+    );
+    expect(applyResponse.status, await applyResponse.clone().text()).toBe(200);
+    expect(await responseBytes(applyResponse)).toBeLessThan(VERCEL_BODY_CAP_BYTES);
+    const applied = await json<PublicDraftResponse & { proposal: unknown }>(applyResponse);
+    expect(applied.draft).toMatchObject({ revision: 3 });
+    expect(applied.draft.files.every((file) => !('content' in file))).toBe(true);
+  }, 40_000);
 });

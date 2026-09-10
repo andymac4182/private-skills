@@ -31,6 +31,22 @@ function base64(value: string): string {
   return btoa(binary);
 }
 
+function bytesFromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function manifest(files: SkillBundle['files']): Promise<Array<{ path: string; size: number; digest: string; executable?: boolean }>> {
+  return await Promise.all(files.map(async (file) => ({
+    path: file.path,
+    size: bytesFromBase64(file.content).byteLength,
+    digest: await digestBytes(bytesFromBase64(file.content)),
+    ...(file.executable === true ? { executable: true } : {}),
+  })));
+}
+
 class MemoryBlobs implements BlobStore {
   readonly values = new Map<string, Uint8Array>();
   putCalls = 0;
@@ -142,7 +158,7 @@ interface Fixture {
   reviewTriggerCalls: number;
 }
 
-async function fixture(options: { withReview?: boolean } = {}): Promise<Fixture> {
+async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
@@ -183,7 +199,7 @@ async function fixture(options: { withReview?: boolean } = {}): Promise<Fixture>
     repository,
     blobs,
     auth,
-    config: { organizationId: ORGANIZATION, maxBodyBytes: 1024 * 1024 },
+    config: { organizationId: ORGANIZATION, maxBodyBytes: options.maxBodyBytes ?? 1024 * 1024 },
     releaseAdmission: () => admitted,
     releaseAdmissionAtCommit: () => commitAdmitted,
     ...(reviewService ? {
@@ -331,7 +347,7 @@ describe('durable skill drafts', () => {
       digest: test.release.artifact.digest,
       status: 'open',
     });
-    expect(created.draft.files).toEqual(test.bundle.files);
+    expect(created.draft.files).toEqual(await manifest(test.bundle.files));
     expect(created.draft).not.toHaveProperty('artifact.key');
 
     const retried = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
@@ -363,7 +379,7 @@ describe('durable skill drafts', () => {
     const updated = await json(updatedResponse);
     expect(updated.draft.revision).toBe(2);
     expect(updated.draft.digest).not.toBe(test.release.artifact.digest);
-    expect(updated.draft.files).toEqual(changedFiles);
+    expect(updated.draft.files).toEqual(await manifest(changedFiles));
 
     const loaded = await test.handler(new Request(`${ORIGIN}/v1/drafts/${draftId}`));
     expect(loaded.status).toBe(200);
@@ -551,6 +567,73 @@ describe('durable skill drafts', () => {
     ]));
     expect(unsafe.status).toBe(400);
     expect((await test.repository.read(ORGANIZATION)).drafts![0]!.revision).toBe(1);
+  });
+
+  it('serves one bounded file only for the current draft revision and omits unsafe previews', async () => {
+    const test = await fixture();
+    const created = await create(test);
+    const oversized = base64('x'.repeat(256 * 1024 + 1));
+    const changedFiles = [
+      ...test.bundle.files,
+      { path: 'assets/blob.bin', content: base64('\u0000\u0001') },
+      { path: 'data.unknown', content: base64('unknown format\n') },
+      { path: 'notes.md', content: oversized },
+    ];
+    const updated = await test.handler(updateRequest(created.draft.id, 'lazy-file-update', 1, changedFiles));
+    expect(updated.status).toBe(200);
+    const updatedDraft = (await json(updated)).draft;
+
+    const selected = await test.handler(new Request(
+      `${ORIGIN}/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=${updatedDraft.revision}&digest=${encodeURIComponent(updatedDraft.digest)}`,
+    ));
+    expect(selected.status).toBe(200);
+    const selectedBody = (await json(selected)).file;
+    expect(selectedBody).toMatchObject({
+      path: 'SKILL.md',
+      previewState: 'text',
+      content: test.bundle.files[0]!.content,
+    });
+    expect(selectedBody).not.toHaveProperty('contents');
+
+    for (const [path, previewState] of [['assets/blob.bin', 'binary'], ['data.unknown', 'unsupported'], ['notes.md', 'oversize']] as const) {
+      const response = await test.handler(new Request(
+        `${ORIGIN}/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=${encodeURIComponent(path)}&revision=${updatedDraft.revision}&digest=${encodeURIComponent(updatedDraft.digest)}`,
+      ));
+      expect(response.status).toBe(200);
+      const body = (await json(response)).file;
+      expect(body).toMatchObject({ path, previewState });
+      expect(body).not.toHaveProperty('content');
+    }
+
+    const stale = await test.handler(new Request(
+      `${ORIGIN}/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=1&digest=${encodeURIComponent(created.draft.digest)}`,
+    ));
+    expect(stale.status).toBe(409);
+
+    test.setPrincipal({ ...user('other-namespace', ['@other']), roles: ['publisher'] });
+    const namespaceDenied = await test.handler(new Request(
+      `${ORIGIN}/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=${updatedDraft.revision}&digest=${encodeURIComponent(updatedDraft.digest)}`,
+    ));
+    expect(namespaceDenied.status).toBe(404);
+
+    test.setPrincipal({ ...user('reader'), roles: ['reader'], scopes: ['skills:read'] });
+    const readerDenied = await test.handler(new Request(
+      `${ORIGIN}/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=${updatedDraft.revision}&digest=${encodeURIComponent(updatedDraft.digest)}`,
+    ));
+    expect(readerDenied.status).toBe(403);
+  });
+
+  it('fails clearly when a valid metadata manifest cannot fit the response bound', async () => {
+    const test = await fixture({ maxBodyBytes: 8 * 1024 * 1024 });
+    const segment = 'a'.repeat(255);
+    const files: SkillBundle['files'] = Array.from({ length: 2_000 }, (_, index) => ({
+      path: `${Array.from({ length: 10 }, () => segment).join('/')}/${index}`,
+      content: base64('x'),
+    }));
+    const response = await test.handler(uploadCreateRequest('@team/large-manifest', 'large-manifest', files));
+    expect(response.status).toBe(413);
+    expect((await json(response)).error).toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
+    expect((await test.repository.read(ORGANIZATION)).drafts).toHaveLength(1);
   });
 
   it('returns an explicit conflict when the selected base digest is stale', async () => {
