@@ -7,6 +7,7 @@ import type {
   SkillVersion,
   StateRepository,
 } from '../../contracts/src/index.js';
+import type { UploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
 import { decodeBundle } from '../../storage/src/index.js';
 import { digestBytes, isSha256Digest } from '../../storage/src/digest.js';
 
@@ -64,6 +65,20 @@ export interface AuthoringHandlerDependencies {
   auth: Authenticator;
   config: AuthoringHandlerConfig;
   releaseAdmission: ReleaseAdmission;
+  /** Synchronous admission predicate evaluated inside the repository CAS transaction. */
+  releaseAdmissionAtCommit?: (state: RegistryState, release: SkillVersion, principal: Principal) => boolean;
+  /** Optional advisory upload/edit review integration. Scanner admission remains authoritative. */
+  uploadReview?: UploadReviewIntegration;
+}
+
+export interface UploadReviewIntegration {
+  service: UploadReviewPersistenceService;
+  model: string;
+  reviewerRevision: string;
+  /** True only when the runtime has the separate service token and Eve trigger configured. */
+  configured?: boolean;
+  /** Starts the separate Eve session after its job is durably queued. */
+  trigger?: (organizationId: string, jobId: string, service: UploadReviewPersistenceService) => Promise<unknown>;
 }
 
 export interface AuthoringHandler {
@@ -102,8 +117,10 @@ export class AuthoringApiError extends Error {
  *
  * The selected release is authorized before its sealed object is read. The
  * object is independently hashed and decoded through the canonical bundle
- * validator; the route never creates state, drafts, transfer grants, or audit
- * events and never returns storage keys or scanner details.
+ * validator; the route never creates drafts, transfer grants, releases, or
+ * audit events and never returns storage keys or scanner details. A concrete
+ * repository may bootstrap an empty tenant on read as part of its existing
+ * persistence contract; this adapter performs no authoring mutation.
  */
 export function createReleaseFilesHandler(deps: AuthoringHandlerDependencies): AuthoringHandler {
   const maxTextPreviewBytes = normalizePreviewLimit(deps.config.maxTextPreviewBytes);
@@ -264,7 +281,8 @@ function decodePathPart(value: string): string {
   }
 }
 
-function selectedFilePath(url: URL): string | undefined {
+/** Validate and normalize one canonical relative file path query value. */
+export function selectedFilePath(url: URL): string | undefined {
   const values = url.searchParams.getAll('path');
   if (values.length === 0) return undefined;
   if (values.length !== 1) {
@@ -328,7 +346,8 @@ export function canReadNamespace(principal: Principal, name: string): boolean {
   return principal.namespaces.some((candidate) => candidate === namespace || candidate === namespace.slice(1));
 }
 
-async function viewFile(
+/** Classify one already validated bundle file for a bounded read-only view. */
+export async function viewFile(
   path: string,
   encodedContent: string,
   executable: boolean,
@@ -362,7 +381,7 @@ async function viewFile(
 }
 
 function decodeBase64(value: string): Uint8Array {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+  if (!isCanonicalBase64(value)) {
     throw new AuthoringApiError('ARTIFACT_INVALID', 'Release file content is not canonical base64', 409);
   }
   let decoded: string;
@@ -374,6 +393,26 @@ function decodeBase64(value: string): Uint8Array {
   const bytes = new Uint8Array(decoded.length);
   for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
   return bytes;
+}
+
+function isCanonicalBase64(value: string): boolean {
+  if (value.length % 4 !== 0) return false;
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const dataLength = value.length - padding;
+  if (padding === 1 && dataLength % 4 !== 3) return false;
+  if (padding === 2 && dataLength % 4 !== 2) return false;
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = value.charCodeAt(index);
+    const valid = (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39) ||
+      code === 0x2b || code === 0x2f;
+    if (!valid) return false;
+  }
+  for (let index = dataLength; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 0x3d) return false;
+  }
+  return true;
 }
 
 const TEXT_EXTENSIONS = new Set([

@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-readonly-release-files",
+  "verified": true,
+  "startedAt": "2026-09-10T09:36:36.206Z",
+  "completedAt": "2026-09-10T09:36:47.674Z",
+  "deployment": {
+    "id": "dpl_GRTEufeDWquQReZmoJatk8rdRdHk",
+    "origin": "https://private-skills-theta.vercel.app",
+    "source": {
+      "provider": "github",
+      "repository": "andymac4182/private-skills",
+      "ref": "main",
+      "commit": "79088eaafa8cca279648004a0266e634b0caade6"
+    },
+    "readyState": "READY"
+  },
+  "checks": [
+    {
+      "label": "health",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "ok",
+        "service",
+        "version"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "me",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "namespaces",
+        "organizationId",
+        "roles",
+        "scopes",
+        "subject"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "policy",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "policy"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "approved_release",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "skill"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "release_files_manifest",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "files",
+        "release"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "selected_release_file",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "files",
+        "release"
+      ],
+      "parseError": null
+    },
+    {
+      "label": "unauthenticated_release_files",
+      "status": 401,
+      "errorCode": "UNAUTHORIZED",
+      "bodyShape": [
+        "error"
+      ],
+      "parseError": null
+    }
+  ],
+  "authenticated": {
+    "health": true,
+    "me": true,
+    "principalPresent": true
+  },
+  "policy": {
+    "status": 200,
+    "allowUnscanned": false,
+    "scannerModes": [
+      {
+        "id": "cisco-skill-scanner",
+        "mode": "disabled"
+      },
+      {
+        "id": "nvidia-skillspector",
+        "mode": "disabled"
+      },
+      {
+        "id": "skillsguard",
+        "mode": "required"
+      }
+    ],
+    "skillGuardRequired": true,
+    "revisionPresent": true
+  },
+  "approvedRelease": {
+    "id": "skill_3f1ae70b-baac-46b3-9420-90671aae376b",
+    "name": "@acme/production-beta-mtucsw5u-wokpof",
+    "version": "1.0.0",
+    "state": "approved",
+    "policyRevisionPresent": true,
+    "artifactDigest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+    "fileCount": 2,
+    "manifestDigest": "sha256:e156c20727be278b1231af12419999c8975bfabac9308735bd0fe3c28f52960b",
+    "pathsOnly": true,
+    "contentsAbsentFromManifest": true
+  },
+  "selectedFile": {
+    "path": "SKILL.md",
+    "previewState": "text",
+    "contentDigest": "sha256:13cc9e6a4683748dda3de354a76b0b70f3f84bf5d095d3cbd522e5268144c7a8",
+    "digestMatchesContents": true,
+    "contentsRetained": false
+  },
+  "security": {
+    "unauthenticatedRejected": true,
+    "credentialsRetained": false,
+    "responseBodiesRetained": false,
+    "registryWrites": 0
+  },
+  "limitations": [
+    "Selected file bytes were read transiently to verify the server-provided digest and discarded.",
+    "Hosted restore was not exercised by this read-only pass."
+  ]
+}

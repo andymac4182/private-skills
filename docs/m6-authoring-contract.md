@@ -70,26 +70,52 @@ canonical path after the existing safe-path validation.
 
 ## Draft and release transitions
 
-The editor starts a draft explicitly from an immutable `SkillVersion`:
+The server supports both release-fork and upload-origin drafts. The current
+HTTP surface is:
 
 ```text
+POST /v1/skills/:resourceId/drafts
 POST /v1/drafts
 GET  /v1/drafts/:draftId
-GET  /v1/drafts/:draftId/files
-PUT  /v1/drafts/:draftId/files
-POST /v1/drafts/:draftId/reviews
-POST /v1/drafts/:draftId/release
+PUT  /v1/drafts/:draftId
+GET  /v1/drafts/:draftId/files?path=<canonical-relative-path>&revision=<N>&digest=<draft-digest>
+POST /v1/drafts/:draftId/publish
+GET/POST /v1/drafts/:draftId/reviews
+POST /v1/drafts/:draftId/reviews/:resultId/decisions
+POST /v1/drafts/:draftId/reviews/:jobId/retry
 ```
 
-The initial create body is `{ baseResourceId, idempotencyKey }`; this first
-slice starts from an existing immutable release. A later upload-origin slice
-may create a draft from a validated upload, but this contract does not claim
-that new-upload draft creation is implemented. The atomic file-save
-body is `{ expectedRevision, files }`, where `files` is the complete canonical
-draft snapshot returned by the Diffs edit callback. The server validates the
-whole snapshot, applies compare-and-swap on `expectedRevision`, computes the
-canonical digest, and writes a new immutable blob. A later patch optimization
-must preserve this snapshot/CAS contract.
+Release-fork creation is `POST /v1/skills/:resourceId/drafts` with
+`{ baseDigest }`; upload-origin creation is `POST /v1/drafts` with
+`{ name, files }`. Both require an `Idempotency-Key` header. The atomic file
+save is `PUT /v1/drafts/:draftId` with `{ expectedRevision, files }`, where
+`files` is the complete draft manifest submitted by the Diffs editor. Draft
+create, read, update, and builder-apply responses expose a metadata-only
+`files` manifest shaped as `{ path, size, digest, executable? }`; they never
+echo base64 file content. A public draft response is rejected with
+`DRAFT_RESPONSE_TOO_LARGE` (413) when that metadata cannot fit the supported
+4,500,000-byte UTF-8 JSON response bound. Entries submitted for a save may carry inline
+`{ path, content, executable? }` bytes (the original contract) or an
+unchanged-file reference `{ path, sourcePath?, digest }`.
+Reference saves also send `expectedDigest`, which binds every reference to the
+exact current sealed draft revision. `sourcePath` defaults to `path`; when it
+is supplied, the server verifies and copies only that current sealed file to
+the requested final `path`, preserving its executable flag. The browser never
+selects a blob key, and omitted manifest paths are deletions.
+
+The server canonicalizes path order before sealing, applies compare-and-swap
+on `expectedRevision` and `expectedDigest`, computes the canonical digest, and
+writes a new immutable blob. Replaying the same idempotency key and payload
+returns the same draft without another revision; a stale revision or digest
+returns `DRAFT_CONFLICT` without changing the draft or its immutable base.
+
+To inspect content, an authenticated publisher requests one file through the
+lazy file route above. The server requires the exact current revision and
+digest, validates the canonical path, and returns
+`{ file: { path, size, digest, executable?, previewState, content? } }`.
+`content` is canonical base64 and is included only for supported UTF-8 text no
+larger than 256 KiB. Binary, unsupported, or oversize files remain metadata
+only. The route is private and never returns blob keys or storage credentials.
 
 The durable state is split between metadata and sealed blobs:
 
@@ -121,10 +147,10 @@ type DraftRevision = {
 };
 ```
 
-Stale writes return an explicit conflict/rebase response. Saving, viewing, or
-reviewing a draft never mutates the base release. `POST .../release` is the
-only author transition that materializes the draft as a new release and queues
-the existing required scanner/publish boundary. Scanner failure, policy
+Saving, viewing, or reviewing a draft never mutates the base release.
+`POST /v1/drafts/:draftId/publish` with `{ expectedRevision, version }` is the
+author transition that materializes the draft as a new pending release and
+queues the existing required scanner/publish boundary. Scanner failure, policy
 failure, authorization failure, or digest mismatch blocks admission.
 
 ## Upload/edit Eve
@@ -138,14 +164,21 @@ review gate; without that policy, a missing or stale Eve result is not a new
 implicit publication blocker.
 
 ```ts
-type UploadReview = {
-  id: string;
-  organizationId: string;
+type UploadReviewBinding = {
   draftId: string;
   draftRevision: number;
-  draftDigest: Digest;
-  baseResourceId: string;
+  contentDigest: Digest;
+  baseReleaseId?: string;
+  baseReleaseVersion?: string;
+  baseDigest?: Digest;
   policyRevision: string;
+};
+
+type UploadReview = {
+  id: string;
+  jobId: string;
+  organizationId: string;
+  binding: UploadReviewBinding;
   reviewerRevision: string;
   model: string;
   state: "pending" | "running" | "passed" | "failed" | "stale";
@@ -169,11 +202,14 @@ type UploadReviewFinding = {
 ```
 
 `POST /v1/drafts/:draftId/reviews` binds the job to the exact current
-revision/digest and is idempotent. Any byte/revision, base-release, policy, or
-reviewer-contract change makes the old result stale. Findings and human
-actions are persisted and audited but cannot mutate the artifact. The reviewer
-receives only an authorized snapshot and no registry, storage, scanner, or
-upstream credentials.
+revision/digest and is idempotent; `GET` lists sanitized jobs/results without
+lease tokens or snapshots. `POST /v1/drafts/:draftId/reviews/:resultId/decisions`
+records a publisher decision, while `POST .../reviews/:jobId/retry` requests a
+new review job. Any byte/revision, base-release, policy, or reviewer-contract
+change makes the old result stale. Findings and human actions are persisted
+and audited but cannot mutate the artifact. The reviewer receives only an
+authorized snapshot and no registry, storage, scanner, or upstream
+credentials.
 
 ## Interactive authoring builder Eve
 

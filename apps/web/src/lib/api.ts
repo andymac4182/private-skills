@@ -5,7 +5,9 @@ import type {
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
-  SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse,
+  SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
+  BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
+  DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -70,8 +72,68 @@ export const api = {
   createPack(input: { name: string; version: string; description: string; skills: Array<{ ref: string; version: string }> }) { return request<PackCreateResponse>('/v1/packs', { method: 'POST', body: input }).then(unwrap) },
   operations() { return request<OperationListResponse>('/v1/operations').then(unwrap) },
   operation(id: string) { return request<OperationResponse>(`/v1/operations/${encodeURIComponent(id)}`).then(unwrap) },
-  releaseFiles(resourceId: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`).then(unwrap) },
-  releaseFile(resourceId: string, path: string) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path } }).then(unwrap) },
+  releaseFiles(resourceId: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`, { signal }).then(unwrap) },
+  releaseFile(resourceId: string, path: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path }, signal }).then(unwrap) },
+  createDraft(resourceId: string, baseDigest: `sha256:${string}`, idempotencyKey: string) {
+    return request<DraftResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/drafts`, { method: 'POST', body: { baseDigest }, headers: { 'idempotency-key': idempotencyKey } }).then(unwrap)
+  },
+  createUploadDraft(input: { name: string; files: SkillBundle['files']; idempotencyKey: string }) {
+    return request<DraftResponse>('/v1/drafts', { method: 'POST', body: { name: input.name, files: input.files }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  },
+  draft(draftId: string, signal?: AbortSignal) { return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, { signal }).then(unwrap) },
+  draftFile(draftId: string, path: string, input: { revision: number; digest: `sha256:${string}` }, signal?: AbortSignal) {
+    return request<DraftFileResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/files`, {
+      query: { path, revision: String(input.revision), digest: input.digest },
+      signal,
+    }).then(unwrap)
+  },
+  updateDraft(draftId: string, input: { expectedRevision: number; expectedDigest?: `sha256:${string}`; files: DraftFileUpdate[]; idempotencyKey: string }) {
+    return request<DraftResponse>(`/v1/drafts/${encodeURIComponent(draftId)}`, {
+      method: 'PUT',
+      body: {
+        expectedRevision: input.expectedRevision,
+        ...(input.expectedDigest === undefined ? {} : { expectedDigest: input.expectedDigest }),
+        files: input.files,
+      },
+      headers: { 'idempotency-key': input.idempotencyKey },
+    }).then(unwrap)
+  },
+  publishDraft(draftId: string, input: { expectedRevision: number; version: string; idempotencyKey: string }) {
+    return request<DraftPublishResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/publish`, { method: 'POST', body: { expectedRevision: input.expectedRevision, version: input.version }, headers: { 'idempotency-key': input.idempotencyKey } }).then(unwrap)
+  },
+  draftReviews(draftId: string) {
+    return request<DraftReviewsResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews`)
+  },
+  requestDraftReview(draftId: string) {
+    return request<DraftReviewResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews`, { method: 'POST', body: {} }).then(unwrap)
+  },
+  retryDraftReview(draftId: string, jobId: string) {
+    return request<DraftReviewResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews/${encodeURIComponent(jobId)}/retry`, { method: 'POST', body: {} }).then(unwrap)
+  },
+  decideDraftReview(draftId: string, resultId: string, input: { findingId: string; decision: 'open' | 'acknowledged' | 'dismissed'; reason?: string }) {
+    return request<DraftReviewResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews/${encodeURIComponent(resultId)}/decisions`, { method: 'POST', body: input }).then(unwrap)
+  },
+  builderAvailability(draftId: string, signal?: AbortSignal) {
+    return request<BuilderAvailabilityResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/availability`, { signal }).then(unwrap)
+  },
+  builderCreateSession(draftId: string, input: { revision: number; digest: `sha256:${string}`; requestId: string }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session`, { method: 'POST', body: input, signal }).then(unwrap)
+  },
+  builderSession(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}` }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}`, { query: { revision: String(input.revision), digest: input.digest }, signal }).then(unwrap)
+  },
+  builderPrompt(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}`; prompt: string; requestId: string; selectedPath?: string }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}/prompt`, { method: 'POST', query: { revision: String(input.revision), digest: input.digest }, body: { prompt: input.prompt, requestId: input.requestId, ...(input.selectedPath ? { selectedPath: input.selectedPath } : {}) }, signal }).then(unwrap)
+  },
+  builderStop(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}`; requestId: string }, signal?: AbortSignal) {
+    return request<void>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}/stop`, { method: 'POST', query: { revision: String(input.revision), digest: input.digest }, body: { requestId: input.requestId }, signal })
+  },
+  applyBuilderProposal(draftId: string, proposalId: string, input: { revision: number; digest: `sha256:${string}`; sessionId: string; idempotencyKey: string; signal?: AbortSignal }) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST', body: { revision: input.revision, digest: input.digest, sessionId: input.sessionId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
+  },
+  rejectBuilderProposal(draftId: string, proposalId: string, input: { revision: number; digest: `sha256:${string}`; sessionId: string; idempotencyKey: string; signal?: AbortSignal }) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST', body: { revision: input.revision, digest: input.digest, sessionId: input.sessionId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
+  },
   policy() { return request<PolicyResponse>('/v1/policy').then(unwrap) },
   updatePolicy(policy: Policy) {
     const { revision: _revision, ...next } = policy

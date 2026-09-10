@@ -181,3 +181,201 @@ export interface ReleaseFilesResponse {
   }
   files: ReleaseFileView[]
 }
+
+export interface DraftView {
+  id: string
+  origin?: 'release' | 'upload'
+  name: string
+  skillName: string
+  description?: string
+  baseResourceId?: string
+  baseDigest?: `sha256:${string}`
+  revision: number
+  digest: `sha256:${string}`
+  size: number
+  /** File metadata only. File bytes are fetched for one selected path. */
+  files: DraftFileMetadata[]
+  status: 'open' | 'publishing' | 'published' | 'discarded'
+  actor: string
+  createdAt: string
+  updatedAt: string
+  publications?: Array<{ resourceId: string; jobId: string; version: string; revision: number; digest: `sha256:${string}`; createdAt: string }>
+}
+
+/** Metadata returned for every draft path without transferring file bytes. */
+export interface DraftFileMetadata {
+  path: string
+  size: number
+  digest: `sha256:${string}`
+  executable?: boolean
+}
+
+/** One selected draft file, with a bounded optional base64 text payload. */
+export interface DraftFileResponseEntry extends DraftFileMetadata {
+  previewState: ReleaseFilePreviewState
+  content?: string
+}
+export interface DraftFileResponse { file: DraftFileResponseEntry }
+/**
+ * PUT entries for a draft revision. Inline files carry changed/new bytes;
+ * references let the server copy bytes from the saved revision without
+ * sending them through the browser again.
+ */
+export interface DraftFileReference {
+  path: string
+  sourcePath?: string
+  digest: `sha256:${string}`
+}
+export type DraftFileUpdate = SkillBundle['files'][number] | DraftFileReference
+export interface DraftResponse { draft: DraftView; idempotent?: boolean }
+export interface DraftPublishOperation {
+  id: string
+  resourceId: string
+  state: 'queued'
+  version: string
+  revision: number
+  digest: `sha256:${string}`
+  scanRequired: true
+}
+export interface DraftPublishResponse { operation: DraftPublishOperation; idempotent?: boolean }
+
+export type BuilderConversationState = 'active' | 'stale' | 'closed'
+export type BuilderMessageRole = 'user' | 'assistant' | 'system'
+export type BuilderMessageState = 'queued' | 'running' | 'complete' | 'failed'
+export type BuilderProposalState = 'pending' | 'proposed' | 'applied' | 'rejected' | 'stale'
+export type BuilderOperationKind = 'add' | 'edit' | 'rename' | 'delete'
+
+export interface BuilderMessage {
+  id: string
+  role: BuilderMessageRole
+  content: string
+  state?: BuilderMessageState
+  createdAt: string
+  proposalId?: string
+}
+
+export interface BuilderOperation {
+  kind?: BuilderOperationKind
+  op?: BuilderOperationKind
+  path: string
+  toPath?: string
+  newPath?: string
+  content?: string
+  contentBytes?: number
+  expectedPathDigest?: `sha256:${string}`
+}
+
+export interface BuilderProposal {
+  id: string
+  conversationId?: string
+  draftId: string
+  baseRevision: number
+  baseDigest: `sha256:${string}`
+  proposedDigest?: `sha256:${string}`
+  diffDigest?: `sha256:${string}`
+  operations: BuilderOperation[]
+  rationale?: string
+  model?: string
+  builderRevision?: string
+  state: BuilderProposalState
+  createdAt: string
+}
+
+export interface BuilderConversation {
+  id: string
+  draftId: string
+  draftRevision: number
+  draftDigest: `sha256:${string}`
+  baseResourceId?: string
+  baseDigest?: `sha256:${string}`
+  gateway?: string
+  model?: string
+  toolRevision?: string
+  state: BuilderConversationState
+  messages?: BuilderMessage[]
+  proposals?: BuilderProposal[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface BuilderConversationResponse { conversation?: BuilderConversation; messages?: BuilderMessage[]; proposals?: BuilderProposal[] }
+export interface BuilderMessageResponse { conversation?: BuilderConversation; message?: BuilderMessage; proposal?: BuilderProposal; status?: BuilderMessageState }
+export interface BuilderProposalResponse { proposal?: BuilderProposal; draft?: DraftView; idempotent?: boolean }
+
+/** Same-origin builder BFF DTOs. The browser only sees registry session data. */
+export type BuilderSessionState = 'ready' | 'running' | 'stopped' | 'failed' | 'completed'
+export interface BuilderSessionBinding {
+  draftId: string
+  revision: number
+  digest: `sha256:${string}`
+}
+export interface BuilderSessionTurn {
+  id: string
+  role: BuilderMessageRole
+  content: string
+  createdAt: string
+}
+export interface BuilderSessionView {
+  id: string
+  binding: BuilderSessionBinding
+  state: BuilderSessionState
+  turns: BuilderSessionTurn[]
+  proposal?: BuilderProposal | null
+}
+export interface BuilderSessionResponse { session: BuilderSessionView }
+export interface BuilderAvailabilityResponse { enabled: boolean; reason?: string; model?: string }
+
+export type DraftReviewState = 'pending' | 'running' | 'passed' | 'failed' | 'stale'
+export type DraftReviewFindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical'
+export type DraftReviewFindingDecision = 'open' | 'acknowledged' | 'dismissed'
+export interface DraftReviewBinding {
+  draftId: string
+  draftRevision: number
+  contentDigest: `sha256:${string}`
+  baseReleaseId?: string
+  baseReleaseVersion?: string
+  baseDigest?: `sha256:${string}`
+  policyRevision: string
+}
+export interface DraftReviewJob {
+  id: string
+  binding: DraftReviewBinding
+  model: string
+  reviewerRevision: string
+  state: DraftReviewState
+  createdAt: string
+  updatedAt: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+  staleReason?: string
+  resultId?: string
+}
+export interface DraftReviewFinding {
+  id: string
+  severity: DraftReviewFindingSeverity
+  category: string
+  title: string
+  summary: string
+  evidence?: string
+  recommendation?: string
+  path?: string
+  line?: number
+  decision: DraftReviewFindingDecision
+  decisionReason?: string
+}
+export interface DraftReviewResult {
+  id: string
+  jobId: string
+  binding: DraftReviewBinding
+  model: string
+  reviewerRevision: string
+  state: Extract<DraftReviewState, 'passed' | 'failed' | 'stale'>
+  findings: DraftReviewFinding[]
+  createdAt: string
+  finishedAt: string
+  error?: string
+  staleReason?: string
+}
+export interface DraftReviewsResponse { reviews: DraftReviewJob[]; results: DraftReviewResult[] }
+export interface DraftReviewResponse { review: DraftReviewJob | DraftReviewResult }

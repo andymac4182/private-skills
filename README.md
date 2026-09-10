@@ -14,24 +14,26 @@ source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
-[`docs/verification-current.md`](docs/verification-current.md). PR23 is merged
-on `origin/main` at `7c7a33e`; the earlier guarded prebuilt rollout
-`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE` is READY. Its current probes are read-only:
-18 authenticated GETs, two unauthenticated negative GETs, one metadata-only
-Pack preview POST, and zero private-registry data mutations (no feed, import,
-scan, install, role, or policy writes). The connected GitHub project
-then produced the READY Git-triggered deployment
-`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH` from that main commit; its separate
-readback records seven authenticated GETs, the expected unauthenticated Topics
-401, and zero private-registry data mutations. This closes the Git-trigger
-observation while keeping the earlier prebuilt and browser evidence
-source-specific. Pack-preview UI proof passed
-during a stable-alias cutover whose exact deployment attribution is unknown;
-one snapshot-only production candidate now has recorded required-scan
-admission, isolated CLI install/repeat, and analytics evidence. Physical
-GitHub/well-known resolution, direct zero-upstream instrumentation, hosted
-restore, and native CI remain pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
-are active implementation milestones with incomplete evidence; they remain
+[`docs/verification-current.md`](docs/verification-current.md). PR26 is merged
+on `origin/main` at `79088ea`; its READY Git-triggered deployment is
+`dpl_GRTEufeDWquQReZmoJatk8rdRdHk`. The sanitized [read-only release-file
+evidence](docs/evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
+proves authenticated health, principal/policy, approved-release metadata,
+paths-only manifest, selected text-file retrieval with matching digest, and
+unauthenticated 401, with zero private-registry writes. This is production GET
+evidence; earlier browser fixtures, including Pack preview, retain their own
+deployment provenance and are not promoted by it. The earlier prebuilt and
+Git-main readbacks remain useful source-specific records. One snapshot-only
+production candidate also has recorded required-scan admission, isolated CLI
+install/repeat, and analytics evidence. Physical GitHub/well-known resolution,
+direct zero-upstream instrumentation, and native CI remain pending. A bounded
+hosted Neon/object-storage logical restore is recorded in the [sanitized restore
+evidence](docs/evidence/hosted-restore-20260910.json); it verifies an exact
+target revision and digest-checked objects but does not claim a provider
+lifecycle guarantee or restored-origin health/scanner run. M6's read-only VIEW
+slice has delivered production evidence, while the full Diffs editor,
+upload/edit Eve, and interactive builder remain active implementation work with
+incomplete evidence. M7 OpenClaw is also active and incomplete; both remain
 outside the current C1 release gate.
 
 | Area | Current status | Boundary |
@@ -47,7 +49,7 @@ outside the current C1 release gate.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_8ru…` rollout proves authenticated read-only API/detail/policy and metadata-only Pack preview with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, hosted restore, and tenant/secrecy acceptance remain pending. Pack-preview UI proof passed during a stable-alias cutover with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_GRTE…` rollout proves authenticated read-only release metadata/file retrieval and 401 rejection with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.

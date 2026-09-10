@@ -16,16 +16,20 @@ original digest.
 The fixture explicitly uses `defaultRegistryState({ production: false,
 allowUnscanned: true })` and does not create worker scanner evidence. This
 local proof therefore does not certify restoration of required scanner results
-or production policy evidence. A hosted rehearsal still needs isolated Neon
-and object-storage backup/restore, hash/reference verification, and operator
-checks before serving traffic.
+or production policy evidence. The bounded hosted Neon/object-storage logical
+restore is recorded in the [sanitized hosted restore evidence](evidence/hosted-restore-20260910.json):
+it captures source revision 114 and five referenced objects, restores an exact
+target revision with five digest-checked objects, and disconnects and removes
+the dedicated empty temporary project. It does not claim a provider lifecycle
+guarantee or a temporary restored-origin health/scanner run.
 
-## Planned hosted online-snapshot procedure
+## Hosted online-snapshot procedure
 
-This procedure is planned only; it has not been run against the hosted Neon or
-object store. The restore target must be a separate database, private storage
-prefix, and temporary origin. It must not receive production traffic until the
-checks below pass.
+The procedure below records the controls used for the bounded hosted logical
+restore. The restore target was a separate Neon database and private storage
+prefix, and the temporary project was empty and dedicated. The executed proof
+did not start a restored public origin or scanner worker; those checks remain
+outside its scope. The target did not receive production traffic.
 
 The current commit protocol does not require stopping ordinary publishes for a
 logical restore of the state captured at revision `R`. PostgreSQL stores the

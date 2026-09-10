@@ -1,0 +1,8 @@
+{
+  "name": "@private-skills/skill-builder",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

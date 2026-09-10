@@ -89,7 +89,115 @@ export interface ExternalProvenance {
   frontmatterName?: string;
   frontmatterDescription?: string;
 }
-export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; }
+export interface SkillReleaseAuthoring { baseResourceId: string; baseDigest: Digest; draftId: string; draftRevision: number; actor: string; }
+export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; authoring?: SkillReleaseAuthoring; }
+export type SkillDraftStatus = 'open' | 'publishing' | 'published' | 'discarded';
+export interface SkillDraftIdempotencyRecord {
+  key: string;
+  subject: string;
+  requestDigest: Digest;
+  revision: number;
+  digest: Digest;
+  artifact: StoredBlob;
+  manifest: SkillDraftFileManifestEntry[];
+  updatedAt: string;
+}
+export interface SkillDraftFileManifestEntry { path: string; size: number; digest: Digest; executable?: boolean; }
+export type SkillDraftFilePreviewState = 'text' | 'binary' | 'unsupported' | 'oversize';
+/** Metadata returned for one lazily readable draft file. */
+export interface SkillDraftFileView extends SkillDraftFileManifestEntry {
+  previewState: SkillDraftFilePreviewState;
+  /** Canonical base64, present only for bounded supported text files. */
+  content?: string;
+}
+export interface SkillDraftPublicationRecord {
+  key: string;
+  subject: string;
+  requestDigest: Digest;
+  revision: number;
+  digest: Digest;
+  version: string;
+  resourceId: string;
+  jobId: string;
+  createdAt: string;
+}
+export type SkillDraftOrigin = 'release' | 'upload';
+/** Tenant-scoped mutable authoring state; the referenced artifact is always a fresh sealed object. */
+export interface SkillDraft {
+  id: string;
+  organizationId: string;
+  origin: SkillDraftOrigin;
+  name: string;
+  skillName: string;
+  description: string;
+  /** Set only when the draft was forked from an approved immutable release. */
+  baseResourceId?: string;
+  baseDigest?: Digest;
+  revision: number;
+  digest: Digest;
+  artifact: StoredBlob;
+  files: BundleFile[];
+  status: SkillDraftStatus;
+  actor: string;
+  createdAt: string;
+  updatedAt: string;
+  createIdempotency?: SkillDraftIdempotencyRecord;
+  idempotency?: SkillDraftIdempotencyRecord[];
+  publications?: SkillDraftPublicationRecord[];
+}
+/** A bounded text-only operation proposed by the private skill builder. */
+export type SkillBuilderPatchOperation =
+  | { op: 'add' | 'edit'; path: string; content: string }
+  | { op: 'rename'; path: string; newPath: string }
+  | { op: 'delete'; path: string };
+export type SkillBuilderProposalState = 'pending' | 'applied' | 'rejected' | 'stale';
+export interface SkillBuilderProposalRecord {
+  id: string;
+  idempotencyKey: string;
+  /** Digest of the canonical proposal request (binding, session, operations). */
+  requestDigest: Digest;
+  organizationId: string;
+  draftId: string;
+  subject: string;
+  sessionId: string;
+  baseRevision: number;
+  baseDigest: Digest;
+  proposedDigest: Digest;
+  operations: SkillBuilderPatchOperation[];
+  state: SkillBuilderProposalState;
+  createdAt: string;
+  updatedAt: string;
+}
+export type SkillBuilderRequestState = 'accepted' | 'completed' | 'failed' | 'uncertain';
+export interface SkillBuilderRequestRecord {
+  id: string;
+  /** Digest of the exact prompt request bound to this request id. */
+  requestDigest: Digest;
+  state: SkillBuilderRequestState;
+  proposalId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+/** Registry-owned mapping; the Eve session key and service credentials never leave the server. */
+export interface SkillBuilderSessionRecord {
+  id: string;
+  organizationId: string;
+  subject: string;
+  draftId: string;
+  draftRevision: number;
+  draftDigest: Digest;
+  sessionKey: string;
+  eveSessionId: string;
+  /** Last provider turn observed for this session; used to scope cancellation. */
+  activeTurnId?: string;
+  /** Durable single-flight fence for a prompt awaiting provider settlement. */
+  activeRequestId?: string;
+  state: 'ready' | 'running' | 'stopped' | 'failed' | 'completed';
+  requests: SkillBuilderRequestRecord[];
+  proposals: SkillBuilderProposalRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
 export interface PackMember { resourceId: string; name: string; version: string; digest: Digest; }
 export interface PackVersion { id: string; organizationId: string; name: string; version: string; description: string; members: PackMember[]; manifestDigest: Digest; state: 'approved' | 'revoked'; createdAt: string; policyRevision: string; }
 export interface Resolution { kind: 'skill' | 'pack'; resourceId: string; organizationId: string; name: string; version: string; digest: Digest; members: SkillVersion[]; }
@@ -228,6 +336,8 @@ export interface RegistryState {
   metadataRevision?: number;
   schemaVersion: 1;
   skills: SkillVersion[];
+  /** Optional so states written before M6 authoring remain readable. */
+  drafts?: SkillDraft[];
   packs: PackVersion[];
   jobs: Job[];
   scans: ScanResult[];
@@ -240,6 +350,8 @@ export interface RegistryState {
   installReceiptTickets?: InstallReceiptTicket[];
   /** Optional so states written before analytics can still be loaded. */
   installReceipts?: InstallReceipt[];
+  /** Optional so states written before the interactive builder can still be loaded. */
+  builderSessions?: SkillBuilderSessionRecord[];
   grants: TransferGrant[];
   audit: AuditEvent[];
 }

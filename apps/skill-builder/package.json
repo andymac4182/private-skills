@@ -1,0 +1,26 @@
+{
+  "name": "@private-skills/skill-builder-app",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build": "eve build --skip-sandbox-prewarm",
+    "start": "eve start",
+    "dev": "eve dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@vercel/oidc": "3.2.0",
+    "ai": "7.0.94",
+    "eve": "0.52.3",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

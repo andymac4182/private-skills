@@ -74,7 +74,7 @@ type DraftFixture = {
   }>;
 };
 
-type DraftState = RegistryState & {
+type DraftState = Omit<RegistryState, 'drafts'> & {
   drafts?: DraftFixture[];
   futureAuthoring?: Array<{
     metadata: { key: string; digest: Digest };
@@ -201,7 +201,7 @@ async function fixture(): Promise<{
   const repository: StateRepository = {
     async read(organizationId) {
       if (organizationId !== ORGANIZATION) throw new Error('organization mismatch');
-      return cloneRegistryState(state);
+      return cloneRegistryState(state as unknown as RegistryState);
     },
     async transaction() {
       throw new Error('source repository is read-only');

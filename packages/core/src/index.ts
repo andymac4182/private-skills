@@ -60,7 +60,14 @@ import {
   type V1Skill,
 } from '../../directory/src/index.js';
 import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
-import { createReleaseFilesHandler } from '../../authoring/src/index.js';
+import {
+  createReleaseFilesHandler,
+  type AuthoringHandlerDependencies,
+  type UploadReviewIntegration,
+} from '../../authoring/src/index.js';
+import { createDraftHandler } from '../../authoring/src/drafts.js';
+import type { UploadReviewBinding } from '../../upload-reviews/src/index.js';
+import { createBuilderBffHandler, type BuilderBffRuntime } from './builder.js';
 import {
   OpenClawConsumerSelectionError,
   createOpenClawFeedAdvertisement,
@@ -465,6 +472,10 @@ export type RegistryHandlerDependencies = RegistryDependencies & {
   /** Resolve the metadata client bound to one exact transparent feed base. */
   directoryForBase?: (baseUrl: string) => RegistryDirectoryClient | undefined;
   directoryPacks?: RegistryDirectoryPackClient;
+  /** Optional separate upload/edit reviewer; scanner admission remains core-owned. */
+  uploadReview?: UploadReviewIntegration;
+  /** Optional same-origin facade for the separately deployed skill builder. */
+  builder?: BuilderBffRuntime;
   openClaw?: RegistryOpenClawDependencies;
 };
 
@@ -482,6 +493,7 @@ export function createEmptyRegistryState(policy: Policy = defaultPolicy()): Regi
     authorizations: [],
     installReceiptTickets: [],
     installReceipts: [],
+    builderSessions: [],
     grants: [],
     audit: [],
   };
@@ -505,6 +517,35 @@ export function defaultPolicy(): Policy {
 }
 
 /**
+ * Resolve the server-owned upload-review binding from the current draft state.
+ * Queue transactions call this pure helper through their injected resolver so
+ * an old review cannot complete or accept a decision after a draft save.
+ */
+export function resolveCurrentUploadReviewBinding(
+  state: RegistryState,
+  draftId: string,
+): UploadReviewBinding | undefined {
+  const draft = state.drafts?.find((candidate) => candidate.id === draftId);
+  if (!draft) return undefined;
+  const base = draft.baseResourceId === undefined
+    ? undefined
+    : state.skills.find((candidate) => candidate.id === draft.baseResourceId);
+  if (
+    draft.baseResourceId !== undefined &&
+    (!base || !skillCurrentlyApproved(state, base) || draft.baseDigest !== base.artifact.digest)
+  ) return undefined;
+  return {
+    draftId: draft.id,
+    draftRevision: draft.revision,
+    contentDigest: draft.digest,
+    ...(draft.baseResourceId === undefined ? {} : { baseReleaseId: draft.baseResourceId }),
+    ...(base?.version === undefined ? {} : { baseReleaseVersion: base.version }),
+    ...(draft.baseDigest === undefined ? {} : { baseDigest: draft.baseDigest }),
+    policyRevision: state.policy.revision,
+  };
+}
+
+/**
  * Create a portable Request -> Response registry API.
  *
  * The handler does not call fetch, read a filesystem, execute an uploaded
@@ -513,6 +554,24 @@ export function defaultPolicy(): Policy {
  */
 export function createRegistryHandler(deps: RegistryHandlerDependencies): RegistryHandler {
   const config = normalizeConfiguration(deps.config);
+  const builderBff = deps.builder
+    ? createBuilderBffHandler({
+      repository: deps.repository,
+      blobs: deps.blobs,
+      auth: deps.auth,
+      config: {
+        organizationId: config.organizationId,
+        publicOrigin: config.publicOrigin,
+        maxBodyBytes: config.maxBodyBytes,
+      },
+      authoring: createAuthoringHandlerDependencies({
+        organizationId: config.organizationId,
+        subject: 'builder-bff',
+        roles: ['publisher'],
+      }, deps, config),
+      runtime: deps.builder,
+    })
+    : undefined;
   const openClaw = normalizeOpenClawDependencies(deps.openClaw);
 
   return async function registryHandler(request: Request): Promise<Response> {
@@ -575,6 +634,21 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
       if (!internalJobs) assertUserPrincipal(principal);
       requireRouteScopes(principal, scopesForRoute(method, path, segments));
 
+      if (builderBff && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'builder') {
+        // Builder POSTs are browser mutations as well as bearer-compatible
+        // server calls.  Reuse the shared cookie-aware Origin policy so a
+        // browser session cannot omit Origin, while CLI bearer callers may.
+        if (method === 'POST') assertSessionRequestSafe(request, config, method);
+        const response = await builderBff(request, principal);
+        if (response) return response;
+      }
+      if (!builderBff && segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'builder') {
+        if (method === 'GET' && segments[4] === 'availability') {
+          return jsonResponse({ enabled: false, reason: 'The skill builder is not configured for this registry.' }, 200, { 'cache-control': 'no-store' });
+        }
+        return jsonResponse({ code: 'BUILDER_DISABLED', message: 'The skill builder is not configured for this registry.' }, 503, { 'cache-control': 'no-store' });
+      }
+
       if (path === '/v1/me') {
         if (method !== 'GET') return methodNotAllowed(['GET']);
         return jsonResponse(publicPrincipal(principal));
@@ -595,6 +669,10 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
             directory: !!deps.directory,
             installAuthorizations: true,
             installReceipts: true,
+            uploadReview: {
+              enabled: deps.uploadReview !== undefined,
+              configured: deps.uploadReview?.configured === true,
+            },
             openClaw: openClawCapability(openClaw),
             transferMode: 'gateway',
             rangeSupported: false,
@@ -606,6 +684,12 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
           },
           scanners: [...SUPPORTED_SCANNERS],
         });
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'drafts') {
+        return await createDraftHandler(
+          createAuthoringHandlerDependencies(principal, deps, config),
+        )(request);
       }
 
       if (segments[0] === 'v1' && segments[1] === 'directory') {
@@ -632,6 +716,12 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
           config,
           requestId,
         );
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'drafts') {
+        return await createDraftHandler(
+          createAuthoringHandlerDependencies(principal, deps, config),
+        )(request);
       }
 
       if (segments[0] === 'v1' && segments[1] === 'publish' && segments.length === 2) {
@@ -1038,13 +1128,21 @@ function requireRouteScopes(principal: Principal, required: readonly string[]): 
 function scopesForRoute(method: HttpMethod, path: string, segments: string[]): readonly string[] {
   if (path === '/v1/me') return [];
   if (path === '/v1/capabilities') return ['registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'drafts' && (segments[3] === 'builder-context' || segments[3] === 'builder-file')) {
+    return ['skills:builder'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'proposals' && segments.length === 4 && method === 'POST') {
+    return ['skills:builder'];
+  }
   if (segments[0] === 'v1' && segments[1] === 'skills') {
     if (segments.length === 2 || (segments.length === 3 && method === 'GET')) return ['skills:read', 'registry:read'];
     if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) return ['skills:read', 'registry:read'];
+    if (segments.length === 4 && segments[3] === 'drafts') return ['skills:write', 'skills:publish'];
     if (segments.length === 4 && segments[3] === 'rescan') return ['skills:rescan', 'skills:write', 'skills:publish'];
     if (segments.length === 4 && segments[3] === 'revoke') return ['skills:revoke', 'skills:write', 'skills:admin'];
   }
   if (segments[0] === 'v1' && segments[1] === 'publish') return ['skills:publish', 'skills:write'];
+  if (segments[0] === 'v1' && segments[1] === 'drafts') return ['skills:write', 'skills:publish'];
   if (segments[0] === 'v1' && segments[1] === 'resolve') return ['skills:read', 'packs:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'operations') return ['jobs:read', 'registry:read'];
   if (segments[0] === 'v1' && segments[1] === 'install-authorizations') {
@@ -1216,6 +1314,37 @@ async function createSessionResponse(
   });
 }
 
+/**
+ * Compose authoring adapters with the core's already-authenticated actor.
+ * Keeping this request-local prevents a second credential lookup from
+ * observing a different actor while retaining one repository/blob/config
+ * boundary for both read-only release views and mutable drafts.
+ */
+function createAuthoringHandlerDependencies(
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+): AuthoringHandlerDependencies {
+  return {
+    repository: deps.repository,
+    blobs: deps.blobs,
+    auth: { authenticate: async () => principal },
+    config: {
+      organizationId: config.organizationId,
+      maxBodyBytes: config.maxBodyBytes,
+    },
+    releaseAdmission: (state, release, releasePrincipal) =>
+      releasePrincipal.organizationId === config.organizationId &&
+      canReadNamespace(releasePrincipal, release.name) &&
+      skillCurrentlyApproved(state, release),
+    releaseAdmissionAtCommit: (state, release, releasePrincipal) =>
+      releasePrincipal.organizationId === config.organizationId &&
+      canReadNamespace(releasePrincipal, release.name) &&
+      skillCurrentlyApproved(state, release),
+    ...(deps.uploadReview === undefined ? {} : { uploadReview: deps.uploadReview }),
+  };
+}
+
 async function handleSkillsRoute(
   method: HttpMethod,
   segments: string[],
@@ -1226,6 +1355,12 @@ async function handleSkillsRoute(
   config: Required<RegistryConfiguration>,
   requestId: string,
 ): Promise<Response> {
+  if (segments.length === 4 && segments[3] === 'drafts') {
+    return await createDraftHandler(
+      createAuthoringHandlerDependencies(principal, deps, config),
+    )(request);
+  }
+
   if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) {
     if (method !== 'GET') return methodNotAllowed(['GET']);
 
@@ -1233,16 +1368,9 @@ async function handleSkillsRoute(
     // while core owns the authenticated principal and current policy gate. A
     // request-local authenticator forwards this already-validated principal so
     // the adapter cannot perform a second credential lookup for the same read.
-    const releaseFilesHandler = createReleaseFilesHandler({
-      repository: deps.repository,
-      blobs: deps.blobs,
-      auth: { authenticate: async () => principal },
-      config: { organizationId: config.organizationId },
-      releaseAdmission: (state, release, releasePrincipal) =>
-        releasePrincipal.organizationId === config.organizationId &&
-        canReadNamespace(releasePrincipal, release.name) &&
-        skillCurrentlyApproved(state, release),
-    });
+    const releaseFilesHandler = createReleaseFilesHandler(
+      createAuthoringHandlerDependencies(principal, deps, config),
+    );
     return await releaseFilesHandler(request);
   }
 
@@ -6015,6 +6143,7 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
   target.authorizations ||= [];
   target.installReceiptTickets ||= [];
   target.installReceipts ||= [];
+  target.builderSessions ||= [];
   target.grants ||= [];
   target.audit ||= [];
   if (!target.policy) target.policy = fallbackPolicy;

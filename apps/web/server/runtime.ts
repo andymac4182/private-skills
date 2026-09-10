@@ -11,6 +11,7 @@ import { createBlobGatewayHandler } from '../../../packages/storage/src/http';
 import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastructure';
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
+import { resolveUploadReviewModel, resolveUploadReviewRevision } from '../../../packages/upload-reviews/src/index';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
 import {
   createSkillsDirectoryClient,
@@ -20,6 +21,7 @@ import {
   SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
+import { createBuilderBffRuntime } from './builder-runtime';
 import {
   createOpenClawCandidateProvider,
   OpenClawPublicationManager,
@@ -69,6 +71,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     officialTokenProvider: infrastructure.directoryOfficialTokenProvider,
   });
   const auth = await createAuthenticatorFromEnv(env);
+  const builder = createBuilderBffRuntime(env);
   const openClawFeedId = env.PSKILLS_OPENCLAW_FEED_ID?.trim();
   const openClawFeedUrl = env.PSKILLS_OPENCLAW_FEED_URL?.trim() || `${config.publicOrigin}/v1/feeds/skills`;
   const openClawTrustedFeed = createOpenClawTrustedFeedProfile(env);
@@ -189,14 +192,25 @@ async function createRuntime(env: RuntimeEnvironment) {
   // Unlisted pack discovery is public and never uses a directory bearer token.
   const directoryPacks = env.PSKILLS_PACK_DIRECTORY_ENABLED === 'true' || env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsPackClient() : undefined;
+  const { uploadReview: uploadReviewRuntime, ...baseInfrastructure } = infrastructure;
   const registryDependencies = {
-    ...infrastructure,
+    ...baseInfrastructure,
     auth,
     config,
     directory,
     directoryPacks,
     directoryForBase,
     openClaw,
+    ...(builder === undefined ? {} : { builder }),
+    ...(uploadReviewRuntime?.configured !== true ? {} : {
+      uploadReview: {
+        service: uploadReviewRuntime.service,
+        model: resolveUploadReviewModel(env),
+        reviewerRevision: resolveUploadReviewRevision(env),
+        configured: uploadReviewRuntime.configured,
+        ...(uploadReviewRuntime.trigger === undefined ? {} : { trigger: uploadReviewRuntime.trigger }),
+      },
+    }),
   };
   const registry = createRegistryHandler(registryDependencies);
   const embeddingProvider = createEmbeddingProvider(env);
@@ -223,6 +237,10 @@ async function createRuntime(env: RuntimeEnvironment) {
     const path = new URL(request.url).pathname;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
+    if (path.startsWith('/internal/upload-review/')) {
+      const response = await uploadReviewRuntime?.httpHandler?.(request);
+      if (response) return response;
+    }
     if (path === '/internal/worker/run') {
       return infrastructure.hostedWorker ? infrastructure.hostedWorker(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
@@ -231,7 +249,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
     if (infrastructure.hostedWorker && env.CRON_SECRET && (response.status === 201 || response.status === 202) && request.method === 'POST' &&
-        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || path === '/v1/feeds/skills/import' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
+        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || path === '/v1/feeds/skills/import' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path) || /^\/v1\/drafts\/[^/]+\/publish$/.test(path))) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.
       const drain = async () => {

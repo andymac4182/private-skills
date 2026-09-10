@@ -3,11 +3,19 @@ import { api, ApiError } from '../lib/api'
 import { formatBytes, shortDigest } from '../lib/format'
 import type { ReleaseFileView, ReleaseFilesResponse } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
+import { DraftEditor } from './DraftEditor'
 
 const PierreReleaseRenderer = lazy(() => import('./PierreReleaseRenderer').then((module) => ({ default: module.PierreReleaseRenderer })))
 
 interface ReleaseViewerProps {
   resourceId: string
+  baseDigest: `sha256:${string}`
+  baseVersion: string
+  canEdit: boolean
+  resumeDraftId?: string
+  onDraftChange?: (draft: import('../lib/types').DraftView) => void
+  onDraftDirty?: (dirty: boolean) => void
+  onDraftClose?: () => void
 }
 
 interface ErrorBoundaryProps {
@@ -46,8 +54,10 @@ function displayPreviewState(file: ReleaseFileView): string {
   return 'Unsupported preview'
 }
 
-export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
+export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit, resumeDraftId, onDraftChange, onDraftDirty, onDraftClose }: ReleaseViewerProps) {
   const [open, setOpen] = useState(false)
+  const [draftOpen, setDraftOpen] = useState(Boolean(resumeDraftId))
+  const [draftCloseRequest, setDraftCloseRequest] = useState(0)
   const [manifest, setManifest] = useState<ReleaseFilesResponse | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<ReleaseFileView | null>(null)
@@ -55,6 +65,10 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
   const [fileLoading, setFileLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
+
+  useEffect(() => {
+    if (resumeDraftId) setDraftOpen(true)
+  }, [resumeDraftId])
 
   async function loadManifest() {
     const generation = ++requestGeneration.current
@@ -82,6 +96,8 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
   useEffect(() => {
     requestGeneration.current += 1
     setOpen(false)
+    setDraftOpen(false)
+    setDraftCloseRequest(0)
     setManifest(null)
     setSelectedPath(null)
     setSelectedFile(null)
@@ -148,7 +164,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
         <h3>Explore files in this version</h3>
         <p className="helper">Read-only view of the selected version.</p>
       </div>
-      <Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>
+      <div className="row-actions"><Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>{canEdit && <Button kind="quiet" type="button" onClick={() => { if (draftOpen) setDraftCloseRequest((current) => current + 1); else { setDraftCloseRequest(0); setDraftOpen(true) } }}>{draftOpen ? 'Hide editor' : 'Open draft editor'}</Button>}</div>
     </div>
     {open && <div className="release-viewer-body">
       {manifestLoading && <LoadingState label="Loading the release manifest…" />}
@@ -173,6 +189,7 @@ export function ReleaseViewer({ resourceId }: ReleaseViewerProps) {
         </OptionalRendererBoundary>
       </>}
     </div>}
+    {draftOpen && <DraftEditor closeRequest={draftCloseRequest} resumeDraftId={resumeDraftId} resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onDraftChange={onDraftChange} onDirtyChange={onDraftDirty} onClose={() => { setDraftCloseRequest(0); setDraftOpen(false); onDraftClose?.() }} />}
   </section>
 }
 
