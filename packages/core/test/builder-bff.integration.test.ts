@@ -96,6 +96,18 @@ interface FixtureOptions {
   holdFirstModel?: boolean;
   providerSessionId?: unknown;
   streamBody?: string;
+  manifest?: {
+    extraFiles: number;
+    pathLength: number;
+  };
+}
+
+function manifestPath(index: number, marker = 'f', pathLength = 2146): string {
+  const segment = 'x'.repeat(255);
+  const prefix = Array.from({ length: 8 }, () => segment).join('/');
+  const suffixLength = pathLength - prefix.length - 1;
+  if (suffixLength < 2) throw new Error('manifest path length is too short for its unique suffix');
+  return `${prefix}/${marker}${String(index).padStart(suffixLength - 1, '0')}`;
 }
 
 async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
@@ -104,18 +116,27 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
     allowUnscanned: true,
     policyRevision: 'builder-policy',
   });
+  const files: SkillBundle['files'] = [
+    {
+      path: 'SKILL.md',
+      content: base64Text('---\nname: demo\ndescription: Base demo\n---\n# Demo\n'),
+    },
+    {
+      path: 'docs/guide.md',
+      content: base64Text('# Guide\n'),
+    },
+  ];
+  if (options.manifest) {
+    for (let index = 0; index < options.manifest.extraFiles; index += 1) {
+      files.push({
+        path: manifestPath(index, 'f', options.manifest.pathLength),
+        content: base64Text('x'),
+      });
+    }
+  }
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
-    files: [
-      {
-        path: 'SKILL.md',
-        content: base64Text('---\nname: demo\ndescription: Base demo\n---\n# Demo\n'),
-      },
-      {
-        path: 'docs/guide.md',
-        content: base64Text('# Guide\n'),
-      },
-    ],
+    files,
   };
   const blobs = new MemoryBlobs();
   const artifact = await blobs.put(encodeBundle(bundle));
@@ -398,6 +419,31 @@ async function internalProposal(
   }));
 }
 
+async function internalProposalOperations(
+  fixture: Fixture,
+  draft: Record<string, any>,
+  sessionId: string,
+  idempotencyKey: string,
+  operations: readonly Record<string, unknown>[],
+): Promise<Response> {
+  return await fixture.handler(new Request(`${ORIGIN}/v1/drafts/${draft.id}/proposals`, {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer publisher-token',
+      'content-type': 'application/json',
+      'idempotency-key': idempotencyKey,
+      'x-pskills-tool-identity': 'skill-builder',
+    },
+    body: JSON.stringify({
+      draftId: draft.id,
+      revision: draft.revision,
+      digest: draft.digest,
+      sessionId,
+      operations,
+    }),
+  }));
+}
+
 describe('builder BFF draft contract', () => {
   it('creates a local release draft session without AI, proposes through the real authoring CAS, and applies only after human approval', async () => {
     const fixture = await makeFixture();
@@ -492,6 +538,67 @@ describe('builder BFF draft contract', () => {
     expect(serviceCalls.filter((call) => call.url.includes('/eve/')).every((call) => call.authorization === `Bearer ${EVE_TOKEN}`)).toBe(true);
     expect(JSON.stringify(applied)).not.toContain(SERVICE_TOKEN);
     expect(JSON.stringify(applied)).not.toContain(EVE_TOKEN);
+  });
+
+  it('preflights an oversized apply response through the core HTTP wrapper before changing the draft or proposal', async () => {
+    const fixture = await makeFixture({ manifest: { extraFiles: 1996, pathLength: 2146 } });
+    const draft = await createReleaseDraft(fixture, 'oversized-apply-draft');
+    const session = await createSession(fixture, draft, 'oversized-apply-session');
+    const firstPath = manifestPath(0, 'f');
+    const secondPath = manifestPath(1, 'f');
+    const proposalResponse = await internalProposalOperations(
+      fixture,
+      draft,
+      session.id,
+      'oversized-apply-proposal',
+      [
+        { op: 'rename', path: firstPath, newPath: manifestPath(0, 'g') },
+        { op: 'rename', path: secondPath, newPath: manifestPath(1, 'h') },
+      ],
+    );
+    expect(proposalResponse.status).toBe(201);
+    const proposal = (await json(proposalResponse)).proposal as Record<string, any>;
+
+    const before = await fixture.repository.read(ORGANIZATION);
+    const blobKeys = [...fixture.blobs.values.keys()];
+    const apply = await request(fixture, `/v1/drafts/${draft.id}/proposals/${proposal.id}/apply`, {
+      method: 'POST',
+      token: 'publisher-token',
+      headers: { 'idempotency-key': 'oversized-apply' },
+      body: { revision: draft.revision, digest: draft.digest, sessionId: session.id },
+    });
+    expect(apply.status).toBe(413);
+    expect((await json(apply)).error).toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
+
+    const after = await fixture.repository.read(ORGANIZATION);
+    expect(after.drafts).toEqual(before.drafts);
+    expect(after.audit).toEqual(before.audit);
+    expect(after.skills).toEqual(before.skills);
+    expect(after.jobs).toEqual(before.jobs);
+    const afterSession = after.builderSessions?.find((candidate) => candidate.id === session.id);
+    expect(afterSession).toMatchObject({ draftRevision: draft.revision, draftDigest: draft.digest });
+    expect(afterSession?.proposals.find((candidate) => candidate.id === proposal.id)).toMatchObject({ state: 'pending' });
+    expect([...fixture.blobs.values.keys()]).toEqual(blobKeys);
+  });
+
+  it('rejects an oversized release draft envelope before storing a draft or audit record', async () => {
+    const fixture = await makeFixture({ manifest: { extraFiles: 1998, pathLength: 2148 } });
+    const before = await fixture.repository.read(ORGANIZATION);
+    const blobKeys = [...fixture.blobs.values.keys()];
+    const response = await request(fixture, '/v1/skills/release-1/drafts', {
+      method: 'POST',
+      token: 'publisher-token',
+      headers: { 'idempotency-key': 'oversized-release-draft' },
+      body: { baseDigest: fixture.release.artifact.digest },
+    });
+    expect(response.status).toBe(413);
+    expect((await json(response)).error).toMatchObject({ code: 'DRAFT_RESPONSE_TOO_LARGE' });
+    const after = await fixture.repository.read(ORGANIZATION);
+    expect(after.drafts).toEqual(before.drafts);
+    expect(after.audit).toEqual(before.audit);
+    expect(after.builderSessions).toEqual(before.builderSessions);
+    expect(after.jobs).toEqual(before.jobs);
+    expect([...fixture.blobs.values.keys()]).toEqual(blobKeys);
   });
 
   it('enforces authentication, publisher namespace, stale bindings, and exact Eve cancellation targets', async () => {
