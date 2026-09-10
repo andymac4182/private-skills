@@ -26,6 +26,19 @@ export {
 } from './types.js';
 
 export {
+  SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
+  SKILLS_DIRECTORY_ENABLED_ENV,
+  SKILLS_DIRECTORY_GATEWAY_TOKEN_ENV,
+  SKILLS_DIRECTORY_GATEWAY_URL_ENV,
+  SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
+  createSkillsDirectoryGatewayTokenProvider,
+  createSkillsShGatewayCredential,
+  createUnavailableSkillsDirectoryTokenProvider,
+  normalizeDirectoryBaseURL,
+  resolveSkillsDirectoryConnection,
+} from './gateway.js';
+
+export {
   SKILLS_TOPIC_PARSER_REVISION,
   SkillsTopicParseError,
   parseSkillsTopicPage,
@@ -74,6 +87,14 @@ export type {
   SkillDetailResponse as SkillDetail,
   V1Skill,
 } from './types.js';
+
+export type {
+  SkillsDirectoryConnection,
+  SkillsDirectoryRuntimeEnvironment,
+  SkillsDirectoryUnavailableReason,
+  SkillsShGatewayCredential,
+  SkillsShGatewayCredentialConfig,
+} from './gateway.js';
 
 export type {
   EnumerateSkillsOptions,

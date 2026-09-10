@@ -6,11 +6,16 @@ import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastr
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
-import { createSkillsDirectoryClient } from '../../../packages/directory/src/index';
+import { createSkillsDirectoryClient, resolveSkillsDirectoryConnection } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
-  const configuredDirectoryBaseURL = env.PSKILLS_DIRECTORY_GATEWAY_URL ?? env.PSKILLS_SKILLS_SH_BASE_URL;
+  const directoryConnection = resolveSkillsDirectoryConnection(env);
+  const configuredDirectoryBaseURL = directoryConnection.kind === 'official'
+    ? directoryConnection.baseURL
+    : directoryConnection.kind === 'gateway'
+      ? directoryConnection.gateway.baseUrl
+      : undefined;
   const config = {
     organizationId: env.PSKILLS_ORGANIZATION_ID ?? 'default',
     publicOrigin: env.PSKILLS_PUBLIC_ORIGIN ?? 'http://localhost:5173',
@@ -29,7 +34,7 @@ async function createRuntime(env: RuntimeEnvironment) {
   // official Vercel OIDC helper per request for skills.sh, while edge keeps
   // custom gateway authentication disconnected until separately configured.
   // The callback is never exposed to browser code.
-  const directory = env.PSKILLS_DIRECTORY_ENABLED === 'true'
+  const directory = configuredDirectoryBaseURL !== undefined
     ? createSkillsDirectoryClient({
       baseURL: configuredDirectoryBaseURL,
       getToken: infrastructure.directoryTokenProvider,

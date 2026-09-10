@@ -37,6 +37,29 @@ describe('node directory token provider', () => {
     expect(oidc.getVercelOidcToken).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the explicit gateway credential without invoking OIDC', async () => {
+    const getToken = createDirectoryTokenProvider({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://gateway.example.test/catalog/',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'gateway-token',
+    });
+
+    await expect(getToken()).resolves.toBe('gateway-token');
+    expect(oidc.getVercelOidcToken).not.toHaveBeenCalled();
+  });
+
+  it('keeps the official OIDC provider separate when a gateway token is also present', async () => {
+    oidc.getVercelOidcToken.mockResolvedValue('project-token');
+    const getToken = createDirectoryTokenProvider({
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://skills.sh/catalog',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'gateway-token',
+    });
+
+    await expect(getToken()).resolves.toBe('project-token');
+    expect(oidc.getVercelOidcToken).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     'https://gateway.example.test',
     'https://skills.sh.evil.example.test',
@@ -44,7 +67,7 @@ describe('node directory token provider', () => {
     'https://skills.sh?forward=token',
     'https://skills.sh#fragment',
     'https://user:password@skills.sh',
-  ])('fails closed for an unapproved directory destination: %s', async (baseURL) => {
+  ])('fails closed for incomplete or unsafe gateway configuration: %s', async (baseURL) => {
     const getToken = createDirectoryTokenProvider({ PSKILLS_DIRECTORY_ENABLED: 'true', PSKILLS_DIRECTORY_GATEWAY_URL: baseURL });
 
     await expect(getToken()).rejects.toThrow('directory authentication is not configured');

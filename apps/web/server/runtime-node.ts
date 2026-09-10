@@ -11,12 +11,15 @@ import { PostgresSemanticIndex } from '../../../packages/search/src/postgres';
 import { StateSemanticIndex } from '../../../packages/search/src/state';
 import type { EmbeddingProfile, SemanticIndex } from '../../../packages/search/src/types';
 import { createHostedWorkerHandlerFromEnv } from '../../../workers/runner/src/hosted';
-import type { SkillsTokenProvider } from '../../../packages/directory/src/index';
+import {
+  createSkillsDirectoryGatewayTokenProvider,
+  createUnavailableSkillsDirectoryTokenProvider,
+  resolveSkillsDirectoryConnection,
+  SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
+  type SkillsTokenProvider,
+} from '../../../packages/directory/src/index';
 
 export type RuntimeEnvironment = Record<string, string | undefined>;
-
-const DEFAULT_DIRECTORY_BASE_URL = 'https://skills.sh';
-const DIRECTORY_AUTH_UNAVAILABLE = 'skills.sh directory authentication is not configured';
 
 /**
  * Resolve one server-side directory bearer. The official helper is invoked
@@ -28,44 +31,23 @@ const DIRECTORY_AUTH_UNAVAILABLE = 'skills.sh directory authentication is not co
  * receiving the Vercel project token.
  */
 export function createDirectoryTokenProvider(env: RuntimeEnvironment): SkillsTokenProvider {
-  if (env.PSKILLS_DIRECTORY_ENABLED !== 'true') return unavailableDirectoryToken;
-  const directoryBaseURL = env.PSKILLS_DIRECTORY_GATEWAY_URL
-    ?? env.PSKILLS_SKILLS_SH_BASE_URL
-    ?? DEFAULT_DIRECTORY_BASE_URL;
-  if (!isOfficialSkillsShOrigin(directoryBaseURL)) return unavailableDirectoryToken;
+  const connection = resolveSkillsDirectoryConnection(env);
+  if (connection.kind === 'gateway') return createSkillsDirectoryGatewayTokenProvider(connection.gateway);
+  if (connection.kind !== 'official') return createUnavailableSkillsDirectoryTokenProvider();
 
   return async (signal) => {
     throwIfAborted(signal);
     const token = await getVercelOidcToken();
     throwIfAborted(signal);
     if (typeof token !== 'string' || token.trim().length === 0) {
-      throw new Error(DIRECTORY_AUTH_UNAVAILABLE);
+      throw new Error(SKILLS_DIRECTORY_AUTH_UNAVAILABLE);
     }
     return token;
   };
 }
 
-async function unavailableDirectoryToken(): Promise<string> {
-  throw new Error(DIRECTORY_AUTH_UNAVAILABLE);
-}
-
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
-}
-
-function isOfficialSkillsShOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:'
-      && url.hostname === 'skills.sh'
-      && url.username.length === 0
-      && url.password.length === 0
-      && url.port.length === 0
-      && url.search.length === 0
-      && url.hash.length === 0;
-  } catch {
-    return false;
-  }
 }
 
 function required(env: RuntimeEnvironment, name: string): string {
@@ -121,23 +103,26 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
+  const directoryConnection = resolveSkillsDirectoryConnection(env);
   // The official skills.sh token provider is request-scoped. Keep the
   // resolver function in the long-lived runtime, never its token, and pass it
   // into hosted import jobs so each catalog request obtains a fresh project
   // OIDC credential. Disabled directory access leaves existing env-backed
-  // upstream credentials untouched.
+  // upstream credentials untouched. A gateway credential is deliberately not
+  // passed through this callback: upstream uses it only for the fixed
+  // official catalog origin, so forwarding it would leak the gateway secret.
   const directoryTokenProvider = createDirectoryTokenProvider(env);
   const hostedSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
     const token = await directoryTokenProvider(signal);
     if (typeof token !== 'string' || token.trim().length === 0) {
-      throw new Error(DIRECTORY_AUTH_UNAVAILABLE);
+      throw new Error(SKILLS_DIRECTORY_AUTH_UNAVAILABLE);
     }
     return token;
   };
   const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
     ? createHostedWorkerHandlerFromEnv(
       { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
-      env.PSKILLS_DIRECTORY_ENABLED === 'true'
+      directoryConnection.kind === 'official'
         ? { acquisition: { getSkillsShToken: hostedSkillsShToken } }
         : {},
     )
