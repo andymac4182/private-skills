@@ -1798,7 +1798,7 @@ function assertDraftResponseSize(value: unknown): void {
   if (new TextEncoder().encode(body).byteLength > MAX_PUBLIC_DRAFT_RESPONSE_BYTES) {
     throw new AuthoringApiError(
       'DRAFT_RESPONSE_TOO_LARGE',
-      'Draft metadata exceeds the supported response size; read selected files individually',
+      'Draft metadata exceeds the supported response size; reduce the number or length of file paths and retry',
       413,
       { maxBytes: MAX_PUBLIC_DRAFT_RESPONSE_BYTES },
     );
