@@ -10,6 +10,7 @@ import {
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.ts';
 import {
   OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
   OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   parseOpenClawFeed,
   serializeOpenClawFeed,
@@ -200,6 +201,7 @@ async function liveClawHubSkillsSnapshot(): Promise<OpenClawCacheSnapshot> {
     bytes,
     sha256: digest,
     etag: `"${digest}"`,
+    compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
     acceptedAt: FIXED_NOW,
     sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
   };
@@ -295,6 +297,36 @@ describe('OpenClaw source proof and consumer services', () => {
         signal: new AbortController().signal,
       })).resolves.toEqual([]);
     }
+  });
+
+  it('rechecks the queued feed freshness inside the durable proof admission transaction', async () => {
+    const repository = await repositoryWithCompletedImport();
+    const feedNow = FIXED_NOW;
+    await repository.transaction(TENANT, (state) => {
+      const descriptor = firstJob(state).openclawSource as Record<string, unknown>;
+      firstJob(state).openclawSource = {
+        ...descriptor,
+        feed: {
+          id: 'clawhub-official',
+          sequence: 5,
+          digest: REGISTRY_DIGEST,
+          sourceUrl: SOURCE_URL,
+          generatedAt: new Date(feedNow - 1_000).toISOString(),
+          expiresAt: new Date(feedNow + 500).toISOString(),
+        },
+      };
+    });
+    let now = feedNow;
+    const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => now });
+    now = feedNow + 1_000;
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+    await expect(proofs.list(TENANT)).resolves.toEqual([]);
   });
 
   it('rejects metadata-only or changed completion evidence and preserves the immutable proof', async () => {

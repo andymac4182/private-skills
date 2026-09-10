@@ -13,8 +13,8 @@ import {
   type OpenClawSkillEntry,
 } from "../src/index.ts";
 
-const FUTURE_GENERATED = "2030-01-01T00:00:00.000Z";
-const FUTURE_EXPIRY = "2030-01-02T00:00:00.000Z";
+const FUTURE_GENERATED = "2029-12-01T00:00:00.000Z";
+const FUTURE_EXPIRY = "2029-12-02T00:00:00.000Z";
 
 function skillEntry(overrides: Partial<OpenClawSkillEntry> = {}): OpenClawSkillEntry {
   return {
@@ -312,6 +312,76 @@ describe("OpenClaw feed transport and cache", () => {
     });
     expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
     expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rejects a strict-profile feed whose declared TTL exceeds 24 hours", async () => {
+    const body = serializeOpenClawFeed(feed({
+      generatedAt: FUTURE_GENERATED,
+      expiresAt: "2029-12-03T00:00:00.000Z",
+    }));
+    const cache = new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rechecks the clock after a delayed 200 body before accepting it", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const bodyBytes = new TextEncoder().encode(body);
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let now = expiry - 1;
+    let pulled = false;
+    const delayedBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (pulled) return;
+        pulled = true;
+        await Promise.resolve();
+        now = expiry;
+        controller.enqueue(bodyBytes);
+        controller.close();
+      },
+    });
+    const cache = new OpenClawFeedCache({ now: () => now });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => new Response(delayedBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rechecks the clock after a delayed 304 before serving the cached snapshot", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let now = expiry - 1;
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => now });
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => {
+        calls += 1;
+        if (calls === 1) return response(body);
+        await Promise.resolve();
+        now = expiry;
+        return new Response(null, { status: 304 });
+      },
+    } as const;
+    await expect(cache.refresh(request)).resolves.toMatchObject({ kind: "accepted" });
+    await expect(cache.refresh(request)).resolves.toMatchObject({ kind: "rejected", status: 304, error: "no-cache" });
   });
 
   it("does not accept a 304 with conflicting response validators", async () => {

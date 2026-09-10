@@ -210,6 +210,8 @@ export interface OpenClawCacheSnapshot {
   sha256: OpenClawSha256;
   /** Canonical body validator used by persisted publication boundaries. */
   etag: string;
+  /** Server-selected profile that admitted this snapshot, when applicable. */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   /**
    * The verified transport validator returned by the source. It may differ
    * from `etag` for a representation-aware CDN, but is never trusted without

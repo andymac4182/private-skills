@@ -230,6 +230,53 @@ describe('worker OpenClaw source acquisition', () => {
     expect(fetches).toBe(0);
   });
 
+  it('validates the normalized OpenClaw source before invoking a custom fetcher', async () => {
+    const sourceDigest = `sha256:${'b'.repeat(64)}`;
+    const job: WorkerClaimedJob = {
+      id: 'job-openclaw-invalid-source',
+      kind: 'import',
+      organizationId: 'org-1',
+      import: {
+        upstreamId: 'openclaw-upstream',
+        path: '../evil',
+        externalId: '../evil',
+        name: '@team/evil',
+        version: '1.0.0',
+      },
+      upstream: {
+        id: 'openclaw-upstream',
+        organizationId: 'org-1',
+        name: 'OpenClaw',
+        kind: 'registry',
+        enabled: true,
+        namespace: 'team',
+      },
+      openclawSource: {
+        source: {
+          kind: 'public-clawhub',
+          sourceRef: 'public-clawhub',
+          packageName: '../evil',
+          version: '1.0.0',
+          artifactDigest: sourceDigest,
+        },
+      },
+    };
+    let fetches = 0;
+    await expect(acquireImportJob(job, {
+      openClaw: {
+        allowedArtifactOrigins: ['https://clawhub.ai'],
+        sourceProviderOrigin: 'https://clawhub.ai',
+        fetcher: {
+          fetch: async () => {
+            fetches += 1;
+            throw new Error('source fetch must not run');
+          },
+        },
+      },
+    })).rejects.toThrow();
+    expect(fetches).toBe(0);
+  });
+
   it('rechecks feed freshness after scanning before submitting a successful completion', async () => {
     const bundleBytes = serializeSkillBundle({
       format: 'pskills-bundle-v1',

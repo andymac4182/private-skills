@@ -292,7 +292,7 @@ describe('composed OpenClaw publication conformance', () => {
       id: 'clawhub-official',
       generatedAt: '2029-12-31T23:59:00.000Z',
       sequence: feedSequence,
-      expiresAt: '2030-01-02T00:00:00.000Z',
+      expiresAt: '2030-01-01T23:59:00.000Z',
       entries: [metadataEntry],
     });
     const feedFetcher = async (): Promise<Response> => {
@@ -309,9 +309,10 @@ describe('composed OpenClaw publication conformance', () => {
       expectedFeedId: 'clawhub-official',
       allowedOrigins: ['https://clawhub.example'],
       fetcher: feedFetcher,
-    });
+    }, { cache: new OpenClawFeedCache({ now: () => NOW }) });
     expect(preview).toMatchObject({ kind: 'accepted' });
     const publicationManager = new OpenClawPublicationManager(new MemoryOpenClawPublicationStore());
+    const trustedCache = new OpenClawFeedCache({ now: () => NOW });
     const handler = createRegistryHandler({
       repository,
       blobs: new MemoryBlobs(),
@@ -334,13 +335,22 @@ describe('composed OpenClaw publication conformance', () => {
           allowedOrigins: ['https://clawhub.example'],
           fetcher: feedFetcher,
         },
+        consumer: {
+          refresh: (signal: AbortSignal) => previewOpenClawFeed({
+            url: FEED_URL,
+            expectedFeedId: 'clawhub-official',
+            allowedOrigins: ['https://clawhub.example'],
+            fetcher: feedFetcher,
+          }, { signal, cache: trustedCache }),
+          selectAndQueue: async () => ({ operationId: 'unused', state: 'queued' as const }),
+        },
         currentTrustedMetadata: async () => {
           const current = await previewOpenClawFeed({
             url: FEED_URL,
             expectedFeedId: 'clawhub-official',
             allowedOrigins: ['https://clawhub.example'],
             fetcher: feedFetcher,
-          });
+          }, { cache: trustedCache });
           return current.kind === 'accepted' || current.kind === 'not-modified'
             ? current.snapshot
             : undefined;

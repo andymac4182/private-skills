@@ -9,9 +9,7 @@ import {
   OpenClawRequestError,
   validateOpenClawFeedUrl,
   type OpenClawFeedCompatibilityProfile,
-  effectiveOpenClawFeedExpiry,
   isOpenClawClawHubSkillsCompatibilityIdentity,
-  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
   type OpenClawCacheSnapshot,
@@ -859,6 +857,7 @@ export interface OpenClawMetadataSnapshot {
   feed: OpenClawMetadataFeed;
   sha256: OpenClawSha256;
   etag: string;
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   lastModified?: string;
   acceptedAt: number;
   sourceUrl: string;
@@ -1123,6 +1122,7 @@ function metadataSnapshot(snapshot: OpenClawCacheSnapshot): OpenClawMetadataSnap
     },
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
     acceptedAt: snapshot.acceptedAt,
     sourceUrl: snapshot.sourceUrl,

@@ -14,11 +14,8 @@ import {
   type OpenClawSourceJobDescriptor,
 } from '../../../packages/upstreams/src/index.js';
 import {
-  effectiveOpenClawFeedExpiry,
-  isOpenClawClawHubSkillsCompatibilityIdentity,
+  isOpenClawFeedFresh,
   OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
-  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
-  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   normalizeOpenClawEntry,
 } from '../../../packages/openclaw/src/index.js';
 import type {
@@ -296,27 +293,11 @@ function validateOpenClawQueuedFeed(
     if (feed.compatibilityProfile !== undefined) throw new Error('OpenClaw feed freshness metadata is required');
     return;
   }
-  const generatedAt = Date.parse(feed.generatedAt);
-  const expiresAt = Date.parse(feed.expiresAt);
-  const compatibility = isOpenClawClawHubSkillsCompatibilityIdentity(feed.id, feed.sourceUrl);
-  if (
-    !Number.isFinite(generatedAt) ||
-    !Number.isFinite(expiresAt) ||
-    generatedAt > now ||
-    expiresAt <= generatedAt ||
-    expiresAt - generatedAt > (compatibility ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : 24 * 60 * 60 * 1_000) ||
-    (compatibility && feed.compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) ||
-    (!compatibility && feed.compatibilityProfile !== undefined)
-  ) throw new Error('OpenClaw feed freshness metadata is invalid');
-  if (feed.id === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !compatibility) {
-    throw new Error('OpenClaw skills feed identity is bound to its compatibility URL');
-  }
-  const effectiveExpiry = effectiveOpenClawFeedExpiry({
+  if (!isOpenClawFeedFresh({
     id: feed.id,
     generatedAt: feed.generatedAt,
     expiresAt: feed.expiresAt,
-  }, feed.sourceUrl);
-  if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) throw new Error('OpenClaw feed has expired');
+  }, feed.sourceUrl, now, feed.compatibilityProfile)) throw new Error('OpenClaw feed has expired');
 }
 
 function buildOpenClawProof(

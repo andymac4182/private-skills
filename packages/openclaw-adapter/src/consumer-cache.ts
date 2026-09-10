@@ -5,16 +5,18 @@ import {
   OpenClawValidationError,
   parseOpenClawFeed,
   sha256,
-  effectiveOpenClawFeedExpiry,
+  isOpenClawFeedFresh,
   isOpenClawClawHubSkillsCompatibilityIdentity,
   isValidOpenClawTransportEtag,
   OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   validateOpenClawFeedUrl,
   OPENCLAW_DEFAULT_MAX_BODY_BYTES,
   OPENCLAW_DEFAULT_MAX_STALE_MS,
   OPENCLAW_MAX_BODY_BYTES,
   OPENCLAW_MAX_STALE_MS,
   type OpenClawCacheSnapshot,
+  type OpenClawFeedCompatibilityProfile,
   type OpenClawFeedErrorCode,
   type OpenClawFeedRefreshRequest,
   type OpenClawFetch,
@@ -76,6 +78,7 @@ interface PersistedConsumerSnapshot {
   bytesLength: number;
   sha256: OpenClawSha256;
   etag: string;
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   transportEtag?: string;
   lastModified?: string;
 }
@@ -223,6 +226,7 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
         bytes,
         sha256: persisted.sha256,
         etag: persisted.etag,
+        ...(persisted.compatibilityProfile === undefined ? {} : { compatibilityProfile: persisted.compatibilityProfile }),
         ...(persisted.transportEtag === undefined ? {} : { transportEtag: persisted.transportEtag }),
         ...(persisted.lastModified === undefined ? {} : { lastModified: persisted.lastModified }),
         acceptedAt: persisted.acceptedAt,
@@ -539,6 +543,9 @@ async function validateSnapshot(
     snapshot.acceptedAt < 0 ||
     !SHA256_RE.test(snapshot.sha256) ||
     snapshot.etag !== `"${snapshot.sha256}"` ||
+    (snapshot.compatibilityProfile !== undefined && snapshot.compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) ||
+    (snapshot.compatibilityProfile === undefined && key.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID) ||
+    (snapshot.compatibilityProfile !== undefined && !isOpenClawClawHubSkillsCompatibilityIdentity(key.feedId, key.sourceUrl)) ||
     (snapshot.transportEtag !== undefined &&
       (typeof snapshot.transportEtag !== 'string' ||
         !isValidOpenClawTransportEtag(snapshot.transportEtag, snapshot.sha256, key.sourceUrl, key.feedId)))
@@ -567,12 +574,21 @@ async function validateSnapshot(
     }
     throw error;
   }
+  const generatedAt = Date.parse(feed.generatedAt);
+  const expiresAt = Date.parse(feed.expiresAt);
+  const maxWireTtl = snapshot.compatibilityProfile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE
+    ? 7 * 24 * 60 * 60 * 1_000
+    : 24 * 60 * 60 * 1_000;
+  if (!Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || expiresAt <= generatedAt || expiresAt - generatedAt > maxWireTtl) {
+    throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot freshness bounds are invalid');
+  }
   return {
     feed,
     body: snapshot.body,
     bytes: snapshot.bytes.slice(),
     sha256: digest,
     etag: `"${digest}"`,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
     ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: boundedOptionalHeader(snapshot.lastModified) }),
     acceptedAt: snapshot.acceptedAt,
@@ -591,6 +607,7 @@ function toPersistedSnapshot(key: OpenClawConsumerCacheKey, snapshot: OpenClawCa
     bytesLength: snapshot.bytes.byteLength,
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
     ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
   };
@@ -608,7 +625,8 @@ function samePersistedSnapshot(left: PersistedConsumerSnapshot, right: Persisted
     left.bytesBase64 === right.bytesBase64 &&
     left.bytesLength === right.bytesLength &&
     left.sha256 === right.sha256 &&
-    left.etag === right.etag;
+    left.etag === right.etag &&
+    left.compatibilityProfile === right.compatibilityProfile;
 }
 
 function validatorsMatch(
@@ -619,19 +637,19 @@ function validatorsMatch(
   const etag = response.headers.get('etag');
   const expectedLiveEtag = `"${snapshot.sha256}-gzip"`;
   const weakExpectedLiveEtag = `W/"${snapshot.sha256}-gzip"`;
-  const etagMatches = etag === null ||
+  const etagMatches = snapshot.compatibilityProfile === compatibilityProfile && (etag === null ||
     etag === snapshot.etag ||
     (compatibilityProfile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE &&
       isOpenClawClawHubSkillsCompatibilityIdentity(snapshot.feed.id, snapshot.sourceUrl) &&
-      (etag === expectedLiveEtag || etag === weakExpectedLiveEtag));
+      (etag === expectedLiveEtag || etag === weakExpectedLiveEtag)));
   if (!etagMatches) return false;
   const lastModified = response.headers.get('last-modified');
   return lastModified === null || lastModified === snapshot.lastModified;
 }
 
 function usableSnapshot(snapshot: OpenClawCacheSnapshot, now: number, maxStaleMs: number): OpenClawCacheSnapshot | undefined {
-  const expiresAt = effectiveOpenClawFeedExpiry(snapshot.feed, snapshot.sourceUrl);
-  if (!Number.isFinite(expiresAt) || expiresAt <= now || snapshot.acceptedAt > now || now - snapshot.acceptedAt > maxStaleMs) return undefined;
+  if (!isOpenClawFeedFresh(snapshot.feed, snapshot.sourceUrl, now, snapshot.compatibilityProfile) ||
+    snapshot.acceptedAt > now || now - snapshot.acceptedAt > maxStaleMs) return undefined;
   return cloneSnapshot(snapshot);
 }
 
@@ -729,6 +747,7 @@ function cloneSnapshot(snapshot: OpenClawCacheSnapshot): OpenClawCacheSnapshot {
     bytes: snapshot.bytes.slice(),
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
     ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
     acceptedAt: snapshot.acceptedAt,

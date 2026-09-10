@@ -13,8 +13,9 @@ import {
   OpenClawPublicationManager,
   OpenClawTrustedSnapshotImportService,
   StateRepositoryOpenClawConsumerSnapshotStore,
+  previewOpenClawFeed,
 } from '../../openclaw-adapter/src/index.ts';
-import { parseOpenClawFeed, serializeOpenClawFeed, sha256 } from '../../openclaw/src/index.ts';
+import { OpenClawFeedCache, parseOpenClawFeed, serializeOpenClawFeed, sha256 } from '../../openclaw/src/index.ts';
 import type { OpenClawCacheSnapshot } from '../../openclaw/src/index.ts';
 import type {
   Authenticator,
@@ -196,6 +197,15 @@ function setup(options: {
         : { candidatesForTenant: async (input) => options.candidates!({ metadata: input.metadata }) }),
       ...(options.recordSourceProof === undefined ? {} : { recordSourceProof: options.recordSourceProof }),
       ...(options.consumer === undefined ? {} : { consumer: options.consumer }),
+      ...(options.consumer === undefined && trustedFeed !== undefined ? {
+        consumer: {
+          refresh: (signal: AbortSignal) => previewOpenClawFeed(trustedFeed, {
+            signal,
+            cache: new OpenClawFeedCache({ now: () => Date.parse('2030-01-01T00:00:00.000Z') }),
+          }),
+          selectAndQueue: async () => ({ operationId: 'unused', state: 'queued' as const }),
+        },
+      } : {}),
       ...(options.namespace === undefined ? {} : { namespace: options.namespace }),
       ...(trustedFeed === undefined ? {} : {
         currentTrustedMetadata: options.currentTrustedMetadata ?? (() => metadataSnapshot(sourceCandidate.entry)),
@@ -223,7 +233,7 @@ function metadataSnapshot(entry: RegistryOpenClawCandidate['entry']): OpenClawMe
     feed: {
       schemaVersion: 1,
       id: 'clawhub-official',
-      generatedAt: '2025-01-01T00:00:00.000Z',
+      generatedAt: '2030-01-01T00:00:00.000Z',
       sequence: 5,
       expiresAt: '2030-01-02T00:00:00.000Z',
       entries: [entry],

@@ -90,9 +90,8 @@ import {
 import {
   OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
   OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
-  effectiveOpenClawFeedExpiry,
+  isOpenClawFeedFresh,
   isOpenClawClawHubSkillsCompatibilityIdentity,
-  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   normalizeOpenClawCandidate,
   parseOpenClawFeed,
   type OpenClawFeedEntry,
@@ -3501,18 +3500,7 @@ function validateOpenClawQueueFeed(
   ) {
     throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed freshness metadata is invalid', 503, { retryable: true });
   }
-  const generatedAt = Date.parse(input.feedGeneratedAt);
-  const expiresAt = Date.parse(input.feedExpiresAt);
   const compatibility = isOpenClawClawHubSkillsCompatibilityIdentity(input.feedId, sourceUrl);
-  if (
-    !Number.isFinite(generatedAt) ||
-    !Number.isFinite(expiresAt) ||
-    generatedAt > now ||
-    expiresAt <= generatedAt ||
-    expiresAt - generatedAt > (compatibility ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : 24 * 60 * 60 * 1_000)
-  ) {
-    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed freshness metadata is invalid', 503, { retryable: true });
-  }
   if (input.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !compatibility) {
     throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The ClawHub skills feed identity is bound to its compatibility URL', 503, { retryable: true });
   }
@@ -3522,13 +3510,12 @@ function validateOpenClawQueueFeed(
   if (!compatibility && input.feedCompatibilityProfile !== undefined) {
     throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The OpenClaw compatibility profile does not match this feed', 503, { retryable: true });
   }
-  const effectiveExpiry = effectiveOpenClawFeedExpiry({
+  if (!isOpenClawFeedFresh({
     id: input.feedId,
     generatedAt: input.feedGeneratedAt,
     expiresAt: input.feedExpiresAt,
-  }, sourceUrl);
-  if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) {
-    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed has expired', 503, { retryable: true });
+  }, sourceUrl, now, input.feedCompatibilityProfile)) {
+    throw new RegistryApiError('OPENCLAW_CONSUMER_UNAVAILABLE', 'The trusted OpenClaw feed freshness metadata is invalid or expired', 503, { retryable: true });
   }
 }
 
@@ -3610,14 +3597,8 @@ function openClawTrustedMetadataUsable(
     return false;
   }
   if (sourceUrl !== expectedSourceUrl) return false;
-  const generatedAt = Date.parse(metadata.feed.generatedAt);
-  const expiresAt = Date.parse(metadata.feed.expiresAt);
-  const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(metadata.feed.id, sourceUrl);
-  const effectiveExpiry = effectiveOpenClawFeedExpiry(metadata.feed, sourceUrl);
-  return Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
-    generatedAt <= now && expiresAt > now && effectiveExpiry > now &&
-    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now &&
-    (!currentClawHubSkills || expiresAt - generatedAt <= OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS);
+  return isOpenClawFeedFresh(metadata.feed, sourceUrl, now, metadata.compatibilityProfile) &&
+    Number.isFinite(metadata.acceptedAt) && metadata.acceptedAt <= now;
 }
 
 async function authorizeOpenClawPublication(

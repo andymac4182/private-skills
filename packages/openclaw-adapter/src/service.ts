@@ -10,9 +10,8 @@ import type {
 import {
   OPENCLAW_OFFICIAL_FEED_ID,
   OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
-  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
-  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   effectiveOpenClawFeedExpiry,
+  isOpenClawFeedFresh,
   isOpenClawClawHubSkillsCompatibilityIdentity,
   normalizeOpenClawCandidate,
   normalizeOpenClawEntry,
@@ -41,7 +40,6 @@ const MAX_PROOF_ENTRIES = 2_000;
 const MAX_PROOF_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_SNAPSHOT_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_SNAPSHOT_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
-const MAX_SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1_000;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
 
 // `openclawSource` is an optional registry job extension. Keep this adapter
@@ -162,9 +160,9 @@ export class StateRepositoryOpenClawSourceProofStore implements OpenClawSourcePr
     const tenantId = safeTenantId(input.tenantId);
     const completionJobId = safeIdentifier(input.completionJobId, MAX_JOB_ID_BYTES, 'completion job');
     const skillId = safeIdentifier(input.skillId, MAX_SKILL_ID_BYTES, 'skill');
-    const recordedAt = canonicalTimestamp(this.now(), 'proof clock');
     try {
       return await this.repository.transaction(tenantId, (state) => {
+        const recordedAt = canonicalTimestamp(this.now(), 'proof clock');
         const extension = state as unknown as OpenClawProofRepositoryState;
         const existing = extension.openClawSourceProofs;
         if (existing !== undefined && !isRecord(existing)) {
@@ -175,6 +173,7 @@ export class StateRepositoryOpenClawSourceProofStore implements OpenClawSourcePr
         if (!job || job.resourceId !== skillId) {
           throw new OpenClawSourceProofStoreError('not-eligible', 'The source proof is not bound to a completed import');
         }
+        validateOpenClawJobFeedFreshness(job, Date.parse(recordedAt));
         const skill = state.skills.find((candidate) => candidate.id === skillId && candidate.organizationId === tenantId);
         if (!skill || skill.state !== 'approved' || !skillCurrentlyApproved(state, skill, Date.parse(recordedAt), this.isCurrentPolicyApproved)) {
           throw new OpenClawSourceProofStoreError('not-eligible', 'The source proof is not bound to a current approved skill');
@@ -232,6 +231,55 @@ export class StateRepositoryOpenClawSourceProofStore implements OpenClawSourcePr
       if (error instanceof OpenClawSourceProofStoreError) throw error;
       throw new OpenClawSourceProofStoreError('unavailable', 'OpenClaw source-proof storage is unavailable');
     }
+  }
+}
+
+/**
+ * Revalidate the server-owned feed descriptor at the durable proof sink. The
+ * worker and core perform earlier checks, but the optional recorder can run
+ * after completion and therefore needs its own admission-time clock check.
+ */
+function validateOpenClawJobFeedFreshness(job: Job, now: number): void {
+  const descriptor = (job as OpenClawJob).openclawSource;
+  if (descriptor === undefined) return;
+  if (!isRecord(descriptor)) {
+    throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw source descriptor is invalid');
+  }
+  const rawFeed = descriptor.feed;
+  if (rawFeed === undefined) return;
+  if (!isRecord(rawFeed) ||
+    typeof rawFeed.id !== 'string' ||
+    typeof rawFeed.sequence !== 'number' ||
+    !Number.isSafeInteger(rawFeed.sequence) ||
+    rawFeed.sequence < 0 ||
+    !isDigest(rawFeed.digest) ||
+    typeof rawFeed.sourceUrl !== 'string' ||
+    typeof rawFeed.generatedAt !== 'string' ||
+    typeof rawFeed.expiresAt !== 'string') {
+    throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw feed descriptor is invalid');
+  }
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(rawFeed.sourceUrl);
+  } catch {
+    throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw feed URL is invalid');
+  }
+  if (sourceUrl.protocol !== 'https:' || sourceUrl.username || sourceUrl.password || sourceUrl.search || sourceUrl.hash || sourceUrl.href !== rawFeed.sourceUrl) {
+    throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw feed URL is invalid');
+  }
+  let compatibilityProfile: typeof OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE | undefined;
+  if (rawFeed.compatibilityProfile !== undefined) {
+    if (rawFeed.compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) {
+      throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw feed compatibility profile is invalid');
+    }
+    compatibilityProfile = OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE;
+  }
+  if (!isOpenClawFeedFresh({
+    id: rawFeed.id,
+    generatedAt: rawFeed.generatedAt,
+    expiresAt: rawFeed.expiresAt,
+  }, sourceUrl, now, compatibilityProfile)) {
+    throw new OpenClawSourceProofStoreError('not-eligible', 'The OpenClaw feed is expired or outside its validity bounds');
   }
 }
 
@@ -522,13 +570,13 @@ async function validateTrustedSnapshot(
       checkExpiry: true,
       maxBytes: OPENCLAW_MAX_BODY_BYTES,
     });
-    const generatedAt = Date.parse(feed.generatedAt);
-    const expiresAt = Date.parse(feed.expiresAt);
-    const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(key.feedId, key.sourceUrl);
-    const maxWireTtl = currentClawHubSkills ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : MAX_SNAPSHOT_TTL_MS;
-    if (key.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !currentClawHubSkills) throw new Error('invalid feed');
-    if (feed.id !== key.feedId || feed.entries.length > 1_000 || !Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || generatedAt > now || expiresAt - generatedAt > maxWireTtl) throw new Error('invalid feed');
     const effectiveExpiry = effectiveOpenClawFeedExpiry(feed, key.sourceUrl);
+    if (feed.id !== key.feedId || feed.entries.length > 1_000 || !isOpenClawFeedFresh(feed, key.sourceUrl, now, snapshot.compatibilityProfile)) {
+      if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) {
+        throw new OpenClawConsumerSelectionError('snapshot-expired', 'The persisted feed snapshot is expired');
+      }
+      throw new Error('invalid feed');
+    }
     if (!Number.isFinite(effectiveExpiry) || effectiveExpiry <= now) {
       throw new OpenClawConsumerSelectionError('snapshot-expired', 'The persisted feed snapshot is expired');
     }
@@ -795,16 +843,10 @@ function defaultCanReadEntry(principal: Principal, entry: OpenClawFeedEntry): bo
 }
 
 function usableMetadata(snapshot: OpenClawMetadataSnapshot, now: number, maxAgeMs: number): boolean {
-  const generatedAt = Date.parse(snapshot.feed.generatedAt);
-  const expiresAt = Date.parse(snapshot.feed.expiresAt);
   const currentClawHubSkills = isOpenClawClawHubSkillsCompatibilityIdentity(snapshot.feed.id, snapshot.sourceUrl);
   const identityAccepted = snapshot.feed.id === OPENCLAW_OFFICIAL_FEED_ID || currentClawHubSkills;
-  const maxWireTtl = currentClawHubSkills ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS : undefined;
   return identityAccepted &&
-    Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
-    generatedAt <= now && expiresAt > now &&
-    (maxWireTtl === undefined || expiresAt - generatedAt <= maxWireTtl) &&
-    effectiveOpenClawFeedExpiry(snapshot.feed, snapshot.sourceUrl) > now &&
+    isOpenClawFeedFresh(snapshot.feed, snapshot.sourceUrl, now, snapshot.compatibilityProfile) &&
     snapshot.acceptedAt <= now && now - snapshot.acceptedAt <= maxAgeMs;
 }
 

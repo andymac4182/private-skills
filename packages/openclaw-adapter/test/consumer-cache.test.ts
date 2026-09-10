@@ -26,13 +26,15 @@ async function snapshot(
   sequence = 1,
   sourceUrl = SOURCE_URL,
   acceptedAt = CLOCK,
+  generatedAt = '2030-01-01T00:00:00.000Z',
+  expiresAt = '2030-01-02T00:00:00.000Z',
 ): Promise<OpenClawCacheSnapshot> {
   const body = serializeOpenClawFeed({
     schemaVersion: 1,
     id: FEED_ID,
-    generatedAt: '2030-01-01T00:00:00.000Z',
+    generatedAt,
     sequence,
-    expiresAt: '2030-01-02T00:00:00.000Z',
+    expiresAt,
     entries: [],
   });
   const bytes = utf8Bytes(body);
@@ -66,6 +68,7 @@ async function liveClawHubSkillsSnapshot(acceptedAt = CLOCK): Promise<OpenClawCa
     bytes,
     sha256: digest,
     etag: `"${digest}"`,
+    compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
     transportEtag: `W/"${digest}-gzip"`,
     lastModified: LAST_MODIFIED,
     acceptedAt,
@@ -507,5 +510,38 @@ describe('durable OpenClaw consumer snapshots', () => {
       fetcher,
     })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
     expect(calls).toBe(2);
+  });
+
+  it('does not hydrate a strict snapshot whose generated time is future or TTL exceeds 24 hours', async () => {
+    const repository = createMemoryStateRepository();
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const future = await snapshot(
+      1,
+      SOURCE_URL,
+      CLOCK,
+      '2030-01-01T02:00:00.000Z',
+      '2030-01-02T00:00:00.000Z',
+    );
+    await store.put(key(), future);
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
+    const response304 = async () => new Response(null, {
+      status: 304,
+      headers: { etag: future.etag, 'last-modified': LAST_MODIFIED },
+    });
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: response304,
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+
+    const longTtl = await snapshot(
+      2,
+      SOURCE_URL,
+      CLOCK,
+      '2030-01-01T00:00:00.000Z',
+      '2030-01-03T00:00:00.000Z',
+    );
+    await expect(store.put(key(), longTtl)).rejects.toMatchObject({ code: 'invalid' });
   });
 });
