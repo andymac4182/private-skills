@@ -12,25 +12,23 @@ their own criteria and evidence pass. They do not silently expand the current
 release checklist.
 
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). PR26 is merged on
-`origin/main` at `79088eaafa8cca279648004a0266e634b0caade6`, and its
-Git-triggered deployment `dpl_GRTEufeDWquQReZmoJatk8rdRdHk` is READY. The
-sanitized [production read-only release-file evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
-proves authenticated health, principal/policy, approved-release, manifest, and
-selected text-file reads plus an unauthenticated 401; it records no private
-registry writes. This is production GET evidence; earlier browser fixtures,
-including Pack preview, retain their own deployment provenance and are not
-promoted by it. The prior quarantined import, same-root CLI result, local
-edge/multi-feed tests, and metadata-only Pack preview remain partial evidence.
-A later production record also closes snapshot-only candidate admission,
-required scanning, isolated CLI install/repeat, and analytics for one selected
-row; it does not establish physical GitHub or well-known source resolution,
-direct zero-upstream instrumentation, or complete C1. A bounded hosted
-Neon/object-storage logical restore is now verified for source revision 114 and
-five referenced objects; native CI remains open. M6's read-only VIEW slice now
-has this delivered evidence, while the full editor/reviewer/builder remains
-active and incomplete; M7 OpenClaw interoperability is also active and
-incomplete.
+[`verification-current.md`](verification-current.md). PR30 is merged on
+`origin/main` at `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426`, with Git-triggered
+READY registry, builder, and upload-reviewer deployments
+`dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`, `dpl_5GfCb5Et8VUcjigcugytvf3NoXqh`, and
+`dpl_J8Rzm6DXTvRErMqRVQcLCWYHGHJP`. The sanitized [production M6 read-only
+evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+records bounded authenticated release metadata/file checks, digest verification,
+OpenClaw-disabled responses, unauthenticated 401 boundaries, and zero private
+registry writes. The editor API and authoring source are shipped, while local
+browser acceptance and Eve bridge credential/model activation remain pending.
+The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
+metadata-only Pack preview, and snapshot-only candidate admission remain
+source-specific evidence. Physical GitHub/well-known resolution, direct
+zero-upstream instrumentation, and complete C1 remain open. A bounded hosted
+Neon/object-storage logical restore is verified for source revision 114 and five
+referenced objects; native CI remains open. M7 OpenClaw backend code is shipped
+but the feed remains disabled, with no live interoperability evidence.
 
 ## G0 — v0.2.0 shipment
 
@@ -45,13 +43,13 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
   records the connected `andymac4182/private-skills` project, seven
   authenticated readback successes, the expected unauthenticated Topics 401,
   and zero registry writes;
-- **verified for the latest read-only release-file slice:** PR26 main commit
-  `79088eaafa8cca279648004a0266e634b0caade6` produced READY Git deployment
-  `dpl_GRTEufeDWquQReZmoJatk8rdRdHk`. The sanitized [release-file evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
-  proves authenticated manifest and selected text-file reads, digest verification,
-  and unauthenticated 401 with zero private-registry writes. It does not replace
-  the broader M6 editor/reviewer/builder acceptance or earlier browser-fixture
-  provenance;
+- **verified for the current read-only release-file slice:** PR30 main commit
+  `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` produced READY Git deployment
+  `dpl_39j65TecJNinwh9o1Y5Y1PALvnR3`. The sanitized [M6 release-file evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+  records authenticated manifest and selected text-file reads, digest
+  verification, expected OpenClaw-disabled responses, unauthenticated 401, and
+  zero private-registry writes. It does not replace the broader M6 browser
+  editor/reviewer/builder acceptance or earlier browser-fixture provenance;
 - **verified for the recorded fixtures:** the production-built registry passes
   an authenticated publish → required SkillsGuard scan → approval → semantic
   search → Rust CLI install/verify → analytics/review flow at its real URL;
@@ -515,11 +513,14 @@ breaking registry distribution.
 ## M6 — full Diffs editor and upload/edit review (active implementation, incomplete; VIEW slice evidence delivered)
 
 M6 is the editor and upload/edit reviewer requested for the Private Skills web
-application. Its read-only release-file VIEW slice has delivered production
-GET evidence for manifest, selected text-file retrieval, digest verification,
-and unauthenticated rejection; the full editor, durable draft, upload/edit
-review, and builder criteria remain active implementation work. It is not a G0
-or C1 release prerequisite. The concise API/type and ownership sketch is in
+application. The editor and authoring API/source are shipped in current main,
+with Git-triggered READY registry, builder, and upload-reviewer deployments;
+local browser acceptance and Eve bridge credential/model activation remain
+pending. Its read-only release-file VIEW slice has delivered production GET
+evidence for manifest, selected text-file retrieval, digest verification, and
+unauthenticated rejection; the full composed editor, durable draft,
+upload/edit review, and builder evidence criteria remain active and incomplete.
+It is not a G0 or C1 release prerequisite. The concise API/type and ownership sketch is in
 [`m6-authoring-contract.md`](m6-authoring-contract.md). The official
 [Diffs home](https://diffs.com/) and [edit page](https://diffs.com/edit)
 confirm an open source `@pierre/diffs` renderer and beta in-place edit mode;
@@ -641,14 +642,15 @@ Completion requires all of the following:
     existing flow remains a separately evidenced path.
 
 12. **M6-VIEW — read-only release file view (delivered slice; full gate remains).** The
-    production [read-only evidence](evidence/production-readonly-release-files-dpl_GRTEufeDWquQReZmoJatk8rdRdHk.json)
-    for PR26 main `79088ea` proves authenticated health/principal/policy,
-    approved-release metadata, a paths-only manifest, selected `SKILL.md`
-    retrieval with matching digest, and unauthenticated release-file `401`, with
-    zero private-registry writes. It is a production HTTP/API check, separate
-    from the earlier browser Pack-preview fixture whose exact deployment
-    attribution remains recorded independently. The remaining full gate is that
-    an authorized
+    current production [read-only evidence](evidence/production-m6-readonly-dpl_39j65TecJNinwh9o1Y5Y1PALvnR3.json)
+    for main `0f7b3f064fdfbdf30e71bd72fef80a3385fc5426` proves authenticated
+    health/principal/policy, approved-release metadata, a metadata-only
+    paths-only manifest, selected `SKILL.md` retrieval with matching digest,
+    expected OpenClaw-disabled responses, and unauthenticated release-file `401`,
+    with zero private-registry writes. It is a production HTTP/API check,
+    separate from the earlier browser Pack-preview fixture whose exact
+    deployment attribution remains recorded independently. The remaining full
+    gate is that an authorized
     reader can select an immutable release/version and see that release's
     server-returned canonical digest, file manifest/tree, and the full content
     of every allowed text/supporting file through the pinned `@pierre/diffs`

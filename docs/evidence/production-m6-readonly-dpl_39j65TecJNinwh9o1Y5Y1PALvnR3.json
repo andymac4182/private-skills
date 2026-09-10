@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-m6-readonly",
+  "startedAt": "2026-09-10T12:56:00.520Z",
+  "completedAt": "2026-09-10T12:56:15.150Z",
+  "deployment": {
+    "id": "dpl_39j65TecJNinwh9o1Y5Y1PALvnR3",
+    "origin": "https://private-skills-theta.vercel.app",
+    "source": {
+      "provider": "github",
+      "repository": "andymac4182/private-skills",
+      "ref": "main",
+      "mergedMainSha": "0f7b3f064fdfbdf30e71bd72fef80a3385fc5426"
+    },
+    "localCandidateSha": "29f7eeab8f4743873ce5e91be6ee5b67eef1b9f7",
+    "localArtifactManifestSha256": null,
+    "readyState": "READY"
+  },
+  "requestPolicy": {
+    "method": "GET",
+    "requestCount": 12,
+    "registryWrites": 0,
+    "maxResponseBytes": 2097152,
+    "timeoutMs": 20000
+  },
+  "checks": [
+    {
+      "label": "health",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "ok",
+        "service",
+        "version"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "me",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "namespaces",
+        "organizationId",
+        "roles",
+        "scopes",
+        "subject"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "policy",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "policy"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "capabilities",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "features",
+        "limits",
+        "protocolVersion",
+        "scanners",
+        "schemaVersion",
+        "service"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "feeds",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "feeds"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "openclaw_feed",
+      "status": 503,
+      "errorCode": "OPENCLAW_DISABLED",
+      "bodyShape": [
+        "error"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "openclaw_catalog",
+      "status": 503,
+      "errorCode": "OPENCLAW_DISABLED",
+      "bodyShape": [
+        "error"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "openclaw_feed_unauthenticated",
+      "status": 401,
+      "errorCode": "UNAUTHORIZED",
+      "bodyShape": [
+        "error"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "approved_release",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "skill"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "release_files_manifest",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "files",
+        "release"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "selected_release_file",
+      "status": 200,
+      "errorCode": null,
+      "bodyShape": [
+        "files",
+        "release"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    },
+    {
+      "label": "unauthenticated_release_files",
+      "status": 401,
+      "errorCode": "UNAUTHORIZED",
+      "bodyShape": [
+        "error"
+      ],
+      "parseError": null,
+      "bodyCredential": false,
+      "headerCredential": false
+    }
+  ],
+  "authentication": {
+    "health200": true,
+    "me200": true,
+    "credentialPatternDetected": false
+  },
+  "policy": {
+    "status": 200,
+    "allowUnscanned": false,
+    "scanners": [
+      {
+        "id": "cisco-skill-scanner",
+        "mode": "disabled"
+      },
+      {
+        "id": "nvidia-skillspector",
+        "mode": "disabled"
+      },
+      {
+        "id": "skillsguard",
+        "mode": "required"
+      }
+    ],
+    "requiredSkillsGuard": true,
+    "revisionPresent": true
+  },
+  "capabilities": {
+    "status": 200,
+    "openClawEnabled": false,
+    "openClaw": {
+      "skipped": false,
+      "feed": {
+        "status": 503,
+        "errorCode": "OPENCLAW_DISABLED",
+        "disabled": true
+      },
+      "catalog": {
+        "status": 503,
+        "errorCode": "OPENCLAW_DISABLED",
+        "disabled": true
+      },
+      "unauthenticated": {
+        "status": 401,
+        "rejected": true
+      }
+    }
+  },
+  "release": {
+    "id": "skill_3f1ae70b-baac-46b3-9420-90671aae376b",
+    "skillStatus": "approved",
+    "skillStatusCode": 200,
+    "manifestStatus": 200,
+    "fileCount": 2,
+    "metadataOnly": true,
+    "contentsAbsent": true,
+    "selectedFileStatus": 200,
+    "selectedPath": "SKILL.md",
+    "selectedPreviewState": "text",
+    "selectedDigestMatchesContents": true,
+    "selectedContentsRetained": false,
+    "unauthenticatedManifestRejected": true
+  },
+  "limitations": {
+    "noFeedImport": true,
+    "noFeedActivation": true,
+    "noScanOrRescan": true,
+    "noRegistryMutation": true,
+    "selectedFileContentsReadTransiently": true,
+    "policyGetDoesNotProveFailurePathBehavior": true
+  }
+}
