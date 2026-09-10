@@ -32,15 +32,16 @@ criteria complete.
 
 A separate bounded [M6 Eve session record](evidence/production-m6-eve-session-34e4f56.json)
 captures one accepted prompt in a ready two-turn session. No proposal was
-created, and the assistant reported that proposal tools were unavailable. The
-captured builder behavior matched the serialized `capture`, `list_draft_files`,
-and tool-boundary observations. Source and compiled inspection identified the
-captured `SkillBuilderBackend` client instance as incompatible with Eve's JSON
-closure boundary. Candidate source commit `c4cd24a` constructs that client
-inside the executors and passes its build, but it has not been deployed or live
-tested. This remains source-scoped diagnostic evidence rather than a final
-hosted-cause or fix claim; hosted source/log validation and end-to-end
-model/proposal evidence remain pending.
+created, and the assistant reported that proposal tools were unavailable. A
+bounded runtime log matched JSON serialization of captured tool state and
+`list_draft_files`; correlated source/compiler inspection identified the
+captured registry client object returned by [`registryClient()`](../apps/skill-builder/agent/lib/config.ts#L158)
+as incompatible with Eve's JSON closure boundary. Candidate source commit
+`c4cd24a` constructs that client inside the executors. Its source-scoped
+verification passes: skill-builder typecheck, 15/15 skill-builder tests, 47/47
+related tests, and the Eve build all passed. The candidate has not been deployed
+or live-tested. Hosted fix validation and end-to-end model/proposal evidence
+remain unverified; this source/build diagnosis does not mark M6 complete.
 
 The editor API and authoring source remain shipped, the local synthetic
 [editor-browser record](evidence/m6-editor-browser-local-29f7.json) retains its
