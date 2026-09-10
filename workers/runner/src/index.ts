@@ -6,6 +6,7 @@ export * from './worker.js';
 export * from './webhook.js';
 export * from './hosted.js';
 
+import { workerAcquisitionOptionsFromEnv } from './acquisition.js';
 import { WorkerRunner } from './worker.js';
 
 /**
@@ -28,6 +29,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
       'nvidia-skillspector': env.PSKILLS_IMAGE_NVIDIA,
       skillsguard: env.PSKILLS_IMAGE_SKILLSGUARD,
     },
+    acquisition: workerAcquisitionOptionsFromEnv(env),
     onEvent(event) {
       // Deliberately metadata-only logs. Never print report excerpts, URLs,
       // artifact bytes, lease tokens, or scanner stderr.

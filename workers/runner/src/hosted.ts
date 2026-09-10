@@ -6,7 +6,7 @@ import {
 } from '../../../packages/scanners/src/index.js';
 import type { CommandExecutor, ScannerAdapter } from '../../../packages/scanners/src/index.js';
 import { createSandboxProviderLoader } from '../../../packages/sandbox-provider/src/index.js';
-import type { WorkerAcquisitionOptions } from './acquisition.js';
+import { workerAcquisitionOptionsFromEnv, type WorkerAcquisitionOptions } from './acquisition.js';
 import {
   WorkerRunner,
   type LocalStageHook,
@@ -115,6 +115,10 @@ export function hostedWorkerOptionsFromEnv(
   env: HostedWorkerEnv,
   overrides: HostedWorkerOverrides = {},
 ): HostedWorkerOptions {
+  const acquisition = {
+    ...workerAcquisitionOptionsFromEnv(env),
+    ...(overrides.acquisition ?? {}),
+  };
   const baseImages: SandboxImageMap = {
     'cisco-skill-scanner': env.PSKILLS_IMAGE_CISCO,
     'nvidia-skillspector': env.PSKILLS_IMAGE_NVIDIA,
@@ -128,6 +132,7 @@ export function hostedWorkerOptionsFromEnv(
     scannerImages: { ...baseImages, ...(overrides.scannerImages ?? {}) },
     sandboxDriver: resolveSandboxDriver(overrides.sandboxDriver ?? env.PSKILLS_SANDBOX_DRIVER),
     sandboxProvider: overrides.sandboxProvider ?? env.PSKILLS_SANDBOX_PROVIDER ?? 'vercel',
+    ...(Object.keys(acquisition).length === 0 ? {} : { acquisition }),
   };
 }
 

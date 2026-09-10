@@ -10,10 +10,48 @@ import {
   type AcquireSkillOptions,
   type AcquisitionResult,
 } from '../../../packages/upstreams/src/index.js';
+import {
+  isValidSkillsShGatewayToken,
+  normalizeDirectoryBaseURL,
+  resolveSkillsDirectoryConnection,
+  type SkillsShGatewayCredential,
+} from '../../../packages/directory/src/index.js';
 import type { WorkerClaimedJob } from './client.js';
 
 /** Options supplied by the worker supervisor for a source acquisition. */
 export interface WorkerAcquisitionOptions extends AcquireSkillOptions {}
+
+const GATEWAY_CREDENTIAL_UNAVAILABLE = 'skills.sh gateway credential unavailable';
+
+/**
+ * Build the optional portable gateway credential from supervisor settings.
+ * The returned object binds the token to the exact configured base URL; the
+ * upstream adapter performs the normalized origin+pathname comparison before
+ * invoking it.  Directory credentials are ignored while the directory is
+ * disabled, and incomplete settings fail closed when the credential is used.
+ */
+export function workerAcquisitionOptionsFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): WorkerAcquisitionOptions {
+  if (env.PSKILLS_DIRECTORY_ENABLED !== 'true') return {};
+
+  const baseUrl = env.PSKILLS_DIRECTORY_GATEWAY_URL;
+  const connection = resolveSkillsDirectoryConnection(env);
+  if (connection.kind === 'gateway') return { skillsShGatewayCredential: connection.gateway };
+  if (connection.kind === 'official' || baseUrl === undefined) return {};
+
+  // Preserve a fail-closed marker for an explicitly selected but incomplete
+  // or unsafe gateway.  Without this marker the upstream adapter could fall
+  // through to an ambient credentialEnv token or an anonymous request.
+  const credential: SkillsShGatewayCredential = {
+    baseUrl: normalizeDirectoryBaseURL(baseUrl) ?? '',
+    getToken: async (signal?: AbortSignal): Promise<string> => {
+      if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
+      throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
+    },
+  };
+  return { skillsShGatewayCredential: credential };
+}
 
 export interface AcquiredImport {
   bundle: SkillBundle;
@@ -68,12 +106,15 @@ function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisiti
   const candidate = (options as WorkerAcquisitionOptions & {
     getSkillsShToken?: unknown;
   }).getSkillsShToken;
-  if (candidate === undefined) return options;
-  if (typeof candidate !== 'function') throw new Error('skills.sh credential unavailable');
+  const gateway = (options as WorkerAcquisitionOptions & {
+    skillsShGatewayCredential?: unknown;
+  }).skillsShGatewayCredential;
+  if (candidate === undefined && gateway === undefined) return options;
 
-  return {
-    ...options,
-    getSkillsShToken: async (signal?: AbortSignal): Promise<string> => {
+  const safe: WorkerAcquisitionOptions = { ...options };
+  if (candidate !== undefined) {
+    if (typeof candidate !== 'function') throw new Error('skills.sh credential unavailable');
+    safe.getSkillsShToken = async (signal?: AbortSignal): Promise<string> => {
       try {
         const token = await (candidate as (signal?: AbortSignal) => Promise<unknown>)(signal);
         if (typeof token !== 'string' || token.length === 0 || Buffer.byteLength(token, 'utf8') > 4_096 || /[\r\n]/.test(token)) {
@@ -83,8 +124,29 @@ function safeSkillsShOptions(options: WorkerAcquisitionOptions): WorkerAcquisiti
       } catch {
         throw new Error('skills.sh credential unavailable');
       }
-    },
-  } as WorkerAcquisitionOptions;
+    };
+  }
+  if (gateway !== undefined) {
+    if (typeof gateway !== 'object' || gateway === null || typeof (gateway as { baseUrl?: unknown }).baseUrl !== 'string' || typeof (gateway as { getToken?: unknown }).getToken !== 'function') {
+      throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
+    }
+    const credential = gateway as SkillsShGatewayCredential;
+    safe.skillsShGatewayCredential = {
+      baseUrl: credential.baseUrl,
+      getToken: async (signal?: AbortSignal): Promise<string> => {
+        try {
+          const token = await credential.getToken(signal);
+          if (!isValidSkillsShGatewayToken(token)) {
+            throw new Error('invalid skills.sh gateway credential');
+          }
+          return token;
+        } catch {
+          throw new Error(GATEWAY_CREDENTIAL_UNAVAILABLE);
+        }
+      },
+    };
+  }
+  return safe;
 }
 
 function asUpstream(value: unknown): Upstream {

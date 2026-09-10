@@ -71,6 +71,31 @@ tenant-scoped and must pass the feed's enabled/trust/ACL checks before catalog
 access. These source-contract rules are not asserted as new hosted behavior
 here.
 
+### Portable directory gateway configuration
+
+The portable directory gateway is an operator-controlled configuration for
+hosts where request-scoped Vercel OIDC is unavailable. On a Node host with
+request-scoped Vercel OIDC available, selecting the canonical `https://skills.sh`
+URL uses project OIDC and never the gateway token. Edge hosts require the
+explicit gateway configuration below:
+
+```sh
+PSKILLS_DIRECTORY_ENABLED=true
+PSKILLS_DIRECTORY_GATEWAY_URL=https://directory-gateway.example/skills
+PSKILLS_DIRECTORY_GATEWAY_TOKEN=replace-with-server-secret
+```
+
+The gateway URL must be an operator-trusted HTTPS base without userinfo, query,
+or fragment data. Requests are bound to its exact origin and path. Gateway
+catalog authentication is stripped on redirects; existing private-source
+authentication is retained only for an allowed same-origin request. The token
+is available only to the server/worker request path, is bounded and redacted,
+and must never reach browser code, job data, logs, source acquisition, or
+redirects. Invalid or incomplete settings fail closed with directory unavailable
+behavior. Legacy ambient directory-token settings, including `DIRECTORY_TOKEN`
+and `PSKILLS_DIRECTORY_TOKEN`, are ignored; use the explicit URL/token pair.
+Deployment enablement and runtime evidence are tracked separately.
+
 `PSKILLS_PACK_DIRECTORY_ENABLED=true` independently enables public, unlisted
 pack metadata preview. It sends no directory credential and fetches no member
 artifacts. Pack preview runs through Web APIs on both Node and edge profiles.

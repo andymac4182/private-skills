@@ -78,6 +78,53 @@ describe('hosted worker route', () => {
     expect(handler).toBeTypeOf('function');
   });
 
+  it('wires an enabled gateway credential to the hosted runner without exposing its token', async () => {
+    const gatewayToken = 'gateway-token-fixture';
+    const handler = createHostedWorkerHandlerFromEnv({
+      PSKILLS_API_URL: 'https://registry.example.test',
+      PSKILLS_WORKER_TOKEN: 'worker-token-fixture',
+      CRON_SECRET: SECRET,
+      PSKILLS_DIRECTORY_ENABLED: 'true',
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://directory-gateway.example.test/tenant-a',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: gatewayToken,
+      PSKILLS_IMAGE_SKILLSGUARD: IMAGE,
+    }, {
+      executor: { run: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '', durationMs: 1, timedOut: false, outputTruncated: false }) },
+      createRunner: (runnerOptions) => {
+        const credential = runnerOptions.acquisition?.skillsShGatewayCredential;
+        expect(credential?.baseUrl).toBe('https://directory-gateway.example.test/tenant-a');
+        expect(credential?.getToken).toBeTypeOf('function');
+        return { runOnce: async () => ({ claimed: false }) } as unknown as WorkerRunner;
+      },
+    });
+    const response = await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(response.status).toBe(200);
+  });
+
+  it('does not wire gateway settings while directory access is disabled', async () => {
+    let acquisition: WorkerRunnerOptions['acquisition'] | undefined;
+    const handler = createHostedWorkerHandlerFromEnv({
+      PSKILLS_API_URL: 'https://registry.example.test',
+      PSKILLS_WORKER_TOKEN: 'worker-token-fixture',
+      CRON_SECRET: SECRET,
+      PSKILLS_DIRECTORY_GATEWAY_URL: 'https://directory-gateway.example.test/tenant-a',
+      PSKILLS_DIRECTORY_GATEWAY_TOKEN: 'must-not-be-used',
+      PSKILLS_IMAGE_SKILLSGUARD: IMAGE,
+    }, {
+      executor: { run: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '', durationMs: 1, timedOut: false, outputTruncated: false }) },
+      createRunner: (runnerOptions) => {
+        acquisition = runnerOptions.acquisition;
+        return { runOnce: async () => ({ claimed: false }) } as unknown as WorkerRunner;
+      },
+    });
+    await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(acquisition?.skillsShGatewayCredential).toBeUndefined();
+  });
+
   it('forwards the request-scoped skills.sh token callback without resolving it at startup', async () => {
     const tokenProvider = async (_signal?: AbortSignal): Promise<string> => 'oidc-token-fixture';
     let forwarded: unknown;

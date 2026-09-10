@@ -10,7 +10,14 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
+import {
+  isReservedSkillsDirectoryHost,
+  isValidSkillsShGatewayToken,
+} from '../../directory/src/gateway.js';
+import type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 import { parseSkillMetadata } from '../../storage/src/bundle.js';
+
+export type { SkillsShGatewayCredential } from '../../directory/src/gateway.js';
 
 /**
  * Limits applied while acquiring an upstream skill.  The limits are checked
@@ -102,6 +109,14 @@ export interface AcquireSkillOptions {
    * requests.  Callers should honor the supplied signal.
    */
   getSkillsShToken?: (signal?: AbortSignal) => Promise<string>;
+  /**
+   * Optional credential provider for one operator-configured skills.sh API
+   * gateway.  The base URL is part of the credential binding: the provider is
+   * invoked only when the normalized upstream base has the same origin and
+   * pathname.  It is never a substitute for the canonical skills.sh OIDC
+   * callback above.
+   */
+  skillsShGatewayCredential?: SkillsShGatewayCredential;
 }
 
 export interface AcquireSkillInput extends AcquireSkillOptions {
@@ -555,6 +570,7 @@ function normalizeInput(
     registryHop,
     signal,
     getSkillsShToken,
+    skillsShGatewayCredential,
     options: nestedOptions,
   } = input;
   const mergedOptions: AcquireSkillOptions = {
@@ -567,6 +583,7 @@ function normalizeInput(
     registryHop: registryHop ?? nestedOptions?.registryHop,
     signal: signal ?? nestedOptions?.signal,
     getSkillsShToken: getSkillsShToken ?? nestedOptions?.getSkillsShToken,
+    skillsShGatewayCredential: skillsShGatewayCredential ?? nestedOptions?.skillsShGatewayCredential,
   };
   return {
     job,
@@ -779,6 +796,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     headers,
     allowedOrigin: apiBase.origin,
     retryable: false,
+    stripCredentialsOnRedirect: true,
   });
   const importSourceType = (importRequest as unknown as { externalSourceType?: unknown }).externalSourceType;
   if (importSourceType !== undefined && importSourceType !== 'github' && importSourceType !== 'well-known') {
@@ -1028,6 +1046,7 @@ async function discoverSkillsShMetadata(
         allowedOrigin: apiBase.origin,
         retryable: false,
         signal,
+        stripCredentialsOnRedirect: true,
       });
       const page = parseSkillsShCatalogMetadataPage(value, limits, false);
       const match = selectSkillsShMetadata(page.rows, detail);
@@ -1049,6 +1068,7 @@ async function discoverSkillsShMetadata(
         allowedOrigin: apiBase.origin,
         retryable: false,
         signal,
+        stripCredentialsOnRedirect: true,
       });
     } catch (error) {
       if (isCatalogNotFound(error)) break;
@@ -2685,6 +2705,36 @@ async function skillsShCatalogCredential(
   options: AcquireSkillOptions,
   timeoutMs: number,
 ): Promise<string | undefined> {
+  const gateway = options.skillsShGatewayCredential;
+  if (gateway !== undefined) {
+    const gatewayBase = normalizeSkillsShGatewayCredentialBase(
+      gateway,
+      options.allowLoopbackForTests ?? false,
+    );
+    if (isCanonicalSkillsShOrigin(gatewayBase)) {
+      // A gateway credential is never allowed to masquerade as the official
+      // skills.sh credential, including www/trailing-dot aliases.  The
+      // request-scoped OIDC callback below is the only credential path for
+      // the canonical service.
+      throw new UpstreamAcquisitionError(
+        'invalid_credential_ref',
+        'skills.sh gateway credential cannot target the canonical skills.sh origin',
+      );
+    }
+    if (sameCatalogBase(apiBase, gatewayBase)) {
+      const token = await resolveSkillsShGatewayToken(gateway.getToken, options, timeoutMs);
+      return `Bearer ${token}`;
+    }
+    // An explicitly supplied gateway credential is bound to one exact
+    // origin/path. Never fall back to an ambient credentialEnv token when the
+    // claimed source points elsewhere; that would silently defeat the
+    // credential binding and could forward a secret to a sibling catalog.
+    if (isCanonicalSkillsShCatalogBase(apiBase) && options.getSkillsShToken !== undefined) {
+      const token = await resolveSkillsShToken(options, timeoutMs);
+      return `Bearer ${token}`;
+    }
+    return undefined;
+  }
   if (isCanonicalSkillsShCatalogBase(apiBase) && options.getSkillsShToken !== undefined) {
     const token = await resolveSkillsShToken(options, timeoutMs);
     return `Bearer ${token}`;
@@ -2699,6 +2749,34 @@ function isCanonicalSkillsShCatalogBase(apiBase: URL): boolean {
   return apiBase.origin === SKILLS_SH_CANONICAL_ORIGIN && apiBase.pathname === '/';
 }
 
+/**
+ * Treat the complete normalized origin and pathname as the gateway binding.
+ * URL normalization removes harmless trailing slashes, while parseFixedBase
+ * rejects credentials, query data, fragments, and insecure non-loopback
+ * destinations before the callback can be considered.
+ */
+function normalizeSkillsShGatewayCredentialBase(
+  credential: SkillsShGatewayCredential,
+  allowLoopbackForTests: boolean,
+): URL {
+  if (typeof credential !== 'object' || credential === null || typeof credential.baseUrl !== 'string' || typeof credential.getToken !== 'function') {
+    throw new UpstreamAcquisitionError('invalid_credential_ref', 'skills.sh gateway credential is invalid');
+  }
+  try {
+    return parseFixedBase(credential.baseUrl.trim(), allowLoopbackForTests);
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_credential_ref', 'skills.sh gateway credential base is invalid');
+  }
+}
+
+function sameCatalogBase(left: URL, right: URL): boolean {
+  return left.origin === right.origin && left.pathname === right.pathname;
+}
+
+function isCanonicalSkillsShOrigin(value: URL): boolean {
+  return value.protocol === 'https:' && isReservedSkillsDirectoryHost(value);
+}
+
 async function resolveSkillsShToken(
   options: AcquireSkillOptions,
   timeoutMs: number,
@@ -2707,6 +2785,26 @@ async function resolveSkillsShToken(
   if (provider === undefined) {
     throw new UpstreamAcquisitionError('credential_missing', 'skills.sh catalog authentication is unavailable');
   }
+  return resolveCatalogToken(provider, options, timeoutMs);
+}
+
+async function resolveSkillsShGatewayToken(
+  provider: SkillsShGatewayCredential['getToken'],
+  options: AcquireSkillOptions,
+  timeoutMs: number,
+): Promise<string> {
+  const token = await resolveCatalogToken(provider, options, timeoutMs);
+  if (!isValidSkillsShGatewayToken(token)) {
+    throw new UpstreamAcquisitionError('invalid_credential', 'skills.sh gateway credential is invalid');
+  }
+  return token;
+}
+
+async function resolveCatalogToken(
+  provider: (signal?: AbortSignal) => Promise<unknown>,
+  options: AcquireSkillOptions,
+  timeoutMs: number,
+): Promise<string> {
   if (options.signal?.aborted) {
     throw new UpstreamAcquisitionError('cancelled', 'Upstream acquisition cancelled');
   }
@@ -2988,16 +3086,17 @@ class HttpClient {
           throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirect location is invalid', status);
         }
         assertSafeURL(next, this.options.allowLoopbackForTests);
+        // Off-origin redirects always lose credentials. Catalog API requests
+        // also opt into same-origin stripping because a gateway/OIDC bearer
+        // is bound to the exact catalog request path. Other source and
+        // artifact requests retain their existing same-origin auth behavior.
+        if (request.stripCredentialsOnRedirect || next.origin !== current.origin) {
+          headers = withoutCredentialHeaders(headers);
+        }
         if (next.origin !== current.origin) {
           if (!request.allowCrossOriginRedirectWithoutAuth) {
             throw new UpstreamAcquisitionError('redirect_denied', 'Upstream redirect changed origin', status);
           }
-          const safeHeaders: FetchHeaders = {};
-          for (const [key, value] of Object.entries(headers)) {
-            const lower = key.toLocaleLowerCase('en-US');
-            if (lower !== 'authorization' && lower !== 'cookie' && lower !== 'proxy-authorization') safeHeaders[key] = value;
-          }
-          headers = safeHeaders;
         }
         current = next;
         redirects += 1;
@@ -3109,7 +3208,19 @@ interface ClientRequest {
   allowedOrigin?: string;
   retryable?: boolean;
   allowCrossOriginRedirectWithoutAuth?: boolean;
+  /** Strip credentials on same-origin redirects for bound catalog requests. */
+  stripCredentialsOnRedirect?: boolean;
   expectJson?: boolean;
+}
+
+function withoutCredentialHeaders(headers: FetchHeaders): FetchHeaders {
+  const safe: FetchHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLocaleLowerCase('en-US');
+    if (lower === 'authorization' || lower === 'cookie' || lower === 'proxy-authorization') continue;
+    safe[key] = value;
+  }
+  return safe;
 }
 
 async function readResponseBytes(response: Response, maxBytes: number, signal?: AbortSignal): Promise<Uint8Array> {
