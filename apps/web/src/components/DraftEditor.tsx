@@ -3,7 +3,7 @@ import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
-import type { DraftView, ReleaseFileView, SkillBundle } from '../lib/types'
+import type { DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
 import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
 import { DraftReviewPanel } from './DraftReviewPanel'
@@ -29,23 +29,16 @@ interface ImmutableReleaseBaseline { entries: ReleaseBaselineEntry[]; files: Dra
 type DraftOperation = { draftId: string; revision: number; version?: string; payloadFingerprint: string; key: string }
 interface DraftPersistence { draftId?: string; createKey: string }
 
-const TEXT_EXTENSIONS = new Set(['.cjs', '.css', '.csv', '.go', '.html', '.ini', '.java', '.js', '.json', '.jsx', '.md', '.mdx', '.mjs', '.py', '.rb', '.rs', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml'])
+/** Must match the server's bounded release text preview contract. */
+export const MAX_TEXT_PREVIEW_BYTES = 256 * 1024
+const TEXT_EXTENSIONS = new Set(['c', 'cc', 'cfg', 'conf', 'cpp', 'css', 'csv', 'go', 'h', 'hpp', 'html', 'ini', 'java', 'js', 'json', 'jsx', 'md', 'mjs', 'mts', 'py', 'rs', 'sh', 'sql', 'toml', 'ts', 'tsx', 'txt', 'xml', 'yaml', 'yml'])
+const BINARY_EXTENSIONS = new Set(['7z', 'avi', 'bin', 'bmp', 'class', 'dll', 'doc', 'docx', 'gif', 'gz', 'ico', 'jar', 'jpeg', 'jpg', 'mp3', 'mp4', 'pdf', 'png', 'so', 'tar', 'wasm', 'webp', 'woff', 'woff2', 'zip'])
+const TEXT_FILENAMES = new Set(['.editorconfig', '.gitignore', '.npmignore', 'dockerfile', 'license', 'makefile', 'readme'])
 const DRAFT_STORAGE_PREFIX = 'private-skills:draft:'
 
 function idempotencyKey(prefix: string): string {
   const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`
   return `web-${prefix}-${random}`
-}
-
-function decodeBase64Text(value: string): string | null {
-  try {
-    const binary = atob(value)
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-    if (bytes.includes(0)) return null
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  } catch {
-    return null
-  }
 }
 
 function encodeBase64Text(value: string): string {
@@ -112,14 +105,85 @@ function digestForContent(content: string): Promise<DigestResult> {
 function extensionFor(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
   const index = name.lastIndexOf('.')
-  return index === -1 ? '' : name.slice(index)
+  return index > 0 ? name.slice(index + 1) : ''
+}
+
+function isBinaryPath(path: string): boolean {
+  return BINARY_EXTENSIONS.has(extensionFor(path))
+}
+
+function isSupportedTextPath(path: string): boolean {
+  const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  return TEXT_FILENAMES.has(basename) || TEXT_EXTENSIONS.has(extensionFor(path))
+}
+
+function validUtf8(bytes: Uint8Array): boolean {
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    const chunkSize = 64 * 1024
+    for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) decoder.decode(bytes.subarray(offset, Math.min(offset + chunkSize, bytes.byteLength)), { stream: true })
+    decoder.decode()
+    return true
+  } catch {
+    return false
+  }
+}
+
+export interface DraftFilePreview {
+  state: ReleaseFilePreviewState
+  size: number | null
+  text: string | null
+}
+
+const previewCache = new Map<string, DraftFilePreview>()
+const MAX_PREVIEW_CACHE = 256
+
+export function inspectDraftFile(file: DraftFile | null): DraftFilePreview | null {
+  if (!file) return null
+  const cacheKey = `${file.path}\u0000${file.content}`
+  const cached = previewCache.get(cacheKey)
+  if (cached) return cached
+  const bytes = decodeBase64Bytes(file.content)
+  const size = bytes?.byteLength ?? null
+  let preview: DraftFilePreview
+  if (!bytes || isBinaryPath(file.path) || bytes.includes(0)) {
+    preview = { state: 'binary', size, text: null }
+  } else if (size !== null && size > MAX_TEXT_PREVIEW_BYTES) {
+    const supported = isSupportedTextPath(file.path)
+    preview = !validUtf8(bytes) ? { state: 'binary', size, text: null } : { state: supported ? 'oversize' : 'unsupported', size, text: null }
+  } else {
+    let text: string | null = null
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { text = null }
+    if (text === null) preview = { state: 'binary', size, text: null }
+    else if (!isSupportedTextPath(file.path)) preview = { state: 'unsupported', size, text: null }
+    else preview = { state: 'text', size, text }
+  }
+  if (previewCache.size >= MAX_PREVIEW_CACHE) {
+    const oldest = previewCache.keys().next().value
+    if (typeof oldest === 'string') previewCache.delete(oldest)
+  }
+  previewCache.set(cacheKey, preview)
+  return preview
+}
+
+function previewLabel(state: ReleaseFilePreviewState | null): string {
+  if (state === 'oversize') return 'Too large to preview'
+  if (state === 'binary') return 'Binary file'
+  if (state === 'unsupported') return 'Unsupported preview'
+  if (state === 'text') return 'Metadata only'
+  return 'No preview'
+}
+
+function previewReason(state: ReleaseFilePreviewState | null): string {
+  if (state === 'oversize') return `Text previews are limited to ${formatBytes(MAX_TEXT_PREVIEW_BYTES)}.`
+  if (state === 'binary') return 'Binary files remain available in the release but are not opened as text.'
+  if (state === 'unsupported') return 'This path is not an allowed text preview type.'
+  if (state === 'text') return 'The file is available as text after its release baseline is loaded.'
+  return 'This file is available in the release manifest, but no text preview is available.'
 }
 
 function editableText(file: DraftFile | null): string | null {
-  if (!file) return null
-  const name = file.path.slice(file.path.lastIndexOf('/') + 1).toLowerCase()
-  if (!TEXT_EXTENSIONS.has(extensionFor(file.path)) && !['.editorconfig', '.gitignore', 'dockerfile', 'license', 'makefile', 'readme'].includes(name)) return null
-  return decodeBase64Text(file.content)
+  return inspectDraftFile(file)?.text ?? null
 }
 
 function cloneFiles(files: DraftFile[]): DraftFile[] {
@@ -227,12 +291,15 @@ export async function loadImmutableReleaseBaseline(resourceId: string, expectedD
 }
 
 function baselineEntriesFromFiles(files: DraftFile[]): ReleaseBaselineEntry[] {
-  return files.map((file) => ({
-    path: file.path,
-    size: decodeBase64Bytes(file.content)?.byteLength ?? 0,
-    previewState: editableText(file) === null ? 'binary' : 'text',
-    ...(file.executable === undefined ? {} : { executable: file.executable }),
-  }))
+  return files.map((file) => {
+    const preview = inspectDraftFile(file)
+    return {
+      path: file.path,
+      size: preview?.size ?? 0,
+      previewState: preview?.state ?? 'binary',
+      ...(file.executable === undefined ? {} : { executable: file.executable }),
+    }
+  })
 }
 
 export function releaseBaselineStatus(entry: ReleaseBaselineEntry | undefined, baseFile: DraftFile | undefined, currentFile: DraftFile | undefined, currentDigest?: `sha256:${string}` | null, currentSize?: number | null): DraftSurfaceEntry['status'] {
@@ -300,10 +367,13 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const selectedBaseFile = useMemo(() => {
     return selectedBasePath ? releaseBaseFiles.find((file) => file.path === selectedBasePath) ?? null : null
   }, [releaseBaseFiles, selectedBasePath])
+  const selectedPreview = inspectDraftFile(selectedFile)
+  const selectedText = selectedPreview?.text ?? null
+  const selectedIsEditable = selectedPreview?.state === 'text'
+  const selectedFilePresent = selectedFile !== null
   const selectedBaseError = selectedBasePath && baseLoadError?.path === selectedBasePath ? baseLoadError.text : null
-  const selectedBaseLoading = selectedBaseEntry?.previewState === 'text' && !selectedBaseFile && !selectedBaseError && (baseLoadingPath === selectedBasePath || baseLoadingPath === null)
-  const selectedText = editableText(selectedFile)
-  const selectedIsEditable = selectedText !== null
+  const canLoadSelectedBase = !selectedFilePresent || selectedPreview?.state === 'text'
+  const selectedBaseLoading = canLoadSelectedBase && selectedBaseEntry?.previewState === 'text' && !selectedBaseFile && !selectedBaseError && (baseLoadingPath === selectedBasePath || baseLoadingPath === null)
   const entries = useMemo<DraftSurfaceEntry[]>(() => {
     const paths = new Set([...releaseBaseEntries.map((entry) => entry.path), ...workingFiles.map((file) => file.path)])
     return [...paths].sort().map((path) => {
@@ -479,7 +549,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   useEffect(() => {
     const path = selectedBasePath
     const metadata = selectedBaseEntry
-    if (!path || !metadata || metadata.previewState !== 'text' || releaseBaseFiles.some((file) => file.path === path)) {
+    if (!path || !metadata || metadata.previewState !== 'text' || (selectedFilePresent && selectedPreview?.state !== 'text') || releaseBaseFiles.some((file) => file.path === path)) {
       if (baseLoadingPath !== null) setBaseLoadingPath(null)
       return
     }
@@ -506,7 +576,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       controller.abort()
       if (generation === baseLoadGeneration.current) baseLoadGeneration.current += 1
     }
-  }, [baseDigest, releaseBaseFiles, resourceId, selectedBaseEntry, selectedBasePath])
+  }, [baseDigest, releaseBaseFiles, resourceId, selectedBaseEntry, selectedBasePath, selectedFilePresent, selectedPreview?.state])
 
   useEffect(() => {
     const generation = ++digestGeneration.current
@@ -716,7 +786,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     }
   }
 
-  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onContentChange={onPierreContentChange} />
+  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onContentChange={onPierreContentChange} />
 
   return <section className="draft-editor">
     <header className="draft-editor-header">
@@ -745,7 +815,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
         <div className="draft-editor-layout">
           <div className="draft-editor-main draft-editor-surface-main">
             <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
-            <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
+            <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>
@@ -755,11 +825,17 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   </section>
 }
 
-function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, mode, editable, busy, baseLoading, baseError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftFile | null; mode: 'edit' | 'diff'; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
-  const text = editableText(currentFile)
-  const baseText = editableText(baseFile)
+function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, mode, editable, busy, baseLoading, baseError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftFile | null; currentPreviewState: ReleaseFilePreviewState | null; currentPreviewSize: number | null; basePreviewState: ReleaseFilePreviewState | null; basePreviewSize: number | null; mode: 'edit' | 'diff'; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
+  const currentPreview = currentFile ? inspectDraftFile(currentFile) : null
+  const basePreview = baseFile ? inspectDraftFile(baseFile) : null
+  const text = currentPreview?.text ?? null
+  const baseText = basePreview?.text ?? null
+  const canShowDiff = (currentFile === null || currentPreviewState === 'text') && (baseFile ? basePreviewState === 'text' : basePreviewState === null)
+  const baseUnavailable = baseFile === null && basePreviewState !== null && basePreviewState !== 'text'
+  const placeholderState = baseUnavailable ? basePreviewState : currentPreviewState ?? basePreviewState
+  const placeholderSize = currentPreviewSize ?? basePreviewSize
   return <div className="draft-surface draft-surface-native">
     <aside className="draft-surface-tree" aria-label="Draft files"><div className="release-tree-heading"><strong>Files</strong><span>{entries.length}</span></div><div className="release-file-list">{entries.map((entry) => <button className={`release-file-row ${entry.path === selectedPath ? 'release-file-row-selected' : ''}`.trim()} key={entry.path} type="button" disabled={busy} onClick={() => onSelect(entry.path)}><span aria-hidden="true">{entry.status === 'removed' ? '−' : entry.status === 'added' ? '+' : '▤'}</span><code title={entry.path}>{entry.path}</code><small>{entry.status}</small></button>)}</div></aside>
-    <div className="draft-surface-code">{baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && (baseText !== null || text !== null) ? <div className="draft-native-diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value="Metadata only" /><p>This file cannot be edited or previewed as UTF-8 text.</p></div>}</div>
+    <div className="draft-surface-code">{baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && canShowDiff && (baseText !== null || text !== null) ? <div className="draft-native-diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}</div>
   </div>
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { canonicalDraftFiles, draftPayloadFingerprint, loadImmutableReleaseBaseline, operationKey, releaseBaselineStatus } from './DraftEditor'
+import { canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus } from './DraftEditor'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
 
 const draft: DraftView = {
@@ -86,5 +86,16 @@ describe('immutable release baseline loading', () => {
     expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:draft', 3)).toBe('changed')
     expect(releaseBaselineStatus({ path: 'assets/logo.bin', size: 1, contentDigest: 'sha256:binary', previewState: 'binary' }, undefined, originalBinary, 'sha256:binary', 1)).toBe('unchanged')
     expect(releaseBaselineStatus(manifestEntry, undefined, resumedText, 'sha256:release', 3)).toBe('unchanged')
+  })
+
+  it('keeps oversized text metadata-only while allowing bounded text editing', () => {
+    const oversized = { path: 'oversize.txt', content: btoa('x'.repeat(3_500_000)) }
+    const small = { path: 'notes.txt', content: btoa('small text') }
+    const oversizedPreview = inspectDraftFile(oversized)
+    const smallPreview = inspectDraftFile(small)
+
+    expect(oversizedPreview).toMatchObject({ state: 'oversize', size: 3_500_000, text: null })
+    expect(oversizedPreview?.size).toBeGreaterThan(MAX_TEXT_PREVIEW_BYTES)
+    expect(smallPreview).toMatchObject({ state: 'text', size: 10, text: 'small text' })
   })
 })
