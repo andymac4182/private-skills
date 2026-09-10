@@ -5,6 +5,7 @@
   "engines": {
     "node": ">=24 <25"
   },
+  "packageManager": "pnpm@11.19.0",
   "scripts": {
     "build": "eve build --skip-sandbox-prewarm",
     "start": "eve start",
