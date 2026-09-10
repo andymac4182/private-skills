@@ -10,6 +10,10 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 use url::Url;
@@ -45,6 +49,18 @@ pub struct ApiClient {
     base: Url,
     token: Option<String>,
     http: Client,
+    #[cfg(test)]
+    mock: Option<Arc<Mutex<VecDeque<MockExchange>>>>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct MockExchange {
+    method: String,
+    path: String,
+    request: Option<Value>,
+    status: u16,
+    response: Vec<u8>,
 }
 
 impl ApiClient {
@@ -84,7 +100,16 @@ impl ApiClient {
             base: url,
             token,
             http,
+            #[cfg(test)]
+            mock: None,
         })
+    }
+
+    #[cfg(test)]
+    fn with_mock_exchanges(base: &str, exchanges: Vec<MockExchange>) -> Result<Self, ApiError> {
+        let mut client = Self::new(base, None)?;
+        client.mock = Some(Arc::new(Mutex::new(exchanges.into_iter().collect())));
+        Ok(client)
     }
 
     pub fn base_url(&self) -> &Url {
@@ -639,7 +664,16 @@ impl ApiClient {
         loop {
             let value: Value =
                 self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
-            match inspect_operation(&value, "external import operation failed")? {
+            let action = inspect_operation(&value, "external import operation failed")?;
+            let operation_state = value
+                .get("operation")
+                .and_then(|operation| operation.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if matches!(operation_state, "completed" | "succeeded" | "done") {
+                return self.resolve_completed_external_operation(&value, request, deadline);
+            }
+            match action {
                 OperationPollAction::Resolution(resolution) => {
                     let reference = resolution
                         .members
@@ -651,7 +685,7 @@ impl ApiClient {
                     });
                 }
                 OperationPollAction::Completed => {
-                    return self.resolve_external_until(request, deadline);
+                    return self.resolve_completed_external_operation(&value, request, deadline);
                 }
                 OperationPollAction::Pending => {}
             }
@@ -661,6 +695,32 @@ impl ApiClient {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             std::thread::sleep(remaining.min(Duration::from_millis(250)));
         }
+    }
+
+    fn resolve_completed_external_operation(
+        &self,
+        operation_value: &Value,
+        request: &ExternalResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<ExternalResolution, ApiError> {
+        let pin = completed_external_operation(operation_value, request)?;
+        let resolution = self.resolve_until(
+            &ResolveRequest {
+                kind: "skill".into(),
+                reference: pin.name.clone(),
+                version: Some(pin.version.clone()),
+            },
+            deadline,
+        )?;
+        verify_completed_external_resolution(&resolution, &pin, request)?;
+        let reference = resolution
+            .members
+            .first()
+            .and_then(|member| member.provenance.source_reference.clone());
+        Ok(ExternalResolution {
+            resolution,
+            reference,
+        })
     }
 
     fn endpoint(&self, segments: &[&str]) -> Result<Url, ApiError> {
@@ -703,6 +763,50 @@ impl ApiClient {
         } else {
             request.header(USER_AGENT, format!("{SERVICE}/{VERSION}"))
         };
+        #[cfg(test)]
+        if let Some(mock) = &self.mock {
+            let request = request
+                .build()
+                .map_err(|error| ApiError::Transport(error.to_string()))?;
+            let exchange = mock
+                .lock()
+                .expect("mock exchange lock")
+                .pop_front()
+                .ok_or_else(|| {
+                    ApiError::Response(format!(
+                        "mock HTTP request queue exhausted at {} {}",
+                        request.method(),
+                        request.url().path()
+                    ))
+                })?;
+            if exchange.method != request.method().as_str() || exchange.path != request.url().path()
+            {
+                return Err(ApiError::Response(format!(
+                    "mock HTTP request mismatch: expected {} {}, received {} {}",
+                    exchange.method,
+                    exchange.path,
+                    request.method(),
+                    request.url().path()
+                )));
+            }
+            if let Some(expected) = exchange.request {
+                let actual = request
+                    .body()
+                    .and_then(|body| body.as_bytes())
+                    .ok_or_else(|| ApiError::Response("mock request body was missing".into()))?;
+                let actual: Value = serde_json::from_slice(actual)
+                    .map_err(|error| ApiError::Response(error.to_string()))?;
+                if actual != expected {
+                    return Err(ApiError::Response(format!(
+                        "mock request JSON mismatch: expected {expected}, received {actual}"
+                    )));
+                }
+            }
+            return Ok(HttpResponse {
+                status: exchange.status,
+                body: exchange.response,
+            });
+        }
         let response = request
             .send()
             .map_err(|e| ApiError::Transport(e.to_string()))?;
@@ -885,6 +989,122 @@ enum OperationPollAction {
     Pending,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletedExternalOperation {
+    external_id: String,
+    feed_name: Option<String>,
+    name: String,
+    version: String,
+    resource_id: String,
+}
+
+fn completed_external_operation(
+    value: &Value,
+    request: &ExternalResolveRequest,
+) -> Result<CompletedExternalOperation, ApiError> {
+    let operation = value.get("operation").unwrap_or(value);
+    let import = operation.get("import").ok_or_else(|| {
+        ApiError::OperationFailed(
+            "completed external operation did not include its import identity".into(),
+        )
+    })?;
+    let external_id = import
+        .get("externalId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include externalId".into(),
+            )
+        })?;
+    if external_id != request.external_id {
+        return Err(ApiError::OperationFailed(
+            "completed external operation identity does not match the requested externalId".into(),
+        ));
+    }
+    let feed_name = import
+        .get("feedName")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if request.feed.as_deref() != feed_name.as_deref() && request.feed.is_some() {
+        return Err(ApiError::OperationFailed(
+            "completed external operation feed does not match the requested feed".into(),
+        ));
+    }
+    let name = import
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its server-owned name".into(),
+            )
+        })?;
+    let version = import
+        .get("version")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its server-owned version".into(),
+            )
+        })?;
+    let resource_id = operation
+        .get("resourceId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::OperationFailed(
+                "completed external operation did not include its resourceId".into(),
+            )
+        })?;
+    Ok(CompletedExternalOperation {
+        external_id: external_id.into(),
+        feed_name,
+        name: name.into(),
+        version: version.into(),
+        resource_id: resource_id.into(),
+    })
+}
+
+fn verify_completed_external_resolution(
+    resolution: &Resolution,
+    operation: &CompletedExternalOperation,
+    request: &ExternalResolveRequest,
+) -> Result<(), ApiError> {
+    if resolution.resource_id != operation.resource_id
+        || resolution.name != operation.name
+        || resolution.version != operation.version
+    {
+        return Err(ApiError::OperationFailed(
+            "completed external operation resolved a different server-owned resource".into(),
+        ));
+    }
+    let member = resolution.members.first().ok_or_else(|| {
+        ApiError::OperationFailed(
+            "completed external operation resolution did not include its resource member".into(),
+        )
+    })?;
+    if member.id != operation.resource_id
+        || member.provenance.external_id.as_deref() != Some(operation.external_id.as_str())
+        || member.provenance.external_id.as_deref() != Some(request.external_id.as_str())
+    {
+        return Err(ApiError::OperationFailed(
+            "completed external operation resolution provenance does not match its operation"
+                .into(),
+        ));
+    }
+    if let Some(feed_name) = operation.feed_name.as_deref() {
+        if member.provenance.feed_name.as_deref() != Some(feed_name) {
+            return Err(ApiError::OperationFailed(
+                "completed external operation resolution feed does not match its operation".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn inspect_operation(
     value: &Value,
     failure_fallback: &str,
@@ -1013,6 +1233,146 @@ mod tests {
             Ok(OperationPollAction::Resolution(resolution))
                 if resolution.resource_id == "skill-1"
         ));
+    }
+
+    #[test]
+    fn completed_external_operation_rejects_identity_mismatch() {
+        let request = ExternalResolveRequest {
+            feed: Some("community".into()),
+            external_id: "vercel-labs/skills/find-skills".into(),
+            refresh: Some(true),
+        };
+        let value = serde_json::json!({
+            "operation": {
+                "id": "op-1",
+                "state": "completed",
+                "resourceId": "skill-1",
+                "import": {
+                    "externalId": "other/skills/item",
+                    "feedName": "community",
+                    "name": "@community/skills-sh-1",
+                    "version": "0.0.0+skills-sh.1"
+                }
+            }
+        });
+        assert!(matches!(
+            completed_external_operation(&value, &request),
+            Err(ApiError::OperationFailed(message))
+                if message.contains("identity does not match")
+        ));
+    }
+
+    #[test]
+    fn external_refresh_pins_completed_operation_without_reposting_proxy() {
+        let external_id = "vercel-labs/skills/find-skills";
+        let feed = "community";
+        let private_name = "@community/skills-sh-1";
+        let version = "0.0.0+skills-sh.1";
+        let resource_id = "skill-1";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": resource_id,
+            "organizationId": "org-1",
+            "name": private_name,
+            "version": version,
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": resource_id,
+                "organizationId": "org-1",
+                "name": private_name,
+                "skillName": "find-skills",
+                "version": version,
+                "description": "",
+                "artifact": {
+                    "key": "blob-1",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "size": 1
+                },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "skills-sh",
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "sourceReference": "@github/vercel-labs/skills/skills/find-skills"
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let operation = serde_json::json!({
+            "operation": {
+                "id": "op-1",
+                "state": "completed",
+                "resourceId": resource_id,
+                "import": {
+                    "externalId": external_id,
+                    "feedName": feed,
+                    "name": private_name,
+                    "version": version
+                }
+            }
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![
+                mock_exchange(
+                    "POST",
+                    "/v1/proxy/resolve",
+                    Some(serde_json::json!({
+                        "feed": feed,
+                        "externalId": external_id,
+                        "refresh": true
+                    })),
+                    202,
+                    serde_json::json!({ "operation": { "id": "op-1" } }),
+                ),
+                mock_exchange("GET", "/v1/operations/op-1", None, 200, operation),
+                mock_exchange(
+                    "POST",
+                    "/v1/resolve",
+                    Some(serde_json::json!({
+                        "kind": "skill",
+                        "ref": private_name,
+                        "version": version
+                    })),
+                    200,
+                    serde_json::json!({ "resolution": resolution }),
+                ),
+            ],
+        )
+        .expect("mock client");
+        let request = ExternalResolveRequest {
+            feed: Some(feed.into()),
+            external_id: external_id.into(),
+            refresh: Some(true),
+        };
+        let result = client
+            .resolve_external_until(&request, std::time::Instant::now() + Duration::from_secs(5))
+            .expect("pinned external resolution");
+        assert_eq!(result.resolution.name, private_name);
+        assert_eq!(result.resolution.version, version);
+        assert_eq!(
+            result.reference.as_deref(),
+            Some("@github/vercel-labs/skills/skills/find-skills")
+        );
+    }
+
+    fn mock_exchange(
+        method: &str,
+        path: &str,
+        request: Option<Value>,
+        status: u16,
+        response: Value,
+    ) -> MockExchange {
+        MockExchange {
+            method: method.into(),
+            path: path.into(),
+            request,
+            status,
+            response: serde_json::to_vec(&response).expect("mock response JSON"),
+        }
     }
 
     #[test]
