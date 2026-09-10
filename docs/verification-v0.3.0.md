@@ -1,21 +1,23 @@
 # v0.3.0 verification checkpoint
 
-Date: 2026-09-10. Status: E7 private-registry production checkpoint plus a
-local transparent-feed implementation review. The recorded E7 source/deployment
-pair is source `0f9da75` and READY deployment
-`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` at the stable alias; it is authoritative for
-the deployed directory/API claims below. The later transparent-feed fixture
-run is loopback-only, using runtime source and CLI build
-`8c8e41eb4ad172fc033bc5593f400874095ec656`,
-and is not a production, current-CI, native-release, or hosted-scanner result.
-The E7 source review reports 286 tests passed and two environment-dependent
-skips, TypeScript and five SDK/Files SDK checks pass, and two independent
-reviews approve. Earlier deployment-specific artifacts remain the source of the
-detailed OIDC/ComputeSDK, pagination, and browser claims; the current API result
-is verified and current browser proof is still pending. Native fallback is also
-verified separately; remaining gates are explicit below. Later local CLI rescan
-and UI source-pinning changes in this checkout are not covered by the fixture
-run's verification SHAs.
+Date: 2026-09-10. Status: current prebuilt production rollout plus historical E7
+directory evidence and a local transparent-feed implementation review. The
+current rollout is READY deployment `dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` at the
+stable alias, from merged main `0efd3583bb5902a77c48cbf98f6b7bff88338bcf` and
+code artifact `8c8e41eb4ad172fc033bc5593f400874095ec656`; its live evidence is
+limited to authenticated read-only checks. The historical E7 source/deployment
+pair is source `0f9da75` and `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y`; its own
+directory, OIDC, Topics, security, pagination, scan, and browser evidence is
+identified below and does not describe the current rollout. The transparent-feed
+fixture run is loopback-only, using runtime source and CLI build
+`8c8e41eb4ad172fc033bc5593f400874095ec656`, and is not a production, current-CI,
+native-release, or hosted-scanner result. Native fallback is also verified
+separately as historical evidence; remaining gates are explicit below. The final
+loopback E2E at `8c8e41e` covers the rescan, warm identity, and frozen reinstall
+flows. Separate local browser evidence from UI source `91eb809` covers the
+tested flows at a 390px viewport with a measured 390×4,078 full-page screenshot;
+both records are local evidence and do not establish current hosted browser or
+production-scanner proof.
 
 ## Implemented scope
 
@@ -35,24 +37,37 @@ run's verification SHAs.
 
 ## Current deployment pointer
 
-The current production deployment is `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` at
+The current production deployment is `dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` at
 [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app),
-with output fingerprint
-`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`.
-The corresponding Cloudflare build fingerprint is
-`a8b82a0dadb571106cd126d98039af579e04a8d45fa787f1b9b0a9358e884b31` with 35
-server files and no executable SDK references. The E7 platform checkpoint
-reports the enabled skills.sh directory and request-scoped Vercel
-OIDC/ComputeSDK paths plus the directory, search, CLI, analytics, and Files SDK
-checks. The current API artifact below records a verified E7 result; the
-detailed older JSON records retain their own deployment provenance, and current
-browser proof is still pending. The later transparent-feed implementation has
-not been deployed in this checkpoint.
+with unique URL
+`https://private-skills-nyfgk0kyh-andrewmcclenaghan-6046s-projects.vercel.app`.
+It is a Vercel CLI prebuilt deployment for merged main
+`0efd3583bb5902a77c48cbf98f6b7bff88338bcf`, carrying code artifact
+`8c8e41eb4ad172fc033bc5593f400874095ec656`. Its output fingerprint is
+`fd71b9627eb0fd1a3bcd8d17ebbf867992516c14cb5f61327a9a1ff292a1169a`; the
+manifest contains 2,057 regular files, 27 symlinks, and 19,585,540 bytes. No
+Git-triggered deployment was found. The sanitized
+[rollout evidence](../work/production-rollout-evidence-dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z.json)
+records authenticated GETs for health, `/v1/me`, `/v1/policy`, `/v1/feeds`,
+and directory list. The policy is fail-closed (`allowUnscanned=false`), the
+feed registry is empty, and list returned two of 9,738 rows with more available.
+No production feed setup, source import, or CLI installation was exercised.
 
-The E7 source `0f9da75` adds the canonical Topics page parser, auth-before-
-hit metadata cache with bounded TTL/bytes, conflict/drift-aware enumeration,
-and credential-negative security coverage. The current deployment's API probe is
-verified below; current browser proof is still pending.
+The bounded Vercel log query for this deployment (2026-09-10
+04:01:03.630Z–04:12:36.466Z) returned nine info-only records, with zero parse
+errors, warnings, errors, or fatal records; raw messages were not retained.
+The project API returned `link: null` (shown in the sanitized evidence as
+`linkedRepository: null`). A documented `vercel git connect` attempt for
+`andymac4182/private-skills` failed with `Make sure there aren’t any typos and
+that you have access to the repository if it’s private`. Repository access setup
+requires owner attention.
+
+The historical E7 source `0f9da75` adds the canonical Topics page parser,
+auth-before-hit metadata cache with bounded TTL/bytes, conflict/drift-aware
+enumeration, and credential-negative security coverage. Its deployment-specific
+OIDC/ComputeSDK, Topics, pagination, and browser artifacts remain below with
+their own provenance; current browser proof for the prebuilt rollout is still
+pending.
 
 ## Evidence collected
 
@@ -78,14 +93,15 @@ verified below; current browser proof is still pending.
   authenticated React and Marketing Topics failed
   `provenance_not_fresh_canonical`. Its `verified:false` result is retained as
   regression evidence for the stale-canonical bug and is not a current failure.
-- The [current API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
+- The [historical E7 API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
   against `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` made eight GET requests with zero
   retries or mutations and `credentialPatternNegative=true`. It verified 200
   health, authenticated `/me`, fail-closed policy, list (`total=9738`), fuzzy
   search (`react`), fresh canonical React Topics (6 capabilities, 6 skills, 4
   FAQs, 3 related topics), and Marketing Topics (6 capabilities, 21 skills, 4
   FAQs, 2 related topics), plus a 401 unauthenticated Topics response. The
-  artifact is `verified:true`; current browser proof is still pending.
+  artifact is `verified:true`; it is historical evidence for that E7 deployment,
+  and browser proof for the current prebuilt rollout is still pending.
 - Earlier deployment `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` passed the required ComputeSDK scan recorded in
   [production-v03 scan evidence](../work/production-v03-scan-evidence.json):
   `verified=true`, driver `computesdk`, scan
@@ -117,7 +133,7 @@ verified below; current browser proof is still pending.
   production browser proof passed for Packs, dashboard, and catalog at 390px,
   and Packs at 1280px; captures are retained as
   `docs/design/production-final-{packs-mobile,dashboard-mobile,catalog-mobile,packs-desktop}.png`.
-- The user-approved native fallback deployment `dpl_9ywi8SygoxMotB5iZJcnNVf6pgS7`
+- The historical user-approved native fallback deployment `dpl_9ywi8SygoxMotB5iZJcnNVf6pgS7`
   passed the replacement scan. Job `job_5562b593-6d5e-479b-a358-672b96bb78c7`
   / scan `b84ed69e-d770-488d-ab56-e2e2fc7c51cf` analyzed one file, found zero
   findings, approved the artifact, and left its digest unchanged under
@@ -157,9 +173,9 @@ verified below; current browser proof is still pending.
 - The E7 source-head review at `0f9da75` reports 286 tests passed and two
   environment-dependent tests skipped. TypeScript, five SDK probes, Files SDK
   checks, and the Cloudflare build pass, and two independent reviews approve.
-  This is source/build evidence for the E7 deployment pointer above; the
-  current API probe verifies the new Topics, cache, enumeration, and security
-  paths; current browser proof remains pending. The browser handoff only
+  This is source/build evidence for the historical E7 deployment pointer above;
+  its API probe verifies the new Topics, cache, enumeration, and security paths.
+  Browser proof for the current prebuilt rollout remains pending. The browser handoff only
   inventoried CUA browser surfaces; it found no dedicated registry tab,
   performed no registry navigation, and produced no new production screenshots.
   The private v0.2
@@ -175,6 +191,8 @@ verified below; current browser proof is still pending.
   its 27-link/5-SDK output check; the output manifest contains 2,057 files,
   27 symlinks, and 19,585,540 bytes, with fingerprint
   `fd71b9627eb0fd1a3bcd8d17ebbf867992516c14cb5f61327a9a1ff292a1169a`.
+  The current local Rust check inventory is 34 core-unit tests plus 8 CLI-unit
+  tests; it is local evidence only.
   These are source/build checks for the local checkpoint, not current GitHub
   CI, native Windows/Linux release, browser, hosted deployment, or production
   scanner evidence.
@@ -240,17 +258,18 @@ verified below; current browser proof is still pending.
 ## Remaining acceptance gates
 
 The owner authorized server-side forwarding of the Vercel project OIDC token to
-skills.sh on 2026-09-10. The current READY deployment
-`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` carries the enabled directory and
-request-scoped OIDC/ComputeSDK configuration. Earlier deployment
+skills.sh on 2026-09-10. The current prebuilt rollout
+`dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` carries the current source artifact and has
+only the authenticated read-only checks recorded above; no feed is configured,
+and no production import or CLI install was exercised. Historical deployment
 `dpl_BHfkYTgcJfpWQJdg4xtDgM5MQbfi` provides the detailed sanitized
 list/search/Official/detail/audits and ComputeSDK evidence, while the earlier
 `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` provides complete metadata pagination and
 nested-row coverage evidence. The current record still has pending selected-row
 GitHub/well-known imports, upstream nested detail availability,
 scanner-admission readback, current browser proof for the new Topics/cache/
-enumeration paths, and the operator-supplied Packs preview. The current API
-probe on `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` verifies credential-negative
+enumeration paths, and the operator-supplied Packs preview. The historical E7
+API probe on `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` verifies credential-negative
 handling, safe list/search behavior, and fresh canonical React/Marketing Topics;
 the previous stale-canonical result is retained as regression evidence. The
 earlier production record explicitly marks Topics `not_exposed` and pack
@@ -277,9 +296,12 @@ versioned artifacts. Native fallback is verified separately. Two independent
 reviews approve the current source, while hosted backup restoration and the
 read-only snapshot-to-restore rehearsal remain unverified. PR10 was explicitly
 authorized and merged to `origin/main` at `6e916d9`; this does not mean the
-current PR11 source or a v0.3 release tag has updated. Git-triggered
-deployment still requires the account owner's GitHub Vercel app security-key
-step, and CLI deployment evidence does not satisfy that separate gate.
+current PR11 source or a v0.3 release tag has updated. The project API returned
+`link: null` (shown in the sanitized evidence as `linkedRepository: null`), and
+a documented `vercel git connect` attempt for `andymac4182/private-skills` failed
+with `Make sure there aren’t any typos and that you have access to the repository
+if it’s private`. Repository access setup requires owner attention. CLI deployment
+evidence does not satisfy the Git-triggered gate.
 
 ### Authoritative current checklist
 
@@ -296,8 +318,11 @@ roadmap features into release blockers.
 - **Complete separately:** the user-approved native fallback deployment and
   replacement scan passed with one file, zero findings, unchanged digest, and
   `allowUnscanned=false`.
-- **Pending:** the account owner's GitHub Vercel app security-key step and a
-  Git-triggered deployment for the final source revision.
+- **Pending:** repository access setup and a Git-triggered deployment for the
+  final source revision. The project API returned `link: null` (shown in the
+  sanitized evidence as `linkedRepository: null`); the documented `vercel git
+  connect` attempt for `andymac4182/private-skills` failed with `Make sure there
+  aren’t any typos and that you have access to the repository if it’s private`.
 - **E7 source review:** `0f9da75` reports 286 tests passed and two
   environment-dependent skips; TypeScript, five SDK probes, Files SDK checks,
   and the Cloudflare build pass, and two independent reviews approve.
@@ -320,9 +345,12 @@ roadmap features into release blockers.
 - **Complete for the captured surfaces:** earlier deployment
   `dpl_4NsLDbtJ9R4ZDcQAyZMTTA58JgFF` passed the final 390px Packs, dashboard,
   and catalog checks plus the 1280px Packs check, with no horizontal overflow.
-  The current deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY; its API
-  artifact verifies list/search/auth and fresh canonical Topics. Current browser
-  proof for the latest directory changes is still pending.
+  The historical E7 deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is READY; its
+  API artifact verifies list/search/auth and fresh canonical Topics. The current
+  prebuilt rollout `dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` is READY and verifies only
+  authenticated read-only health, `/v1/me`, policy, feeds, and list (`feedCount=0`,
+  `total=9738`); current browser proof for the latest directory changes is still
+  pending.
 - **Pending review:** Rust directory/proxy scanner-failure reason preservation
   must be observed end to end before being called fixed.
 
@@ -335,17 +363,26 @@ roadmap features into release blockers.
   `503 DIRECTORY_NOT_CONFIGURED` result remains historical evidence. Latest
   deployment `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` separately verifies 20-page,
   9,738-row metadata pagination with three nested IDs and no artifact writes.
-- **Verified current deployment API evidence:** `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y`
+- **Verified historical E7 deployment API evidence:** `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y`
   passes the read-only API health, authenticated `/me`, policy, list, search,
   fresh canonical React/Marketing Topics, and credential-negative checks in the
   [sanitized API artifact](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json).
   The previous `dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj` stale-canonical result remains
-  preserved as regression evidence. Current browser proof is still pending.
-- **E7 implementation, awaiting browser proof:** source `0f9da75` includes the
+  preserved as regression evidence. Browser proof for the current prebuilt
+  rollout is still pending.
+- **Verified current prebuilt rollout (read-only only):**
+  `dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z` is the Vercel CLI prebuilt artifact for
+  merged main `0efd3583bb5902a77c48cbf98f6b7bff88338bcf`, with code artifact
+  `8c8e41eb4ad172fc033bc5593f400874095ec656`. The sanitized rollout evidence
+  records 200 responses for health, authenticated `/v1/me`, fail-closed policy,
+  `/v1/feeds`, and directory list; feeds are empty and list reports two of
+  `total=9738` rows with more available. No production feed setup, source import,
+  or CLI installation was exercised, so this does not close C1.
+- **E7 implementation, awaiting current browser proof:** source `0f9da75` includes the
   canonical Topics parser, auth-before-hit bounded cache, conflict/drift-aware
-  enumeration, and credential-negative tests. The current READY deployment
-  carries this code, and the API acceptance artifact is verified; the current
-  browser acceptance artifact has not yet been captured.
+  enumeration, and credential-negative tests. The historical E7 deployment
+  carries this code, and its API acceptance artifact is verified; the current
+  prebuilt rollout's browser acceptance artifact has not yet been captured.
 - **Transparent-feed implementation, locally verified only:** the loopback
   fixture evidence above proves the source/worker/Files SDK/Rust CLI seam for
   the recorded runtime and CLI SHAs, including cold/warm/refresh, feed guards,

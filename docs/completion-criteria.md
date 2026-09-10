@@ -17,9 +17,12 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified:** the accepted Neon integration is provisioned and connected, and
   the main registry has a production database, private object storage, and
   configured secrets, as recorded in the current verification record;
-- **pending:** the account owner completes the GitHub Vercel app security-key
-  step and a Git-triggered deployment is observed for the final source
-  revision;
+- **pending:** the owner resolves GitHub repository access setup and a
+  Git-triggered deployment is observed for the final source revision. The
+  project API returned `link: null` (shown in the sanitized evidence as
+  `linkedRepository: null`); a documented `vercel git connect` attempt for
+  `andymac4182/private-skills` failed with `Make sure there aren’t any typos and
+  that you have access to the repository if it’s private`;
 - **verified for the recorded fixtures:** the production-built registry passes
   an authenticated publish → required SkillsGuard scan → approval → semantic
   search → Rust CLI install/verify → analytics/review flow at its real URL;
@@ -89,23 +92,28 @@ explicitly. Explicit feed selection still passes tenant, enabled, origin, and
 policy checks before catalog access.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
 skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
-directory-agent wiring is present, and earlier deployment evidence proves the
-authorized request-scoped token is accepted. The current READY deployment is
-`dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` with fingerprint
-`613f05b33f43aa449e28e3a0c65821b046524e43e50a2214b96f284910023662`; the
-earlier production deployment `dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
-`b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) proves
-metadata-only pagination. The current source also implements the canonical
-Topics parser, auth-before-hit bounded cache, conflict/drift-aware enumeration,
-and credential-negative security tests. This evidence subset does not count as
-complete C1 cloud acceptance: a deployment must still prove authenticated
-listing, detail, import, and view behavior together before C1 is complete. The
-previous [API probe](../work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
-is retained as stale-canonical regression evidence. The [current API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
+directory-agent wiring is present, and historical deployment evidence proves the
+authorized request-scoped token is accepted. The current prebuilt rollout is
+`dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z`, from merged main
+`0efd3583bb5902a77c48cbf98f6b7bff88338bcf` and code artifact
+`8c8e41eb4ad172fc033bc5593f400874095ec656`. Its sanitized [rollout evidence](../work/production-rollout-evidence-dpl_3ATQ46MCMBJTuLjbmdDuZnSAAA3Z.json)
+verifies only authenticated read-only health, `/v1/me`, fail-closed policy,
+`/v1/feeds`, and directory list (`feedCount=0`, `total=9738`); no production
+feed is configured, and no source import or CLI installation was exercised. The
+historical E7 deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` and earlier
+`dpl_BbpxHqggbg7nYvfjxQp63C1SW1fC` (fingerprint
+`b58fccb70827db007ff84d0ce4c776f6297dfc9cc3f552de353e614515b0586b`) retain
+the hosted directory/Topics and metadata-only pagination evidence. The current
+source also implements the canonical Topics parser, auth-before-hit bounded
+cache, conflict/drift-aware enumeration, and credential-negative security tests.
+This evidence subset does not count as complete C1 cloud acceptance: a deployment
+must still prove authenticated listing, detail, import, and view behavior together
+before C1 is complete. The previous [API probe](../work/production-c1-api-evidence-1788993090676-80975-dpl_3DgJ6ovpoESraFXCjVhiX39f1tRj.json)
+is retained as stale-canonical regression evidence. The [historical E7 API probe](../work/production-c1-api-evidence-1788993909280-85606-dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y.json)
 made eight GET requests with zero retries or mutations and no credential-pattern
 leakage, and verified health, authenticated `/me`, policy, list (`total=9738`),
 fuzzy search, fresh canonical React and Marketing Topics, and unauthenticated
-Topics rejection with 401. Current browser proof remains pending.
+Topics rejection with 401. Browser proof for the current rollout remains pending.
 
 Earlier evidence closes the bounded metadata-enumeration portion: 20 all-time
 pages at `per_page=500` returned `totalDeclared=9738`, `totalObserved=9738`,
