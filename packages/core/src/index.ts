@@ -3350,9 +3350,17 @@ function openClawCandidateMatchesMetadata(
 function openClawTrustedMetadataUsable(
   metadata: OpenClawMetadataSnapshot | undefined,
   expectedFeedId: string,
+  expectedSourceUrl: string,
   now: number,
 ): metadata is OpenClawMetadataSnapshot {
   if (!metadata || metadata.feed.id !== expectedFeedId || metadata.feed.schemaVersion !== 1) return false;
+  let sourceUrl: string;
+  try {
+    sourceUrl = new URL(metadata.sourceUrl).href;
+  } catch {
+    return false;
+  }
+  if (sourceUrl !== expectedSourceUrl) return false;
   const generatedAt = Date.parse(metadata.feed.generatedAt);
   const expiresAt = Date.parse(metadata.feed.expiresAt);
   return Number.isFinite(generatedAt) && Number.isFinite(expiresAt) &&
@@ -3385,7 +3393,12 @@ async function authorizeOpenClawPublication(
     }
   }
   if (openClaw.trustedFeed !== undefined &&
-      !openClawTrustedMetadataUsable(trustedMetadata, openClaw.trustedFeed.expectedFeedId, openClaw.now?.() ?? Date.now())) {
+      !openClawTrustedMetadataUsable(
+        trustedMetadata,
+        openClaw.trustedFeed.expectedFeedId,
+        new URL(openClaw.trustedFeed.url).href,
+        openClaw.now?.() ?? Date.now(),
+      )) {
     return false;
   }
   const state = await readState(deps.repository, config.organizationId);

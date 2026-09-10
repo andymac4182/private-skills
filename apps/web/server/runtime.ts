@@ -28,6 +28,7 @@ import {
   StateRepositoryOpenClawConsumerSnapshotStore,
   StateRepositoryOpenClawSourceProofStore,
   StateRepositoryOpenClawPublicationStore,
+  type OpenClawMetadataPreviewResult,
   type OpenClawMetadataSnapshot,
   type OpenClawTrustedFeedProfile,
 } from '../../../packages/openclaw-adapter/src/index';
@@ -105,25 +106,29 @@ async function createRuntime(env: RuntimeEnvironment) {
       }
     })()
     : undefined;
+  const refreshOpenClawMetadata = openClawTrustedFeed && openClawCache
+    ? async (signal: AbortSignal): Promise<Pick<OpenClawMetadataPreviewResult, 'kind' | 'snapshot'>> => {
+      const result = await openClawCache.refresh({
+        url: openClawTrustedFeed.url,
+        expectedFeedId: openClawTrustedFeed.expectedFeedId,
+        allowedOrigins: openClawTrustedFeed.allowedOrigins,
+        ...(openClawTrustedFeed.fetcher === undefined ? {} : { fetcher: openClawTrustedFeed.fetcher }),
+        signal,
+      });
+      return openClawConsumerRefreshResult(result);
+    }
+    : undefined;
   const openClawConsumerService = openClawConsumerStore && openClawQueue && openClawNamespace
     ? new OpenClawTrustedSnapshotImportService({
       store: openClawConsumerStore,
       queue: openClawQueue,
+      ...(refreshOpenClawMetadata === undefined ? {} : { refresh: refreshOpenClawMetadata }),
       authorize: ({ principal }) => canReadOpenClawNamespace(principal, openClawNamespace),
     })
     : undefined;
   const openClawConsumer = openClawTrustedFeed && openClawCache && openClawConsumerService
     ? {
-      refresh: async (signal: AbortSignal) => {
-        const result = await openClawCache.refresh({
-          url: openClawTrustedFeed.url,
-          expectedFeedId: openClawTrustedFeed.expectedFeedId,
-          allowedOrigins: openClawTrustedFeed.allowedOrigins,
-          ...(openClawTrustedFeed.fetcher === undefined ? {} : { fetcher: openClawTrustedFeed.fetcher }),
-          signal,
-        });
-        return openClawConsumerRefreshResult(result);
-      },
+      refresh: refreshOpenClawMetadata!,
       selectAndQueue: openClawConsumerService.selectAndQueue.bind(openClawConsumerService),
     }
     : undefined;
@@ -267,7 +272,7 @@ function createOpenClawTrustedFeedProfile(env: RuntimeEnvironment): OpenClawTrus
 }
 
 function openClawConsumerRefreshResult(result: OpenClawRefreshResult): {
-  kind: string;
+  kind: OpenClawMetadataPreviewResult['kind'];
   snapshot?: OpenClawMetadataSnapshot;
 } {
   if (result.kind === 'rejected') return { kind: result.kind };
