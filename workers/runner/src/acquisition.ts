@@ -38,6 +38,16 @@ export function workerAcquisitionOptionsFromEnv(
   const resolution: SkillsDirectoryGatewayResolution = resolveSkillsDirectoryGateways(env);
   if (resolution.kind === 'disabled') return {};
 
+  // An enabled directory with no gateway profile is the historical worker
+  // configuration. Keep the empty options object so explicitly mapped
+  // upstream.credentialEnv credentials continue to work. An explicitly
+  // supplied JSON profile (including []) remains authoritative and is handled
+  // below as a fail-closed multi-feed configuration.
+  if (env.PSKILLS_DIRECTORY_GATEWAYS_JSON === undefined
+    && env.PSKILLS_DIRECTORY_GATEWAY_URL === undefined) {
+    return {};
+  }
+
   // A multi-feed document is represented by the plural seam even when it
   // happens to contain one gateway. This lets the upstream adapter treat an
   // empty or unmatched profile as authoritative and fail closed.

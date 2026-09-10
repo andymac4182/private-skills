@@ -93,6 +93,62 @@ describe('portable worker skills.sh gateway credentials', () => {
     expect(disabledSeen).toEqual(['']);
   });
 
+  it('preserves the explicit legacy credentialEnv path when no gateway profile is configured', async () => {
+    const key = 'PSKILLS_WORKER_LEGACY_DIRECTORY_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'legacy-worker-token';
+    const seen: string[] = [];
+    try {
+      const options = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+      });
+      expect(options).toEqual({});
+      const acquired = await acquireImportJob({
+        ...job(),
+        upstream: { ...job().upstream!, credentialEnv: key },
+      }, {
+        ...options,
+        fetch: detailFetch(seen),
+        allowLoopbackForTests: true,
+      });
+      expect(acquired.provenance.externalSnapshotHash).toBe('worker-gateway-snapshot');
+      expect(seen).toEqual(['Bearer legacy-worker-token']);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
+  it('does not fall through to credentialEnv for an explicit empty gateway profile', async () => {
+    const key = 'PSKILLS_WORKER_EMPTY_GATEWAY_TOKEN';
+    const previous = process.env[key];
+    process.env[key] = 'ambient-token-must-not-be-used';
+    let fetchCalls = 0;
+    try {
+      const options = workerAcquisitionOptionsFromEnv({
+        PSKILLS_DIRECTORY_ENABLED: 'true',
+        PSKILLS_DIRECTORY_GATEWAYS_JSON: '[]',
+      });
+      expect(options.skillsShGatewayCredentials).toEqual([]);
+      const error = await acquireImportJob({
+        ...job(),
+        upstream: { ...job().upstream!, credentialEnv: key },
+      }, {
+        ...options,
+        fetch: async () => {
+          fetchCalls += 1;
+          return jsonResponse({ error: 'unexpected request' }, 500);
+        },
+        allowLoopbackForTests: true,
+      }).catch((value: unknown) => value);
+      expect(error).toMatchObject({ code: 'credential_missing' });
+      expect(fetchCalls).toBe(0);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
   it('fails closed and redacts gateway provider failures at the worker boundary', async () => {
     const secret = 'worker-gateway-provider-secret';
     const seen: string[] = [];
