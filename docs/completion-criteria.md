@@ -75,8 +75,17 @@ of the remaining G0 GitHub deployment gate.
 Dependencies: an authenticated skills.sh gateway contract that works on the
 selected Nitro deployment, a versioned external identity model, and a
 server-side source resolver that can hand complete bytes to the existing
-validation/scanner worker. The C1 deployment may be verified independently of
+validation/scanner worker. The tenant feed registry supports multiple named
+feeds, with one adapter/origin/credential/restriction configuration per feed;
+the current feed kind is `skills-sh`. Per-repository mappings and manual aliases
+are not dependencies. An administrator may add source restrictions or explicit
+proxy mappings as an optional tightening policy. The C1 deployment may be verified independently of
 the remaining G0 GitHub integration step.
+The configured feed base must be the canonical skills.sh origin or an
+operator-trusted gateway listed in `trustedSkillsShBaseUrls`; a caller-supplied
+`credentialEnv` is rejected. An omitted feed uses the configured default (and a
+single enabled feed may serve as that default), while explicit feed selection
+still passes tenant, enabled, origin, and policy checks before catalog access.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
 skills.sh on 2026-09-10, superseding the earlier disconnected deferral. The
 directory-agent wiring is present, and earlier deployment evidence proves the
@@ -102,9 +111,10 @@ pages at `per_page=500` returned `totalDeclared=9738`, `totalObserved=9738`,
 and `uniqueIds=9738`, with no duplicate rows/IDs or artifact writes. The
 earlier OIDC/endpoint/ComputeSDK evidence and the current nested-route probe
 are recorded with their own deployment provenance in [`verification-v0.3.0.md`](verification-v0.3.0.md).
-Selected GitHub/well-known imports still await separately requested
-restricted-source approval and scanner-admission readback; a conditionally
-approved isolated CLI folder is not import acceptance evidence.
+Representative GitHub/well-known pullthrough, scanner admission, warm-cache,
+and concurrent-deduplication evidence remains pending; a conditionally
+approved isolated CLI folder is not import acceptance evidence. Optional source
+restrictions must not become a prerequisite for the default catalog path.
 
 Completion requires all of the following:
 
@@ -145,14 +155,20 @@ Completion requires all of the following:
    browser responses or logs; source-level wiring or owner authorization alone
    is insufficient.
 5. **C1-ID — external identity and version separation.** Every row preserves
-   provider, complete stable ID, source, slug, name, source type, install URL,
+   feed name, provider, complete stable ID, source, slug, name, source type, install URL,
    skills.sh page URL, install count, duplicate flag, and fetch time. Detail
    route construction validates parsed source/slug segments and rejects path
    traversal. The skills.sh hash is retained as an external snapshot hash;
    Private Skills computes and stores its own canonical artifact digest. No
    install count, branch name, or first-seen date is presented as an upstream
-   SemVer; a private import requires an explicit private release version or a
-   separately specified immutable revision mode.
+   SemVer; the server owns the verified provenance source reference,
+   collision-resistant
+   internal release reference, and immutable resolved revision, so a reader does
+   not supply a manual alias, private name/version, or source mapping merely to
+   install a catalog row. A verified GitHub reference is derived from
+   `@github/owner/repo/<exact-skill-directory>`, a verified well-known reference
+   from `@web/<authority>/<scope>/<entry>`, and snapshot-only metadata uses
+   `@snapshot/skills-sh/<externalId>` without inventing a physical path.
    Current-head fixtures accept the valid nested ID
    `claude-office-skills/skills/facebook/meta-ads` and reject traversal,
    encoded-delimiter, and excessive-depth variants. The live upstream probe
@@ -161,44 +177,78 @@ Completion requires all of the following:
    current production nested probe returned 503 for detail/audit. This is an
    upstream compatibility/availability limitation, and does not count as a
    successful detail or import.
-6. **C1-GITHUB — exact public GitHub mapping.** For a GitHub row whose detail
+6. **C1-FEED — feed selection and isolation.** A tenant can configure at least
+   two named feeds using the current `skills-sh` kind, with one
+   adapter/origin/credential/restriction configuration and feed membership,
+   provenance, and ACL context per feed. `GET /v1/feeds` returns readable
+   id/name/kind/enabled/configured-prefix metadata without making that prefix
+   the canonical source identity. The selected feed and complete source
+   ID remain separate fields in provenance, and sharing a verified canonical
+   source identity never shares an ACL grant. An artifact cache may be reused
+   only after verified origin/repository/exact-path or well-known scoped
+   identity, revision/digest, and current tenant policy checks; the external ID
+   alone is not a cache key. Unknown or disabled feeds and cross-feed
+   authorization guesses fail before catalog access or outbound fetch. A valid
+   configured feed needs no per-repository mapping or manual alias. The
+   source-derived reference and managed namespace policy remain separate from
+   feed membership. Additional feed adapter kinds are future work; OpenClaw
+   feed interoperability remains M7.
+7. **C1-GITHUB — exact public GitHub source resolution.** For a GitHub row whose detail
    has no snapshot, a fixture resolves owner/repository, default or requested
    ref, immutable commit, recursive tree, exact `SKILL.md` path, selected tree
    SHA, and frontmatter identity. Multiple matching paths, changed source,
    truncated tree, missing frontmatter, or identity mismatch produce an
    explicit unresolved/changed/rejected state and cannot import another skill
-   by display-name coincidence.
-7. **C1-WELLKNOWN — well-known source compatibility.** Fixtures cover the
+   by display-name coincidence. This built-in resolver works without a
+   per-repository mapping; an optional tenant administrator policy may narrow
+   the permitted sources.
+8. **C1-WELLKNOWN — well-known source compatibility.** Fixtures cover the
    official discovery v0.2 schema and legacy v0.1, preferred
    `/.well-known/agent-skills/index.json` and legacy
    `/.well-known/skills/index.json`, relative artifact URLs, supplied digest,
    bounded archive extraction, unsafe paths, unknown schema, and a scoped path.
    A scoped request never falls back to the host root catalog. SSRF, redirect,
    timeout, path, file-count, per-file, response, and expanded-size limits are
-   enforced before bytes are retained; no source credential is forwarded.
-8. **C1-IMPORT — governed pullthrough.** Selecting a cloud row creates or
-   joins one durable import operation for the selected individual catalog skill,
-   keyed by external identity and resolved revision. The operation records
-   source URL/path/index, ref/commit/tree when available, external hash/digest,
-   local artifact digest, fetch time, and scanner IDs. Canonical validation,
-   required scanner evidence, local policy, authorization, and immutable
-   transfer checks all pass before a private release is installable. A remote
-   skills.sh audit `pass`/“Safe” never satisfies a required Private Skills
-   scanner; missing or stale remote audits are evidence states, not local scan
-   failures.
-9. **C1-OFFICIAL — maker-curated view.** The curated response is normalized into
+   enforced before bytes are retained; no source credential is forwarded. The
+   default path does not require a custom well-known or per-repository mapping.
+9. **C1-IMPORT — automatic transparent pullthrough.** The canonical resolve
+   request is `POST /v1/proxy/resolve` with `{ feed?, externalId, refresh? }`, where
+   `externalId` is the complete source ID or an exact supported skills.sh URL.
+   An omitted `feed` selects the configured default skills.sh feed. A bare
+   ID/URL is a convenience input; the CLI passes the original URL with
+   `--feed` where needed. The response contains `{ feed, externalId, reference, operation |
+   resolution }`; a `202` operation may omit `reference`, while a `200`
+   resolution includes the verified source reference, and both echo the original
+   ID and selected feed. The caller does
+   not supply `name`, `version`, or `upstreamId`; the server owns its
+   collision-resistant internal ID and immutable revision, including when the
+   source reports `files: null` or no hash. A cold first install creates or
+   joins one durable operation, fetches complete bytes, validates them, runs
+   all required scanner/policy gates, and caches only the approved immutable
+   release. A warm install uses an approved cache entry whose verified
+   canonical source/revision matches the selected feed policy, without an
+   upstream lookup after a fresh reader install authorization plus explicit
+   `proxy:resolve` permission. Concurrent cold
+   requests for one tenant, feed, external identity, and resolved revision join
+   one operation and produce one source fetch, scan set, and sealed artifact;
+   sharing that canonical source does not share an ACL grant.
+   `refresh: true` or update rechecks upstream and reports failure rather than
+   treating an older cache entry as freshly verified. A remote skills.sh audit
+   `pass`/“Safe” never satisfies a required Private Skills scanner; missing,
+   stale, incomplete, blocked, or failed scanner evidence denies installation.
+10. **C1-OFFICIAL — maker-curated view.** The curated response is normalized into
    owner groups while retaining featured repository/skill and `generatedAt`.
    The UI labels the result maker-curated; arbitrary repository ownership,
    install count, or external audit status cannot set an Official/approved
    badge.
-10. **C1-TOPICS — curated taxonomy view.** The Topics view exposes the current
+11. **C1-TOPICS — curated taxonomy view.** The Topics view exposes the current
     official category links and can render recognized `/topic/{slug}` page
     content, including skill links and related topics, while retaining source
     URL, fetch time, and parser/schema revision. Since no documented JSON topic
     membership API exists, a changed or unparseable page is marked stale or
     unavailable; the product must not invent persistent skill-topic relations
     or claim complete membership from category counts alone.
-11. **C1-PACKS — unlisted external-pack preview.** Existing private pack
+12. **C1-PACKS — unlisted external-pack preview.** Existing private pack
     management remains tenant-scoped and immutable. The cloud Packs view
     accepts a user-supplied `https://skills.sh/p/<pack-id>` link and renders a
     metadata-only manifest preview, including the unlisted/public state, member
@@ -207,25 +257,40 @@ Completion requires all of the following:
     member file bytes, batch-import members, create a private pack, or imply
     Private Skills approval. Deleted/404 links report unavailable rather than
     falling back.
-12. **C1-AUDITS — external evidence view.** The external Audits view is
+13. **C1-AUDITS — external evidence view.** The external Audits view is
     separate from the Private Skills administrative audit log and local scan
     results. It renders 200, 404/no-audit, partial-provider, future-provider,
     stale-timestamp, and malformed-entry fixtures generically by returned
     provider/status/risk/summary/time. Unknown providers do not break the view.
-13. **C1-TENANT — authorization and secrecy.** Public external metadata may be
-    shared, but external detail caches, import operations, private catalog
-    rows, pack members, scanner reports, source credentials, and transfer
-    descriptors remain organization-scoped. Browser/network and audit-log
-    tests prove that no skills.sh/GitHub bearer, raw private source, or
-    unapproved candidate content is exposed.
-14. **C1-EVIDENCE — representative end-to-end proof.** Evidence includes the
-    page/search/detail/curated/audit fixtures, GitHub root/nested/ambiguous
-    mapping fixtures, both well-known schemas, React and Marketing topic-page
-    fixtures, an unlisted/deleted pack manifest-preview fixture, an existing
-    private-pack management/immutability fixture, an individual selected-row
-    import through local scanner approval, a blocked scan, a changed source,
-    rate limiting, unavailable auth, tenant isolation, and a metadata
-    enumeration proving zero artifact writes for unselected rows.
+14. **C1-TENANT — authorization, reader install, and secrecy.** Public external metadata may be
+   shared, but external detail caches, import operations, private catalog
+   rows, pack members, scanner reports, source credentials, and transfer
+   descriptors remain organization-scoped. Browser/network and audit-log
+   tests prove that no skills.sh/GitHub bearer, raw private source, or
+   unapproved candidate content is exposed. A reader with install permission
+   and the explicit `proxy:resolve` permission can install an already approved
+   warm release and can start the bounded cold pullthrough operation. The
+   default reader/publisher grant for `proxy:resolve` remains pending explicit
+   product approval and production verification; owners/admins may exercise the
+   route where their current grants allow it. Readers cannot change tenant source restrictions,
+   scanner policy, publication state, or aliases. Publisher/admin permissions
+   are required for those mutations, and every transfer still receives an
+   actor-bound authorization.
+15. **C1-EVIDENCE — representative end-to-end proof.** Evidence includes the
+   page/search/detail/curated/audit fixtures, multi-feed selection and
+   unknown/disabled-feed fixtures, source-derived identity/provenance and
+   source-reference notes, GitHub root/nested/ambiguous
+   mapping fixtures, both well-known schemas, React and Marketing topic-page
+   fixtures, an unlisted/deleted pack manifest-preview fixture, an existing
+   private-pack management/immutability fixture, a cold first install through
+   source resolution and required scanner approval, a warm install with zero
+   upstream requests, concurrent cold requests proving deduplication, a
+   blocked/failed scan that denies installation, `refresh: true` failure that
+   does not relabel old cache as fresh, changed-source provenance, trusted-base
+   and caller-credential negative checks, 202/200 reference behavior, rate
+   limiting, unavailable auth, reader/publisher/admin permissions, tenant
+   isolation, and a metadata enumeration proving zero artifact writes for
+   unselected rows.
 
 The broader upstream CLI parity items — `find` ergonomics, source-selector
 grammar, lock check/restore/sync, multi-agent adapters, multi-skill selection,
@@ -570,7 +635,8 @@ trust-root decision. Therefore M7 must not claim that the skills route is v2
 or signed; signing is conditional until the upstream skills contract and a
 Private Skills trust configuration explicitly enable it.
 
-Dependencies: C1's exact source mapping and individual pullthrough, the
+Dependencies: C1's identity-preserving automatic source pullthrough and
+individual on-demand ingestion, the
 canonical bundle validator, existing required scanner/policy and immutable
 transfer boundary, tenant-scoped auth/storage, a bounded server-side upstream
 gateway, and a dated copy/reference of the upstream contract. A Private Skills

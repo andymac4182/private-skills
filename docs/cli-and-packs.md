@@ -1,6 +1,9 @@
 # CLI, skill formats, packs, and locks
 
-This document specifies the proposed `pskills` v1 interface. Commands are illustrative; the CLI is not implemented yet. Sources were checked on 9 September 2026.
+This document specifies the proposed `pskills` v1 interface and records the
+current skills.sh install syntax. The Rust CLI supports the original complete
+skills.sh ID/URL plus `--feed`; broader protocol parity and a published release
+remain separate acceptance work. Sources were checked on 9 September 2026.
 
 ## Distribution and language
 
@@ -33,17 +36,34 @@ Preserve agent-specific metadata without enabling extra products. Claude reserve
 | Authentication | `pskills login --registry <url>`, `logout`, `whoami` |
 | Registry configuration | `pskills registry add/list/remove` |
 | Discovery | `pskills search`, `show @team/review`, `versions @team/review` |
-| Installation | `pskills install @team/review@1.2.0 --agent codex` |
+| Installation | `pskills install @team/review@1.2.0 --agent codex` or `pskills install <full-source-id-or-exact-supported-url> --feed <feed> --agent codex` |
 | Reproduction | `pskills install --frozen-lockfile` |
 | Maintenance | `pskills list`, `update`, `outdated`, `remove`, `verify`, `doctor` |
 | Authoring | `pskills init`, `validate`, `publish` |
 | Packs | `pskills pack show/install/update/remove/validate/publish` |
-| Approved upstream import | `pskills import <source> --skill <path>` |
+| Generic approved upstream import | `pskills import <source> --skill <path>` (advanced mapping-controlled path) |
 | Scan evidence | `pskills scan status/report <release>` |
 
 Default to project scope; user-wide installation requires `--global`. Select adapters explicitly and record them in project intent. Support `--dry-run`, `--json`, `--non-interactive` and documented exit codes. Progress uses stderr; JSON results use stdout. Unresolved choices fail in non-interactive mode. Scan commands inspect server-side work; installing does not require local scanners.
 
-Imports must match approved server mappings. All downloads pass through registry authorization and policy; server errors or blocked scans never cause a direct-upstream fallback. Existing Vercel `skills` workflows inform familiarity, but this is not a promise of protocol compatibility. [Vercel skills CLI](https://github.com/vercel-labs/skills)
+The built-in `skills-sh` path accepts the original complete source ID or exact
+supported skills.sh URL plus an optional `--feed`; if omitted, the configured
+default feed is selected. The CLI does not accept a feed alias as a substitute
+for the source ID. The server derives its source reference only after verifying
+origin/repository/exact path or a well-known scoped identity; that reference is
+provenance/lock metadata, not a supported direct CLI input. Install continues
+to use the original skills.sh ID/URL plus the optional `--feed`.
+The operation does not require a per-source mapping, private alias, or
+caller-supplied private name/version. Unknown or disabled feeds fail before
+catalog access. A reader with install and explicit `proxy:resolve` permission
+may start a bounded cold pullthrough or install an approved warm release; the server performs source resolution, validation,
+scanner/policy admission, and cache selection. Generic upstream imports still
+require an administrator's explicit mapping or source policy. All downloads
+pass through registry authorization and policy; server errors, required
+scanner failures, or blocked scans never cause a direct-upstream fallback.
+Existing Vercel `skills` workflows inform familiarity, but this is not a promise
+of protocol or drop-in CLI compatibility, including unmodified `npx skills`
+behavior. [Vercel skills CLI](https://github.com/vercel-labs/skills)
 
 ## Packs and deterministic locks
 
@@ -67,7 +87,7 @@ Publishing resolves every range and freezes exact member releases and digests. U
 
 A published v1 pack belongs to one registry/organization, including any locally mirrored upstream members. A project may use several registries: the CLI partitions the plan by origin/organization, obtains separate authorizations, and completes all final validations before activation. Each registry receives only its own member metadata and credentials; failure anywhere prevents activation of the combined operation.
 
-`pskills.json` records requested direct skills, packs, version constraints and adapters. `pskills.lock.json` records exact releases/source revisions, registry origins, artifact/tree digests and each member's owners: direct installation or pack identities. Keep tokens, download URLs, timestamps and machine-specific absolute paths out of committed locks. A separate local journal records installed paths and per-file hashes. This distinct filename avoids overwriting Vercel's existing `skills-lock.json`. [Vercel lock implementation](https://raw.githubusercontent.com/vercel-labs/skills/main/src/local-lock.ts)
+`pskills.json` records requested direct skills, packs, version constraints and adapters. `pskills.lock.json` records exact releases/source revisions, registry origins, artifact/tree digests and each member's owners: direct installation or pack identities. For a `skills-sh` member, the lock retains the selected feed membership, complete original external ID/source URL, verified canonical source identity when available, and server-resolved immutable revision; it never substitutes a mandatory feed alias or an invented upstream SemVer. Snapshot-only metadata records its unresolved status and does not invent a physical path. Keep tokens, download URLs, timestamps and machine-specific absolute paths out of committed locks. A separate local journal records installed paths and per-file hashes. This distinct filename avoids overwriting Vercel's existing `skills-lock.json`. [Vercel lock implementation](https://raw.githubusercontent.com/vercel-labs/skills/main/src/local-lock.ts)
 
 Resolve a complete pack before writes. Every member must be authorized and policy-approved. Allow one active version per skill identity and target scope; incompatible direct/pack requirements fail with an owner-by-owner explanation. Distinct skills sharing a destination name also fail. V1 never rewrites names or introduces aliases.
 
@@ -75,7 +95,21 @@ Removing a pack removes its ownership only; shared members remain until their fi
 
 ## Installation and recovery
 
-Download approved bytes into a content-addressed cache, verify the archive digest, extract into staging, validate the file manifest and tree digest, then activate. Use the versioned canonical digest contract; preserve file bytes and line endings. Copy by default so Windows needs no symlink privileges.
+For a full skills.sh ID selected through a configured feed, the first install
+starts or joins one server-side pullthrough operation. The server fetches
+detail/source bytes into quarantine,
+validates the complete bundle, runs all required scanners and policy checks,
+and stores only an approved immutable release. A later warm install uses the
+approved registry cache without another upstream lookup after a fresh
+actor-bound authorization. Concurrent cold requests for one tenant, external
+identity, and resolved revision join one operation and produce one fetch,
+scanner set, and sealed artifact. An explicit update or refresh rechecks the
+source; a failed recheck is reported and never relabels an older cache entry as
+fresh. Download approved bytes into a content-addressed cache, verify the
+archive digest, extract into staging, validate the file manifest and tree
+digest, then activate. Use the versioned canonical digest contract; preserve
+file bytes and line endings. Copy by default so Windows needs no symlink
+privileges.
 
 Consume the registry's provider-neutral transfer descriptor: either an approved private signed URL or an authenticated gateway URL with narrowly scoped transfer headers. Do not assume S3/Vercel URLs, always-available range requests, or direct storage signing. Forward only descriptor-authorized headers to its exact origin, never the registry session token. Files SDK runs on the server/gateway; the Rust CLI contains no storage-provider SDK or credentials.
 
@@ -92,5 +126,14 @@ V1 installs require online policy authorization even for locally cached bytes. O
 Use established browser/device authorization with expiring codes and no embedded client secret. Store interactive credentials in OS keyrings; support scoped environment/stdin tokens for headless CI. If a keyring is unavailable, explain configuration instead of silently storing plaintext. [OAuth device flow](https://www.rfc-editor.org/rfc/rfc8628)
 
 Bind credentials to the exact registry origin. Separate read, publish and administrator scopes; redact logs and never commit tokens. Registry credentials never flow upstream or across arbitrary redirects. Server-side GitHub App credentials stay on the server, and explicit namespace routing prevents public fallback.
+
+Reader install permission plus explicit `proxy:resolve` is required to request
+a cold skills.sh pullthrough or consume its resulting approved warm cache entry,
+subject to the registry's current authorization and scanner evidence. The
+default reader/publisher grant remains pending explicit product approval and
+production verification; owner/admin grants may exercise the route. It does not grant source-policy,
+scanner, publication, or mapping changes. Catalog browsing remains metadata
+only; the CLI receives bytes only through an authorized transfer after the
+registry has admitted the exact candidate.
 
 Release acceptance requires successful private installs and frozen pack reproduction on all three operating systems; real Codex/Claude discovery; shared-member removal; collision and local-edit protection; crash recovery; archive/digest rejection; and tests proving that revoked credentials, stale required scans and unauthorized namespaces cannot obtain fresh artifact access. Preserve existing third-party lockfiles and unrelated skills throughout.
