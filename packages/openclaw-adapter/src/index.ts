@@ -25,6 +25,19 @@ export const OPENCLAW_SKILLS_FEED_ROUTE = '/v1/feeds/skills';
 /** The producer must never impersonate the ClawHub-owned feed identity. */
 export const OPENCLAW_RESERVED_OFFICIAL_FEED_ID = 'clawhub-official';
 
+export {
+  PersistentOpenClawFeedCache,
+  StateRepositoryOpenClawConsumerSnapshotStore,
+  OpenClawConsumerSnapshotStoreError,
+} from './consumer-cache.ts';
+export type {
+  OpenClawConsumerCacheKey,
+  OpenClawConsumerSnapshotStore,
+  OpenClawConsumerSnapshotStoreErrorCode,
+  PersistentOpenClawFeedCacheOptions,
+  StateRepositoryOpenClawConsumerSnapshotStoreOptions,
+} from './consumer-cache.ts';
+
 const MAX_FEED_ID_BYTES = 512;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 const MAX_PUBLICATION_TTL_MS = 24 * 60 * 60 * 1_000;
