@@ -87,6 +87,7 @@ describe('directory client feed resolver', () => {
     });
     const official = nodeResolver('https://skills.sh');
     expect(official).toBeDefined();
+    expect(nodeResolver('https://skills.sh/catalog')).toBeUndefined();
     await official!.detail('same/repo/skill');
     expect(tokens).toEqual(['Bearer fresh-oidc-token']);
   });

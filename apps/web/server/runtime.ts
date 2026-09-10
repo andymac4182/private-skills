@@ -11,6 +11,7 @@ import {
   createSkillsDirectoryClientResolver,
   resolveSkillsDirectoryConnection,
   resolveSkillsDirectoryGateways,
+  SKILLS_DIRECTORY_OFFICIAL_BASE_URL,
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 
@@ -25,6 +26,11 @@ async function createRuntime(env: RuntimeEnvironment) {
   const configuredGatewayBases = directoryGateways.kind === 'ready'
     ? directoryGateways.gateways.map((gateway) => gateway.baseUrl)
     : [];
+  const trustedDirectoryBaseURL = configuredDirectoryBaseURL !== undefined &&
+    (directoryConnection.kind === 'gateway' ||
+      (directoryConnection.kind === 'official' && configuredDirectoryBaseURL === SKILLS_DIRECTORY_OFFICIAL_BASE_URL))
+    ? configuredDirectoryBaseURL
+    : undefined;
   const config = {
     organizationId: env.PSKILLS_ORGANIZATION_ID ?? 'default',
     publicOrigin: env.PSKILLS_PUBLIC_ORIGIN ?? 'http://localhost:5173',
@@ -33,7 +39,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     allowLoopbackUpstreams: env.PSKILLS_ENVIRONMENT === 'test',
     trustedSkillsShBaseUrls: [...new Set([
       'https://skills.sh',
-      ...(configuredDirectoryBaseURL === undefined ? [] : [configuredDirectoryBaseURL]),
+      ...(trustedDirectoryBaseURL === undefined ? [] : [trustedDirectoryBaseURL]),
       ...configuredGatewayBases,
     ])],
   };
@@ -66,7 +72,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     directory,
     directoryPacks,
     directoryForBase,
-  } as Parameters<typeof createRegistryHandler>[0];
+  };
   const registry = createRegistryHandler(registryDependencies);
   const embeddingProvider = createEmbeddingProvider(env);
   const intelligence = createIntelligenceHandler({
