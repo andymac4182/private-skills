@@ -63,9 +63,9 @@ function feed(overrides: Partial<OpenClawFeed> = {}): OpenClawFeed {
   return {
     schemaVersion: 1,
     id: 'private/opaque-a',
-    generatedAt: '2030-01-01T00:00:00.000Z',
+    generatedAt: '2029-12-01T00:00:00.000Z',
     sequence: 1,
-    expiresAt: '2030-01-02T00:00:00.000Z',
+    expiresAt: '2029-12-02T00:00:00.000Z',
     entries: [record().entry],
     ...overrides,
   };

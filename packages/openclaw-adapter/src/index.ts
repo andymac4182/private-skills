@@ -8,6 +8,8 @@ import {
   OpenClawFeedCache,
   OpenClawRequestError,
   validateOpenClawFeedUrl,
+  type OpenClawFeedCompatibilityProfile,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
   OPENCLAW_SOURCE_CLAWHUB,
   OPENCLAW_SOURCE_GITHUB,
   type OpenClawCacheSnapshot,
@@ -834,6 +836,12 @@ export interface OpenClawTrustedFeedProfile {
   url: string | URL;
   expectedFeedId: string;
   allowedOrigins: readonly string[];
+  /**
+   * Optional revision-pinned producer compatibility. The profile is
+   * server-selected and its implementation verifies the exact ClawHub URL
+   * and feed identity before accepting any relaxed wire details.
+   */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   /** A server-side fetcher may add its own configured auth; it is never returned. */
   fetcher?: OpenClawFetch;
   timeoutMs?: number;
@@ -849,6 +857,7 @@ export interface OpenClawMetadataSnapshot {
   feed: OpenClawMetadataFeed;
   sha256: OpenClawSha256;
   etag: string;
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
   lastModified?: string;
   acceptedAt: number;
   sourceUrl: string;
@@ -964,6 +973,9 @@ export async function previewOpenClawFeed(
     url,
     expectedFeedId: profile.expectedFeedId,
     allowedOrigins: profile.allowedOrigins,
+    ...(profile.compatibilityProfile === undefined
+      ? {}
+      : { compatibilityProfile: profile.compatibilityProfile }),
     fetcher: guardedFetcher,
     timeoutMs: profile.timeoutMs,
     maxBodyBytes: profile.maxBodyBytes,
@@ -1110,6 +1122,7 @@ function metadataSnapshot(snapshot: OpenClawCacheSnapshot): OpenClawMetadataSnap
     },
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
     acceptedAt: snapshot.acceptedAt,
     sourceUrl: snapshot.sourceUrl,

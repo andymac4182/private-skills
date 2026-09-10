@@ -13,8 +13,16 @@ import {
   type OpenClawSourceFetcher,
   type OpenClawSourceJobDescriptor,
 } from '../../../packages/upstreams/src/index.js';
-import { normalizeOpenClawEntry } from '../../../packages/openclaw/src/feed.js';
-import type { OpenClawFeedEntry, OpenClawNormalizedSource } from '../../../packages/openclaw/src/types.js';
+import {
+  isOpenClawFeedFresh,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  normalizeOpenClawEntry,
+} from '../../../packages/openclaw/src/index.js';
+import type {
+  OpenClawFeedEntry,
+  OpenClawNormalizedSource,
+  OpenClawSha256,
+} from '../../../packages/openclaw/src/types.js';
 import {
   MAX_SKILLS_DIRECTORY_GATEWAYS,
   isValidSkillsShGatewayToken,
@@ -33,6 +41,8 @@ export interface WorkerOpenClawAcquisitionOptions {
   allowedArtifactOrigins: readonly string[];
   /** Optional fixed source identity origin for the configured adapter. */
   sourceProviderOrigin?: string;
+  /** Clock injection for deterministic expiry checks; defaults to Date.now. */
+  now?: () => number;
 }
 
 /** Options supplied by the worker supervisor for a source acquisition. */
@@ -155,6 +165,7 @@ export async function acquireImportJob(
     }
     const source = openClawJob.source;
     const externalId = importRequest.externalId ?? importRequest.path;
+    validateOpenClawQueuedFeed(openClawJob.feed, configured.now?.() ?? Date.now());
     if (source.kind === 'public-clawhub' && source.version !== importRequest.version) {
       throw new Error('OpenClaw hosted source version does not match the import request');
     }
@@ -203,18 +214,90 @@ function parseOpenClawSourceJob(value: unknown): OpenClawSourceJobDescriptor | u
   if (value.entry !== undefined && !isRecord(value.entry)) {
     throw new Error('claimed OpenClaw source proof entry is invalid');
   }
+  const feed = parseOpenClawSourceFeed(value.feed);
   const source = value.source;
   if (source.sourceRef === 'public-clawhub' && source.kind === 'public-clawhub' &&
     typeof source.packageName === 'string' && typeof source.version === 'string' &&
     typeof source.artifactDigest === 'string') {
-    return { source: source as unknown as OpenClawSourceJobDescriptor['source'], ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }) };
+    return {
+      source: source as unknown as OpenClawSourceJobDescriptor['source'],
+      ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }),
+      ...(feed === undefined ? {} : { feed }),
+    };
   }
   if (source.sourceRef === 'public-github' && source.kind === 'public-github' &&
     typeof source.repo === 'string' && typeof source.path === 'string' &&
     typeof source.commit === 'string' && typeof source.contentHash === 'string') {
-    return { source: source as unknown as OpenClawSourceJobDescriptor['source'], ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }) };
+    return {
+      source: source as unknown as OpenClawSourceJobDescriptor['source'],
+      ...(value.entry === undefined ? {} : { entry: value.entry as unknown as OpenClawFeedEntry }),
+      ...(feed === undefined ? {} : { feed }),
+    };
   }
   throw new Error('claimed OpenClaw source identity is invalid');
+}
+
+function parseOpenClawSourceFeed(value: unknown): OpenClawSourceJobDescriptor['feed'] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.sourceUrl !== 'string' ||
+    typeof value.sequence !== 'number' || !Number.isSafeInteger(value.sequence) || value.sequence < 0 ||
+    typeof value.digest !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(value.digest)) {
+    throw new Error('claimed OpenClaw feed descriptor is invalid');
+  }
+  if ((value.generatedAt === undefined) !== (value.expiresAt === undefined) ||
+    (value.generatedAt !== undefined && typeof value.generatedAt !== 'string') ||
+    (value.expiresAt !== undefined && typeof value.expiresAt !== 'string')) {
+    throw new Error('claimed OpenClaw feed freshness metadata is incomplete');
+  }
+  if (value.compatibilityProfile !== undefined && value.compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) {
+    throw new Error('claimed OpenClaw compatibility profile is invalid');
+  }
+  let url: URL;
+  try {
+    url = new URL(value.sourceUrl);
+  } catch {
+    throw new Error('claimed OpenClaw feed URL is invalid');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.href !== value.sourceUrl) {
+    throw new Error('claimed OpenClaw feed URL is invalid');
+  }
+  return {
+    id: value.id,
+    sequence: value.sequence,
+    digest: value.digest as OpenClawSha256,
+    sourceUrl: url.href,
+    ...(value.generatedAt === undefined ? {} : { generatedAt: value.generatedAt }),
+    ...(value.expiresAt === undefined ? {} : { expiresAt: value.expiresAt }),
+    ...(value.compatibilityProfile === undefined ? {} : { compatibilityProfile: value.compatibilityProfile }),
+  };
+}
+
+/** Recheck a claimed descriptor immediately before completion as a worker-side
+ * guard; the registry repeats the same check inside its completion transaction. */
+export function validateOpenClawSourceFeedFreshness(value: unknown, now = Date.now()): void {
+  const feedValue = isRecord(value) && Object.prototype.hasOwnProperty.call(value, 'source') ? value.feed : value;
+  validateOpenClawQueuedFeed(parseOpenClawSourceFeed(feedValue), now);
+}
+
+function validateOpenClawQueuedFeed(
+  feed: OpenClawSourceJobDescriptor['feed'],
+  now: number,
+): void {
+  // Jobs created before feed freshness was part of the descriptor remain
+  // compatible for the strict published profile. The alternate ClawHub
+  // producer profile is fail-closed because its seven-day wire expiry must be
+  // reduced to one local day even when the worker starts much later.
+  if (feed === undefined) return;
+  if (!Number.isFinite(now)) throw new Error('OpenClaw feed clock is invalid');
+  if (feed.generatedAt === undefined || feed.expiresAt === undefined) {
+    if (feed.compatibilityProfile !== undefined) throw new Error('OpenClaw feed freshness metadata is required');
+    return;
+  }
+  if (!isOpenClawFeedFresh({
+    id: feed.id,
+    generatedAt: feed.generatedAt,
+    expiresAt: feed.expiresAt,
+  }, feed.sourceUrl, now, feed.compatibilityProfile)) throw new Error('OpenClaw feed has expired');
 }
 
 function buildOpenClawProof(

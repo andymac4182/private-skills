@@ -12,7 +12,13 @@ import {
   createHostedOpenClawSourceConfigFromEnv,
   createOfficialDirectoryTokenProvider,
 } from '../server/runtime-node.js';
+import { openClawConsumerRefreshResult } from '../server/openclaw-runtime.js';
 import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types.js';
+import {
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+  type OpenClawCacheSnapshot,
+} from '../../../packages/openclaw/src/index.js';
 
 describe('node directory token provider', () => {
   beforeEach(() => {
@@ -246,5 +252,31 @@ describe('node directory token provider', () => {
     expect(() => createHostedOpenClawSourceConfigFromEnv({
       PSKILLS_OPENCLAW_SOURCE_LOCATOR_JSON: value,
     })).toThrow('OpenClaw');
+  });
+
+  it('preserves the server-selected compatibility profile for refresh and durable metadata projections', () => {
+    const digest = `sha256:${'a'.repeat(64)}` as `sha256:${string}`;
+    const snapshot: OpenClawCacheSnapshot = {
+      feed: {
+        schemaVersion: 1,
+        id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+        generatedAt: '2030-01-01T00:00:00.000Z',
+        sequence: 1,
+        expiresAt: '2030-01-02T00:00:00.000Z',
+        entries: [],
+      },
+      body: '{}',
+      bytes: new Uint8Array(),
+      sha256: digest,
+      etag: `"${digest}"`,
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      acceptedAt: Date.parse('2030-01-01T01:00:00.000Z'),
+      sourceUrl: 'https://clawhub.ai/api/v1/feeds/skills',
+    };
+
+    expect(openClawConsumerRefreshResult({ kind: 'accepted', status: 200, snapshot }).snapshot)
+      .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
+    expect(openClawConsumerRefreshResult({ kind: 'not-modified', status: 304, snapshot }).snapshot)
+      .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
   });
 });

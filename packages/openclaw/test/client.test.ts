@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   OPENCLAW_OFFICIAL_FEED_ID,
   OPENCLAW_SOURCE_CLAWHUB,
   OpenClawFeedCache,
@@ -10,8 +13,8 @@ import {
   type OpenClawSkillEntry,
 } from "../src/index.ts";
 
-const FUTURE_GENERATED = "2030-01-01T00:00:00.000Z";
-const FUTURE_EXPIRY = "2030-01-02T00:00:00.000Z";
+const FUTURE_GENERATED = "2029-12-01T00:00:00.000Z";
+const FUTURE_EXPIRY = "2029-12-02T00:00:00.000Z";
 
 function skillEntry(overrides: Partial<OpenClawSkillEntry> = {}): OpenClawSkillEntry {
   return {
@@ -116,6 +119,289 @@ describe("OpenClaw feed transport and cache", () => {
     expect(opaque.kind).toBe("rejected");
     if (opaque.kind !== "rejected") throw new Error("expected opaque ETag rejection");
     expect(opaque.error).toBe("invalid-etag");
+  });
+
+  it("accepts the pinned live ClawHub skills profile only with body-bound CDN validators", async () => {
+    const generatedAt = "2029-11-30T02:00:00.000Z";
+    const body = serializeOpenClawFeed(
+      feed({
+        id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+        generatedAt,
+        expiresAt: "2029-12-07T00:00:00.000Z",
+      }),
+    );
+    const digest = await sha256(new TextEncoder().encode(body));
+    let calls = 0;
+    let conditionalHeader: string | null = null;
+    const cache = new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    });
+    const accepted = await cache.refresh({
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async (_input, init) => {
+        calls += 1;
+        conditionalHeader = new Headers(init?.headers).get("if-none-match");
+        expect(init?.redirect).toBe("error");
+        return calls === 1
+          ? response(body, {
+              headers: {
+                etag: `W/"${digest}-gzip"`,
+                "x-content-sha256": digest,
+              },
+            })
+          : new Response(null, {
+              status: 304,
+              headers: { etag: `W/"${digest}-gzip"` },
+            });
+      },
+    });
+    expect(accepted.kind).toBe("accepted");
+    if (accepted.kind !== "accepted") throw new Error("expected live profile acceptance");
+    // The CDN validator is transport metadata only; the cache stores the
+    // canonical body digest so durable consumers can revalidate it safely.
+    expect(accepted.snapshot.etag).toBe(`"${digest}"`);
+    expect(accepted.snapshot.transportEtag).toBe(`W/"${digest}-gzip"`);
+    expect(accepted.snapshot.sha256).toBe(digest);
+    expect(conditionalHeader).toBeNull();
+    const revalidated = await cache.refresh({
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async (_input, init) => {
+        conditionalHeader = new Headers(init?.headers).get("if-none-match");
+        return new Response(null, {
+          status: 304,
+          headers: { etag: `W/"${digest}-gzip"` },
+        });
+      },
+    });
+    expect(revalidated.kind).toBe("not-modified");
+    expect(conditionalHeader).toBe(`W/"${digest}-gzip"`);
+
+    const mismatchedHeader = await new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    }).refresh({
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async () => response(body, {
+        headers: {
+          etag: `"${digest}-gzip"`,
+          "x-content-sha256": `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    });
+    expect(mismatchedHeader.kind).toBe("rejected");
+    if (mismatchedHeader.kind !== "rejected") throw new Error("expected digest rejection");
+    expect(mismatchedHeader.error).toBe("digest-mismatch");
+  });
+
+  it("keeps the live profile host, path, identity, and wire expiry pinned", async () => {
+    const generatedAt = "2029-11-30T00:00:00.000Z";
+    const body = serializeOpenClawFeed(
+      feed({
+        id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+        generatedAt,
+        expiresAt: "2029-12-08T00:00:00.000Z",
+      }),
+    );
+    let calls = 0;
+    const base = {
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async () => {
+        calls += 1;
+        return response(body);
+      },
+    } as const;
+    const wrongPath = await new OpenClawFeedCache().refresh({
+      ...base,
+      url: "https://clawhub.ai/v1/feeds/skills",
+    });
+    expect(wrongPath.kind).toBe("rejected");
+    if (wrongPath.kind !== "rejected") throw new Error("expected path rejection");
+    expect(wrongPath.error).toBe("invalid-url");
+    expect(calls).toBe(0);
+
+    const wrongIdentity = await new OpenClawFeedCache().refresh({
+      ...base,
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+    });
+    expect(wrongIdentity.kind).toBe("rejected");
+    if (wrongIdentity.kind !== "rejected") throw new Error("expected identity rejection");
+    expect(wrongIdentity.error).toBe("invalid-url");
+    expect(calls).toBe(0);
+
+    const tooLong = await new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    }).refresh({
+      ...base,
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      fetcher: async () => response(
+        serializeOpenClawFeed(
+          feed({
+            id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+            generatedAt,
+            expiresAt: "2029-12-08T00:00:00.000Z",
+          }),
+        ),
+      ),
+    });
+    expect(tooLong.kind).toBe("rejected");
+    if (tooLong.kind !== "rejected") throw new Error("expected expiry rejection");
+    expect(tooLong.error).toBe("invalid-feed");
+  });
+
+  it("uses the effective one-day local expiry for the live seven-day wire profile", async () => {
+    const body = serializeOpenClawFeed(
+      feed({
+        id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+        generatedAt: "2029-11-30T02:00:00.000Z",
+        expiresAt: "2029-12-07T00:00:00.000Z",
+      }),
+    );
+    let now = Date.parse("2029-12-01T01:00:00.000Z");
+    const cache = new OpenClawFeedCache({
+      now: () => now,
+      maxStaleMs: 7 * 24 * 60 * 60 * 1_000,
+    });
+    const request = {
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async () => response(body),
+    } as const;
+    const first = await cache.refresh(request);
+    expect(first.kind).toBe("accepted");
+    if (first.kind !== "accepted") throw new Error("expected live profile acceptance");
+    now = Date.parse("2029-12-01T02:00:00.001Z");
+    const laterResult = await cache.refresh({
+      ...request,
+      fetcher: async () => new Response(null, { status: 304 }),
+    });
+    expect(laterResult.kind).toBe("rejected");
+    if (laterResult.kind !== "rejected") throw new Error("expected effective expiry rejection");
+    expect(laterResult.error).toBe("no-cache");
+  });
+
+  it("rejects a first 200 at the effective one-day boundary without retaining a snapshot", async () => {
+    const body = serializeOpenClawFeed(
+      feed({
+        id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+        generatedAt: "2029-11-30T00:00:00.000Z",
+        expiresAt: "2029-12-07T00:00:00.000Z",
+      }),
+    );
+    const cache = new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    });
+    const result = await cache.refresh({
+      url: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      allowedOrigins: ["https://clawhub.ai"],
+      compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+      fetcher: async () => response(body),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rejects a strict-profile feed whose declared TTL exceeds 24 hours", async () => {
+    const body = serializeOpenClawFeed(feed({
+      generatedAt: FUTURE_GENERATED,
+      expiresAt: "2029-12-03T00:00:00.000Z",
+    }));
+    const cache = new OpenClawFeedCache({
+      now: () => Date.parse("2029-12-01T00:00:00.000Z"),
+    });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rechecks the clock after a delayed 200 body before accepting it", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const bodyBytes = new TextEncoder().encode(body);
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let now = expiry - 1;
+    let pulled = false;
+    const delayedBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (pulled) return;
+        pulled = true;
+        await Promise.resolve();
+        now = expiry;
+        controller.enqueue(bodyBytes);
+        controller.close();
+      },
+    });
+    const cache = new OpenClawFeedCache({ now: () => now });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => new Response(delayedBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rechecks the clock after the asynchronous digest before accepting a 200", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let nowReads = 0;
+    const cache = new OpenClawFeedCache({
+      // The third read occurs after the awaited WebCrypto digest. Returning
+      // the boundary there models expiry while hashing/validator work is in
+      // flight without changing the production clock source.
+      now: () => (nowReads++ < 2 ? expiry - 1 : expiry),
+    });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
+  it("rechecks the clock after a delayed 304 before serving the cached snapshot", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let now = expiry - 1;
+    let calls = 0;
+    const cache = new OpenClawFeedCache({ now: () => now });
+    const request = {
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => {
+        calls += 1;
+        if (calls === 1) return response(body);
+        await Promise.resolve();
+        now = expiry;
+        return new Response(null, { status: 304 });
+      },
+    } as const;
+    await expect(cache.refresh(request)).resolves.toMatchObject({ kind: "accepted" });
+    await expect(cache.refresh(request)).resolves.toMatchObject({ kind: "rejected", status: 304, error: "no-cache" });
   });
 
   it("does not accept a 304 with conflicting response validators", async () => {

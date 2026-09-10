@@ -10,7 +10,12 @@ import type {
   SkillBundle,
   Upstream,
 } from '../../contracts/src/index.js';
-import type { OpenClawFeedEntry, OpenClawNormalizedSource } from '../../openclaw/src/types.js';
+import type {
+  OpenClawFeedCompatibilityProfile,
+  OpenClawFeedEntry,
+  OpenClawNormalizedSource,
+  OpenClawSha256,
+} from '../../openclaw/src/types.js';
 import {
   isReservedSkillsDirectoryHost,
   isValidSkillsShGatewayToken,
@@ -182,10 +187,25 @@ export interface OpenClawSourceLocation {
 }
 
 /** Server-owned job extension placed alongside an import request. */
+export interface OpenClawSourceFeedDescriptor {
+  /** The exact feed identity selected by the server. */
+  id: string;
+  sequence: number;
+  digest: OpenClawSha256;
+  sourceUrl: string;
+  /** Immutable producer timestamps used by delayed workers for freshness. */
+  generatedAt?: string;
+  expiresAt?: string;
+  /** Set only for the server-selected, exact ClawHub compatibility profile. */
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
+}
+
 export interface OpenClawSourceJobDescriptor {
   source: OpenClawNormalizedSource;
   /** Server-owned feed entry retained for post-approval source-proof recording. */
   entry?: OpenClawFeedEntry;
+  /** Server-owned snapshot identity/freshness bound to this import job. */
+  feed?: OpenClawSourceFeedDescriptor;
 }
 
 export interface OpenClawSourceLocator {
@@ -592,6 +612,43 @@ export async function acquireSkillsShSkill(
   return acquireSkillsSh(normalized);
 }
 
+/** Validate a claimed OpenClaw source identity before any source request. */
+export function validateOpenClawSourceIdentity(
+  source: OpenClawNormalizedSource,
+): OpenClawNormalizedSource {
+  const record = asOpenClawSourceRecord(source);
+  if (record.kind === 'public-clawhub' && record.sourceRef === 'public-clawhub') {
+    const packageName = boundedDefaultSourceCoordinate(record.packageName);
+    const version = boundedDefaultSourceCoordinate(record.version);
+    if (typeof record.artifactDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(record.artifactDigest)) {
+      throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw ClawHub source integrity is invalid');
+    }
+    parseDefaultClawHubPackage(packageName);
+    return {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName,
+      version,
+      artifactDigest: record.artifactDigest,
+    };
+  }
+  if (record.kind === 'public-github' && record.sourceRef === 'public-github') {
+    const repo = validateDefaultGithubRepository(record.repo);
+    const path = validateDefaultGithubPath(record.path);
+    const commit = validateDefaultGithubSha(record.commit, 40, 'commit');
+    const contentHash = validateDefaultGithubSha(record.contentHash, 64, 'content hash');
+    return {
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo,
+      path,
+      commit,
+      contentHash,
+    };
+  }
+  throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source identity is invalid');
+}
+
 /**
  * Resolve one explicit OpenClaw feed candidate into the canonical worker
  * bundle.  Feed normalization is intentionally separate from this function:
@@ -604,16 +661,16 @@ export async function acquireOpenClawSource(
 ): Promise<OpenClawSourceResolution> {
   const limits = mergeLimits(input.limits);
   const allowedOrigins = normalizeOpenClawArtifactOrigins(input.allowedArtifactOrigins);
+  const source = validateOpenClawSourceIdentity(input.source);
   if (input.signal?.aborted) {
     throw new UpstreamAcquisitionError('cancelled', 'OpenClaw source acquisition cancelled');
   }
-  const fetched = await input.fetcher.fetch(input.source, input.signal);
+  const fetched = await input.fetcher.fetch(source, input.signal);
   const fetchedAt = sourceFetchedAt();
   const transport = validateOpenClawFetchedSource(fetched, allowedOrigins, limits);
   const sourceProviderOrigin = normalizeOpenClawSourceProviderOrigin(
     input.sourceProviderOrigin ?? fetched.sourceProviderOrigin,
   );
-  const source = input.source;
   if (source.kind === 'public-clawhub') {
     const bundle = resolveOpenClawHostedArtifact(transport, source.artifactDigest, limits);
     const sourceDigest = digestBytes(serializeSkillBundle(bundle));

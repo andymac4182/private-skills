@@ -9,6 +9,9 @@ import {
 } from '../src/index.ts';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.ts';
 import {
+  OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   parseOpenClawFeed,
   serializeOpenClawFeed,
   sha256,
@@ -80,6 +83,10 @@ function principal(overrides: Partial<Principal> = {}): Principal {
     scopes: ['registry:read'],
     ...overrides,
   };
+}
+
+function consumerStore(repository: ReturnType<typeof createMemoryStateRepository>): StateRepositoryOpenClawConsumerSnapshotStore {
+  return new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => FIXED_NOW });
 }
 
 function skill(): SkillVersion {
@@ -181,6 +188,29 @@ async function feedSnapshot(): Promise<OpenClawCacheSnapshot> {
   };
 }
 
+async function liveClawHubSkillsSnapshot(): Promise<OpenClawCacheSnapshot> {
+  const body = serializeOpenClawFeed({
+    schemaVersion: 1,
+    id: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+    generatedAt: '2030-01-01T00:00:00.000Z',
+    sequence: 4,
+    expiresAt: '2030-01-08T00:00:00.000Z',
+    entries: [entry],
+  });
+  const bytes = utf8Bytes(body);
+  const digest = await sha256(bytes);
+  return {
+    feed: parseOpenClawFeed(body, { expectedFeedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID, checkExpiry: false }),
+    body,
+    bytes,
+    sha256: digest,
+    etag: `"${digest}"`,
+    compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+    acceptedAt: FIXED_NOW,
+    sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  };
+}
+
 describe('OpenClaw source proof and consumer services', () => {
   it('writes a proof only for a completed approved import and projects it with current namespace/policy checks', async () => {
     const repository = await repositoryWithCompletedImport();
@@ -271,6 +301,36 @@ describe('OpenClaw source proof and consumer services', () => {
         signal: new AbortController().signal,
       })).resolves.toEqual([]);
     }
+  });
+
+  it('rechecks the queued feed freshness inside the durable proof admission transaction', async () => {
+    const repository = await repositoryWithCompletedImport();
+    const feedNow = FIXED_NOW;
+    await repository.transaction(TENANT, (state) => {
+      const descriptor = firstJob(state).openclawSource as Record<string, unknown>;
+      firstJob(state).openclawSource = {
+        ...descriptor,
+        feed: {
+          id: 'clawhub-official',
+          sequence: 5,
+          digest: REGISTRY_DIGEST,
+          sourceUrl: SOURCE_URL,
+          generatedAt: new Date(feedNow - 1_000).toISOString(),
+          expiresAt: new Date(feedNow + 500).toISOString(),
+        },
+      };
+    });
+    let now = feedNow;
+    const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => now });
+    now = feedNow + 1_000;
+    await expect(proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    })).rejects.toMatchObject({ code: 'not-eligible' });
+    await expect(proofs.list(TENANT)).resolves.toEqual([]);
   });
 
   it('rejects metadata-only or changed completion evidence and preserves the immutable proof', async () => {
@@ -472,7 +532,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('selects only a non-expired persisted snapshot and queues the existing scanner-bound path', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const snapshot = await feedSnapshot();
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, snapshot);
     const queued: unknown[] = [];
@@ -498,15 +558,68 @@ describe('OpenClaw source proof and consumer services', () => {
       feedId: 'clawhub-official',
       feedSequence: 4,
       feedDigest: snapshot.sha256,
+      feedGeneratedAt: snapshot.feed.generatedAt,
+      feedExpiresAt: snapshot.feed.expiresAt,
       externalId: entry.id,
       entry: { id: entry.id, install: { candidates: [{ integrity: SOURCE_DIGEST }] } },
     });
     expect((await repository.read(TENANT)).skills).toHaveLength(0);
   });
 
+  it('accepts the live seven-day wire expiry only for one local day during import selection', async () => {
+    const repository = createMemoryStateRepository();
+    const store = consumerStore(repository);
+    const live = await liveClawHubSkillsSnapshot();
+    const liveKey = {
+      tenantId: TENANT,
+      feedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+    };
+    await store.put(liveKey, live);
+    let queueCalls = 0;
+    let liveRequest: Record<string, unknown> | undefined;
+    const queue = {
+      enqueue: async (request: unknown) => {
+        queueCalls += 1;
+        liveRequest = request as Record<string, unknown>;
+        return { operationId: 'live-queued', state: 'queued' as const };
+      },
+    };
+    const current = new OpenClawTrustedSnapshotImportService({
+      store,
+      now: () => FIXED_NOW,
+      queue,
+    });
+    await expect(current.selectAndQueue({
+      key: liveKey,
+      externalId: entry.id,
+      principal: principal(),
+    })).resolves.toEqual({ operationId: 'live-queued', state: 'queued' });
+    expect(queueCalls).toBe(1);
+    expect(liveRequest).toMatchObject({
+      feedId: OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+      sourceUrl: OPENCLAW_CLAWHUB_SKILLS_API_URL,
+      feedGeneratedAt: live.feed.generatedAt,
+      feedExpiresAt: live.feed.expiresAt,
+      feedCompatibilityProfile: 'clawhub-live-skills-694ff719',
+    });
+
+    const afterEffectiveExpiry = new OpenClawTrustedSnapshotImportService({
+      store,
+      now: () => Date.parse('2030-01-02T00:00:00.001Z'),
+      queue,
+    });
+    await expect(afterEffectiveExpiry.selectAndQueue({
+      key: liveKey,
+      externalId: entry.id,
+      principal: principal(),
+    })).rejects.toMatchObject<Partial<OpenClawConsumerSelectionError>>({ code: 'snapshot-expired' });
+    expect(queueCalls).toBe(1);
+  });
+
   it('does not queue for an expired, unavailable, or unauthorized snapshot', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, await feedSnapshot());
     let calls = 0;
     const service = new OpenClawTrustedSnapshotImportService({
@@ -546,7 +659,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('fails closed when a combined refresh reports stale metadata instead of queueing cached bytes', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, await feedSnapshot());
     let calls = 0;
     const service = new OpenClawTrustedSnapshotImportService({

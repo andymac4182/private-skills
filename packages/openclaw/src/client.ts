@@ -9,12 +9,17 @@ import {
   OPENCLAW_DEFAULT_MAX_BODY_BYTES,
   OPENCLAW_DEFAULT_MAX_STALE_MS,
   OPENCLAW_DEFAULT_TIMEOUT_MS,
+  OPENCLAW_CLAWHUB_SKILLS_API_URL,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
+  OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS,
   OPENCLAW_MAX_BODY_BYTES,
   OPENCLAW_MAX_STALE_MS,
   OPENCLAW_MAX_TIMEOUT_MS,
   type OpenClawCacheSnapshot,
   type OpenClawFeed,
   type OpenClawFeedCacheOptions,
+  type OpenClawFeedCompatibilityProfile,
   type OpenClawFeedErrorCode,
   type OpenClawFeedRefreshRequest,
   type OpenClawFetch,
@@ -87,6 +92,9 @@ export class OpenClawFeedCache {
     if (!request.expectedFeedId || request.expectedFeedId.trim() === "") {
       return this.rejectWithoutSnapshot("invalid-url");
     }
+    if (!isSupportedCompatibilityRequest(url, request.expectedFeedId, request.compatibilityProfile)) {
+      return this.rejectWithoutSnapshot("invalid-url");
+    }
     const key = `${request.expectedFeedId}\u0000${url.href}`;
     if (this.cacheKey !== undefined && this.cacheKey !== key) {
       return this.rejectWithoutSnapshot("invalid-url");
@@ -99,8 +107,8 @@ export class OpenClawFeedCache {
     }
 
     const headers: Record<string, string> = { accept: "application/json" };
-    if (this.snapshotValue?.etag) {
-      headers["if-none-match"] = this.snapshotValue.etag;
+    if (this.snapshotValue?.transportEtag ?? this.snapshotValue?.etag) {
+      headers["if-none-match"] = this.snapshotValue.transportEtag ?? this.snapshotValue.etag;
     }
     if (this.snapshotValue?.lastModified) {
       headers["if-modified-since"] = this.snapshotValue.lastModified;
@@ -125,16 +133,28 @@ export class OpenClawFeedCache {
         response.redirected ||
         (response.status >= 300 && response.status < 400 && response.status !== 304)
       ) {
-        return this.fallback("redirected", now, response.status);
+        return this.fallback("redirected", this.now(), response.status);
       }
       if (response.status === 304) {
-        const cached = this.usableSnapshot(now);
+        const responseNow = this.now();
+        const cached = this.usableSnapshot(responseNow);
         if (!cached) {
-          return this.rejected("no-cache", now, 304);
+          return this.rejected("no-cache", responseNow, 304);
         }
-        const responseEtag = response.headers.get("etag");
-        if (responseEtag !== null && responseEtag !== cached.etag) {
-          return this.fallback("invalid-etag", now, 304);
+        const responseEtag = readBoundedHeader(response.headers.get("etag"));
+        if (responseEtag === "invalid") {
+          return this.fallback("invalid-etag", responseNow, 304);
+        }
+        if (
+          responseEtag !== undefined &&
+          !matchesResponseEtag(
+            responseEtag,
+            cached.sha256,
+            url,
+            request.compatibilityProfile,
+          )
+        ) {
+          return this.fallback("invalid-etag", responseNow, 304);
         }
         const responseLastModified = readBoundedHeader(response.headers.get("last-modified"));
         if (
@@ -143,7 +163,7 @@ export class OpenClawFeedCache {
             cached.lastModified !== undefined &&
             responseLastModified !== cached.lastModified)
         ) {
-          return this.fallback("invalid-feed", now, 304);
+          return this.fallback("invalid-feed", responseNow, 304);
         }
         if (
           request.expectedSha256 !== undefined &&
@@ -154,7 +174,7 @@ export class OpenClawFeedCache {
         return { kind: "not-modified", status: 304, snapshot: cached };
       }
       if (response.status !== 200) {
-        return this.fallback("unexpected-status", now, response.status);
+        return this.fallback("unexpected-status", this.now(), response.status);
       }
       const rawBody = await readResponseBody(
         response,
@@ -163,46 +183,76 @@ export class OpenClawFeedCache {
         controller,
         deadline,
       );
+      const acceptanceNow = this.now();
       const body = rawBody.text;
       let feed: OpenClawFeed;
       try {
         feed = parseOpenClawFeed(rawBody.bytes, {
           expectedFeedId: request.expectedFeedId,
-          now,
+          now: acceptanceNow,
           checkExpiry: true,
           maxBytes: maxBodyBytes,
         });
       } catch (error) {
         const code = classifyFeedError(error);
-        return this.fallback(code, now, 200);
+        return this.fallback(code, acceptanceNow, 200);
+      }
+      if (!isOpenClawFeedFresh(feed, url, acceptanceNow, request.compatibilityProfile)) {
+        return this.fallback("invalid-feed", acceptanceNow, 200);
       }
       let digest: Awaited<ReturnType<typeof sha256>>;
       try {
         digest = await sha256(rawBody.bytes);
       } catch {
-        return this.fallback("webcrypto-unavailable", now, 200);
+        return this.fallback("webcrypto-unavailable", acceptanceNow, 200);
       }
       if (request.expectedSha256 !== undefined && !matchesExpectedSha256(digest, request.expectedSha256)) {
         return this.rejectWithoutSnapshot("digest-mismatch", 200);
       }
-      const suppliedEtag = response.headers.get("etag");
+      const suppliedEtag = readBoundedHeader(response.headers.get("etag"));
+      if (suppliedEtag === "invalid") {
+        return this.fallback("invalid-etag", acceptanceNow, 200);
+      }
+      const suppliedContentDigest = readBoundedHeader(response.headers.get("x-content-sha256"));
+      if (suppliedContentDigest === "invalid") {
+        return this.fallback("invalid-feed", acceptanceNow, 200);
+      }
+      if (
+        suppliedContentDigest !== undefined &&
+        !matchesExpectedSha256(digest, suppliedContentDigest)
+      ) {
+        return this.rejectWithoutSnapshot("digest-mismatch", 200);
+      }
       // The pinned ClawHub hosted-feed contract defines ETag as the quoted
-      // payload SHA-256, so an opaque validator is not interchangeable here.
-      if (suppliedEtag !== null && suppliedEtag !== `"${digest}"`) {
-        return this.fallback("invalid-etag", now, 200);
+      // payload SHA-256. The opt-in live profile additionally accepts only
+      // the digest-derived suffix emitted by the observed Vercel gzip
+      // representation. Opaque validators remain invalid.
+      if (
+        suppliedEtag !== undefined &&
+        !matchesResponseEtag(suppliedEtag, digest, url, request.compatibilityProfile)
+      ) {
+        return this.fallback("invalid-etag", acceptanceNow, 200);
       }
       const previous = this.snapshotValue;
       if (previous !== undefined) {
         if (feed.sequence < previous.feed.sequence) {
-          return this.fallback("replay", now, 200);
+          return this.fallback("replay", acceptanceNow, 200);
         }
         if (feed.sequence === previous.feed.sequence && digest !== previous.sha256) {
-          return this.fallback("equivocation", now, 200);
+          return this.fallback("equivocation", acceptanceNow, 200);
         }
       }
       const lastModified = readBoundedHeader(response.headers.get("last-modified"));
       if (lastModified === "invalid") {
-        return this.fallback("invalid-feed", now, 200);
+        return this.fallback("invalid-feed", acceptanceNow, 200);
+      }
+      // Hashing and validator processing are asynchronous. Recheck the
+      // effective expiry immediately before publishing the snapshot so a
+      // response that crossed its boundary during those awaits is never
+      // retained or returned as accepted.
+      const finalAcceptanceNow = this.now();
+      if (!isOpenClawFeedFresh(feed, url, finalAcceptanceNow, request.compatibilityProfile)) {
+        return this.fallback("invalid-feed", finalAcceptanceNow, 200);
       }
       const snapshot: OpenClawCacheSnapshot = {
         feed,
@@ -210,15 +260,17 @@ export class OpenClawFeedCache {
         bytes: rawBody.bytes.slice(),
         sha256: digest,
         etag: `"${digest}"`,
+        ...(request.compatibilityProfile === undefined ? {} : { compatibilityProfile: request.compatibilityProfile }),
+        ...(suppliedEtag === undefined ? {} : { transportEtag: suppliedEtag }),
         ...(lastModified === undefined ? {} : { lastModified }),
-        acceptedAt: now,
+        acceptedAt: finalAcceptanceNow,
         sourceUrl: url.href,
       };
       this.snapshotValue = snapshot;
       return { kind: "accepted", status: 200, snapshot: cloneSnapshot(snapshot) };
     } catch (error) {
       const code = classifyRequestError(error, request.signal, controller.signal, deadline, Date.now());
-      return this.fallback(code, now);
+      return this.fallback(code, this.now());
     } finally {
       controller.abort();
       cleanupAbort();
@@ -233,8 +285,7 @@ export class OpenClawFeedCache {
     if (now - snapshot.acceptedAt > this.maxStaleMs) {
       return undefined;
     }
-    const expiresAt = Date.parse(snapshot.feed.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    if (!isOpenClawFeedFresh(snapshot.feed, snapshot.sourceUrl, now, snapshot.compatibilityProfile)) {
       return undefined;
     }
     return cloneSnapshot(snapshot);
@@ -288,6 +339,89 @@ export function validateOpenClawFeedUrl(
   allowedOrigins: readonly string[],
 ): URL {
   return validateFeedUrl(value, allowedOrigins);
+}
+
+/**
+ * Identify the one upstream producer/profile for which this package carries
+ * an explicit compatibility rule. The URL and feed id are checked together;
+ * neither value is accepted as a portable alias for the pinned contract.
+ */
+export function isOpenClawClawHubSkillsCompatibilityIdentity(
+  feedId: string,
+  sourceUrl: string | URL,
+): boolean {
+  try {
+    const url = sourceUrl instanceof URL ? new URL(sourceUrl.href) : new URL(sourceUrl);
+    return feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && url.href === OPENCLAW_CLAWHUB_SKILLS_API_URL;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compute the effective local expiry used by cache/admission callers. The
+ * current producer advertises a seven-day wire expiry, but this consumer
+ * intentionally never treats that as more than one day of local validity.
+ */
+export function effectiveOpenClawFeedExpiry(
+  feed: Pick<OpenClawFeed, "generatedAt" | "expiresAt" | "id">,
+  sourceUrl: string | URL,
+): number {
+  const expiresAt = Date.parse(feed.expiresAt);
+  if (!Number.isFinite(expiresAt)) return Number.NaN;
+  if (!isOpenClawClawHubSkillsCompatibilityIdentity(feed.id, sourceUrl)) {
+    return expiresAt;
+  }
+  const generatedAt = Date.parse(feed.generatedAt);
+  if (!Number.isFinite(generatedAt)) return Number.NaN;
+  return Math.min(expiresAt, generatedAt + 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * Validate the bounded timestamp/profile contract at the point a snapshot is
+ * admitted or reused. Strict feeds are limited to the published 24-hour
+ * horizon; the explicitly selected live profile accepts its seven-day wire
+ * horizon but remains locally valid for at most one day.
+ */
+export function isOpenClawFeedFresh(
+  feed: Pick<OpenClawFeed, "generatedAt" | "expiresAt" | "id">,
+  sourceUrl: string | URL,
+  now: number,
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile,
+): boolean {
+  if (!Number.isFinite(now)) return false;
+  const compatibilityIdentity = isOpenClawClawHubSkillsCompatibilityIdentity(feed.id, sourceUrl);
+  if (feed.id === OPENCLAW_CLAWHUB_SKILLS_FEED_ID && !compatibilityIdentity) return false;
+  if (compatibilityProfile !== undefined && compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) return false;
+  if (compatibilityProfile === undefined && compatibilityIdentity) return false;
+  if (compatibilityProfile !== undefined && !compatibilityIdentity) return false;
+  const generatedAt = Date.parse(feed.generatedAt);
+  const expiresAt = Date.parse(feed.expiresAt);
+  const maxWireTtl = compatibilityProfile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE
+    ? OPENCLAW_CLAWHUB_SKILLS_MAX_TTL_MS
+    : 24 * 60 * 60 * 1_000;
+  const effectiveExpiry = effectiveOpenClawFeedExpiry(feed, sourceUrl);
+  return Number.isFinite(generatedAt) &&
+    generatedAt <= now &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > generatedAt &&
+    expiresAt - generatedAt <= maxWireTtl &&
+    Number.isFinite(effectiveExpiry) &&
+    effectiveExpiry > now;
+}
+
+/** Validate a persisted/source transport ETag against the canonical body. */
+export function isValidOpenClawTransportEtag(
+  value: string,
+  digest: string,
+  sourceUrl: string | URL,
+  feedId: string,
+): boolean {
+  if (value === `"${digest}"`) return true;
+  return isOpenClawClawHubSkillsCompatibilityIdentity(
+    feedId,
+    sourceUrl,
+  ) && (value === `"${digest}-gzip"` || value === `W/"${digest}-gzip"`);
 }
 
 function validateFeedUrl(value: string | URL, allowedOrigins: readonly string[]): URL {
@@ -428,6 +562,8 @@ function cloneSnapshot(snapshot: OpenClawCacheSnapshot): OpenClawCacheSnapshot {
     bytes: snapshot.bytes.slice(),
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
+    ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
     acceptedAt: snapshot.acceptedAt,
     sourceUrl: snapshot.sourceUrl,
@@ -478,6 +614,35 @@ function readBoundedHeader(value: string | null): string | undefined | "invalid"
 function matchesExpectedSha256(actual: string, expected: string): boolean {
   const normalized = expected.startsWith("sha256:") ? expected : `sha256:${expected}`;
   return /^sha256:[0-9a-f]{64}$/u.test(normalized) && normalized === actual;
+}
+
+function isSupportedCompatibilityRequest(
+  url: URL,
+  expectedFeedId: string,
+  profile: OpenClawFeedCompatibilityProfile | undefined,
+): boolean {
+  // The producer's alternate id is reserved for the explicit profile. This
+  // prevents a caller from accidentally reusing it with another origin or
+  // from treating it as an alias for the pinned `clawhub-official` id.
+  if (profile === undefined) return expectedFeedId !== OPENCLAW_CLAWHUB_SKILLS_FEED_ID;
+  return profile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE &&
+    isOpenClawClawHubSkillsCompatibilityIdentity(expectedFeedId, url);
+}
+
+function matchesResponseEtag(
+  value: string,
+  digest: string,
+  url: URL,
+  profile: OpenClawFeedCompatibilityProfile | undefined,
+): boolean {
+  if (value === `"${digest}"`) return true;
+  if (
+    profile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE &&
+    isOpenClawClawHubSkillsCompatibilityIdentity(OPENCLAW_CLAWHUB_SKILLS_FEED_ID, url)
+  ) {
+    return value === `"${digest}-gzip"` || value === `W/"${digest}-gzip"`;
+  }
+  return false;
 }
 
 function forwardAbort(signal: AbortSignal | undefined, controller: AbortController): () => void {

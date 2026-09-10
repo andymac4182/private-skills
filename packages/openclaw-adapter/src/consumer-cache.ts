@@ -5,12 +5,18 @@ import {
   OpenClawValidationError,
   parseOpenClawFeed,
   sha256,
+  isOpenClawFeedFresh,
+  isOpenClawClawHubSkillsCompatibilityIdentity,
+  isValidOpenClawTransportEtag,
+  OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+  OPENCLAW_CLAWHUB_SKILLS_FEED_ID,
   validateOpenClawFeedUrl,
   OPENCLAW_DEFAULT_MAX_BODY_BYTES,
   OPENCLAW_DEFAULT_MAX_STALE_MS,
   OPENCLAW_MAX_BODY_BYTES,
   OPENCLAW_MAX_STALE_MS,
   type OpenClawCacheSnapshot,
+  type OpenClawFeedCompatibilityProfile,
   type OpenClawFeedErrorCode,
   type OpenClawFeedRefreshRequest,
   type OpenClawFetch,
@@ -60,6 +66,8 @@ export interface StateRepositoryOpenClawConsumerSnapshotStoreOptions {
   maxEntriesPerTenant?: number;
   maxBytesPerTenant?: number;
   maxBodyBytes?: number;
+  /** Clock used at the durable transaction admission boundary. */
+  now?: () => number;
 }
 
 interface PersistedConsumerSnapshot {
@@ -72,6 +80,8 @@ interface PersistedConsumerSnapshot {
   bytesLength: number;
   sha256: OpenClawSha256;
   etag: string;
+  compatibilityProfile?: OpenClawFeedCompatibilityProfile;
+  transportEtag?: string;
   lastModified?: string;
 }
 
@@ -88,6 +98,7 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
   private readonly maxEntriesPerTenant: number;
   private readonly maxBytesPerTenant: number;
   private readonly maxBodyBytes: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly repository: StateRepository,
@@ -114,6 +125,7 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
       OPENCLAW_MAX_BODY_BYTES,
       'cache body limit',
     );
+    this.now = options.now ?? Date.now;
   }
 
   async read(key: OpenClawConsumerCacheKey): Promise<OpenClawCacheSnapshot | undefined> {
@@ -130,8 +142,20 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
   async put(key: OpenClawConsumerCacheKey, snapshot: OpenClawCacheSnapshot): Promise<void> {
     const normalized = normalizeCacheKey(key);
     const validated = await validateSnapshot(normalized, snapshot, this.maxBodyBytes);
+    const isFreshAtAdmission = (now: number): boolean =>
+      isOpenClawFeedFresh(validated.feed, normalized.sourceUrl, now, validated.compatibilityProfile) &&
+      validated.acceptedAt <= now;
+    if (!isFreshAtAdmission(this.now())) {
+      throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot is no longer fresh');
+    }
     const persisted = toPersistedSnapshot(normalized, validated);
     await this.repository.transaction(normalized.tenantId, (state) => {
+      // Validate again while the StateRepository transaction owns the tenant
+      // row. A feed can cross its effective expiry between validation and
+      // this synchronous updater, so a pre-transaction check is not enough.
+      if (!isFreshAtAdmission(this.now())) {
+        throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot is no longer fresh');
+      }
       const extension = state as unknown as ConsumerRepositoryState;
       const existing = extension.openClawConsumerSnapshots;
       if (existing !== undefined && !isRecord(existing)) {
@@ -145,10 +169,16 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
       }
       if (current !== undefined && current.feedSequence === persisted.feedSequence) {
         if (samePersistedSnapshot(current, persisted)) {
-          // A revalidation can accept the same immutable sequence with a new
-          // local acceptedAt. Retain the newer freshness timestamp while
-          // rejecting any same-sequence byte or validator change.
-          snapshots[storage] = persisted;
+          // The body, digest, and canonical ETag define the accepted
+          // sequence. A CDN representation may rotate its bounded transport
+          // validators without changing that acceptance or extending its
+          // local freshness window. Preserve acceptedAt when either validator
+          // changes; an identical revalidation may still refresh it.
+          const transportChanged = current.transportEtag !== persisted.transportEtag ||
+            current.lastModified !== persisted.lastModified;
+          snapshots[storage] = transportChanged
+            ? { ...persisted, acceptedAt: current.acceptedAt }
+            : persisted;
           extension.openClawConsumerSnapshots = snapshots;
           return;
         }
@@ -212,6 +242,8 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
         bytes,
         sha256: persisted.sha256,
         etag: persisted.etag,
+        ...(persisted.compatibilityProfile === undefined ? {} : { compatibilityProfile: persisted.compatibilityProfile }),
+        ...(persisted.transportEtag === undefined ? {} : { transportEtag: persisted.transportEtag }),
         ...(persisted.lastModified === undefined ? {} : { lastModified: persisted.lastModified }),
         acceptedAt: persisted.acceptedAt,
         sourceUrl: persisted.sourceUrl,
@@ -328,7 +360,7 @@ export class PersistentOpenClawFeedCache {
       ? async (input, init) => {
           const headers = new Headers(init?.headers);
           if (durable !== undefined) {
-            headers.set('if-none-match', durable.etag);
+            headers.set('if-none-match', durable.transportEtag ?? durable.etag);
             if (durable.lastModified === undefined) headers.delete('if-modified-since');
             else headers.set('if-modified-since', durable.lastModified);
           }
@@ -340,7 +372,7 @@ export class PersistentOpenClawFeedCache {
           if (response.url !== '' && response.url !== key.sourceUrl) {
             throw new OpenClawRequestError('redirected');
           }
-          if (response.status === 304 && usableDurable !== undefined && !request.signal?.aborted && validatorsMatch(response, usableDurable)) {
+          if (response.status === 304 && usableDurable !== undefined && !request.signal?.aborted && validatorsMatch(response, usableDurable, request.compatibilityProfile)) {
             // Keep the 304 response intact. The durable snapshot is selected
             // below only after the worker's redirect/validator checks run.
             durableNotModified = true;
@@ -363,17 +395,25 @@ export class PersistentOpenClawFeedCache {
         await this.store.put(key, refreshed);
       } catch (error) {
         cache.clear();
-        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
+        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, this.now, this.maxStaleMs);
         return authoritativeResult(authoritative.usable, 304, projectStoreError(error));
       }
       if (request.signal?.aborted) return { kind: 'rejected', status: 304, error: 'aborted' };
-      return { kind: 'not-modified', status: 304, snapshot: refreshed };
+      const admitted = await confirmPersistedSnapshot(this.store, key, refreshed, request, this.maxBodyBytes, this.maxStaleMs, this.now);
+      if (!admitted.ok) {
+        cache.clear();
+        return { kind: 'rejected', status: 304, error: admitted.error };
+      }
+      return { kind: 'not-modified', status: 304, snapshot: admitted.snapshot };
     }
     if (result.kind === 'accepted' || result.kind === 'not-modified') {
       const relation = durable === undefined ? 'newer' : compareSnapshots(result.snapshot, durable);
       if (relation === 'older' || relation === 'equivocation') {
         cache.clear();
-        return authoritativeResult(usableDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
+        const currentDurable = durable === undefined
+          ? undefined
+          : usableSnapshot(durable, this.now(), this.maxStaleMs);
+        return authoritativeResult(currentDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
       }
       try {
         await this.store.put(key, result.snapshot);
@@ -381,27 +421,41 @@ export class PersistentOpenClawFeedCache {
         cache.clear();
         // Another process may have won the compare-and-swap between read and
         // put. Re-read before deciding whether the candidate can be exposed.
-        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
+        const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, this.now, this.maxStaleMs);
         return authoritativeResult(authoritative.usable, result.status, projectStoreError(error));
       }
-      return result;
+      const admitted = await confirmPersistedSnapshot(this.store, key, result.snapshot, request, this.maxBodyBytes, this.maxStaleMs, this.now);
+      if (!admitted.ok) {
+        cache.clear();
+        return { kind: 'rejected', status: result.status, error: admitted.error };
+      }
+      return { ...result, snapshot: admitted.snapshot };
     }
     if (result.snapshot !== undefined && durable !== undefined) {
       const relation = compareSnapshots(result.snapshot, durable);
       if (relation === 'older' || relation === 'equivocation') {
         cache.clear();
-        return authoritativeResult(usableDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
+        const currentDurable = durable === undefined
+          ? undefined
+          : usableSnapshot(durable, this.now(), this.maxStaleMs);
+        return authoritativeResult(currentDurable, result.status, relation === 'older' ? 'replay' : 'equivocation');
       }
     }
     if (
       result.snapshot === undefined &&
-      usableDurable !== undefined &&
       canFallbackToDurable(result.error)
     ) {
+      // The fetch awaited above may have crossed the feed's effective expiry.
+      // Recheck at the return boundary so a last-known-good display fallback
+      // never returns metadata that is already expired.
+      const currentDurable = durable === undefined
+        ? undefined
+        : usableSnapshot(durable, this.now(), this.maxStaleMs);
+      if (currentDurable === undefined) return result;
       return {
         kind: 'stale',
         ...(result.status === undefined ? {} : { status: result.status }),
-        snapshot: cloneSnapshot(usableDurable),
+        snapshot: cloneSnapshot(currentDurable),
         error: result.error,
       };
     }
@@ -421,6 +475,16 @@ function compareSnapshots(
 }
 
 function canServeDurable304(
+  snapshot: OpenClawCacheSnapshot,
+  request: OpenClawFeedRefreshRequest,
+  maxBodyBytes: number,
+  now: number,
+  maxStaleMs: number,
+): boolean {
+  return canServeSnapshot(snapshot, request, maxBodyBytes, now, maxStaleMs);
+}
+
+function canServeSnapshot(
   snapshot: OpenClawCacheSnapshot,
   request: OpenClawFeedRefreshRequest,
   maxBodyBytes: number,
@@ -460,30 +524,65 @@ function authoritativeResult(
   };
 }
 
+async function confirmPersistedSnapshot(
+  store: OpenClawConsumerSnapshotStore,
+  key: OpenClawConsumerCacheKey,
+  candidate: OpenClawCacheSnapshot,
+  request: OpenClawFeedRefreshRequest,
+  maxBodyBytes: number,
+  maxStaleMs: number,
+  now: () => number,
+): Promise<{ ok: true; snapshot: OpenClawCacheSnapshot } | { ok: false; error: OpenClawFeedErrorCode }> {
+  let persisted: OpenClawCacheSnapshot | undefined;
+  try {
+    persisted = await store.read(key);
+  } catch {
+    return { ok: false, error: 'fetch-failed' };
+  }
+  if (persisted === undefined) return { ok: false, error: 'fetch-failed' };
+  const relation = compareSnapshots(persisted, candidate);
+  if (relation === 'older') return { ok: false, error: 'replay' };
+  if (relation === 'equivocation') return { ok: false, error: 'equivocation' };
+  if (!canServeSnapshot(persisted, request, maxBodyBytes, now(), maxStaleMs)) {
+    if (request.expectedSha256 !== undefined && !matchesExpectedSha256(persisted.sha256, request.expectedSha256)) {
+      return { ok: false, error: 'digest-mismatch' };
+    }
+    return { ok: false, error: 'no-cache' };
+  }
+  return { ok: true, snapshot: cloneSnapshot(persisted) };
+}
+
 async function readAuthoritativeSnapshot(
   store: OpenClawConsumerSnapshotStore,
   key: OpenClawConsumerCacheKey,
   prior: OpenClawCacheSnapshot | undefined,
-  priorUsable: OpenClawCacheSnapshot | undefined,
-  now: number,
+  now: () => number,
   maxStaleMs: number,
 ): Promise<{ snapshot: OpenClawCacheSnapshot | undefined; usable: OpenClawCacheSnapshot | undefined }> {
   let current: OpenClawCacheSnapshot | undefined;
   try {
     current = await store.read(key);
   } catch {
-    return { snapshot: prior, usable: priorUsable };
+    return {
+      snapshot: prior,
+      usable: prior === undefined ? undefined : usableSnapshot(prior, now(), maxStaleMs),
+    };
   }
-  if (current === undefined) return { snapshot: prior, usable: priorUsable };
-  if (prior === undefined) return { snapshot: current, usable: usableSnapshot(current, now, maxStaleMs) };
+  if (current === undefined) {
+    return {
+      snapshot: prior,
+      usable: prior === undefined ? undefined : usableSnapshot(prior, now(), maxStaleMs),
+    };
+  }
+  if (prior === undefined) return { snapshot: current, usable: usableSnapshot(current, now(), maxStaleMs) };
   const relation = compareSnapshots(current, prior);
-  if (relation === 'older') return { snapshot: prior, usable: priorUsable };
+  if (relation === 'older') return { snapshot: prior, usable: usableSnapshot(prior, now(), maxStaleMs) };
   if (relation === 'equivocation') {
     // Same-sequence bytes have no safe winner. Keep the high-water identity
     // for diagnostics but never serve either conflicting body as fallback.
     return { snapshot: current, usable: undefined };
   }
-  return { snapshot: current, usable: usableSnapshot(current, now, maxStaleMs) };
+  return { snapshot: current, usable: usableSnapshot(current, now(), maxStaleMs) };
 }
 
 function normalizeCacheKey(value: OpenClawConsumerCacheKey): OpenClawConsumerCacheKey {
@@ -526,7 +625,13 @@ async function validateSnapshot(
     !Number.isFinite(snapshot.acceptedAt) ||
     snapshot.acceptedAt < 0 ||
     !SHA256_RE.test(snapshot.sha256) ||
-    snapshot.etag !== `"${snapshot.sha256}"`
+    snapshot.etag !== `"${snapshot.sha256}"` ||
+    (snapshot.compatibilityProfile !== undefined && snapshot.compatibilityProfile !== OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE) ||
+    (snapshot.compatibilityProfile === undefined && key.feedId === OPENCLAW_CLAWHUB_SKILLS_FEED_ID) ||
+    (snapshot.compatibilityProfile !== undefined && !isOpenClawClawHubSkillsCompatibilityIdentity(key.feedId, key.sourceUrl)) ||
+    (snapshot.transportEtag !== undefined &&
+      (typeof snapshot.transportEtag !== 'string' ||
+        !isValidOpenClawTransportEtag(snapshot.transportEtag, snapshot.sha256, key.sourceUrl, key.feedId)))
   ) {
     throw new OpenClawConsumerSnapshotStoreError('identity-mismatch', 'The consumer snapshot identity is invalid');
   }
@@ -552,12 +657,22 @@ async function validateSnapshot(
     }
     throw error;
   }
+  const generatedAt = Date.parse(feed.generatedAt);
+  const expiresAt = Date.parse(feed.expiresAt);
+  const maxWireTtl = snapshot.compatibilityProfile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE
+    ? 7 * 24 * 60 * 60 * 1_000
+    : 24 * 60 * 60 * 1_000;
+  if (!Number.isFinite(generatedAt) || !Number.isFinite(expiresAt) || expiresAt <= generatedAt || expiresAt - generatedAt > maxWireTtl) {
+    throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot freshness bounds are invalid');
+  }
   return {
     feed,
     body: snapshot.body,
     bytes: snapshot.bytes.slice(),
     sha256: digest,
     etag: `"${digest}"`,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
+    ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: boundedOptionalHeader(snapshot.lastModified) }),
     acceptedAt: snapshot.acceptedAt,
     sourceUrl: key.sourceUrl,
@@ -575,6 +690,8 @@ function toPersistedSnapshot(key: OpenClawConsumerCacheKey, snapshot: OpenClawCa
     bytesLength: snapshot.bytes.byteLength,
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
+    ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
   };
 }
@@ -592,19 +709,30 @@ function samePersistedSnapshot(left: PersistedConsumerSnapshot, right: Persisted
     left.bytesLength === right.bytesLength &&
     left.sha256 === right.sha256 &&
     left.etag === right.etag &&
-    left.lastModified === right.lastModified;
+    left.compatibilityProfile === right.compatibilityProfile;
 }
 
-function validatorsMatch(response: Response, snapshot: OpenClawCacheSnapshot): boolean {
+function validatorsMatch(
+  response: Response,
+  snapshot: OpenClawCacheSnapshot,
+  compatibilityProfile?: typeof OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE,
+): boolean {
   const etag = response.headers.get('etag');
-  if (etag !== null && etag !== snapshot.etag) return false;
+  const expectedLiveEtag = `"${snapshot.sha256}-gzip"`;
+  const weakExpectedLiveEtag = `W/"${snapshot.sha256}-gzip"`;
+  const etagMatches = snapshot.compatibilityProfile === compatibilityProfile && (etag === null ||
+    etag === snapshot.etag ||
+    (compatibilityProfile === OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE &&
+      isOpenClawClawHubSkillsCompatibilityIdentity(snapshot.feed.id, snapshot.sourceUrl) &&
+      (etag === expectedLiveEtag || etag === weakExpectedLiveEtag)));
+  if (!etagMatches) return false;
   const lastModified = response.headers.get('last-modified');
   return lastModified === null || lastModified === snapshot.lastModified;
 }
 
 function usableSnapshot(snapshot: OpenClawCacheSnapshot, now: number, maxStaleMs: number): OpenClawCacheSnapshot | undefined {
-  const expiresAt = Date.parse(snapshot.feed.expiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt <= now || snapshot.acceptedAt > now || now - snapshot.acceptedAt > maxStaleMs) return undefined;
+  if (!isOpenClawFeedFresh(snapshot.feed, snapshot.sourceUrl, now, snapshot.compatibilityProfile) ||
+    snapshot.acceptedAt > now || now - snapshot.acceptedAt > maxStaleMs) return undefined;
   return cloneSnapshot(snapshot);
 }
 
@@ -702,6 +830,8 @@ function cloneSnapshot(snapshot: OpenClawCacheSnapshot): OpenClawCacheSnapshot {
     bytes: snapshot.bytes.slice(),
     sha256: snapshot.sha256,
     etag: snapshot.etag,
+    ...(snapshot.compatibilityProfile === undefined ? {} : { compatibilityProfile: snapshot.compatibilityProfile }),
+    ...(snapshot.transportEtag === undefined ? {} : { transportEtag: snapshot.transportEtag }),
     ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
     acceptedAt: snapshot.acceptedAt,
     sourceUrl: snapshot.sourceUrl,
