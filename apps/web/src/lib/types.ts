@@ -275,6 +275,29 @@ export interface BuilderConversationResponse { conversation?: BuilderConversatio
 export interface BuilderMessageResponse { conversation?: BuilderConversation; message?: BuilderMessage; proposal?: BuilderProposal; status?: BuilderMessageState }
 export interface BuilderProposalResponse { proposal?: BuilderProposal; draft?: DraftView; idempotent?: boolean }
 
+/** Same-origin builder BFF DTOs. The browser only sees registry session data. */
+export type BuilderSessionState = 'ready' | 'running' | 'stopped' | 'failed' | 'completed'
+export interface BuilderSessionBinding {
+  draftId: string
+  revision: number
+  digest: `sha256:${string}`
+}
+export interface BuilderSessionTurn {
+  id: string
+  role: BuilderMessageRole
+  content: string
+  createdAt: string
+}
+export interface BuilderSessionView {
+  id: string
+  binding: BuilderSessionBinding
+  state: BuilderSessionState
+  turns: BuilderSessionTurn[]
+  proposal?: BuilderProposal | null
+}
+export interface BuilderSessionResponse { session: BuilderSessionView }
+export interface BuilderAvailabilityResponse { enabled: boolean; reason?: string; model?: string }
+
 export type DraftReviewState = 'pending' | 'running' | 'passed' | 'failed' | 'stale'
 export type DraftReviewFindingSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical'
 export type DraftReviewFindingDecision = 'open' | 'acknowledged' | 'dismissed'

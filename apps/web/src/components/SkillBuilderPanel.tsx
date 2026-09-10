@@ -75,6 +75,7 @@ export interface SkillBuilderProgress {
 export interface SkillBuilderAvailability {
   readonly enabled: boolean
   readonly reason?: string
+  readonly model?: string
 }
 
 export interface SkillBuilderPromptInput {
@@ -113,12 +114,12 @@ export type SkillBuilderAppliedResult = Omit<SkillBuilderProposalResult, 'draft'
  * to this interface while the route/session contract settles independently.
  */
 export interface SkillBuilderPanelAdapter {
-  getAvailability?: (signal?: AbortSignal) => Promise<SkillBuilderAvailability>
+  getAvailability?: (input: { draftId: string; signal?: AbortSignal }) => Promise<SkillBuilderAvailability>
   loadSession: (input: { binding: SkillBuilderDraftContext; signal: AbortSignal }) => Promise<SkillBuilderSession>
   sendPrompt: (input: SkillBuilderPromptInput) => Promise<SkillBuilderPromptResult>
   /** Reload the exact draft after apply; this is the authoritative CAS result. */
   reloadDraft: (input: { binding: SkillBuilderDraftContext; signal: AbortSignal }) => Promise<DraftView>
-  stop: (input: { sessionId: string; requestId: string }) => Promise<void>
+  stop: (input: { binding: SkillBuilderDraftContext; sessionId: string; requestId: string }) => Promise<void>
   applyProposal: (input: {
     binding: SkillBuilderDraftContext
     sessionId: string
@@ -263,7 +264,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
       setAvailability({ enabled: false, reason: disabledReason ?? 'The skill builder is disabled for this registry.' })
       return
     }
-    if (!adapter.getAvailability) {
+    if (!draft || !adapter.getAvailability) {
       setAvailability(enabled === true
         ? { enabled: true }
         : { enabled: false, reason: 'The skill builder availability is not configured.' })
@@ -272,13 +273,13 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     const controller = new AbortController()
     let active = true
     setAvailability(null)
-    void adapter.getAvailability(controller.signal).then((next) => {
+    void adapter.getAvailability({ draftId: draft.draftId, signal: controller.signal }).then((next) => {
       if (active) setAvailability(next)
     }).catch((cause: unknown) => {
       if (active && !controller.signal.aborted) setAvailability({ enabled: false, reason: displayError(cause, 'The skill builder is unavailable.') })
     })
     return () => { active = false; controller.abort() }
-  }, [adapter, disabledReason, enabled])
+  }, [adapter, disabledReason, draft?.draftId, enabled])
 
   useEffect(() => {
     const currentGeneration = ++generation.current
@@ -361,13 +362,14 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   async function stopPrompt(): Promise<void> {
     const active = activeRequest.current
-    if (!active || !session || stopping) return
+    const currentDraft = draft
+    if (!active || !currentDraft || !session || stopping) return
     const currentGeneration = generation.current
     const activeRequestId = active.requestId
     setStopping(true)
     active.controller.abort()
     try {
-      await adapter.stop({ sessionId: session.id, requestId: activeRequestId })
+      await adapter.stop({ binding: currentDraft, sessionId: session.id, requestId: activeRequestId })
     } catch (cause: unknown) {
       if (currentGeneration === generation.current && !isAbortLike(cause)) setError(displayError(cause, 'The builder could not be stopped.'))
     } finally {

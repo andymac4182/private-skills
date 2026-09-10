@@ -1,15 +1,5 @@
 import { api, ApiError } from './api'
-import type {
-  BuilderConversation,
-  BuilderConversationResponse,
-  BuilderMessage,
-  BuilderMessageResponse,
-  BuilderOperation,
-  BuilderProposal,
-  BuilderProposalResponse,
-  DraftResponse,
-  DraftView,
-} from './types'
+import type { DraftResponse, DraftView } from './types'
 import type {
   SkillBuilderConversationTurn,
   SkillBuilderDraftContext,
@@ -23,17 +13,15 @@ import type {
 } from '../components/SkillBuilderPanel'
 
 /**
- * Browser-side adapter for the builder BFF.  It deliberately uses the
- * registry client's same-origin cookie session; the Eve service token stays
- * in the server-side builder application.
+ * Browser-side adapter for the same-origin builder BFF. Eve credentials and
+ * provider session identifiers remain server-side; the browser only receives
+ * the registry-owned session DTO.
  */
 
-type BuilderEnvelope = BuilderConversation | BuilderConversationResponse | BuilderMessageResponse | BuilderProposalResponse
-
-const conversationKeys = new Map<string, string>()
+const sessionRequestKeys = new Map<string, string>()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -64,99 +52,82 @@ function staleError(message = 'The builder response belongs to a different draft
   return new ApiError(409, { code: 'STALE_BINDING', message })
 }
 
-function conversationKey(binding: SkillBuilderDraftContext): string {
-  const value = `${binding.draftId}:${binding.revision}:${binding.digest}`
-  const existing = conversationKeys.get(value)
+function sessionRequestKey(binding: SkillBuilderDraftContext): string {
+  const key = `${binding.draftId}:${binding.revision}:${binding.digest}`
+  const existing = sessionRequestKeys.get(key)
   if (existing) return existing
-  // This key contains only the opaque draft id/revision/digest and is stable
-  // for uncertain retries. It does not contain prompt or file contents.
-  const key = `web-builder-${value}`
-  conversationKeys.set(value, key)
-  return key
+  // Keep the retry key bounded and free of control characters. The server
+  // deduplicates session creation by the immutable draft binding as well.
+  const safeDraftId = binding.draftId.replace(/[^a-z0-9_-]/giu, '_').slice(0, 120)
+  const requestId = `web-builder-session-${safeDraftId}-${binding.revision}-${binding.digest.slice(-16)}`
+  sessionRequestKeys.set(key, requestId)
+  return requestId
 }
 
 function mapSessionState(value: unknown): SkillBuilderSession['state'] {
-  switch (value) {
-    case 'running': return 'running'
-    case 'stopped': return 'stopped'
-    case 'failed':
-    case 'stale': return 'failed'
-    case 'completed':
-    case 'closed': return 'completed'
-    case 'ready':
-    case 'active':
-    default: return 'ready'
-  }
+  if (value === 'ready' || value === 'running' || value === 'stopped' || value === 'failed' || value === 'completed') return value
+  throw schemaError('session.state is invalid in the builder response.')
 }
 
 function mapProposalState(value: unknown): SkillBuilderProposal['state'] {
-  switch (value) {
-    case 'applied': return 'applied'
-    case 'rejected': return 'rejected'
-    case 'stale': return 'stale'
-    case 'pending':
-    case 'proposed':
-    default: return 'pending'
-  }
-}
-
-function unwrapConversation(value: BuilderEnvelope): BuilderConversation | null {
-  if (isRecord(value) && isRecord(value.conversation)) return value.conversation as unknown as BuilderConversation
-  if (isRecord(value) && typeof value.id === 'string' && typeof value.draftId === 'string') return value as unknown as BuilderConversation
-  return null
-}
-
-function unwrapArray<T>(value: BuilderEnvelope, key: 'messages' | 'proposals'): T[] {
-  if (!isRecord(value) || !Array.isArray(value[key])) return []
-  return value[key] as T[]
+  if (value === 'pending' || value === 'applied' || value === 'rejected' || value === 'stale') return value
+  throw schemaError('proposal.state is invalid in the builder response.')
 }
 
 function mapTurn(value: unknown): SkillBuilderConversationTurn {
-  if (!isRecord(value)) throw schemaError('builder message is not an object.')
+  if (!isRecord(value)) throw schemaError('session.turns contains an invalid turn.')
   const role = value.role
-  if (role !== 'user' && role !== 'assistant' && role !== 'system') throw schemaError('builder message role is invalid.')
+  if (role !== 'user' && role !== 'assistant' && role !== 'system') throw schemaError('turn.role is invalid in the builder response.')
   return {
-    id: requiredString(value.id, 'message.id'),
+    id: requiredString(value.id, 'turn.id'),
     role,
-    content: requiredString(value.content, 'message.content'),
+    content: requiredString(value.content, 'turn.content'),
     createdAt: optionalString(value.createdAt) ?? '',
   }
 }
 
 function mapOperation(value: unknown): SkillBuilderProposalOperation {
-  if (!isRecord(value)) throw schemaError('builder proposal operation is not an object.')
-  const op = value.op ?? value.kind
-  if (op !== 'add' && op !== 'edit' && op !== 'rename' && op !== 'delete') throw schemaError('builder proposal operation is invalid.')
-  const before = typeof value.before === 'string' ? value.before : value.before === null ? null : undefined
-  const after = typeof value.after === 'string' ? value.after : value.after === null ? null : undefined
-  const content = typeof value.content === 'string' ? value.content : undefined
-  const contentBytes = typeof value.contentBytes === 'number' && Number.isSafeInteger(value.contentBytes) ? value.contentBytes : content === undefined ? undefined : new TextEncoder().encode(content).byteLength
+  if (!isRecord(value)) throw schemaError('proposal.operations contains an invalid operation.')
+  const op = value.op
+  if (op !== 'add' && op !== 'edit' && op !== 'rename' && op !== 'delete') throw schemaError('operation.op is invalid in the builder response.')
+  const contentBytes = value.contentBytes
+  if (contentBytes !== undefined && (typeof contentBytes !== 'number' || !Number.isSafeInteger(contentBytes) || contentBytes < 0)) {
+    throw schemaError('operation.contentBytes is invalid in the builder response.')
+  }
+  const newPath = value.newPath
+  if (newPath !== undefined && typeof newPath !== 'string') throw schemaError('operation.newPath is invalid in the builder response.')
+  const before = value.before
+  if (before !== undefined && before !== null && typeof before !== 'string') throw schemaError('operation.before is invalid in the builder response.')
+  const after = value.after
+  if (after !== undefined && after !== null && typeof after !== 'string') throw schemaError('operation.after is invalid in the builder response.')
   return {
     op,
     path: requiredString(value.path, 'operation.path'),
-    ...(typeof value.newPath === 'string' || typeof value.toPath === 'string' ? { newPath: (value.newPath ?? value.toPath) as string } : {}),
+    ...(newPath === undefined ? {} : { newPath }),
     ...(contentBytes === undefined ? {} : { contentBytes }),
     ...(before === undefined ? {} : { before }),
-    ...(after === undefined ? {} : { after: after ?? content ?? null }),
+    ...(after === undefined ? {} : { after }),
   }
 }
 
 function mapProposal(value: unknown, binding: SkillBuilderDraftContext, sessionId: string): SkillBuilderProposal {
-  if (!isRecord(value)) throw schemaError('builder proposal is not an object.')
+  if (!isRecord(value)) throw schemaError('builder proposal is missing from the response.')
   const draftId = requiredString(value.draftId, 'proposal.draftId')
-  if (draftId !== binding.draftId) throw staleError()
   const baseRevision = requiredNumber(value.baseRevision, 'proposal.baseRevision')
   const baseDigest = digest(value.baseDigest, 'proposal.baseDigest')
-  if (baseRevision !== binding.revision || baseDigest !== binding.digest) throw staleError()
+  if (draftId !== binding.draftId || baseRevision !== binding.revision || baseDigest !== binding.digest) throw staleError()
   if (!Array.isArray(value.operations)) throw schemaError('proposal.operations is missing from the builder response.')
-  const rawSessionId = optionalString(value.sessionId) ?? optionalString(value.conversationId) ?? sessionId
+  const rawSessionId = optionalString(value.sessionId) ?? sessionId
+  if (rawSessionId !== sessionId) throw staleError('The builder proposal belongs to a different session.')
+  const proposedDigest = digest(value.proposedDigest, 'proposal.proposedDigest', false)
+  const diffDigest = digest(value.diffDigest, 'proposal.diffDigest', false)
   return {
     id: requiredString(value.id, 'proposal.id'),
     draftId,
     baseRevision,
     baseDigest,
-    ...(digest(value.proposedDigest, 'proposal.proposedDigest', false) ? { proposedDigest: digest(value.proposedDigest, 'proposal.proposedDigest', false) } : {}),
-    ...(digest(value.diffDigest, 'proposal.diffDigest', false) ? { diffDigest: digest(value.diffDigest, 'proposal.diffDigest', false) } : {}),
+    ...(proposedDigest ? { proposedDigest } : {}),
+    ...(diffDigest ? { diffDigest } : {}),
     operations: value.operations.map(mapOperation),
     state: mapProposalState(value.state),
     sessionId: rawSessionId,
@@ -164,30 +135,35 @@ function mapProposal(value: unknown, binding: SkillBuilderDraftContext, sessionI
   }
 }
 
-function mapSession(value: BuilderEnvelope, binding: SkillBuilderDraftContext, fallback?: SkillBuilderSession): SkillBuilderSession {
-  const conversation = unwrapConversation(value)
-  if (!conversation) {
-    if (!fallback) throw schemaError('builder conversation is missing from the response.')
-    const rawMessage = isRecord(value) && value.message ? value.message : null
-    const rawProposal = isRecord(value) && value.proposal ? value.proposal : null
-    const turns = rawMessage ? [...fallback.turns, mapTurn(rawMessage)] : fallback.turns
-    const proposal = rawProposal ? mapProposal(rawProposal, binding, fallback.id) : fallback.proposal
-    return { ...fallback, turns, ...(proposal ? { proposal } : {}) }
-  }
-  const draftId = requiredString(conversation.draftId, 'conversation.draftId')
-  const draftRevision = requiredNumber(conversation.draftRevision, 'conversation.draftRevision')
-  const draftDigest = digest(conversation.draftDigest, 'conversation.draftDigest')
-  if (draftId !== binding.draftId || draftRevision !== binding.revision || draftDigest !== binding.digest) throw staleError()
-  const messages = Array.isArray(conversation.messages) ? conversation.messages : unwrapArray<BuilderMessage>(value, 'messages')
-  const proposalValues = Array.isArray(conversation.proposals) ? conversation.proposals : unwrapArray<BuilderProposal>(value, 'proposals')
-  const rawProposal = isRecord(value) && value.proposal ? value.proposal : proposalValues[proposalValues.length - 1]
-  const proposal = rawProposal ? mapProposal(rawProposal, binding, requiredString(conversation.id, 'conversation.id')) : null
+function mapSession(value: unknown, binding: SkillBuilderDraftContext, expectedSessionId?: string): SkillBuilderSession {
+  if (!isRecord(value) || !isRecord(value.session)) throw schemaError('builder session is missing from the response.')
+  const raw = value.session
+  const id = requiredString(raw.id, 'session.id')
+  if (expectedSessionId !== undefined && id !== expectedSessionId) throw staleError('The builder response returned a different session.')
+  if (!isRecord(raw.binding)) throw schemaError('session.binding is missing from the builder response.')
+  const draftId = requiredString(raw.binding.draftId, 'session.binding.draftId')
+  const revision = requiredNumber(raw.binding.revision, 'session.binding.revision')
+  const rawDigest = digest(raw.binding.digest, 'session.binding.digest')
+  if (draftId !== binding.draftId || revision !== binding.revision || rawDigest !== binding.digest) throw staleError()
+  if (!Array.isArray(raw.turns)) throw schemaError('session.turns is missing from the builder response.')
+  const proposal = raw.proposal === undefined || raw.proposal === null ? null : mapProposal(raw.proposal, binding, id)
   return {
-    id: requiredString(conversation.id, 'conversation.id'),
+    id,
     binding,
-    state: mapSessionState(conversation.state),
-    turns: messages.map(mapTurn),
+    state: mapSessionState(raw.state),
+    turns: raw.turns.map(mapTurn),
     ...(proposal ? { proposal } : {}),
+  }
+}
+
+function mapAvailability(value: unknown): { enabled: boolean; reason?: string; model?: string } {
+  if (!isRecord(value) || typeof value.enabled !== 'boolean') throw schemaError('builder availability is invalid.')
+  if (value.reason !== undefined && typeof value.reason !== 'string') throw schemaError('availability.reason is invalid.')
+  if (value.model !== undefined && typeof value.model !== 'string') throw schemaError('availability.model is invalid.')
+  return {
+    enabled: value.enabled,
+    ...(typeof value.reason === 'string' ? { reason: value.reason } : {}),
+    ...(typeof value.model === 'string' ? { model: value.model } : {}),
   }
 }
 
@@ -208,9 +184,25 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
   const sessions = new Map<string, SkillBuilderSession>()
 
   return {
+    async getAvailability({ draftId, signal }) {
+      return mapAvailability(await api.builderAvailability(draftId, signal))
+    },
+
     async loadSession({ binding, signal }) {
-      const response = await api.builderCreateConversation(binding.draftId, { draftRevision: binding.revision, draftDigest: binding.digest }, conversationKey(binding), signal)
-      const session = mapSession(response, binding)
+      const created = await api.builderCreateSession(binding.draftId, {
+        revision: binding.revision,
+        digest: binding.digest,
+        requestId: sessionRequestKey(binding),
+      }, signal)
+      const createdSession = mapSession(created, binding)
+      // POST /session resumes an existing registry session. Hydrate the
+      // server-owned history through the ID-addressed GET before rendering so
+      // a browser refresh never silently erases the conversation transcript.
+      const hydrated = await api.builderSession(binding.draftId, createdSession.id, {
+        revision: binding.revision,
+        digest: binding.digest,
+      }, signal)
+      const session = mapSession(hydrated, binding, createdSession.id)
       sessions.set(session.id, session)
       return session
     },
@@ -218,15 +210,15 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
     async sendPrompt(input: SkillBuilderPromptInput): Promise<SkillBuilderPromptResult> {
       input.onProgress?.({ phase: 'reading-context', message: 'Reading the selected draft revision…' })
       input.onProgress?.({ phase: 'thinking', message: 'Waiting for Eve to prepare a bounded response…' })
-      const response = await api.builderMessage(input.binding.draftId, input.sessionId, {
-        draftRevision: input.binding.revision,
-        draftDigest: input.binding.digest,
-        content: input.prompt,
+      const response = await api.builderPrompt(input.binding.draftId, input.sessionId, {
+        revision: input.binding.revision,
+        digest: input.binding.digest,
+        prompt: input.prompt,
+        requestId: input.requestId,
         ...(input.binding.selectedPath ? { selectedPath: input.binding.selectedPath } : {}),
-      }, input.requestId, input.signal)
+      }, input.signal)
       input.onProgress?.({ phase: 'preparing-proposal', message: 'Preparing a reviewable proposal…' })
-      const previous = sessions.get(input.sessionId)
-      const session = mapSession(response, input.binding, previous)
+      const session = mapSession(response, input.binding, input.sessionId)
       sessions.set(session.id, session)
       return { session, proposal: session.proposal ?? null }
     },
@@ -236,14 +228,23 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
       return validateReboundDraft(response, binding)
     },
 
-    async stop() {
-      // The browser aborts the same-origin request before invoking this hook.
-      // There is no portable stop route in the documented BFF seam; keeping
-      // this method local avoids pretending a cancelled fetch stopped Eve.
+    async stop({ binding, sessionId, requestId }) {
+      await api.builderStop(binding.draftId, sessionId, {
+        revision: binding.revision,
+        digest: binding.digest,
+        requestId,
+      })
+      const previous = sessions.get(sessionId)
+      if (previous) sessions.set(sessionId, { ...previous, state: 'stopped' })
     },
 
     async applyProposal({ binding, sessionId, proposalId, requestId }): Promise<SkillBuilderProposalResult> {
-      const response = await api.applyBuilderProposal(binding.draftId, proposalId, { expectedRevision: binding.revision, idempotencyKey: requestId })
+      const response = await api.applyBuilderProposal(binding.draftId, proposalId, {
+        revision: binding.revision,
+        digest: binding.digest,
+        sessionId,
+        idempotencyKey: requestId,
+      })
       const rawProposal = response.proposal
       if (!rawProposal) throw schemaError('The builder apply response did not include the proposal.')
       const proposal = mapProposal(rawProposal, binding, sessionId)
@@ -255,8 +256,13 @@ export function createSkillBuilderAdapter(): SkillBuilderPanelAdapter {
     },
 
     async rejectProposal({ binding, sessionId, proposalId, requestId }) {
-      const response = await api.rejectBuilderProposal(binding.draftId, proposalId, requestId)
-      if (!response.proposal) return undefined
+      const response = await api.rejectBuilderProposal(binding.draftId, proposalId, {
+        revision: binding.revision,
+        digest: binding.digest,
+        sessionId,
+        idempotencyKey: requestId,
+      })
+      if (!response.proposal) throw schemaError('The builder reject response did not include the proposal.')
       const proposal = mapProposal(response.proposal, binding, sessionId)
       const previous = sessions.get(sessionId)
       const session = previous ? { ...previous, proposal } : undefined

@@ -6,7 +6,7 @@ import type {
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
-  BuilderConversation, BuilderConversationResponse, BuilderMessageResponse, BuilderProposalResponse,
+  BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
   DraftReviewsResponse, DraftReviewResponse,
 } from './types'
 
@@ -56,20 +56,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 function unwrap<T>(value: T | { data: T }): T { return isRecord(value) && 'data' in value ? value.data as T : value as T }
 
-function unwrapBuilderConversation(value: BuilderConversation | BuilderConversationResponse): BuilderConversation {
-  const source = isRecord(value) && 'data' in value ? value.data as BuilderConversation | BuilderConversationResponse : value
-  const wrapped = source as BuilderConversationResponse
-  if (isRecord(wrapped) && isRecord(wrapped.conversation)) {
-    const conversation = wrapped.conversation as BuilderConversation
-    return {
-      ...conversation,
-      ...(Array.isArray(wrapped.messages) ? { messages: wrapped.messages as BuilderConversation['messages'] } : {}),
-      ...(Array.isArray(wrapped.proposals) ? { proposals: wrapped.proposals as BuilderConversation['proposals'] } : {}),
-    }
-  }
-  return source as BuilderConversation
-}
-
 export const api = {
   health() { return request<HealthResponse>('/health') },
   me() { return request<Principal>('/v1/me').then(unwrap) },
@@ -113,23 +99,26 @@ export const api = {
   decideDraftReview(draftId: string, resultId: string, input: { findingId: string; decision: 'open' | 'acknowledged' | 'dismissed'; reason?: string }) {
     return request<DraftReviewResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/reviews/${encodeURIComponent(resultId)}/decisions`, { method: 'POST', body: input }).then(unwrap)
   },
-  builderCreateConversation(draftId: string, input: { draftRevision: number; draftDigest: `sha256:${string}` }, idempotencyKey: string, signal?: AbortSignal) {
-    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrapBuilderConversation)
+  builderAvailability(draftId: string, signal?: AbortSignal) {
+    return request<BuilderAvailabilityResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/availability`, { signal }).then(unwrap)
   },
-  builderConversation(draftId: string, conversationId: string, signal?: AbortSignal) {
-    return request<BuilderConversation | BuilderConversationResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}`, { signal }).then(unwrapBuilderConversation)
+  builderCreateSession(draftId: string, input: { revision: number; digest: `sha256:${string}`; requestId: string }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session`, { method: 'POST', body: input, signal }).then(unwrap)
   },
-  builderMessage(draftId: string, conversationId: string, input: { draftRevision: number; draftDigest: `sha256:${string}`; content: string; selectedPath?: string }, idempotencyKey: string, signal?: AbortSignal) {
-    return request<BuilderMessageResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/conversations/${encodeURIComponent(conversationId)}/messages`, { method: 'POST', body: input, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrap)
+  builderSession(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}` }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}`, { query: { revision: String(input.revision), digest: input.digest }, signal }).then(unwrap)
   },
-  builderProposal(draftId: string, proposalId: string, signal?: AbortSignal) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}`, { signal }).then(unwrap)
+  builderPrompt(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}`; prompt: string; requestId: string; selectedPath?: string }, signal?: AbortSignal) {
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}/prompt`, { method: 'POST', query: { revision: String(input.revision), digest: input.digest }, body: { prompt: input.prompt, requestId: input.requestId, ...(input.selectedPath ? { selectedPath: input.selectedPath } : {}) }, signal }).then(unwrap)
   },
-  applyBuilderProposal(draftId: string, proposalId: string, input: { expectedRevision: number; idempotencyKey: string; signal?: AbortSignal }) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST', body: { expectedRevision: input.expectedRevision, proposalId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
+  builderStop(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}`; requestId: string }, signal?: AbortSignal) {
+    return request<void>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}/stop`, { method: 'POST', query: { revision: String(input.revision), digest: input.digest }, body: { requestId: input.requestId }, signal })
   },
-  rejectBuilderProposal(draftId: string, proposalId: string, idempotencyKey: string, signal?: AbortSignal) {
-    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST', body: { proposalId }, headers: { 'idempotency-key': idempotencyKey }, signal }).then(unwrap)
+  applyBuilderProposal(draftId: string, proposalId: string, input: { revision: number; digest: `sha256:${string}`; sessionId: string; idempotencyKey: string; signal?: AbortSignal }) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/proposals/${encodeURIComponent(proposalId)}/apply`, { method: 'POST', body: { revision: input.revision, digest: input.digest, sessionId: input.sessionId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
+  },
+  rejectBuilderProposal(draftId: string, proposalId: string, input: { revision: number; digest: `sha256:${string}`; sessionId: string; idempotencyKey: string; signal?: AbortSignal }) {
+    return request<BuilderProposalResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST', body: { revision: input.revision, digest: input.digest, sessionId: input.sessionId }, headers: { 'idempotency-key': input.idempotencyKey }, signal: input.signal }).then(unwrap)
   },
   policy() { return request<PolicyResponse>('/v1/policy').then(unwrap) },
   updatePolicy(policy: Policy) {
