@@ -96,6 +96,16 @@ pub struct Provenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_snapshot_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_config_revision: Option<String>,
+    /// Server-derived canonical source identity for display and lifecycle
+    /// output. This is separate from the original external catalog id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub external_digest: Option<Digest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
@@ -132,6 +142,10 @@ impl Default for Provenance {
             external_id: None,
             external_source_type: None,
             external_snapshot_hash: None,
+            feed_id: None,
+            feed_name: None,
+            feed_config_revision: None,
+            source_reference: None,
             external_digest: None,
             source_url: None,
             page_url: None,
@@ -443,9 +457,45 @@ pub struct ResolveRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalResolveRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed: Option<String>,
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh: Option<bool>,
+}
+
+/// Public feed metadata returned by the registry discovery endpoint.
+/// Optional fields keep the client compatible with older registries while
+/// preserving server-owned feed identity when present.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub config_revision: Option<String>,
+    #[serde(default)]
+    pub repositories: Vec<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedList {
+    #[serde(default)]
+    pub feeds: Vec<FeedInfo>,
+}
+
+/// Resolution plus the optional canonical source identity returned by the
+/// transparent proxy response envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalResolution {
+    pub resolution: Resolution,
+    pub reference: Option<String>,
 }
 
 /// A registry controlled pull-through request.  The CLI sends this only to

@@ -23,6 +23,9 @@ struct Cli {
     /// Registry origin. Credentials are bound to this exact origin.
     #[arg(long, global = true, env = "PSKILLS_REGISTRY")]
     registry: Option<String>,
+    /// Select a configured external catalog feed for skills.sh installs.
+    #[arg(long, global = true, value_name = "NAME")]
+    feed: Option<String>,
     /// Emit machine-readable JSON on stdout.
     #[arg(long, global = true)]
     json: bool,
@@ -242,6 +245,7 @@ enum CliError {
 struct Context {
     credentials: CredentialStore,
     registry: Option<RegistryConfig>,
+    feed: Option<String>,
     json: bool,
     dry_run: bool,
     agent: Agent,
@@ -313,6 +317,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
                     command: PackCommand::Publish { .. }
                 }
         );
+    let feed = cli.feed.as_deref().map(parse_feed_name).transpose()?;
     let context = Context {
         registry: if local_dry_run || (registry_not_required && cli.registry.is_none()) {
             None
@@ -320,6 +325,7 @@ fn run(cli: Cli) -> Result<(), CliError> {
             Some(credentials.registry(cli.registry.as_deref())?)
         },
         credentials,
+        feed,
         json: cli.json,
         dry_run: cli.dry_run,
         agent: cli.agent.into(),
@@ -579,23 +585,10 @@ fn show(context: &Context, reference: &str) -> Result<(), CliError> {
 
 fn versions(context: &Context, reference: &str) -> Result<(), CliError> {
     let parsed = parse_install_reference(reference)?;
-    let client = client(context)?;
     if let InstallReference::SkillsSh { external_id } = parsed {
-        let resolution = client.resolve_external(&external_id, false)?;
-        let skill = resolution.members.first().ok_or_else(|| {
-            CliError::Message("external resolution did not contain a skill member".into())
-        })?;
-        return emit(
-            context.json,
-            json!([{
-                "version": resolution.version,
-                "state": skill.state,
-                "digest": resolution.digest,
-                "externalId": external_id,
-                "reference": resolution.name,
-            }]),
-        );
+        return versions_external_local(context, &external_id);
     }
+    let client = client(context)?;
     let InstallReference::Native {
         reference,
         version: requested_version,
@@ -617,6 +610,45 @@ fn versions(context: &Context, reference: &str) -> Result<(), CliError> {
             json!({ "version": skill.version, "state": skill.state, "digest": skill.artifact.digest })
         })
         .collect();
+    emit(context.json, Value::Array(values))
+}
+
+fn versions_external_local(context: &Context, external_id: &str) -> Result<(), CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    let mut values = lock
+        .skills
+        .iter()
+        .filter(|skill| {
+            context
+                .registry
+                .as_ref()
+                .map(|registry| lock_registry_matches(&lock, &skill.registry, registry))
+                .unwrap_or(true)
+                && context
+                    .feed
+                    .as_deref()
+                    .map(|feed| skill.provenance.feed_name.as_deref() == Some(feed))
+                    .unwrap_or(true)
+                && skill.provenance.external_id.as_deref() == Some(external_id)
+        })
+        .map(|skill| {
+            json!({
+                "version": skill.version,
+                "digest": skill.artifact_digest,
+                "externalId": external_id,
+                "reference": skill.provenance.source_reference.as_deref().unwrap_or(external_id),
+                "privateReference": skill.reference,
+                "feed": skill.provenance.feed_name,
+            })
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| left["version"].as_str().cmp(&right["version"].as_str()));
+    if values.is_empty() {
+        return Err(CliError::Message(format!(
+            "versions for skills.sh identity {external_id} are unavailable until it is installed; use `directory show` for catalog metadata"
+        )));
+    }
     emit(context.json, Value::Array(values))
 }
 
@@ -728,29 +760,88 @@ fn install_skill_with_refresh(
     } else {
         None
     };
+    let selected_feed = match &parsed {
+        InstallReference::SkillsSh { external_id } => {
+            if let Some(feed) = context.feed.clone() {
+                Some(feed)
+            } else if let Some(feed) = frozen_entry
+                .as_ref()
+                .and_then(|entry| entry.provenance.feed_name.clone())
+            {
+                Some(feed)
+            } else {
+                stored_external_feed(context, registry, external_id)?
+            }
+        }
+        InstallReference::Native { .. } => None,
+    };
     let client = client(context)?;
-    let resolution = match &parsed {
+    let (mut resolution, response_reference) = match &parsed {
         InstallReference::Native { reference, version } => {
             let version = frozen_entry
                 .as_ref()
                 .map(|entry| entry.version.clone())
                 .or_else(|| version.clone());
-            client.resolve(&ResolveRequest {
-                kind: "skill".into(),
-                reference: reference.clone(),
-                version,
-            })?
+            (
+                client.resolve(&ResolveRequest {
+                    kind: "skill".into(),
+                    reference: reference.clone(),
+                    version,
+                })?,
+                None,
+            )
         }
         InstallReference::SkillsSh { external_id } => {
-            client.resolve_external(external_id, refresh_external && !context.frozen)?
+            if let Some(entry) = frozen_entry.as_ref() {
+                let resolution = client.resolve(&ResolveRequest {
+                    kind: "skill".into(),
+                    reference: entry.reference.clone(),
+                    version: Some(entry.version.clone()),
+                })?;
+                (resolution, entry.provenance.source_reference.clone())
+            } else {
+                let external = client.resolve_external(
+                    selected_feed.as_deref(),
+                    external_id,
+                    refresh_external && !context.frozen,
+                )?;
+                (external.resolution, external.reference)
+            }
         }
     };
+    if let Some(reference) = response_reference.as_deref() {
+        for member in &mut resolution.members {
+            if member.provenance.source_reference.is_none() {
+                member.provenance.source_reference = Some(reference.to_string());
+            }
+        }
+    }
+    if let Some(feed) = selected_feed.as_deref() {
+        for member in &mut resolution.members {
+            // The feed name was accepted by the registry's authenticated
+            // discovery endpoint. Preserve it even when an older response
+            // omits the additive provenance field so update can replay the
+            // same selection.
+            if member.provenance.feed_name.is_none() {
+                member.provenance.feed_name = Some(feed.to_string());
+            }
+        }
+    }
     if resolution.kind != "skill" {
         return Err(CliError::Message(
             "registry resolution did not contain a skill".into(),
         ));
     }
-    let display_reference = parsed.display().to_string();
+    let display_reference = parsed
+        .external_id()
+        .and_then(|_| {
+            resolution
+                .members
+                .first()
+                .and_then(|member| member.provenance.source_reference.clone())
+        })
+        .or_else(|| parsed.external_id().map(str::to_string))
+        .unwrap_or_else(|| parsed.display().to_string());
     let private_reference = resolution.name.clone();
     let external_id = parsed.external_id().map(str::to_string);
     let skill = resolution.members.first().cloned();
@@ -830,8 +921,17 @@ fn install_skill_with_refresh(
     // Keep the journal owner stable across server-owned private reference
     // changes.  The generated registry name is an implementation detail; the
     // external identity is the lifecycle identity the user supplied.
-    let owner_reference = external_id.as_deref().unwrap_or(&private_reference);
-    let owner = owner_for_reference(owner_prefix, registry, owner_reference);
+    let owner_reference = external_id
+        .as_deref()
+        .map(|external_id| {
+            let feed = skill
+                .as_ref()
+                .and_then(|member| member.provenance.feed_name.as_deref())
+                .or(selected_feed.as_deref());
+            external_owner_reference(feed, external_id)
+        })
+        .unwrap_or_else(|| private_reference.clone());
+    let owner = owner_for_reference(owner_prefix, registry, &owner_reference);
     let plan = InstallPlan {
         root: root.clone(),
         skill_name: skill_name.clone(),
@@ -870,6 +970,9 @@ fn install_skill_with_refresh(
     if let Some(external_id) = external_id {
         output["externalId"] = Value::String(external_id);
         output["privateReference"] = Value::String(private_reference);
+        if let Some(feed) = selected_feed {
+            output["feed"] = Value::String(feed);
+        }
     }
     emit(context.json, output)
 }
@@ -1272,8 +1375,9 @@ fn decorate_local_value(
     };
     let display_reference = skill
         .provenance
-        .external_id
+        .source_reference
         .as_deref()
+        .or(skill.provenance.external_id.as_deref())
         .unwrap_or(&skill.reference);
     object.insert(
         "reference".into(),
@@ -1285,6 +1389,15 @@ fn decorate_local_value(
     );
     if let Some(external_id) = &skill.provenance.external_id {
         object.insert("externalId".into(), Value::String(external_id.clone()));
+    }
+    if let Some(source_reference) = &skill.provenance.source_reference {
+        object.insert(
+            "sourceReference".into(),
+            Value::String(source_reference.clone()),
+        );
+    }
+    if let Some(feed_name) = &skill.provenance.feed_name {
+        object.insert("feed".into(), Value::String(feed_name.clone()));
     }
 }
 
@@ -1384,6 +1497,11 @@ fn remove_external_local(
                 .as_ref()
                 .map(|registry| lock_registry_matches(&lock, &skill.registry, registry))
                 .unwrap_or(true)
+                && context
+                    .feed
+                    .as_deref()
+                    .map(|feed| skill.provenance.feed_name.as_deref() == Some(feed))
+                    .unwrap_or(true)
                 && skill.provenance.external_id.as_deref() == Some(external_id)
         })
         .collect::<Vec<_>>();
@@ -1601,6 +1719,41 @@ fn owner_for_reference(owner_prefix: &str, registry: &RegistryConfig, reference:
     }
 }
 
+fn external_owner_reference(feed: Option<&str>, external_id: &str) -> String {
+    match feed {
+        Some(feed) => format!("feed={feed}\u{1f}{external_id}"),
+        None => external_id.to_string(),
+    }
+}
+
+fn stored_external_feed(
+    context: &Context,
+    registry: &RegistryConfig,
+    external_id: &str,
+) -> Result<Option<String>, CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    let feeds = lock
+        .skills
+        .iter()
+        .filter(|skill| {
+            lock_registry_matches(&lock, &skill.registry, registry)
+                && skill.provenance.external_id.as_deref() == Some(external_id)
+                && skill
+                    .owners
+                    .iter()
+                    .any(|owner| owner.starts_with("direct:"))
+        })
+        .filter_map(|skill| skill.provenance.feed_name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if feeds.len() > 1 {
+        return Err(CliError::Message(format!(
+            "skills.sh identity {external_id} is installed from multiple feeds; pass --feed"
+        )));
+    }
+    Ok(feeds.into_iter().next())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_lock_for_skill(
     lock: &mut LockFile,
@@ -1636,10 +1789,11 @@ fn update_lock_for_skill(
         });
     }
     let key = format!("{}:{}@{}", registry.url, reference, resolution.version);
-    let resolved_external_id = resolution
-        .members
-        .first()
-        .and_then(|member| member.provenance.external_id.as_deref());
+    let resolved_member = resolution.members.first();
+    let resolved_external_id =
+        resolved_member.and_then(|member| member.provenance.external_id.as_deref());
+    let resolved_feed_name =
+        resolved_member.and_then(|member| member.provenance.feed_name.as_deref());
     if let Some(external_id) = resolved_external_id {
         let matching_registries = lock
             .registries
@@ -1655,6 +1809,7 @@ fn update_lock_for_skill(
                     .external_id
                     .as_deref()
                     .is_some_and(|value| value == external_id)
+                && existing.provenance.feed_name.as_deref() == resolved_feed_name
                 && existing.key != key
             {
                 existing
@@ -1752,14 +1907,29 @@ fn frozen_external_skill_entry(
     let lock = local_state(&root, context.scope).read_lock()?;
     validate_frozen_target(&lock, context)?;
     validate_frozen_registry(&lock, registry)?;
-    let owner = owner_for_reference("direct", registry, external_id);
     let matches = lock
         .skills
         .iter()
         .filter(|skill| {
             lock_registry_matches(&lock, &skill.registry, registry)
                 && skill.provenance.external_id.as_deref() == Some(external_id)
-                && skill.owners.iter().any(|candidate| candidate == &owner)
+                && context
+                    .feed
+                    .as_deref()
+                    .map(|feed| skill.provenance.feed_name.as_deref() == Some(feed))
+                    .unwrap_or(true)
+                && skill.owners.iter().any(|candidate| {
+                    let current_owner = owner_for_reference(
+                        "direct",
+                        registry,
+                        &external_owner_reference(
+                            skill.provenance.feed_name.as_deref(),
+                            external_id,
+                        ),
+                    );
+                    let legacy_owner = owner_for_reference("direct", registry, external_id);
+                    candidate == &current_owner || candidate == &legacy_owner
+                })
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -2011,6 +2181,22 @@ fn validate_external_id(value: &str) -> Result<String, CliError> {
     {
         return Err(CliError::Message(
             "skills.sh external id must contain 2 to 64 non-empty path segments (each at most 512 bytes)".into(),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn parse_feed_name(value: &str) -> Result<String, CliError> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        });
+    if !valid {
+        return Err(CliError::Message(
+            "--feed must be a lowercase configured feed name (1-64 characters)".into(),
         ));
     }
     Ok(value.to_string())
@@ -2273,16 +2459,36 @@ mod tests {
             "/tmp/private-skills",
             "--agent",
             "universal",
+            "--feed",
+            "community",
             "install",
             "vercel-labs/skills/find-skills",
         ])
         .expect("transparent install arguments");
         assert_eq!(cli.directory, Some(PathBuf::from("/tmp/private-skills")));
+        assert_eq!(cli.feed.as_deref(), Some("community"));
         assert!(matches!(cli.agent, AgentArg::Universal));
         assert!(matches!(
             cli.command,
             Command::Install(InstallArgs { reference })
                 if reference == "vercel-labs/skills/find-skills"
         ));
+    }
+
+    #[test]
+    fn feed_name_accepts_configured_identifiers_only() {
+        assert_eq!(parse_feed_name(" community ").expect("feed"), "community");
+        for invalid in [
+            "",
+            "Community",
+            "community/feed",
+            "community feed",
+            "-community",
+        ] {
+            assert!(
+                parse_feed_name(invalid).is_err(),
+                "expected `{invalid}` to fail"
+            );
+        }
     }
 }

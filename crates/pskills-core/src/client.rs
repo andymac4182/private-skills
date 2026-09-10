@@ -103,6 +103,20 @@ impl ApiClient {
         extract(value, "principal")
     }
 
+    /// Discover the feeds available to the authenticated principal. The
+    /// registry remains the only source of feed configuration; the CLI never
+    /// contacts a feed origin directly.
+    pub fn feeds(&self) -> Result<Vec<FeedInfo>, ApiError> {
+        let value: Value = self.get_json(&self.endpoint(&["v1", "feeds"])?, true)?;
+        if let Ok(response) = serde_json::from_value::<FeedList>(value.clone()) {
+            return Ok(response.feeds);
+        }
+        if let Ok(feeds) = serde_json::from_value::<Vec<FeedInfo>>(value.clone()) {
+            return Ok(feeds);
+        }
+        extract(value, "feeds")
+    }
+
     pub fn search(&self, query: &str) -> Result<Vec<SkillVersion>, ApiError> {
         let mut url = self.endpoint(&["v1", "skills"])?;
         url.query_pairs_mut().append_pair("q", query);
@@ -264,16 +278,40 @@ impl ApiClient {
     /// this client never derives or fetches the external source itself.
     pub fn resolve_external(
         &self,
+        feed: Option<&str>,
         external_id: &str,
         refresh: bool,
-    ) -> Result<Resolution, ApiError> {
+    ) -> Result<ExternalResolution, ApiError> {
         let external_id = external_id.trim();
         if external_id.is_empty() {
             return Err(ApiError::Response(
                 "external skills.sh identity must not be empty".into(),
             ));
         }
+        if let Some(feed_name) = feed {
+            let feed_name = feed_name.trim();
+            let feed = self
+                .feeds()?
+                .into_iter()
+                .find(|candidate| candidate.name == feed_name)
+                .ok_or_else(|| {
+                    ApiError::Response(format!(
+                        "configured feed `{feed_name}` was not returned by the registry"
+                    ))
+                })?;
+            if feed.kind != "skills-sh" {
+                return Err(ApiError::Response(format!(
+                    "configured feed `{feed_name}` is not a skills.sh feed"
+                )));
+            }
+            if !feed.enabled {
+                return Err(ApiError::Response(format!(
+                    "configured feed `{feed_name}` is disabled"
+                )));
+            }
+        }
         let request = ExternalResolveRequest {
+            feed: feed.map(str::to_owned),
             external_id: external_id.into(),
             refresh: refresh.then_some(true),
         };
@@ -309,7 +347,7 @@ impl ApiClient {
         &self,
         request: &ExternalResolveRequest,
         deadline: std::time::Instant,
-    ) -> Result<Resolution, ApiError> {
+    ) -> Result<ExternalResolution, ApiError> {
         let url = self.endpoint(&["v1", "proxy", "resolve"])?;
         let response = self.send(
             self.http
@@ -324,7 +362,15 @@ impl ApiClient {
             return self.wait_for_external_resolution(&operation_id, request, deadline);
         }
         ensure_success(&response)?;
-        extract_resolution(parse_json(response.body)?)
+        let value = parse_json(response.body)?;
+        let reference = value
+            .get("reference")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        Ok(ExternalResolution {
+            resolution: extract_resolution(value)?,
+            reference,
+        })
     }
 
     fn resolve_until(
@@ -589,12 +635,21 @@ impl ApiClient {
         operation_id: &str,
         request: &ExternalResolveRequest,
         deadline: std::time::Instant,
-    ) -> Result<Resolution, ApiError> {
+    ) -> Result<ExternalResolution, ApiError> {
         loop {
             let value: Value =
                 self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
             match inspect_operation(&value, "external import operation failed")? {
-                OperationPollAction::Resolution(resolution) => return Ok(resolution),
+                OperationPollAction::Resolution(resolution) => {
+                    let reference = resolution
+                        .members
+                        .first()
+                        .and_then(|member| member.provenance.source_reference.clone());
+                    return Ok(ExternalResolution {
+                        resolution,
+                        reference,
+                    });
+                }
                 OperationPollAction::Completed => {
                     return self.resolve_external_until(request, deadline);
                 }
@@ -1002,6 +1057,7 @@ mod tests {
     #[test]
     fn external_resolve_serializes_only_registry_owned_identity_fields() {
         let value = serde_json::to_value(ExternalResolveRequest {
+            feed: Some("community".into()),
             external_id: "vercel-labs/skills/find-skills".into(),
             refresh: Some(true),
         })
@@ -1009,6 +1065,7 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({
+                "feed": "community",
                 "externalId": "vercel-labs/skills/find-skills",
                 "refresh": true
             })
@@ -1017,6 +1074,7 @@ mod tests {
         assert!(value.get("version").is_none());
         assert!(value.get("upstreamId").is_none());
         let cached = serde_json::to_value(ExternalResolveRequest {
+            feed: None,
             external_id: "vercel-labs/skills/find-skills".into(),
             refresh: None,
         })
@@ -1055,6 +1113,10 @@ mod tests {
             external_id: Some("vercel-labs/skills/find-skills".into()),
             external_source_type: Some("github".into()),
             external_snapshot_hash: Some("snapshot-1".into()),
+            feed_id: Some("feed-1".into()),
+            feed_name: Some("community".into()),
+            feed_config_revision: Some("feed-config-1".into()),
+            source_reference: Some("@github/vercel-labs/skills/skills/find-skills".into()),
             external_digest: Some("sha256:external".into()),
             source_url: Some("https://github.com/vercel-labs/skills".into()),
             page_url: Some("https://skills.sh/vercel-labs/skills/find-skills".into()),
@@ -1109,6 +1171,12 @@ mod tests {
         );
         assert_eq!(value["provenance"]["externalSourceType"], "github");
         assert_eq!(value["provenance"]["externalSnapshotHash"], "snapshot-1");
+        assert_eq!(value["provenance"]["feedId"], "feed-1");
+        assert_eq!(value["provenance"]["feedName"], "community");
+        assert_eq!(
+            value["provenance"]["sourceReference"],
+            "@github/vercel-labs/skills/skills/find-skills"
+        );
         assert_eq!(value["provenance"]["externalDigest"], "sha256:external");
         assert_eq!(
             value["provenance"]["resolvedCommit"],
@@ -1127,6 +1195,8 @@ mod tests {
         assert_eq!(legacy.external_id, None);
         assert_eq!(legacy.external_source_type, None);
         assert_eq!(legacy.external_snapshot_hash, None);
+        assert_eq!(legacy.feed_name, None);
+        assert_eq!(legacy.source_reference, None);
     }
 
     #[test]
