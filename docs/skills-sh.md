@@ -74,10 +74,10 @@ here.
 ### Portable directory gateway configuration
 
 The portable directory gateway is an operator-controlled configuration for
-hosts where request-scoped Vercel OIDC is unavailable. When the canonical
-`https://skills.sh` URL is selected, the catalog uses request-scoped project
-OIDC and never uses the gateway token. Configure the gateway explicitly for a
-noncanonical destination:
+hosts where request-scoped Vercel OIDC is unavailable. On a Node host with
+request-scoped Vercel OIDC available, selecting the canonical `https://skills.sh`
+URL uses project OIDC and never the gateway token. Edge hosts require the
+explicit gateway configuration below:
 
 ```sh
 PSKILLS_DIRECTORY_ENABLED=true
