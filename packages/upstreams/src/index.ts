@@ -195,6 +195,119 @@ export interface OpenClawSourceLocator {
   ): OpenClawSourceLocation | Promise<OpenClawSourceLocation>;
 }
 
+export type OpenClawSourceKind = OpenClawNormalizedSource['kind'];
+
+/**
+ * Trusted transport settings for one public OpenClaw source family. The
+ * artifact origin and the provider origin are intentionally separate: a
+ * GitHub source is identified by github.com while its public archive bytes
+ * are served by codeload.github.com.
+ */
+export interface OpenClawSourceTransportProfile {
+  allowedArtifactOrigins: readonly string[];
+  sourceProviderOrigin: string;
+}
+
+/**
+ * Deployment-owned defaults for the two public OpenClaw source families.
+ * The locator derives a URL only from an already normalized immutable source
+ * identity; it does not accept a URL or origin from a feed entry or claimed
+ * job.
+ */
+export interface DefaultOpenClawSourceConfiguration {
+  locator: OpenClawSourceLocator;
+  profiles: Readonly<Record<OpenClawSourceKind, OpenClawSourceTransportProfile>>;
+}
+
+export interface DefaultOpenClawSourceConfigurationOptions {
+  /**
+   * Operator-owned ClawHub API origin. The official default is
+   * https://clawhub.ai and the fixed /api/v1/download route is used.
+   */
+  clawHubOrigin?: string;
+}
+
+export const DEFAULT_OPENCLAW_CLAWHUB_ORIGIN = 'https://clawhub.ai';
+export const DEFAULT_OPENCLAW_GITHUB_SOURCE_ORIGIN = 'https://github.com';
+export const DEFAULT_OPENCLAW_GITHUB_ARTIFACT_ORIGIN = 'https://codeload.github.com';
+
+/**
+ * Build the standard public source bindings once at worker construction.
+ * ClawHub's documented v1 endpoint returns a deterministic hosted-skill ZIP
+ * for /api/v1/download?slug=&version=. GitHub's public immutable archive is
+ * addressed directly through codeload with the verified commit, avoiding the
+ * GitHub API's 302 archive handoff. Both requests are anonymous and therefore
+ * receive no catalog or OIDC credentials.
+ */
+export function createDefaultOpenClawSourceConfiguration(
+  options: DefaultOpenClawSourceConfigurationOptions = {},
+): DefaultOpenClawSourceConfiguration {
+  const clawHubOrigin = normalizeOpenClawSourceProviderOrigin(
+    options.clawHubOrigin ?? DEFAULT_OPENCLAW_CLAWHUB_ORIGIN,
+  );
+  const clawHubOrigins = Object.freeze([clawHubOrigin]);
+  const githubSourceOrigin = DEFAULT_OPENCLAW_GITHUB_SOURCE_ORIGIN;
+  const githubArtifactOrigins = Object.freeze([DEFAULT_OPENCLAW_GITHUB_ARTIFACT_ORIGIN]);
+  const profiles = Object.freeze({
+    'public-clawhub': Object.freeze({
+      allowedArtifactOrigins: clawHubOrigins,
+      sourceProviderOrigin: clawHubOrigin,
+    }),
+    'public-github': Object.freeze({
+      allowedArtifactOrigins: githubArtifactOrigins,
+      sourceProviderOrigin: githubSourceOrigin,
+    }),
+  });
+
+  return {
+    profiles,
+    locator: {
+      locate(source) {
+        const record = asOpenClawSourceRecord(source);
+        const kind = record.kind;
+        const sourceRef = record.sourceRef;
+        if (kind === 'public-clawhub' && sourceRef === 'public-clawhub') {
+          const packageName = boundedDefaultSourceCoordinate(record.packageName);
+          const version = boundedDefaultSourceCoordinate(record.version);
+          if (typeof record.artifactDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(record.artifactDigest)) {
+            throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw ClawHub source integrity is invalid');
+          }
+          const { slug, ownerHandle } = parseDefaultClawHubPackage(packageName);
+          const url = new URL('/api/v1/download', clawHubOrigin);
+          url.searchParams.set('slug', slug);
+          if (ownerHandle !== undefined) url.searchParams.set('ownerHandle', ownerHandle);
+          url.searchParams.set('version', version);
+          assertDefaultSourceURLSize(url);
+          return {
+            url: url.href,
+            allowedArtifactOrigins: profiles['public-clawhub'].allowedArtifactOrigins,
+            sourceProviderOrigin: profiles['public-clawhub'].sourceProviderOrigin,
+          };
+        }
+        if (kind === 'public-github' && sourceRef === 'public-github') {
+          const repo = validateDefaultGithubRepository(record.repo);
+          validateDefaultGithubPath(record.path);
+          const commit = validateDefaultGithubSha(record.commit, 40, 'commit');
+          validateDefaultGithubSha(record.contentHash, 64, 'content hash');
+          // Validate the selected path here even though it is not part of the
+          // archive URL. This keeps malformed job identities from reaching a
+          // source request or a later archive selector.
+          const [owner, repository] = repo.split('/');
+          const url = new URL(DEFAULT_OPENCLAW_GITHUB_ARTIFACT_ORIGIN);
+          url.pathname = `/${encodeURIComponent(owner!)}/${encodeURIComponent(repository!)}/tar.gz/${commit}`;
+          assertDefaultSourceURLSize(url);
+          return {
+            url: url.href,
+            allowedArtifactOrigins: profiles['public-github'].allowedArtifactOrigins,
+            sourceProviderOrigin: profiles['public-github'].sourceProviderOrigin,
+          };
+        }
+        throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source identity is invalid');
+      },
+    },
+  };
+}
+
 export interface OpenClawHttpFetcherOptions {
   locator: OpenClawSourceLocator;
   fetchImpl?: FetchLike;
@@ -2272,6 +2385,82 @@ function normalizeOpenClawArtifactOrigins(origins: readonly string[]): string[] 
     normalized.add(parsed.origin);
   }
   return [...normalized];
+}
+
+function asOpenClawSourceRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source identity is invalid');
+  }
+  return value;
+}
+
+function boundedDefaultSourceCoordinate(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || new TextEncoder().encode(value).byteLength > 4_096) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source coordinate is invalid');
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source coordinate is invalid');
+  }
+  try {
+    // Reject lone UTF-16 surrogates before URLSearchParams or URL path
+    // encoding can silently replace them with U+FFFD.
+    encodeURIComponent(value);
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw source coordinate is invalid');
+  }
+  return value;
+}
+
+function parseDefaultClawHubPackage(value: string): { slug: string; ownerHandle?: string } {
+  // OpenClaw's user-facing ClawHub coordinate is @owner/slug, while the v1
+  // download API takes those as separate `ownerHandle` and `slug` query
+  // parameters. Unscoped slugs stay as-is. A malformed scoped coordinate is
+  // rejected instead of silently dropping its publisher identity.
+  if (!value.startsWith('@')) {
+    if (value.includes('/')) {
+      throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw ClawHub package identity is invalid');
+    }
+    return { slug: value };
+  }
+  const match = /^@([^/@]+)\/([^/@]+)$/.exec(value);
+  if (!match || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(match[1]!) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(match[2]!)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw ClawHub package identity is invalid');
+  }
+  return { slug: match[2]!, ownerHandle: match[1]! };
+}
+
+function validateDefaultGithubRepository(value: unknown): string {
+  const repo = boundedDefaultSourceCoordinate(value);
+  if (new TextEncoder().encode(repo).byteLength > 256) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw GitHub repository is invalid');
+  }
+  const parts = repo.split('/');
+  if (parts.length !== 2 || parts.some((part) => part.length === 0 || part === '.' || part === '..' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part))) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw GitHub repository is invalid');
+  }
+  return repo;
+}
+
+function validateDefaultGithubPath(value: unknown): string {
+  const path = boundedDefaultSourceCoordinate(value);
+  if (path === '') return path;
+  if (path.startsWith('/') || path.includes('\\') || path.split('/').some((part) => part.length === 0 || part === '.' || part === '..')) {
+    throw new UpstreamAcquisitionError('invalid_source', 'OpenClaw GitHub source path is invalid');
+  }
+  return path;
+}
+
+function validateDefaultGithubSha(value: unknown, length: 40 | 64, label: string): string {
+  if (typeof value !== 'string' || !new RegExp(`^[0-9a-f]{${length}}$`).test(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', `OpenClaw GitHub ${label} is not immutable`);
+  }
+  return value;
+}
+
+function assertDefaultSourceURLSize(url: URL): void {
+  if (new TextEncoder().encode(url.href).byteLength > 8_192) {
+    throw new UpstreamAcquisitionError('unsafe_url', 'OpenClaw source URL is too large');
+  }
 }
 
 function normalizeOpenClawSourceProviderOrigin(value: string | undefined): string {

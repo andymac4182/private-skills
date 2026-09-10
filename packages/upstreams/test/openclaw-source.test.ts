@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   acquireOpenClawSource,
+  createDefaultOpenClawSourceConfiguration,
   createOpenClawHttpFetcher,
   serializeSkillBundle,
   type OpenClawFetchedSource,
@@ -98,6 +99,89 @@ async function resolve(
 }
 
 describe('OpenClaw source verification', () => {
+  it('derives the documented ClawHub and immutable GitHub locations without per-skill mapping', async () => {
+    const configuration = createDefaultOpenClawSourceConfiguration();
+    const clawHub = await configuration.locator.locate({
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/demo',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+    });
+    expect(clawHub.url).toBe('https://clawhub.ai/api/v1/download?slug=demo&ownerHandle=acme&version=1.0.0');
+    expect(clawHub.allowedArtifactOrigins).toEqual(['https://clawhub.ai']);
+    expect(clawHub.sourceProviderOrigin).toBe('https://clawhub.ai');
+
+    const github = await configuration.locator.locate({
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'openclaw/skills',
+      path: 'skills/demo',
+      commit: COMMIT,
+      contentHash: 'a'.repeat(64),
+    });
+    expect(github.url).toBe(`https://codeload.github.com/openclaw/skills/tar.gz/${COMMIT}`);
+    expect(github.allowedArtifactOrigins).toEqual(['https://codeload.github.com']);
+    expect(github.sourceProviderOrigin).toBe('https://github.com');
+
+    const secondClawHub = await configuration.locator.locate({
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: 'other-skill',
+      version: '2.0.0',
+      artifactDigest: `sha256:${'b'.repeat(64)}`,
+    });
+    expect(secondClawHub.url).toContain('slug=other-skill');
+    expect(secondClawHub.url).not.toBe(clawHub.url);
+  });
+
+  it('keeps an operator-selected ClawHub origin separate from the fixed public GitHub profile', async () => {
+    const configuration = createDefaultOpenClawSourceConfiguration({
+      clawHubOrigin: 'https://clawhub.example.test',
+    });
+    const clawHub = await configuration.locator.locate({
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: 'demo',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+    });
+    expect(clawHub.url).toBe('https://clawhub.example.test/api/v1/download?slug=demo&version=1.0.0');
+    expect(configuration.profiles['public-clawhub'].sourceProviderOrigin).toBe('https://clawhub.example.test');
+    expect(configuration.profiles['public-github'].sourceProviderOrigin).toBe('https://github.com');
+    expect(configuration.profiles['public-github'].allowedArtifactOrigins).toEqual(['https://codeload.github.com']);
+  });
+
+  it('rejects invalid default source identities before any source request', async () => {
+    const locator = createDefaultOpenClawSourceConfiguration().locator;
+    await expect(Promise.resolve().then(() => locator.locate({
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'evil/../repo',
+      path: '',
+      commit: COMMIT,
+      contentHash: 'a'.repeat(64),
+    }))).rejects.toMatchObject({ code: 'invalid_source' });
+    await expect(Promise.resolve().then(() => locator.locate({
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'openclaw/skills',
+      path: 'skills/../demo',
+      commit: COMMIT,
+      contentHash: 'a'.repeat(64),
+    }))).rejects.toMatchObject({ code: 'invalid_source' });
+    await expect(Promise.resolve().then(() => locator.locate({
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'openclaw/skills',
+      path: '',
+      commit: COMMIT.toUpperCase(),
+      contentHash: 'a'.repeat(64),
+    }))).rejects.toMatchObject({ code: 'invalid_source' });
+    expect(() => createDefaultOpenClawSourceConfiguration({ clawHubOrigin: 'http://clawhub.example.test' })).toThrow();
+    expect(() => createDefaultOpenClawSourceConfiguration({ clawHubOrigin: 'https://clawhub.example.test/api' })).toThrow();
+  });
+
   it('resolves a pinned GitHub archive and computes the canonical folder hash', async () => {
     const source: OpenClawNormalizedSource = {
       kind: 'public-github',

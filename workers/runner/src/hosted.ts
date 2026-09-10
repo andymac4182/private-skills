@@ -13,7 +13,9 @@ import {
 } from './acquisition.js';
 import {
   createOpenClawHttpFetcher,
+  type OpenClawSourceKind,
   type OpenClawSourceLocator,
+  type OpenClawSourceTransportProfile,
 } from '../../../packages/upstreams/src/index.js';
 import {
   WorkerRunner,
@@ -72,10 +74,19 @@ export interface HostedWorkerOptions {
 export interface HostedOpenClawSourceConfig {
   /** Maps a server-selected source identity to an operator-approved URL. */
   locator: OpenClawSourceLocator;
-  /** Artifact transport origins approved by deployment configuration. */
-  allowedArtifactOrigins: readonly string[];
+  /**
+   * Legacy one-profile binding. It remains supported for custom adapters, but
+   * a default public configuration should use sourceProfiles because GitHub's
+   * provider and codeload transport have different trusted origins.
+   */
+  allowedArtifactOrigins?: readonly string[];
   /** Verified source identity origin, separate from the transport endpoint. */
-  sourceProviderOrigin: string;
+  sourceProviderOrigin?: string;
+  /**
+   * Per-source-family bindings. A family absent from this map is unavailable;
+   * no claimed job may provide a replacement origin or URL.
+   */
+  sourceProfiles?: Readonly<Partial<Record<OpenClawSourceKind, OpenClawSourceTransportProfile>>>;
 }
 
 export type HostedSandboxDriver = 'computesdk' | 'native';
@@ -148,11 +159,13 @@ export function createHostedOpenClawAcquisition(
   config: HostedOpenClawSourceConfig,
   fetchImpl?: typeof fetch,
 ): WorkerOpenClawAcquisitionOptions {
-  validateHostedOpenClawSourceConfig(config);
-  const allowedArtifactOrigins = [...config.allowedArtifactOrigins];
-  const sourceProviderOrigin = new URL(config.sourceProviderOrigin).origin;
+  const normalized = normalizeHostedOpenClawSourceConfig(config);
   const boundedLocator: OpenClawSourceLocator = {
     async locate(source, signal) {
+      const profile = hostedOpenClawProfileForSource(normalized.profiles, source);
+      if (profile === undefined) {
+        throw new Error('hosted OpenClaw source kind is not configured');
+      }
       const location = await config.locator.locate(source, signal);
       if (!location || typeof location.url !== 'string') {
         throw new Error('hosted OpenClaw source locator returned an invalid location');
@@ -162,8 +175,8 @@ export function createHostedOpenClawAcquisition(
       // either allowlist, even when it is supplied by another adapter.
       return {
         url: location.url,
-        allowedArtifactOrigins,
-        sourceProviderOrigin,
+        allowedArtifactOrigins: profile.allowedArtifactOrigins,
+        sourceProviderOrigin: profile.sourceProviderOrigin,
       };
     },
   };
@@ -172,8 +185,8 @@ export function createHostedOpenClawAcquisition(
       locator: boundedLocator,
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
     }),
-    allowedArtifactOrigins,
-    sourceProviderOrigin,
+    allowedArtifactOrigins: normalized.allowedArtifactOrigins,
+    ...(normalized.sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin: normalized.sourceProviderOrigin }),
   };
 }
 
@@ -234,19 +247,92 @@ function validateHostedOptions(options: HostedWorkerOptions): void {
   }
 }
 
-function validateHostedOpenClawSourceConfig(config: HostedOpenClawSourceConfig): void {
+interface NormalizedHostedOpenClawSourceConfig {
+  profiles: Readonly<Partial<Record<OpenClawSourceKind, OpenClawSourceTransportProfile>>>;
+  allowedArtifactOrigins: readonly string[];
+  sourceProviderOrigin?: string;
+}
+
+function normalizeHostedOpenClawSourceConfig(config: HostedOpenClawSourceConfig): NormalizedHostedOpenClawSourceConfig {
   if (!config || typeof config.locator?.locate !== 'function') {
     throw new Error('hosted OpenClaw source locator is required');
   }
-  if (!Array.isArray(config.allowedArtifactOrigins) || config.allowedArtifactOrigins.length === 0 || config.allowedArtifactOrigins.length > 8) {
+
+  const hasLegacyProfile = config.allowedArtifactOrigins !== undefined || config.sourceProviderOrigin !== undefined;
+  const hasSourceProfiles = config.sourceProfiles !== undefined;
+  if (hasLegacyProfile && hasSourceProfiles) {
+    throw new Error('hosted OpenClaw source cannot combine legacy and per-kind profiles');
+  }
+
+  if (hasLegacyProfile) {
+    if (config.allowedArtifactOrigins === undefined || config.sourceProviderOrigin === undefined) {
+      throw new Error('hosted OpenClaw legacy profile requires artifact and provider origins');
+    }
+    const profile = normalizeHostedOpenClawSourceProfile({
+      allowedArtifactOrigins: config.allowedArtifactOrigins,
+      sourceProviderOrigin: config.sourceProviderOrigin,
+    });
+    const profiles = Object.freeze({
+      'public-clawhub': profile,
+      'public-github': profile,
+    });
+    return {
+      profiles,
+      allowedArtifactOrigins: profile.allowedArtifactOrigins,
+      sourceProviderOrigin: profile.sourceProviderOrigin,
+    };
+  }
+
+  if (!isRecord(config.sourceProfiles)) {
+    throw new Error('hosted OpenClaw source requires one or more per-kind profiles');
+  }
+  const profileKeys = Object.keys(config.sourceProfiles);
+  if (profileKeys.length === 0 || profileKeys.length > 2) {
+    throw new Error('hosted OpenClaw source requires one or two per-kind profiles');
+  }
+  const profiles: Partial<Record<OpenClawSourceKind, OpenClawSourceTransportProfile>> = {};
+  const origins = new Set<string>();
+  for (const key of profileKeys) {
+    if (key !== 'public-clawhub' && key !== 'public-github') {
+      throw new Error('hosted OpenClaw source profile kind is invalid');
+    }
+    const profile = normalizeHostedOpenClawSourceProfile(config.sourceProfiles[key]);
+    profiles[key] = profile;
+    for (const origin of profile.allowedArtifactOrigins) origins.add(origin);
+  }
+  return {
+    profiles: Object.freeze(profiles),
+    allowedArtifactOrigins: Object.freeze([...origins]),
+  };
+}
+
+function normalizeHostedOpenClawSourceProfile(value: unknown): OpenClawSourceTransportProfile {
+  if (!isRecord(value) || !Array.isArray(value.allowedArtifactOrigins) || value.allowedArtifactOrigins.length === 0 || value.allowedArtifactOrigins.length > 8) {
     throw new Error('hosted OpenClaw source requires 1-8 artifact origins');
   }
-  for (const origin of config.allowedArtifactOrigins) {
-    if (!isStrictHttpsOrigin(origin)) throw new Error('hosted OpenClaw artifact origins must be HTTPS origins');
-  }
-  if (!isStrictHttpsOrigin(config.sourceProviderOrigin)) {
+  const origins = [...new Set(value.allowedArtifactOrigins.map((origin) => {
+    if (typeof origin !== 'string' || !isStrictHttpsOrigin(origin)) {
+      throw new Error('hosted OpenClaw artifact origins must be HTTPS origins');
+    }
+    return new URL(origin).origin;
+  }))];
+  if (typeof value.sourceProviderOrigin !== 'string' || !isStrictHttpsOrigin(value.sourceProviderOrigin)) {
     throw new Error('hosted OpenClaw source provider must be an HTTPS origin');
   }
+  return Object.freeze({
+    allowedArtifactOrigins: Object.freeze(origins),
+    sourceProviderOrigin: new URL(value.sourceProviderOrigin).origin,
+  });
+}
+
+function hostedOpenClawProfileForSource(
+  profiles: Readonly<Partial<Record<OpenClawSourceKind, OpenClawSourceTransportProfile>>>,
+  source: unknown,
+): OpenClawSourceTransportProfile | undefined {
+  if (!isRecord(source)) return undefined;
+  const kind = source.kind;
+  if (kind !== 'public-clawhub' && kind !== 'public-github') return undefined;
+  return profiles[kind];
 }
 
 function sandboxExecutorOptions(options: HostedWorkerOptions): SandboxExecutorOptions | undefined {
@@ -283,6 +369,10 @@ function isHttpOrigin(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isStrictHttpsOrigin(value: string): boolean {

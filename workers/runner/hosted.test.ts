@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createHostedOpenClawAcquisition,
   createHostedWorkerHandler,
   createHostedWorkerHandlerFromEnv,
   type HostedWorkerOptions,
@@ -241,5 +242,80 @@ describe('hosted worker route', () => {
         sourceProviderOrigin: 'https://clawhub.example.test',
       },
     })).toThrow('cannot be combined with a caller-supplied OpenClaw fetcher');
+  });
+
+  it('keeps public source profiles independent and rejects an unconfigured source family', async () => {
+    const locatorCalls: OpenClawNormalizedSource[] = [];
+    const acquisition = createHostedOpenClawAcquisition({
+      locator: {
+        locate: (source) => {
+          locatorCalls.push(source);
+          throw new Error('profile locator fixture');
+        },
+      },
+      sourceProfiles: {
+        'public-clawhub': {
+          allowedArtifactOrigins: ['https://clawhub.ai'],
+          sourceProviderOrigin: 'https://clawhub.ai',
+        },
+        'public-github': {
+          allowedArtifactOrigins: ['https://codeload.github.com'],
+          sourceProviderOrigin: 'https://github.com',
+        },
+      },
+    });
+    expect(acquisition.allowedArtifactOrigins).toEqual([
+      'https://clawhub.ai',
+      'https://codeload.github.com',
+    ]);
+    expect(acquisition.sourceProviderOrigin).toBeUndefined();
+
+    const github: OpenClawNormalizedSource = {
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'openclaw/skills',
+      path: '',
+      commit: '0123456789012345678901234567890123456789',
+      contentHash: 'a'.repeat(64),
+    };
+    await expect(acquisition.fetcher.fetch(github)).rejects.toThrow('profile locator fixture');
+    expect(locatorCalls).toEqual([github]);
+
+    const onlyGithub = createHostedOpenClawAcquisition({
+      locator: { locate: () => { throw new Error('must not call unconfigured source locator'); } },
+      sourceProfiles: {
+        'public-github': {
+          allowedArtifactOrigins: ['https://codeload.github.com'],
+          sourceProviderOrigin: 'https://github.com',
+        },
+      },
+    });
+    const clawHub: OpenClawNormalizedSource = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: 'demo',
+      version: '1.0.0',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+    };
+    await expect(onlyGithub.fetcher.fetch(clawHub)).rejects.toThrow('source kind is not configured');
+
+    const crossProfile = createHostedOpenClawAcquisition({
+      locator: {
+        locate: () => ({
+          // A malicious locator result must not widen the ClawHub profile to
+          // the GitHub archive origin.
+          url: 'https://codeload.github.com/openclaw/skills/tar.gz/0123456789012345678901234567890123456789',
+          allowedArtifactOrigins: ['https://codeload.github.com'],
+          sourceProviderOrigin: 'https://github.com',
+        }),
+      },
+      sourceProfiles: {
+        'public-clawhub': {
+          allowedArtifactOrigins: ['https://clawhub.ai'],
+          sourceProviderOrigin: 'https://clawhub.ai',
+        },
+      },
+    });
+    await expect(crossProfile.fetcher.fetch(clawHub)).rejects.toMatchObject({ code: 'unsafe_url' });
   });
 });
