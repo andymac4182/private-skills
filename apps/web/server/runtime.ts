@@ -1,5 +1,11 @@
 import { createAuthenticatorFromEnv } from '../../../packages/auth/src/index';
-import { createRegistryHandler } from '../../../packages/core/src/index';
+import {
+  createRegistryHandler,
+  canReadOpenClawNamespace,
+  canReadSkillForPrincipal,
+  createOpenClawImportQueue,
+  isSkillCurrentlyApproved,
+} from '../../../packages/core/src/index';
 import { createHttpRepositoryHandler } from '../../../packages/database/src/http';
 import { createBlobGatewayHandler } from '../../../packages/storage/src/http';
 import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastructure';
@@ -15,10 +21,17 @@ import {
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 import {
+  createOpenClawCandidateProvider,
   OpenClawPublicationManager,
+  OpenClawTrustedSnapshotImportService,
+  PersistentOpenClawFeedCache,
+  StateRepositoryOpenClawConsumerSnapshotStore,
+  StateRepositoryOpenClawSourceProofStore,
   StateRepositoryOpenClawPublicationStore,
+  type OpenClawMetadataSnapshot,
   type OpenClawTrustedFeedProfile,
 } from '../../../packages/openclaw-adapter/src/index';
+import type { OpenClawRefreshResult } from '../../../packages/openclaw/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -58,10 +71,69 @@ async function createRuntime(env: RuntimeEnvironment) {
   const openClawFeedId = env.PSKILLS_OPENCLAW_FEED_ID?.trim();
   const openClawFeedUrl = env.PSKILLS_OPENCLAW_FEED_URL?.trim() || `${config.publicOrigin}/v1/feeds/skills`;
   const openClawTrustedFeed = createOpenClawTrustedFeedProfile(env);
+  const openClawProofStore = openClawFeedId
+    ? new StateRepositoryOpenClawSourceProofStore(infrastructure.repository, {
+      isCurrentPolicyApproved: isSkillCurrentlyApproved,
+    })
+    : undefined;
+  const openClawCandidateProvider = openClawProofStore
+    ? createOpenClawCandidateProvider({
+      proofs: openClawProofStore,
+      canReadSkill: canReadSkillForPrincipal,
+      isCurrentPolicyApproved: isSkillCurrentlyApproved,
+    })
+    : undefined;
+  const openClawNamespace = env.PSKILLS_OPENCLAW_NAMESPACE?.trim();
+  const openClawSourceOrigin = env.PSKILLS_OPENCLAW_SOURCE_ORIGIN?.trim();
+  const openClawConsumerStore = openClawFeedId
+    ? new StateRepositoryOpenClawConsumerSnapshotStore(infrastructure.repository)
+    : undefined;
+  const openClawCache = openClawConsumerStore
+    ? new PersistentOpenClawFeedCache({ store: openClawConsumerStore, tenantId: config.organizationId })
+    : undefined;
+  const openClawQueue = openClawNamespace && openClawSourceOrigin
+    ? (() => {
+      try {
+        return createOpenClawImportQueue({
+          repository: infrastructure.repository,
+          organizationId: config.organizationId,
+          namespace: openClawNamespace,
+          sourceProviderOrigin: openClawSourceOrigin,
+        });
+      } catch {
+        return undefined;
+      }
+    })()
+    : undefined;
+  const openClawConsumerService = openClawConsumerStore && openClawQueue && openClawNamespace
+    ? new OpenClawTrustedSnapshotImportService({
+      store: openClawConsumerStore,
+      queue: openClawQueue,
+      authorize: ({ principal }) => canReadOpenClawNamespace(principal, openClawNamespace),
+    })
+    : undefined;
+  const openClawConsumer = openClawTrustedFeed && openClawCache && openClawConsumerService
+    ? {
+      refresh: async (signal: AbortSignal) => {
+        const result = await openClawCache.refresh({
+          url: openClawTrustedFeed.url,
+          expectedFeedId: openClawTrustedFeed.expectedFeedId,
+          allowedOrigins: openClawTrustedFeed.allowedOrigins,
+          ...(openClawTrustedFeed.fetcher === undefined ? {} : { fetcher: openClawTrustedFeed.fetcher }),
+          signal,
+        });
+        return openClawConsumerRefreshResult(result);
+      },
+      selectAndQueue: openClawConsumerService.selectAndQueue.bind(openClawConsumerService),
+    }
+    : undefined;
   // Publication persistence is always the injected StateRepository. The
-  // feed remains disabled unless an operator supplies a non-reserved feed ID;
-  // source-verifier candidates are supplied by the worker integration later.
-  // This construction is Web API-only and safe for Nitro edge composition.
+  // feed remains disabled unless an operator supplies a non-reserved feed ID.
+  // Candidate projection is deliberately read-only: it can expose only
+  // releases whose worker-produced provenance, artifact digest, current
+  // policy, and namespace access all match the trusted metadata snapshot.
+  // Source acquisition stays in the hosted worker; this construction is
+  // Web API-only and safe for Nitro edge composition.
   const openClaw = openClawFeedId
     ? {
       enabled: true,
@@ -71,6 +143,11 @@ async function createRuntime(env: RuntimeEnvironment) {
         new StateRepositoryOpenClawPublicationStore(infrastructure.repository),
       ),
       ...(openClawTrustedFeed === undefined ? {} : { trustedFeed: openClawTrustedFeed }),
+      ...(openClawCandidateProvider === undefined ? {} : { candidatesForTenant: openClawCandidateProvider }),
+      ...(openClawProofStore === undefined ? {} : { recordSourceProof: openClawProofStore.recordFromCompletion.bind(openClawProofStore) }),
+      ...(openClawNamespace === undefined ? {} : { namespace: openClawNamespace }),
+      ...(openClawSourceOrigin === undefined ? {} : { sourceProviderOrigin: openClawSourceOrigin }),
+      ...(openClawConsumer === undefined ? {} : { consumer: openClawConsumer }),
     }
     : undefined;
   // Directory access is an explicit server-side opt-in. The selected
@@ -130,7 +207,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
     if (infrastructure.hostedWorker && env.CRON_SECRET && (response.status === 201 || response.status === 202) && request.method === 'POST' &&
-        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
+        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || path === '/v1/feeds/skills/import' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path))) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.
       const drain = async () => {
@@ -168,6 +245,53 @@ function createOpenClawTrustedFeedProfile(env: RuntimeEnvironment): OpenClawTrus
   } catch {
     return undefined;
   }
+}
+
+function openClawConsumerRefreshResult(result: OpenClawRefreshResult): {
+  kind: string;
+  snapshot?: OpenClawMetadataSnapshot;
+} {
+  if (result.kind === 'rejected') return { kind: result.kind };
+  const snapshot = result.snapshot;
+  return {
+    kind: result.kind,
+    snapshot: {
+      feed: {
+        schemaVersion: snapshot.feed.schemaVersion,
+        id: snapshot.feed.id,
+        generatedAt: snapshot.feed.generatedAt,
+        sequence: snapshot.feed.sequence,
+        expiresAt: snapshot.feed.expiresAt,
+        ...(snapshot.feed.description === undefined ? {} : { description: snapshot.feed.description }),
+        entries: snapshot.feed.entries.map((entry) => ({
+          type: entry.type,
+          id: entry.id,
+          title: entry.title,
+          ...(entry.description === undefined ? {} : { description: entry.description }),
+          ...(entry.icon === undefined ? {} : { icon: entry.icon }),
+          version: entry.version,
+          state: entry.state,
+          ...(entry.featured === undefined ? {} : { featured: entry.featured }),
+          ...(entry.featuredAt === undefined ? {} : { featuredAt: entry.featuredAt }),
+          publisher: { ...entry.publisher },
+          install: {
+            candidates: entry.install.candidates.map((candidate) => ({
+              sourceRef: candidate.sourceRef,
+              package: candidate.package,
+              version: candidate.version,
+              integrity: candidate.integrity,
+              ...(candidate.github === undefined ? {} : { github: { ...candidate.github } }),
+            })),
+          },
+        })),
+      },
+      sha256: snapshot.sha256,
+      etag: snapshot.etag,
+      ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
+      acceptedAt: snapshot.acceptedAt,
+      sourceUrl: snapshot.sourceUrl,
+    },
+  };
 }
 
 // A stable environment object is cached on Node; worker bindings are per-request.

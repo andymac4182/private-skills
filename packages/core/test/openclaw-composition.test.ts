@@ -3,27 +3,37 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyRegistryState,
   createRegistryHandler,
+  createOpenClawImportQueue,
+  type RegistryOpenClawConsumerDependencies,
+  type RegistryOpenClawSourceProofCompletion,
   type RegistryOpenClawCandidate,
 } from '../src/index.js';
 import {
   MemoryOpenClawPublicationStore,
   OpenClawPublicationManager,
+  OpenClawTrustedSnapshotImportService,
+  StateRepositoryOpenClawConsumerSnapshotStore,
 } from '../../openclaw-adapter/src/index.ts';
-import { serializeOpenClawFeed } from '../../openclaw/src/index.ts';
+import { parseOpenClawFeed, serializeOpenClawFeed, sha256 } from '../../openclaw/src/index.ts';
+import type { OpenClawCacheSnapshot } from '../../openclaw/src/index.ts';
 import type {
   Authenticator,
   BlobStore,
+  Job,
   Principal,
   RegistryDependencies,
   RegistryState,
   SkillVersion,
   StateRepository,
 } from '../../contracts/src/index.js';
+import type { OpenClawMetadataSnapshot } from '../../openclaw-adapter/src/index.ts';
+import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION_ID = 'org-openclaw';
 const REGISTRY_DIGEST = `sha256:${'a'.repeat(64)}` as `sha256:${string}`;
 const SOURCE_DIGEST = `sha256:${'b'.repeat(64)}` as `sha256:${string}`;
+const FEED_DIGEST = `sha256:${'c'.repeat(64)}` as `sha256:${string}`;
 
 class MemoryRepository implements StateRepository {
   state: RegistryState;
@@ -51,7 +61,7 @@ class MemoryRepository implements StateRepository {
 
 class MemoryBlobs implements BlobStore {
   async put(bytes: Uint8Array) {
-    return { key: 'openclaw-memory', digest: REGISTRY_DIGEST, size: bytes.byteLength };
+    return { key: 'openclaw-memory', digest: await digestBytes(bytes), size: bytes.byteLength };
   }
 
   async get(): Promise<Uint8Array> {
@@ -131,7 +141,10 @@ function candidate(): RegistryOpenClawCandidate {
 function setup(options: {
   principal?: Principal | null;
   candidates?: (input: { metadata?: unknown }) => readonly RegistryOpenClawCandidate[];
+  recordSourceProof?: (input: RegistryOpenClawSourceProofCompletion) => Promise<unknown> | unknown;
   trustedPreview?: boolean;
+  consumer?: RegistryOpenClawConsumerDependencies;
+  namespace?: string;
 } = {}) {
   const repository = new MemoryRepository();
   repository.state.skills.push(skill());
@@ -180,6 +193,9 @@ function setup(options: {
       ...(options.candidates === undefined
         ? { candidatesForTenant: async () => [sourceCandidate] }
         : { candidatesForTenant: async (input) => options.candidates!({ metadata: input.metadata }) }),
+      ...(options.recordSourceProof === undefined ? {} : { recordSourceProof: options.recordSourceProof }),
+      ...(options.consumer === undefined ? {} : { consumer: options.consumer }),
+      ...(options.namespace === undefined ? {} : { namespace: options.namespace }),
       now: () => Date.parse('2030-01-01T00:00:00.000Z'),
     },
   };
@@ -198,7 +214,120 @@ async function json(response: Response): Promise<any> {
   return response.json();
 }
 
+function metadataSnapshot(entry: RegistryOpenClawCandidate['entry']): OpenClawMetadataSnapshot {
+  return {
+    feed: {
+      schemaVersion: 1,
+      id: 'clawhub-official',
+      generatedAt: '2025-01-01T00:00:00.000Z',
+      sequence: 5,
+      expiresAt: '2030-01-02T00:00:00.000Z',
+      entries: [entry],
+    },
+    sha256: FEED_DIGEST,
+    etag: `"${FEED_DIGEST}"`,
+    acceptedAt: Date.now(),
+    sourceUrl: 'https://clawhub.example/v1/feeds/skills',
+  };
+}
+
 describe('core OpenClaw feed composition', () => {
+  it('previews trusted catalog metadata and queues an exact entry through the durable import path', async () => {
+    const entry = candidate().entry;
+    const generatedAt = new Date(Date.now() - 1_000).toISOString();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const body = serializeOpenClawFeed({
+      schemaVersion: 1,
+      id: 'clawhub-official',
+      generatedAt,
+      sequence: 5,
+      expiresAt,
+      entries: [entry],
+    });
+    const bytes = new TextEncoder().encode(body);
+    const snapshot: OpenClawCacheSnapshot = {
+      feed: parseOpenClawFeed(body, { checkExpiry: false }),
+      body,
+      bytes,
+      sha256: await sha256(bytes),
+      etag: `"${await sha256(bytes)}"`,
+      acceptedAt: Date.now(),
+      sourceUrl: 'https://clawhub.example/v1/feeds/skills',
+    };
+    const withConsumer = setup({ trustedPreview: true, namespace: '@team' });
+    // Seed the exact validated feed bytes in the same repository used by the
+    // handler; the consumer service never trusts the route body for metadata.
+    const consumerStore = new StateRepositoryOpenClawConsumerSnapshotStore(withConsumer.repository);
+    await consumerStore.put({
+      tenantId: ORGANIZATION_ID,
+      feedId: 'clawhub-official',
+      sourceUrl: snapshot.sourceUrl,
+    }, snapshot);
+    const consumerQueue = createOpenClawImportQueue({
+      repository: withConsumer.repository,
+      organizationId: ORGANIZATION_ID,
+      namespace: '@team',
+      sourceProviderOrigin: 'https://clawhub.example',
+      now: () => Date.now(),
+    });
+    const consumerService = new OpenClawTrustedSnapshotImportService({
+      store: consumerStore,
+      queue: consumerQueue,
+      authorize: () => true,
+      now: () => Date.now(),
+    });
+    let currentPrincipal = principal('reader', ['reader'], ['@team'], ['registry:read', 'proxy:resolve']);
+    const handler = createRegistryHandler({
+      repository: withConsumer.repository,
+      blobs: new MemoryBlobs(),
+      auth: { authenticate: async () => currentPrincipal },
+      config: { publicOrigin: ORIGIN, maxBodyBytes: 1024 * 1024, organizationId: ORGANIZATION_ID, leaseSeconds: 30 },
+      openClaw: {
+        feedId: 'private/openclaw',
+        feedUrl: `${ORIGIN}/v1/feeds/skills`,
+        publicationManager: new OpenClawPublicationManager(new MemoryOpenClawPublicationStore()),
+        trustedFeed: {
+          url: snapshot.sourceUrl,
+          expectedFeedId: 'clawhub-official',
+          allowedOrigins: ['https://clawhub.example'],
+        },
+        namespace: '@team',
+        consumer: {
+          refresh: async () => ({ kind: 'not-modified', snapshot: metadataSnapshot(entry) }),
+          selectAndQueue: consumerService.selectAndQueue.bind(consumerService),
+        },
+      },
+    });
+    const catalog = await handler(new Request(`${ORIGIN}/v1/feeds/skills/catalog`));
+    expect(catalog.status).toBe(200);
+    expect(await json(catalog)).toMatchObject({ feed: { id: 'clawhub-official', entries: [{ id: '@acme/demo' }] } });
+
+    const queued = await handler(new Request(`${ORIGIN}/v1/feeds/skills/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ externalId: '@acme/demo' }),
+    }));
+    expect(queued.status).toBe(202);
+    const queuedBody = await json(queued);
+    expect(queuedBody).toMatchObject({ feed: 'clawhub-official', externalId: '@acme/demo', operation: { state: 'queued' } });
+    const queuedJob = withConsumer.repository.state.jobs.find((job) => job.id === queuedBody.operation.operationId);
+    expect(queuedJob).toMatchObject({
+      kind: 'import',
+      import: { externalId: '@acme/demo', name: expect.stringMatching(/^@team\/openclaw-/u) },
+      openclawSource: { source: { kind: 'public-clawhub' }, feed: { id: 'clawhub-official', sequence: 5 } },
+    });
+
+    const beforeDenied = withConsumer.repository.state.jobs.length;
+    currentPrincipal = principal('reader', ['reader'], ['@team'], ['registry:read']);
+    const actuallyDenied = await handler(new Request(`${ORIGIN}/v1/feeds/skills/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ externalId: '@acme/demo' }),
+    }));
+    expect(actuallyDenied.status).toBe(403);
+    expect(withConsumer.repository.state.jobs.length).toBe(beforeDenied);
+  });
+
   it('refreshes from verifier-backed approved evidence and serves an authenticated feed', async () => {
     const test = setup({ trustedPreview: true });
     const capabilities = await test.handler(new Request(`${ORIGIN}/v1/capabilities`));
@@ -231,6 +360,100 @@ describe('core OpenClaw feed composition', () => {
       id: 'private/openclaw',
       entries: [{ id: '@acme/demo', install: { candidates: [{ integrity: SOURCE_DIGEST }] } }],
     });
+  });
+
+  it('hands a completed server-owned OpenClaw import to the durable proof store', async () => {
+    const recorded: Array<{
+      tenantId: string;
+      completionJobId: string;
+      skillId: string;
+      entry: RegistryOpenClawCandidate['entry'];
+      sourceArtifact: RegistryOpenClawCandidate['sourceArtifact'];
+    }> = [];
+    const test = setup({
+      recordSourceProof: async (input) => { recorded.push(input); },
+    });
+    const source = {
+      kind: 'public-clawhub',
+      sourceRef: 'public-clawhub',
+      packageName: '@acme/demo',
+      version: '1.0.0',
+      artifactDigest: SOURCE_DIGEST,
+    } as const;
+    await test.repository.transaction(ORGANIZATION_ID, (state) => {
+      const now = new Date().toISOString();
+      const job: Job = {
+        id: 'job-openclaw-proof',
+        organizationId: ORGANIZATION_ID,
+        kind: 'import',
+        state: 'queued',
+        policyRevision: state.policy.revision,
+        policy: structuredClone(state.policy),
+        import: {
+          upstreamId: 'upstream-openclaw',
+          path: '@acme/demo',
+          externalId: '@acme/demo',
+          name: '@team/demo',
+          version: '1.0.0',
+        },
+        upstream: {
+          id: 'upstream-openclaw',
+          organizationId: ORGANIZATION_ID,
+          name: 'OpenClaw fixture',
+          kind: 'registry',
+          enabled: true,
+          baseUrl: 'https://clawhub.example',
+          namespace: '@team',
+        },
+        openclawSource: { source, entry: candidate().entry },
+        createdAt: now,
+        updatedAt: now,
+        attempts: 0,
+      };
+      state.jobs.push(job);
+    });
+
+    const worker = { ...principal('worker', ['worker']), identity: 'worker' as const, scopes: ['jobs:claim', 'jobs:complete'] };
+    test.setPrincipal(worker);
+    const claimed = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    expect(claimed.status).toBe(200);
+    const claimedJob = (await json(claimed)).job as Job & { leaseToken: string };
+    const bundle = {
+      format: 'pskills-bundle-v1' as const,
+      files: [{
+        path: 'SKILL.md',
+        content: Buffer.from('---\nname: demo\ndescription: proof fixture\n---\n# Demo\n', 'utf8').toString('base64'),
+      }],
+    };
+    const artifactDigest = await digestBytes(encodeBundle(bundle));
+    const completed = await test.handler(new Request(`${ORIGIN}/internal/jobs/${claimedJob.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': claimedJob.leaseToken },
+      body: JSON.stringify({
+        leaseToken: claimedJob.leaseToken,
+        artifactDigest,
+        bundle,
+        provenance: {
+          kind: 'registry',
+          upstreamId: 'upstream-openclaw',
+          repository: 'https://clawhub.example',
+          path: '@acme/demo',
+          revision: '1.0.0',
+          externalId: '@acme/demo',
+          externalDigest: SOURCE_DIGEST,
+          sourceResolutionKind: 'snapshot',
+          sourceProviderOrigin: 'https://clawhub.example',
+          sourceDigest: artifactDigest,
+        },
+      }),
+    }));
+    expect(completed.status).toBe(200);
+    expect(recorded).toMatchObject([{
+      tenantId: ORGANIZATION_ID,
+      completionJobId: 'job-openclaw-proof',
+      entry: { id: '@acme/demo', version: '1.0.0' },
+      sourceArtifact: { digest: SOURCE_DIGEST, format: 'clawhub-skill-v1', identity: '@acme/demo@1.0.0' },
+    }]);
   });
 
   it('requires admin refresh and current namespace/policy admission on every read', async () => {
