@@ -45,6 +45,9 @@ export interface LocalRegistryOptions {
   readonly workerToken?: string;
   readonly policy?: Policy;
   readonly directory?: RegistryDirectoryClient;
+  /** Exact catalog base represented by the injected directory fixture. */
+  readonly directoryBaseUrl?: string;
+  readonly trustedSkillsShBaseUrls?: readonly string[];
   readonly allowLoopbackUpstreams?: boolean;
 }
 
@@ -114,13 +117,18 @@ export async function createLocalRegistryHarness(
     organizationId,
     leaseSeconds: 60,
     allowLoopbackUpstreams: options.allowLoopbackUpstreams,
+    ...(options.trustedSkillsShBaseUrls === undefined ? {} : { trustedSkillsShBaseUrls: options.trustedSkillsShBaseUrls }),
   };
+  const directoryBaseUrl = options.directoryBaseUrl ?? 'https://skills.sh';
+  const directoryForBase = (baseUrl: string): RegistryDirectoryClient | undefined =>
+    baseUrl === directoryBaseUrl ? options.directory : undefined;
   const dependencies: RegistryHandlerDependencies = {
     repository,
     blobs,
     auth,
     config,
     directory: options.directory,
+    directoryForBase,
   };
 
   return {
