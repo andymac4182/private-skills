@@ -133,8 +133,12 @@ invalid, or does not match the explicit project and organization IDs. It also
 uses the repository root as the child working directory and only forwards the
 fixed deploy flags plus sanitized `--meta key=value` values:
 
+The command deliberately has one `--`, immediately before the fixed deploy
+flags. With pnpm 11.19, an extra `--` immediately after the script name is
+forwarded to the wrapper and is rejected as a duplicate separator.
+
 ```sh
-pnpm run release:vercel -- \
+pnpm run release:vercel \
   --project-id "$VERCEL_PROJECT_ID" \
   --org-id "$VERCEL_ORG_ID" \
   -- \

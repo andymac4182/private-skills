@@ -1,6 +1,8 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   parseVercelReleaseArgs,
@@ -131,6 +133,32 @@ describe('Vercel release preflight', () => {
       spawn,
     })).toThrow(VercelReleaseGuardError)
     expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('does not echo secret-looking unsupported arguments to process output', () => {
+    const canary = 'release-argument-canary-do-not-echo'
+    const script = fileURLToPath(new URL('../scripts/vercel-release.mjs', import.meta.url))
+    const attempts = [
+      [
+        '--project-id', EXPECTED_PROJECT_ID,
+        '--org-id', EXPECTED_ORG_ID,
+        '--', ...DEPLOY_ARGS,
+        `--token=${canary}`,
+      ],
+      [
+        `${canary}-path`,
+        '--project-id', EXPECTED_PROJECT_ID,
+        '--org-id', EXPECTED_ORG_ID,
+        '--', ...DEPLOY_ARGS,
+      ],
+    ]
+
+    for (const args of attempts) {
+      const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' })
+      expect(result.status).toBe(1)
+      expect(`${result.stdout ?? ''}${result.stderr ?? ''}`).not.toContain(canary)
+      expect(result.stderr).toMatch(/Vercel release (?:option is not permitted\.|argument is not permitted before the deploy separator\.)/u)
+    }
   })
 
   it('requires explicit IDs and a deploy separator in the package command', () => {

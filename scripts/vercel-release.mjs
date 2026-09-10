@@ -59,10 +59,10 @@ function readLinkedProject(root) {
   try {
     parsed = JSON.parse(readFileSync(linkPath, 'utf8'))
   } catch {
-    fail('The checked-in Vercel project link is not valid JSON.')
+    fail('The existing local Vercel project link is not valid JSON.')
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    fail('The checked-in Vercel project link has an invalid shape.')
+    fail('The existing local Vercel project link has an invalid shape.')
   }
   assertIdentifier(parsed.projectId, 'linked project ID')
   assertIdentifier(parsed.orgId, 'linked organization ID')
@@ -131,7 +131,7 @@ export function validateVercelDeployArgs(args) {
     }
     // A whitelist is intentional: it rejects Vercel context, path, project,
     // team, token, debug, environment, and positional-target overrides.
-    fail(`Vercel release option is not permitted: ${argument}`)
+    fail('Vercel release option is not permitted.')
   }
   for (const required of REQUIRED_DEPLOY_FLAGS) {
     if (!seen.has(required)) fail(`Vercel release requires ${required}.`)
@@ -218,7 +218,7 @@ export function parseVercelReleaseArgs(argv) {
       expectedOrgId = argument.slice('--org-id='.length)
       continue
     }
-    fail(`Vercel release argument is not permitted before the deploy separator: ${String(argument)}`)
+    fail('Vercel release argument is not permitted before the deploy separator.')
   }
   assertIdentifier(expectedProjectId, 'expected project ID')
   assertIdentifier(expectedOrgId, 'expected organization ID')
