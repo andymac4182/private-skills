@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { api, ApiError, isApiErrorCode } from '../lib/api'
-import { formatDate, shortDigest } from '../lib/format'
+import { shortDigest } from '../lib/format'
 import { useAuth } from '../lib/auth'
 import type {
+  Job,
   SkillDetailResponse,
   SkillSearchResponse,
   SkillView,
   V1Skill,
   DirectorySkillListResponse,
 } from '../lib/types'
-import { Badge, Button, DisconnectedState, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
+import { Badge, Button, DisconnectedState, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
 
 const browseViews: Array<{ id: SkillView; label: string; description: string }> = [
   { id: 'all-time', label: 'All', description: 'The complete on-demand leaderboard page.' },
@@ -188,7 +189,7 @@ export function DirectoryView() {
       {loading ? <LoadingState label="Loading cloud metadata…" /> : disconnected ? <Notice kind="info">Directory results are paused until the public source connection is configured.</Notice> : error ? <Notice kind="warning">No directory results are shown while the source is unavailable.</Notice> : skills.length === 0 ? <EmptyState title={submittedQuery ? 'No cloud matches' : 'No skills on this page'} description={submittedQuery ? 'Try a broader source or skill description.' : 'The directory returned no rows for this page.'} /> : <div className="directory-grid">{skills.map((skill) => <DirectorySkillCard key={skill.id} skill={skill} selected={selected?.id === skill.id} onInspect={() => void inspect(skill)} />)}</div>}
       {!submittedQuery && list && <DirectoryPagination pagination={list.pagination} page={page} onPageChange={(nextPage) => { setPage(nextPage); setSelected(null); setDetail(null) }} />}
     </Panel>
-    {selected && <DirectoryDetailPanel detail={detail} detailDisconnected={detailDisconnected} detailError={detailError} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
+    {selected && <DirectoryDetailPanel key={selected.id} detail={detail} detailDisconnected={detailDisconnected} detailError={detailError} loading={detailLoading} selected={selected} onRetry={() => void inspect(selected)} />}
   </div>
 }
 
@@ -214,29 +215,81 @@ function DirectoryPagination({ pagination, page, onPageChange }: { pagination: D
 function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading, selected, onRetry }: { detail: SkillDetailResponse | null; detailDisconnected: boolean; detailError: string | null; loading: boolean; selected: V1Skill; onRetry: () => void }) {
   const navigate = useNavigate()
   const { principal } = useAuth()
-  const [name, setName] = useState('')
-  const [version, setVersion] = useState('')
   const [busy, setBusy] = useState(false)
+  const [operation, setOperation] = useState<Job | null>(null)
+  const [ready, setReady] = useState(false)
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const canImport = principal?.roles.some((role) => role === 'owner' || role === 'admin' || role === 'publisher') ?? false
 
-  async function requestImport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!/^@[a-z0-9-]+\/[a-z0-9-]+$/u.test(name.trim()) || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version.trim())) {
-      setMessage({ kind: 'error', text: 'Choose a private @namespace/name and an explicit semantic version for admission.' })
-      return
-    }
+  async function requestProxy(refresh = false) {
     setBusy(true)
     setMessage(null)
+    setOperation(null)
+    setReady(false)
     try {
-      const response = await api.directoryImport({ id: selected.id, name: name.trim(), version: version.trim() })
-      setMessage({ kind: 'success', text: `Private import queued as ${response.operation.id}. The existing scanner and policy flow must complete before installation.` })
+      const response = await api.proxyResolve({ externalId: selected.id, ...(refresh ? { refresh: true } : {}) })
+      if (response.externalId !== selected.id) {
+        setMessage({ kind: 'error', text: 'The registry returned a different external identity, so this request was not accepted.' })
+      } else if (response.operation) {
+        setOperation(response.operation)
+        if (response.operation.state === 'failed') {
+          setMessage({ kind: 'error', text: response.operation.error ?? 'The registry operation failed before this source became ready.' })
+        } else if (response.operation.state === 'completed') {
+          setMessage({ kind: 'success', text: 'The registry operation completed. Check the source again to confirm its current approval state.' })
+        } else {
+          setMessage({ kind: 'success', text: `The registry is fetching, scanning, and caching ${response.externalId}.` })
+        }
+      } else if (response.resolution) {
+        setReady(true)
+        setMessage({ kind: 'success', text: `This source is ready through the private registry. The original skills.sh ID remains the install identity.` })
+      } else {
+        setMessage({ kind: 'error', text: 'The registry returned no operation or approved resolution for this source.' })
+      }
     } catch (cause) {
-      setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not queue the private import.' })
+      setReady(false)
+      setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not request this source through the private registry.' })
     } finally {
       setBusy(false)
     }
   }
+
+  useEffect(() => {
+    if (!operation || operation.state === 'completed' || operation.state === 'failed') return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      try {
+        const response = await api.operation(operation.id)
+        if (stopped) return
+        setOperation(response.operation)
+        if (response.operation.state === 'failed') {
+          setReady(false)
+          setMessage({ kind: 'error', text: response.operation.error ?? 'The registry operation failed before this source became ready.' })
+        } else if (response.operation.state === 'completed') {
+          try {
+            const resolved = await api.proxyResolve({ externalId: selected.id })
+            if (!stopped && resolved.externalId !== selected.id) {
+              setReady(false)
+              setMessage({ kind: 'error', text: 'The registry returned a different external identity, so readiness was not claimed.' })
+            } else if (!stopped && resolved.resolution) {
+              setReady(true)
+              setMessage({ kind: 'success', text: 'The source passed the registry flow and is ready to install by its original skills.sh ID.' })
+            } else if (!stopped) {
+              setMessage({ kind: 'error', text: 'The registry operation completed without an approved resolution.' })
+            }
+          } catch (cause) {
+            if (!stopped) setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'The source completed without an approved resolution.' })
+          }
+        } else if (!stopped) {
+          timer = setTimeout(() => void poll(), 1600)
+        }
+      } catch (cause) {
+        if (!stopped) setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not refresh registry operation status.' })
+      }
+    }
+    timer = setTimeout(() => void poll(), 1200)
+    return () => { stopped = true; if (timer) clearTimeout(timer) }
+  }, [operation?.id, operation?.state, selected.id])
 
   function openAudits() {
     if (typeof window !== 'undefined') window.sessionStorage.setItem('pskills.directory.audit.id', selected.id)
@@ -247,9 +300,13 @@ function DirectoryDetailPanel({ detail, detailDisconnected, detailError, loading
     {loading ? <LoadingState label="Loading source detail…" /> : detailDisconnected ? <DisconnectedState title="Cloud source is disconnected" message="This listing cannot be inspected until the public skills.sh connection is configured." action={selected.url ? <a className="button button-secondary" href={selected.url} rel="noreferrer" target="_blank">Open source page ↗</a> : undefined} /> : detailError ? <ErrorState message={detailError} onRetry={onRetry} /> : detail && <div className="directory-detail-grid"><div>
       <div className="detail-heading"><div><span className="eyebrow eyebrow-cloud">skills.sh listing</span><h2>{selected.name}</h2><p>{selected.source}/{selected.slug}</p></div><Badge value={detail.files === null ? 'metadata-only' : 'snapshot-available'} /></div>
       <div className="detail-meta"><div className="meta-row"><span>External ID</span><span>{detail.id}</span></div><div className="meta-row"><span>Source type</span><span>{selected.sourceType === 'github' ? 'GitHub' : 'Well-known provider'}</span></div><div className="meta-row"><span>skills.sh installs</span><span>{formatNumber(detail.installs)}</span></div><div className="meta-row"><span>External snapshot hash</span><span>{detail.hash ? shortDigest(detail.hash) : 'Unavailable'}</span></div></div>
-      {detail.files === null ? <Notice kind="warning">The directory has no file snapshot for this row. Source resolution is required before a private import can be admitted.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Snapshot files</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · text is retained as source data</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
-    </div><div className="directory-import"><h3 className="subheading">Request private import</h3><p className="helper">Choose the private namespace and version yourself. The external row has no upstream SemVer, and approval still depends on our scanner policy.</p><form className="stack-form" onSubmit={requestImport}><Field label="Private name"><input disabled={!canImport} onChange={(event) => setName(event.target.value)} placeholder="@team/skill" value={name} /></Field><Field label="Private version"><input disabled={!canImport} onChange={(event) => setVersion(event.target.value)} placeholder="1.0.0" value={version} /></Field>{message && <Notice kind={message.kind}>{message.text}{message.kind === 'success' && <>{' '}<Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link></>}</Notice>}{!canImport && <Notice kind="warning">Your role cannot request a private import.</Notice>}<Button busy={busy} disabled={!canImport || detail.files === null} type="submit">Queue private import</Button></form></div></div>}
+      {detail.files === null ? <Notice kind="info">This row has metadata only. The first request below asks the registry to resolve the source, retain the external identity, scan the bytes, and cache the result.</Notice> : <div className="directory-files"><div className="install-header"><h3 className="subheading">Snapshot files</h3><span className="helper">{detail.files.length} file{detail.files.length === 1 ? '' : 's'} · text is retained as source data</span></div><ul>{detail.files.slice(0, 24).map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>{detail.files.length > 24 && <span className="helper">Showing the first 24 paths.</span>}</div>}
+    </div><div className="directory-import"><h3 className="subheading">Use this skill privately</h3><p className="helper">The original skills.sh ID is the source identity. No rename, version, or source mapping is required here; the registry fetches, scans, and caches it on the first request.</p><div className="proxy-identity"><span>External skill ID</span><code>{selected.id}</code></div>{message && <Notice kind={message.kind}>{message.text}</Notice>}{operation && <div className="proxy-operation"><div className="meta-row"><span>Registry operation</span><Badge value={operation.state} /></div><div className="meta-row"><span>Operation ID</span><code>{operation.id}</code></div>{operation.error && <Notice kind="error">{operation.error}</Notice>}</div>}{ready && <Notice kind="success">Approved resolution available through this registry.</Notice>}{!canImport && <Notice kind="warning">Your role cannot request a private source resolution.</Notice>}<div className="proxy-actions"><Button busy={busy} disabled={!canImport} type="button" onClick={() => void requestProxy()}>{ready ? 'Check source again' : 'Fetch and check source'}</Button>{ready && <Button busy={busy} disabled={!canImport} kind="quiet" type="button" onClick={() => void requestProxy(true)}>Refresh source</Button>}</div><div className="proxy-command"><span className="helper">CLI command using the configured private registry</span><code>pskills install {selected.id} --registry {registryOrigin()} --agent codex</code><span className="helper">The command keeps this same external ID and waits for the registry’s scanner and policy state.</span></div>{operation && <Link to="/app/$section" params={{ section: 'operations' }}>View activity</Link>}</div></div>}
   </Panel>
+}
+
+function registryOrigin() {
+  return typeof window === 'undefined' ? '<private-registry-url>' : window.location.origin
 }
 
 function formatNumber(value: number) {

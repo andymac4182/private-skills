@@ -5,6 +5,7 @@ import type {
   PackVersion,
   Policy,
   Principal,
+  Resolution,
   ScanResult,
   SkillBundle,
   SkillVersion,
@@ -90,6 +91,11 @@ export interface ScanActionResponse { operation?: Job; skill?: SkillVersion }
 export interface PackCreateResponse { pack: PackVersion }
 export interface UpstreamResponse { upstream: Upstream }
 export interface ImportResponse { operation: Job }
+export interface ProxyResolveResponse {
+  externalId: string
+  operation?: Job
+  resolution?: Resolution
+}
 export interface SessionResponse { principal?: Principal }
 export interface ReviewsResponse { runs: ReviewRunView[]; suggestions: ReviewSuggestionView[] }
 export interface ReviewRunResponse { sessionId: string; status: 'started' }

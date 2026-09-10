@@ -406,6 +406,15 @@ tr.row-selected td { background: #f4f8f3; }
 .directory-import .subheading { margin-top: 0; }
 .directory-import .notice { margin-top: 14px; }
 .directory-import .button { width: 100%; }
+.proxy-identity, .proxy-operation, .proxy-command { display: grid; min-width: 0; gap: 7px; }
+.proxy-identity { margin-top: 15px; padding: 11px 12px; border: 1px solid #ded2fb; border-radius: 9px; background: rgba(255, 255, 255, .72); color: var(--muted); font-size: 10px; }
+.proxy-identity code, .proxy-operation code, .proxy-command code { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.proxy-identity code { color: var(--ink); font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.proxy-operation { margin-top: 14px; padding: 12px; border: 1px solid #ded2fb; border-radius: 9px; background: rgba(255, 255, 255, .58); }
+.proxy-actions { display: grid; gap: 8px; margin-top: 14px; }
+.proxy-command { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ded2fb; }
+.proxy-command code { padding: 10px; border: 1px solid #d8d0ee; border-radius: 8px; background: rgba(255, 255, 255, .78); color: var(--ink); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.directory-import > a { display: inline-block; margin-top: 13px; }
 .directory-summary { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 15px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 11px; }
 .directory-summary strong { margin-right: 4px; color: var(--ink); font-size: 19px; letter-spacing: -.04em; }
 .official-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 17px; }

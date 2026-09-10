@@ -5,7 +5,7 @@ import type {
   ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
-  SkillsPackManifest,
+  SkillsPackManifest, ProxyResolveResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -105,6 +105,9 @@ export const api = {
   directoryAudits(id: string) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id } }) },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {
     return request<OperationResponse>('/v1/directory/import', { method: 'POST', body: input })
+  },
+  proxyResolve(input: { externalId: string; refresh?: boolean }) {
+    return request<ProxyResolveResponse>('/v1/proxy/resolve', { method: 'POST', body: input })
   },
   directoryPackPreview(input: { url: string }) {
     return request<SkillsPackManifest>('/v1/directory/packs/preview', { method: 'POST', body: input })
