@@ -3,6 +3,11 @@ import {
   PersistentOpenClawFeedCache,
   StateRepositoryOpenClawConsumerSnapshotStore,
 } from '../src/index.ts';
+import type {
+  OpenClawConsumerCacheKey,
+  OpenClawConsumerSnapshotStore,
+  StateRepositoryOpenClawConsumerSnapshotStoreOptions,
+} from '../src/index.ts';
 import { createMemoryStateRepository } from '../../database/src/index.ts';
 import {
   OPENCLAW_CLAWHUB_SKILLS_API_URL,
@@ -21,6 +26,33 @@ const SOURCE_URL = 'https://feed.example/v1/feeds/skills';
 const OTHER_SOURCE_URL = 'https://other.example/v1/feeds/skills';
 const CLOCK = Date.parse('2030-01-01T01:00:00.000Z');
 const LAST_MODIFIED = 'Wed, 01 Jan 2030 00:00:00 GMT';
+
+function consumerStore(
+  repository: ReturnType<typeof createMemoryStateRepository>,
+  options: StateRepositoryOpenClawConsumerSnapshotStoreOptions = {},
+): StateRepositoryOpenClawConsumerSnapshotStore {
+  return new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => CLOCK, ...options });
+}
+
+class DelayedPutStore implements OpenClawConsumerSnapshotStore {
+  constructor(
+    private readonly inner: OpenClawConsumerSnapshotStore,
+    private readonly afterPut: () => void,
+  ) {}
+
+  read(key: OpenClawConsumerCacheKey): Promise<OpenClawCacheSnapshot | undefined> {
+    return this.inner.read(key);
+  }
+
+  async put(key: OpenClawConsumerCacheKey, snapshot: OpenClawCacheSnapshot): Promise<void> {
+    await this.inner.put(key, snapshot);
+    this.afterPut();
+  }
+
+  clear(key: OpenClawConsumerCacheKey): Promise<void> {
+    return this.inner.clear(key);
+  }
+}
 
 async function snapshot(
   sequence = 1,
@@ -87,13 +119,13 @@ function key(overrides: Partial<{ tenantId: string; feedId: string; sourceUrl: s
 describe('durable OpenClaw consumer snapshots', () => {
   it('retains bounded bytes, validators, expiry, and identity across repository-backed restarts', async () => {
     const repository = createMemoryStateRepository();
-    const first = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const first = consumerStore(repository);
     const original = await snapshot();
 
     await first.put(key(), original);
 
     // A fresh adapter over the same StateRepository models a process restart.
-    const restarted = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const restarted = consumerStore(repository);
     await expect(restarted.read(key())).resolves.toMatchObject({
       body: original.body,
       sha256: original.sha256,
@@ -118,7 +150,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('does not cross tenant, feed, or source identities', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     await store.put(key(), await snapshot());
 
     await expect(store.read(key({ tenantId: 'tenant-b' }))).resolves.toBeUndefined();
@@ -128,7 +160,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('rejects replay and same-sequence equivocation while allowing an identical revalidation timestamp', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => CLOCK + 2_000 });
     await store.put(key(), await snapshot(2, SOURCE_URL, CLOCK));
 
     await expect(store.put(key(), await snapshot(1))).rejects.toMatchObject({
@@ -151,7 +183,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('hydrates a fresh feed cache instance for a conditional 304 without serving another origin', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     await store.put(key(), original);
     let calls = 0;
@@ -192,7 +224,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('hydrates a live ClawHub snapshot across restart when the CDN returns its weak gzip ETag', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await liveClawHubSkillsSnapshot();
     const liveKey = {
       tenantId: TENANT,
@@ -251,7 +283,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('updates a bounded CDN transport validator when the canonical body and sequence stay identical', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await liveClawHubSkillsSnapshot();
     const liveKey = {
       tenantId: TENANT,
@@ -286,7 +318,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('keeps the durable high-water snapshot when an instance receives an older 200 and then loses the network', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const durable = await snapshot(2);
     const old = await snapshot(1);
     await store.put(key(), durable);
@@ -316,7 +348,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('does not serve a same-sequence equivocation from local memory after durable fallback', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const durable = await snapshot(2);
     const changed = await snapshot(2);
     changed.body = changed.body.replace('"entries":[]', '"description":"changed","entries":[]');
@@ -350,7 +382,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('preserves a redirected 304 marker instead of converting it to not-modified', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     await store.put(key(), original);
     const redirected = new Response(null, {
@@ -375,7 +407,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('does not let a durable 304 bypass a changed digest pin or a tighter request body limit', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     await store.put(key(), original);
     const fetcher = async () => new Response(null, {
@@ -398,7 +430,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('does not accept a durable 304 when the caller aborts after the response is produced', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     await store.put(key(), original);
     const controller = new AbortController();
@@ -422,7 +454,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('serializes refreshes for one durable feed key', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     let calls = 0;
     let started!: () => void;
@@ -451,7 +483,8 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('persists a newly accepted 200 snapshot and enforces per-tenant bounds', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository, {
+    const store = consumerStore(repository, {
+      now: () => CLOCK,
       maxEntriesPerTenant: 1,
       maxBytesPerTenant: 64 * 1024,
     });
@@ -479,9 +512,59 @@ describe('durable OpenClaw consumer snapshots', () => {
     });
   });
 
+  it('rechecks feed freshness inside the StateRepository transaction admission boundary', async () => {
+    const repository = createMemoryStateRepository();
+    const expiry = Date.parse('2030-01-02T00:00:00.000Z');
+    let clockReads = 0;
+    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository, {
+      now: () => (clockReads++ === 0 ? CLOCK : expiry),
+    });
+
+    await expect(store.put(key(), await snapshot())).rejects.toMatchObject({ code: 'invalid' });
+    await expect(store.read(key())).resolves.toBeUndefined();
+  });
+
+  it('does not return an accepted 200 when durable persistence crosses feed expiry before put resolves', async () => {
+    const repository = createMemoryStateRepository();
+    const expiry = Date.parse('2030-01-02T00:00:00.000Z');
+    let now = CLOCK;
+    const inner = new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => now });
+    const store = new DelayedPutStore(inner, () => { now = expiry; });
+    const original = await snapshot();
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => now });
+
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(original.body, { status: 200, headers: { etag: original.etag } }),
+    })).resolves.toMatchObject({ kind: 'rejected', status: 200, error: 'no-cache' });
+  });
+
+  it('does not return a not-modified 304 when durable persistence crosses feed expiry before put resolves', async () => {
+    const repository = createMemoryStateRepository();
+    const expiry = Date.parse('2030-01-02T00:00:00.000Z');
+    let now = CLOCK;
+    const inner = new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => now });
+    const original = await snapshot();
+    await inner.put(key(), original);
+    const store = new DelayedPutStore(inner, () => { now = expiry; });
+    const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => now });
+
+    await expect(cache.refresh({
+      url: SOURCE_URL,
+      expectedFeedId: FEED_ID,
+      allowedOrigins: ['https://feed.example'],
+      fetcher: async () => new Response(null, {
+        status: 304,
+        headers: { etag: original.etag, 'last-modified': LAST_MODIFIED },
+      }),
+    })).resolves.toMatchObject({ kind: 'rejected', status: 304, error: 'no-cache' });
+  });
+
   it('does not reuse a durable snapshot when the origin changes or the snapshot expires', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const original = await snapshot();
     await store.put(key(), original);
     let calls = 0;
@@ -514,7 +597,7 @@ describe('durable OpenClaw consumer snapshots', () => {
 
   it('does not hydrate a strict snapshot whose generated time is future or TTL exceeds 24 hours', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const future = await snapshot(
       1,
       SOURCE_URL,
@@ -522,7 +605,7 @@ describe('durable OpenClaw consumer snapshots', () => {
       '2030-01-01T02:00:00.000Z',
       '2030-01-02T00:00:00.000Z',
     );
-    await store.put(key(), future);
+    await expect(store.put(key(), future)).rejects.toMatchObject({ code: 'invalid' });
     const cache = new PersistentOpenClawFeedCache({ store, tenantId: TENANT, now: () => CLOCK });
     const response304 = async () => new Response(null, {
       status: 304,

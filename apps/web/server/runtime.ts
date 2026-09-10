@@ -23,6 +23,7 @@ import {
 } from '../../../packages/directory/src/index';
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 import { createBuilderBffRuntime } from './builder-runtime';
+import { openClawConsumerRefreshResult } from './openclaw-runtime';
 import {
   createOpenClawCandidateProvider,
   OpenClawPublicationManager,
@@ -34,7 +35,6 @@ import {
   type OpenClawMetadataPreviewResult,
   type OpenClawMetadataSnapshot,
 } from '../../../packages/openclaw-adapter/src/index';
-import type { OpenClawRefreshResult } from '../../../packages/openclaw/src/index';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -273,53 +273,6 @@ async function createRuntime(env: RuntimeEnvironment) {
       else await pending;
     }
     return response;
-  };
-}
-
-function openClawConsumerRefreshResult(result: OpenClawRefreshResult): {
-  kind: OpenClawMetadataPreviewResult['kind'];
-  snapshot?: OpenClawMetadataSnapshot;
-} {
-  if (result.kind === 'rejected') return { kind: result.kind };
-  const snapshot = result.snapshot;
-  return {
-    kind: result.kind,
-    snapshot: {
-      feed: {
-        schemaVersion: snapshot.feed.schemaVersion,
-        id: snapshot.feed.id,
-        generatedAt: snapshot.feed.generatedAt,
-        sequence: snapshot.feed.sequence,
-        expiresAt: snapshot.feed.expiresAt,
-        ...(snapshot.feed.description === undefined ? {} : { description: snapshot.feed.description }),
-        entries: snapshot.feed.entries.map((entry) => ({
-          type: entry.type,
-          id: entry.id,
-          title: entry.title,
-          ...(entry.description === undefined ? {} : { description: entry.description }),
-          ...(entry.icon === undefined ? {} : { icon: entry.icon }),
-          version: entry.version,
-          state: entry.state,
-          ...(entry.featured === undefined ? {} : { featured: entry.featured }),
-          ...(entry.featuredAt === undefined ? {} : { featuredAt: entry.featuredAt }),
-          publisher: { ...entry.publisher },
-          install: {
-            candidates: entry.install.candidates.map((candidate) => ({
-              sourceRef: candidate.sourceRef,
-              package: candidate.package,
-              version: candidate.version,
-              integrity: candidate.integrity,
-              ...(candidate.github === undefined ? {} : { github: { ...candidate.github } }),
-            })),
-          },
-        })),
-      },
-      sha256: snapshot.sha256,
-      etag: snapshot.etag,
-      ...(snapshot.lastModified === undefined ? {} : { lastModified: snapshot.lastModified }),
-      acceptedAt: snapshot.acceptedAt,
-      sourceUrl: snapshot.sourceUrl,
-    },
   };
 }
 

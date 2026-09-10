@@ -66,6 +66,8 @@ export interface StateRepositoryOpenClawConsumerSnapshotStoreOptions {
   maxEntriesPerTenant?: number;
   maxBytesPerTenant?: number;
   maxBodyBytes?: number;
+  /** Clock used at the durable transaction admission boundary. */
+  now?: () => number;
 }
 
 interface PersistedConsumerSnapshot {
@@ -96,6 +98,7 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
   private readonly maxEntriesPerTenant: number;
   private readonly maxBytesPerTenant: number;
   private readonly maxBodyBytes: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly repository: StateRepository,
@@ -122,6 +125,7 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
       OPENCLAW_MAX_BODY_BYTES,
       'cache body limit',
     );
+    this.now = options.now ?? Date.now;
   }
 
   async read(key: OpenClawConsumerCacheKey): Promise<OpenClawCacheSnapshot | undefined> {
@@ -138,8 +142,20 @@ export class StateRepositoryOpenClawConsumerSnapshotStore implements OpenClawCon
   async put(key: OpenClawConsumerCacheKey, snapshot: OpenClawCacheSnapshot): Promise<void> {
     const normalized = normalizeCacheKey(key);
     const validated = await validateSnapshot(normalized, snapshot, this.maxBodyBytes);
+    const isFreshAtAdmission = (now: number): boolean =>
+      isOpenClawFeedFresh(validated.feed, normalized.sourceUrl, now, validated.compatibilityProfile) &&
+      validated.acceptedAt <= now;
+    if (!isFreshAtAdmission(this.now())) {
+      throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot is no longer fresh');
+    }
     const persisted = toPersistedSnapshot(normalized, validated);
     await this.repository.transaction(normalized.tenantId, (state) => {
+      // Validate again while the StateRepository transaction owns the tenant
+      // row. A feed can cross its effective expiry between validation and
+      // this synchronous updater, so a pre-transaction check is not enough.
+      if (!isFreshAtAdmission(this.now())) {
+        throw new OpenClawConsumerSnapshotStoreError('invalid', 'The consumer snapshot is no longer fresh');
+      }
       const extension = state as unknown as ConsumerRepositoryState;
       const existing = extension.openClawConsumerSnapshots;
       if (existing !== undefined && !isRecord(existing)) {
@@ -383,7 +399,12 @@ export class PersistentOpenClawFeedCache {
         return authoritativeResult(authoritative.usable, 304, projectStoreError(error));
       }
       if (request.signal?.aborted) return { kind: 'rejected', status: 304, error: 'aborted' };
-      return { kind: 'not-modified', status: 304, snapshot: refreshed };
+      const admitted = await confirmPersistedSnapshot(this.store, key, refreshed, request, this.maxBodyBytes, this.maxStaleMs, this.now);
+      if (!admitted.ok) {
+        cache.clear();
+        return { kind: 'rejected', status: 304, error: admitted.error };
+      }
+      return { kind: 'not-modified', status: 304, snapshot: admitted.snapshot };
     }
     if (result.kind === 'accepted' || result.kind === 'not-modified') {
       const relation = durable === undefined ? 'newer' : compareSnapshots(result.snapshot, durable);
@@ -400,7 +421,12 @@ export class PersistentOpenClawFeedCache {
         const authoritative = await readAuthoritativeSnapshot(this.store, key, durable, usableDurable, this.now(), this.maxStaleMs);
         return authoritativeResult(authoritative.usable, result.status, projectStoreError(error));
       }
-      return result;
+      const admitted = await confirmPersistedSnapshot(this.store, key, result.snapshot, request, this.maxBodyBytes, this.maxStaleMs, this.now);
+      if (!admitted.ok) {
+        cache.clear();
+        return { kind: 'rejected', status: result.status, error: admitted.error };
+      }
+      return { ...result, snapshot: admitted.snapshot };
     }
     if (result.snapshot !== undefined && durable !== undefined) {
       const relation = compareSnapshots(result.snapshot, durable);
@@ -443,6 +469,16 @@ function canServeDurable304(
   now: number,
   maxStaleMs: number,
 ): boolean {
+  return canServeSnapshot(snapshot, request, maxBodyBytes, now, maxStaleMs);
+}
+
+function canServeSnapshot(
+  snapshot: OpenClawCacheSnapshot,
+  request: OpenClawFeedRefreshRequest,
+  maxBodyBytes: number,
+  now: number,
+  maxStaleMs: number,
+): boolean {
   if (request.signal?.aborted) return false;
   if (request.expectedSha256 !== undefined && !matchesExpectedSha256(snapshot.sha256, request.expectedSha256)) return false;
   if (request.maxBodyBytes !== undefined && (!Number.isSafeInteger(request.maxBodyBytes) || request.maxBodyBytes < 1)) return false;
@@ -474,6 +510,34 @@ function authoritativeResult(
     ...(status === undefined ? {} : { status }),
     error,
   };
+}
+
+async function confirmPersistedSnapshot(
+  store: OpenClawConsumerSnapshotStore,
+  key: OpenClawConsumerCacheKey,
+  candidate: OpenClawCacheSnapshot,
+  request: OpenClawFeedRefreshRequest,
+  maxBodyBytes: number,
+  maxStaleMs: number,
+  now: () => number,
+): Promise<{ ok: true; snapshot: OpenClawCacheSnapshot } | { ok: false; error: OpenClawFeedErrorCode }> {
+  let persisted: OpenClawCacheSnapshot | undefined;
+  try {
+    persisted = await store.read(key);
+  } catch {
+    return { ok: false, error: 'fetch-failed' };
+  }
+  if (persisted === undefined) return { ok: false, error: 'fetch-failed' };
+  const relation = compareSnapshots(persisted, candidate);
+  if (relation === 'older') return { ok: false, error: 'replay' };
+  if (relation === 'equivocation') return { ok: false, error: 'equivocation' };
+  if (!canServeSnapshot(persisted, request, maxBodyBytes, now(), maxStaleMs)) {
+    if (request.expectedSha256 !== undefined && !matchesExpectedSha256(persisted.sha256, request.expectedSha256)) {
+      return { ok: false, error: 'digest-mismatch' };
+    }
+    return { ok: false, error: 'no-cache' };
+  }
+  return { ok: true, snapshot: cloneSnapshot(persisted) };
 }
 
 async function readAuthoritativeSnapshot(

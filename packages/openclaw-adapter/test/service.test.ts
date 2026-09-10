@@ -85,6 +85,10 @@ function principal(overrides: Partial<Principal> = {}): Principal {
   };
 }
 
+function consumerStore(repository: ReturnType<typeof createMemoryStateRepository>): StateRepositoryOpenClawConsumerSnapshotStore {
+  return new StateRepositoryOpenClawConsumerSnapshotStore(repository, { now: () => FIXED_NOW });
+}
+
 function skill(): SkillVersion {
   return {
     id: 'skill-1',
@@ -528,7 +532,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('selects only a non-expired persisted snapshot and queues the existing scanner-bound path', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const snapshot = await feedSnapshot();
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, snapshot);
     const queued: unknown[] = [];
@@ -564,7 +568,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('accepts the live seven-day wire expiry only for one local day during import selection', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     const live = await liveClawHubSkillsSnapshot();
     const liveKey = {
       tenantId: TENANT,
@@ -615,7 +619,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('does not queue for an expired, unavailable, or unauthorized snapshot', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, await feedSnapshot());
     let calls = 0;
     const service = new OpenClawTrustedSnapshotImportService({
@@ -655,7 +659,7 @@ describe('OpenClaw source proof and consumer services', () => {
 
   it('fails closed when a combined refresh reports stale metadata instead of queueing cached bytes', async () => {
     const repository = createMemoryStateRepository();
-    const store = new StateRepositoryOpenClawConsumerSnapshotStore(repository);
+    const store = consumerStore(repository);
     await store.put({ tenantId: TENANT, feedId: 'clawhub-official', sourceUrl: SOURCE_URL }, await feedSnapshot());
     let calls = 0;
     const service = new OpenClawTrustedSnapshotImportService({

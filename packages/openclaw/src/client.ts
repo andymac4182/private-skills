@@ -246,6 +246,14 @@ export class OpenClawFeedCache {
       if (lastModified === "invalid") {
         return this.fallback("invalid-feed", acceptanceNow, 200);
       }
+      // Hashing and validator processing are asynchronous. Recheck the
+      // effective expiry immediately before publishing the snapshot so a
+      // response that crossed its boundary during those awaits is never
+      // retained or returned as accepted.
+      const finalAcceptanceNow = this.now();
+      if (!isOpenClawFeedFresh(feed, url, finalAcceptanceNow, request.compatibilityProfile)) {
+        return this.fallback("invalid-feed", finalAcceptanceNow, 200);
+      }
       const snapshot: OpenClawCacheSnapshot = {
         feed,
         body,
@@ -255,7 +263,7 @@ export class OpenClawFeedCache {
         ...(request.compatibilityProfile === undefined ? {} : { compatibilityProfile: request.compatibilityProfile }),
         ...(suppliedEtag === undefined ? {} : { transportEtag: suppliedEtag }),
         ...(lastModified === undefined ? {} : { lastModified }),
-        acceptedAt: acceptanceNow,
+        acceptedAt: finalAcceptanceNow,
         sourceUrl: url.href,
       };
       this.snapshotValue = snapshot;

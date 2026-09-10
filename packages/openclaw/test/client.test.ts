@@ -362,6 +362,26 @@ describe("OpenClaw feed transport and cache", () => {
     expect(cache.getSnapshot()).toBeUndefined();
   });
 
+  it("rechecks the clock after the asynchronous digest before accepting a 200", async () => {
+    const body = serializeOpenClawFeed(feed());
+    const expiry = Date.parse(FUTURE_EXPIRY);
+    let nowReads = 0;
+    const cache = new OpenClawFeedCache({
+      // The third read occurs after the awaited WebCrypto digest. Returning
+      // the boundary there models expiry while hashing/validator work is in
+      // flight without changing the production clock source.
+      now: () => (nowReads++ < 2 ? expiry - 1 : expiry),
+    });
+    const result = await cache.refresh({
+      url: "https://feeds.example.test/feed",
+      expectedFeedId: OPENCLAW_OFFICIAL_FEED_ID,
+      allowedOrigins: ["https://feeds.example.test"],
+      fetcher: async () => response(body),
+    });
+    expect(result).toMatchObject({ kind: "rejected", status: 200, error: "invalid-feed" });
+    expect(cache.getSnapshot()).toBeUndefined();
+  });
+
   it("rechecks the clock after a delayed 304 before serving the cached snapshot", async () => {
     const body = serializeOpenClawFeed(feed());
     const expiry = Date.parse(FUTURE_EXPIRY);
