@@ -179,10 +179,20 @@ export type UploadReviewCurrentBindingResolver = (
   draftId: string,
 ) => UploadReviewBinding | undefined;
 
+export interface UploadReviewContract {
+  model: string;
+  reviewerRevision: string;
+}
+
+/** Runtime-owned reviewer configuration used for currentness checks. */
+export type UploadReviewCurrentContractResolver = () => UploadReviewContract;
+
 export interface UploadReviewPersistenceOptions {
   leaseSeconds?: number;
   /** Optional core-owned binding lookup evaluated inside queue transactions. */
   resolveCurrentBinding?: UploadReviewCurrentBindingResolver;
+  /** Optional runtime-owned reviewer contract evaluated in queue transactions. */
+  resolveCurrentContract?: UploadReviewCurrentContractResolver;
 }
 
 export interface UploadReviewPersistenceService {
@@ -664,6 +674,7 @@ function staleResultForJob(
 export class DefaultUploadReviewPersistenceService implements UploadReviewPersistenceService {
   private readonly leaseSeconds: number;
   private readonly resolveCurrentBinding?: UploadReviewCurrentBindingResolver;
+  private readonly resolveCurrentContract?: UploadReviewCurrentContractResolver;
 
   constructor(
     private readonly repository: StateRepository,
@@ -671,6 +682,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
   ) {
     this.leaseSeconds = options.leaseSeconds ?? DEFAULT_UPLOAD_REVIEW_LEASE_SECONDS;
     this.resolveCurrentBinding = options.resolveCurrentBinding;
+    this.resolveCurrentContract = options.resolveCurrentContract;
     if (!Number.isSafeInteger(this.leaseSeconds) || this.leaseSeconds <= 0 || this.leaseSeconds > 24 * 60 * 60) {
       throw new UploadReviewValidationError('leaseSeconds is outside the supported range');
     }
@@ -688,8 +700,26 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     return current !== undefined && sameBinding(binding, current);
   }
 
-  private assertBindingCurrent(state: RegistryState, binding: UploadReviewBinding): void {
-    if (!this.bindingIsCurrent(state, binding)) throw new UploadReviewBindingStaleError();
+  private contractIsCurrent(model: string, reviewerRevision: string): boolean {
+    if (!this.resolveCurrentContract) return true;
+    const current = this.resolveCurrentContract();
+    return current.model === model && current.reviewerRevision === reviewerRevision;
+  }
+
+  private jobIsCurrent(state: RegistryState, job: Pick<UploadReviewJob, 'binding' | 'model' | 'reviewerRevision'>): boolean {
+    return this.bindingIsCurrent(state, job.binding) && this.contractIsCurrent(job.model, job.reviewerRevision);
+  }
+
+  private assertBindingCurrent(
+    state: RegistryState,
+    binding: UploadReviewBinding,
+    model?: string,
+    reviewerRevision?: string,
+  ): void {
+    if (!this.bindingIsCurrent(state, binding) ||
+        (model !== undefined && reviewerRevision !== undefined && !this.contractIsCurrent(model, reviewerRevision))) {
+      throw new UploadReviewBindingStaleError();
+    }
   }
 
   private markBindingStale(
@@ -702,9 +732,9 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
 
   private projectJob(state: RegistryState, job: UploadReviewJob): UploadReviewJob {
     const projected = clone(job);
-    if (this.resolveCurrentBinding && !this.bindingIsCurrent(state, projected.binding) && projected.state !== 'stale') {
+    if ((this.resolveCurrentBinding || this.resolveCurrentContract) && !this.jobIsCurrent(state, projected) && projected.state !== 'stale') {
       projected.state = 'stale';
-      projected.staleReason = 'current draft binding differs';
+      projected.staleReason = 'current draft binding or reviewer contract differs';
       clearLease(projected);
     }
     return projected;
@@ -712,9 +742,11 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
 
   private projectResult(state: RegistryState, result: UploadReviewResult): UploadReviewResult {
     const projected = clone(result);
-    if (this.resolveCurrentBinding && !this.bindingIsCurrent(state, projected.binding) && projected.state !== 'stale') {
+    if ((this.resolveCurrentBinding || this.resolveCurrentContract) &&
+        (!this.bindingIsCurrent(state, projected.binding) || !this.contractIsCurrent(projected.model, projected.reviewerRevision)) &&
+        projected.state !== 'stale') {
       projected.state = 'stale';
-      projected.staleReason = 'current draft binding differs';
+      projected.staleReason = 'current draft binding or reviewer contract differs';
     }
     return projected;
   }
@@ -724,7 +756,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     const normalized = normalizeEnqueueInput(input);
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs, results } = writableCollections(rawState);
-      this.assertBindingCurrent(rawState, normalized.binding);
+      this.assertBindingCurrent(rawState, normalized.binding, normalized.model, normalized.reviewerRevision);
       const existing = jobs.find((job) => job.organizationId === organizationId && job.idempotencyKey === normalized.idempotencyKey);
       if (existing) {
         if (!sameRequest(existing, normalized)) {
@@ -759,7 +791,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, cleanJobId);
-      this.assertBindingCurrent(rawState, job.binding);
+      this.assertBindingCurrent(rawState, job.binding, job.model, job.reviewerRevision);
       const duplicate = jobs.find((candidate) =>
         candidate.organizationId === organizationId &&
         candidate.id !== job.id &&
@@ -809,7 +841,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       if (job.state === 'passed' || job.state === 'failed' || job.state === 'stale') {
         return { job: clone(job), claimed: false };
       }
-      if (!this.bindingIsCurrent(rawState, job.binding)) {
+      if (!this.jobIsCurrent(rawState, job)) {
         this.markBindingStale(job, results, clock.iso);
         pruneCollections(jobs, results);
         return { job: clone(job), claimed: false };
@@ -844,8 +876,13 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs, results } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, boundedString(jobId, 'jobId', MAX_ID_LENGTH));
+      // A current-draft save may have already fenced and cleared this lease.
+      // Return the durable stale marker so the HTTP adapter can report a
+      // truthful stale completion instead of treating it as an opaque lease
+      // failure. The adapter still checks the bound Eve session id.
+      if (job.state === 'stale') return clone(job);
       requireLease(job, leaseToken, clock.milliseconds);
-      if (!this.bindingIsCurrent(rawState, job.binding)) {
+      if (!this.jobIsCurrent(rawState, job)) {
         this.markBindingStale(job, results, clock.iso);
         pruneCollections(jobs, results);
         return clone(job);
@@ -866,7 +903,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       const { jobs, results } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, boundedString(jobId, 'jobId', MAX_ID_LENGTH));
       requireLease(job, leaseToken, clock.milliseconds);
-      if (!this.bindingIsCurrent(rawState, job.binding)) {
+      if (!this.jobIsCurrent(rawState, job)) {
         const stale = this.markBindingStale(job, results, clock.iso);
         pruneCollections(jobs, results);
         return clone(stale);
@@ -908,7 +945,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       const { jobs, results } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, boundedString(jobId, 'jobId', MAX_ID_LENGTH));
       requireLease(job, leaseToken, clock.milliseconds);
-      if (!this.bindingIsCurrent(rawState, job.binding)) {
+      if (!this.jobIsCurrent(rawState, job)) {
         const stale = this.markBindingStale(job, results, clock.iso);
         pruneCollections(jobs, results);
         return clone(stale);
@@ -954,11 +991,14 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
         ? this.currentBinding(rawState, draftId)
         : current;
       const effectiveCurrent = resolvedCurrent;
+      const currentContract = this.resolveCurrentContract?.();
       const changed: UploadReviewJob[] = [];
       for (const job of jobs) {
         if (job.organizationId !== organizationId || job.binding.draftId !== draftId) continue;
         const contractChanged = (reviewerRevision !== undefined && job.reviewerRevision !== reviewerRevision) ||
-          (model !== undefined && job.model !== model);
+          (model !== undefined && job.model !== model) ||
+          (currentContract !== undefined &&
+            (job.reviewerRevision !== currentContract.reviewerRevision || job.model !== currentContract.model));
         if (effectiveCurrent !== undefined && sameBinding(job.binding, effectiveCurrent) && !contractChanged) continue;
         if (job.state === 'stale') continue;
         staleResultForJob(job, organizationId, results, reason, clock.iso);
@@ -976,7 +1016,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
     return this.repository.transaction(organizationId, (rawState) => {
       const { jobs, results } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, boundedString(jobId, 'jobId', MAX_ID_LENGTH));
-      this.assertBindingCurrent(rawState, job.binding);
+      this.assertBindingCurrent(rawState, job.binding, job.model, job.reviewerRevision);
       if (job.state !== 'failed' && job.state !== 'stale') {
         throw new UploadReviewConflictError('only failed or stale upload reviews may be requeued');
       }
@@ -1033,7 +1073,7 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       if (result.state === 'stale') throw new UploadReviewBindingStaleError('stale upload review findings cannot be changed');
       if (this.resolveCurrentBinding) {
         const job = jobs.find((candidate) => candidate.organizationId === organizationId && candidate.id === result.jobId);
-        if (!job || !this.bindingIsCurrent(rawState, result.binding)) {
+        if (!job || !this.jobIsCurrent(rawState, job) || !this.contractIsCurrent(result.model, result.reviewerRevision) || !this.bindingIsCurrent(rawState, result.binding)) {
           throw new UploadReviewBindingStaleError('stale upload review findings cannot be changed');
         }
       }
@@ -1103,3 +1143,4 @@ export function createUploadReviewPersistenceService(
 // entry points so importing the queue from Nitro edge code does not pull in
 // `node:crypto` or the Eve client transport.
 export * from './snapshot.js';
+export * from './config.js';

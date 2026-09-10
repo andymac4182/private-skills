@@ -75,6 +75,8 @@ export interface UploadReviewIntegration {
   service: UploadReviewPersistenceService;
   model: string;
   reviewerRevision: string;
+  /** True only when the runtime has the separate service token and Eve trigger configured. */
+  configured?: boolean;
   /** Starts the separate Eve session after its job is durably queued. */
   trigger?: (organizationId: string, jobId: string, service: UploadReviewPersistenceService) => Promise<unknown>;
 }

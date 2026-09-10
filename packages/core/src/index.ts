@@ -63,8 +63,10 @@ import type { SkillsPackManifest } from '../../directory-packs/src/index.js';
 import {
   createReleaseFilesHandler,
   type AuthoringHandlerDependencies,
+  type UploadReviewIntegration,
 } from '../../authoring/src/index.js';
 import { createDraftHandler } from '../../authoring/src/drafts.js';
+import type { UploadReviewBinding } from '../../upload-reviews/src/index.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
 
 /**
@@ -236,6 +238,8 @@ export type RegistryHandlerDependencies = RegistryDependencies & {
   /** Resolve the metadata client bound to one exact transparent feed base. */
   directoryForBase?: (baseUrl: string) => RegistryDirectoryClient | undefined;
   directoryPacks?: RegistryDirectoryPackClient;
+  /** Optional separate upload/edit reviewer; scanner admission remains core-owned. */
+  uploadReview?: UploadReviewIntegration;
 };
 
 /** A safe, empty state used by memory repositories and migration shims. */
@@ -271,6 +275,32 @@ export function defaultPolicy(): Policy {
     allowUnscanned: false,
     evidenceMaxAgeSeconds: 7 * 24 * 60 * 60,
     hooks: [],
+  };
+}
+
+/**
+ * Resolve the server-owned upload-review binding from the current draft state.
+ * Queue transactions call this pure helper through their injected resolver so
+ * an old review cannot complete or accept a decision after a draft save.
+ */
+export function resolveCurrentUploadReviewBinding(
+  state: RegistryState,
+  draftId: string,
+): UploadReviewBinding | undefined {
+  const draft = state.drafts?.find((candidate) => candidate.id === draftId);
+  if (!draft) return undefined;
+  const base = draft.baseResourceId === undefined
+    ? undefined
+    : state.skills.find((candidate) => candidate.id === draft.baseResourceId);
+  if (draft.baseResourceId !== undefined && (!base || !skillCurrentlyApproved(state, base))) return undefined;
+  return {
+    draftId: draft.id,
+    draftRevision: draft.revision,
+    contentDigest: draft.digest,
+    ...(draft.baseResourceId === undefined ? {} : { baseReleaseId: draft.baseResourceId }),
+    ...(base?.version === undefined ? {} : { baseReleaseVersion: base.version }),
+    ...(draft.baseDigest === undefined ? {} : { baseDigest: draft.baseDigest }),
+    policyRevision: state.policy.revision,
   };
 }
 
@@ -364,6 +394,10 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
             directory: !!deps.directory,
             installAuthorizations: true,
             installReceipts: true,
+            uploadReview: {
+              enabled: deps.uploadReview !== undefined,
+              configured: deps.uploadReview?.configured === true,
+            },
             transferMode: 'gateway',
             rangeSupported: false,
           },
@@ -374,6 +408,12 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
           },
           scanners: [...SUPPORTED_SCANNERS],
         });
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'drafts') {
+        return await createDraftHandler(
+          createAuthoringHandlerDependencies(principal, deps, config),
+        )(request);
       }
 
       if (segments[0] === 'v1' && segments[1] === 'directory') {
@@ -982,7 +1022,7 @@ async function createSessionResponse(
  */
 function createAuthoringHandlerDependencies(
   principal: Principal,
-  deps: RegistryDependencies,
+  deps: RegistryHandlerDependencies,
   config: Required<RegistryConfiguration>,
 ): AuthoringHandlerDependencies {
   return {
@@ -1001,6 +1041,7 @@ function createAuthoringHandlerDependencies(
       releasePrincipal.organizationId === config.organizationId &&
       canReadNamespace(releasePrincipal, release.name) &&
       skillCurrentlyApproved(state, release),
+    ...(deps.uploadReview === undefined ? {} : { uploadReview: deps.uploadReview }),
   };
 }
 

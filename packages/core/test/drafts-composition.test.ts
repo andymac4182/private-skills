@@ -1,22 +1,27 @@
 import { describe, expect, it } from 'vitest';
+import {
+  createRegistryHandler,
+  resolveCurrentUploadReviewBinding,
+  type RegistryHandlerDependencies,
+} from '../src/index.js';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
-import { digestBytes, encodeBundle } from '../../storage/src/index.js';
+import { digestBytes } from '../../storage/src/index.js';
+import { createUploadReviewHttpHandler } from '../../upload-reviews/src/http.js';
+import { createUploadReviewPersistenceService } from '../../upload-reviews/src/index.js';
 import type {
   Authenticator,
   BlobStore,
+  BundleFile,
   Principal,
   RegistryState,
-  ScanResult,
-  SkillBundle,
-  SkillVersion,
   StoredBlob,
 } from '../../contracts/src/index.js';
-import { createRegistryHandler } from '../src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION = 'org-test';
+const REVIEW_TOKEN = 'upload-review-http-test-token';
 
-function base64Text(value: string): string {
+function base64(value: string): string {
   const bytes = new TextEncoder().encode(value);
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -24,17 +29,14 @@ function base64Text(value: string): string {
 }
 
 class MemoryBlobs implements BlobStore {
-  readonly values = new Map<string, Uint8Array>();
+  private readonly values = new Map<string, Uint8Array>();
+  private nextKey = 0;
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
     const copy = bytes.slice();
-    const stored: StoredBlob = {
-      key: `blob-${this.values.size}`,
-      digest: await digestBytes(copy),
-      size: copy.byteLength,
-    };
-    this.values.set(stored.key, copy);
-    return stored;
+    const key = `draft-${this.nextKey++}`;
+    this.values.set(key, copy);
+    return { key, digest: await digestBytes(copy), size: copy.byteLength };
   }
 
   async get(key: string): Promise<Uint8Array> {
@@ -48,279 +50,247 @@ class MemoryBlobs implements BlobStore {
   }
 }
 
-function publisher(namespaces: string[] = ['@team']): Principal {
+function publisher(): Principal {
   return {
     organizationId: ORGANIZATION,
-    subject: 'publisher',
-    roles: ['publisher', 'reader'],
-    namespaces,
-    scopes: ['skills:read', 'registry:read', 'skills:write', 'skills:publish'],
+    subject: 'publisher-1',
+    roles: ['publisher'],
+    namespaces: ['@team'],
+    scopes: ['skills:write', 'skills:publish', 'skills:read'],
   };
 }
 
-function worker(): Principal {
-  return {
-    organizationId: ORGANIZATION,
-    subject: 'scanner-worker',
-    roles: ['worker'],
-    scopes: ['jobs:claim', 'jobs:artifact', 'jobs:complete'],
-    identity: 'worker',
-  } as Principal;
-}
-
-function requiredScan(
-  jobId: string,
-  digest: SkillVersion['artifact']['digest'],
-  policyRevision: string,
-  id: string,
-): ScanResult {
-  return {
-    id,
-    organizationId: ORGANIZATION,
-    jobId,
-    artifactDigest: digest,
-    policyRevision,
-    scannerId: 'cisco-skill-scanner',
-    engineVersion: 'test-engine',
-    rulesRevision: 'test-rules',
-    configurationHash: 'test-config',
-    status: 'completed',
-    findings: [],
-    coverage: {
-      filesEnumerated: 1,
-      filesAnalyzed: 1,
-      filesSkipped: 0,
-      filesUnsupported: 0,
-      limitations: [],
-      externalDestinations: [],
-    },
-    createdAt: new Date().toISOString(),
-    durationMs: 1,
-  };
-}
-
-interface Fixture {
-  state: RegistryState;
-  repository: ReturnType<typeof createMemoryStateRepository>;
-  blobs: MemoryBlobs;
-  handler: ReturnType<typeof createRegistryHandler>;
-  setPrincipal(value: Principal | null): void;
-}
-
-async function fixture(): Promise<Fixture> {
-  const state = defaultRegistryState({
-    production: false,
-    allowUnscanned: false,
-    policyRevision: 'policy-authoring',
-  });
-  state.policy.scanners = [{
-    id: 'cisco-skill-scanner',
-    mode: 'required',
-    blockSeverities: ['high', 'critical'],
-    timeoutSeconds: 60,
+function nativeFiles(revision: number): BundleFile[] {
+  return [{
+    path: 'SKILL.md',
+    content: base64(`---\nname: native-review\ndescription: Revision ${revision}\n---\n# Native review ${revision}\n`),
   }];
+}
 
-  const bundle: SkillBundle = {
-    format: 'pskills-bundle-v1',
-    files: [{
-      path: 'SKILL.md',
-      content: base64Text('---\nname: base\ndescription: Base release\n---\n# Base\n'),
-    }],
-  };
-  const bytes = encodeBundle(bundle);
-  const blobs = new MemoryBlobs();
-  const artifact = await blobs.put(bytes);
-  const baseScan = requiredScan('base-scan-job', artifact.digest, state.policy.revision, 'base-scan');
-  state.scans.push(baseScan);
-  const base: SkillVersion = {
-    id: 'release-1',
-    organizationId: ORGANIZATION,
-    name: '@team/base',
-    skillName: 'base',
-    version: '1.0.0',
-    description: 'Base release',
-    artifact,
-    state: 'approved',
-    policyRevision: state.policy.revision,
-    createdAt: '2026-09-10T00:00:00.000Z',
-    approvedAt: '2026-09-10T00:00:01.000Z',
-    provenance: { kind: 'native' },
-    fileCount: bundle.files.length,
-    scanIds: [baseScan.id],
-  };
-  state.skills.push(base);
+async function json(response: Response): Promise<Record<string, any>> {
+  return response.json() as Promise<Record<string, any>>;
+}
 
+function request(
+  path: string,
+  options: { method?: string; body?: unknown; authorization?: string; idempotency?: string } = {},
+): Request {
+  const headers = new Headers();
+  if (options.authorization !== undefined) headers.set('authorization', options.authorization);
+  if (options.body !== undefined) headers.set('content-type', 'application/json');
+  if (options.idempotency !== undefined) headers.set('idempotency-key', options.idempotency);
+  return new Request(`${ORIGIN}${path}`, {
+    method: options.method ?? 'GET',
+    headers,
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+  });
+}
+
+interface CompositionFixture {
+  state: RegistryState;
+  handler: (request: Request) => Promise<Response>;
+  repository: ReturnType<typeof createMemoryStateRepository>;
+  sessions: string[];
+  setPrincipal(principal: Principal | null): void;
+}
+
+function fixture(): CompositionFixture {
+  const state = defaultRegistryState({ production: false, allowUnscanned: true });
+  state.policy.revision = 'policy-test';
   const repository = createMemoryStateRepository({ initial: { [ORGANIZATION]: state } });
-  let current: Principal | null = publisher();
-  const auth: Authenticator = { authenticate: async () => current };
-  const handler = createRegistryHandler({
+  const blobs = new MemoryBlobs();
+  let sessionCounter = 0;
+  const sessions: string[] = [];
+  const service = createUploadReviewPersistenceService(repository, {
+    resolveCurrentBinding: resolveCurrentUploadReviewBinding,
+  });
+  const integration: NonNullable<RegistryHandlerDependencies['uploadReview']> = {
+    service,
+    model: 'openai/gpt-5.5',
+    reviewerRevision: 'upload-review-test-v1',
+    configured: true,
+    trigger: async (organizationId, jobId, reviewService) => {
+      const sessionId = `eve-upload-${++sessionCounter}`;
+      sessions.push(sessionId);
+      await reviewService.bindEveSession(organizationId, jobId, sessionId);
+      return { sessionId, status: 'started' };
+    },
+  };
+  let currentPrincipal: Principal | null = publisher();
+  const auth: Authenticator = {
+    authenticate: async (request) => request.headers.get('authorization') === 'Bearer publisher-token'
+      ? currentPrincipal
+      : null,
+  };
+  const deps: RegistryHandlerDependencies = {
     repository,
     blobs,
     auth,
     config: {
       publicOrigin: ORIGIN,
-      maxBodyBytes: 1024 * 1024,
+      maxBodyBytes: 2 * 1024 * 1024,
       organizationId: ORGANIZATION,
       leaseSeconds: 30,
     },
+    uploadReview: integration,
+  };
+  const registry = createRegistryHandler(deps);
+  const internal = createUploadReviewHttpHandler({
+    repository,
+    organizationId: ORGANIZATION,
+    reviewerToken: REVIEW_TOKEN,
+    resolveCurrentBinding: resolveCurrentUploadReviewBinding,
+    service,
   });
   return {
     state,
     repository,
-    blobs,
-    handler,
+    sessions,
     setPrincipal(value) {
-      current = value;
+      currentPrincipal = value;
     },
+    handler: async (incoming) => (await internal(incoming)) ?? registry(incoming),
   };
 }
 
-async function json(response: Response): Promise<any> {
-  return response.json();
-}
-
-describe('core authoring composition', () => {
-  it('runs draft create/update/publish through core, then scanner completion approves the immutable revision', async () => {
-    const test = await fixture();
-    const baseDigest = test.state.skills[0]!.artifact.digest;
-
-    const created = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
+describe('M6 registry/runtime composition', () => {
+  it('mounts native upload drafts and fences HTTP review completion and decisions to current revisions', async () => {
+    const test = fixture();
+    const auth = 'Bearer publisher-token';
+    const createdResponse = await test.handler(request('/v1/drafts', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'draft-create-1' },
-      body: JSON.stringify({ baseDigest }),
+      authorization: auth,
+      idempotency: 'native-create-1',
+      body: { name: '@team/native-review', files: nativeFiles(1) },
     }));
-    expect(created.status).toBe(201);
-    const draft = (await json(created)).draft as { id: string; revision: number; digest: string };
-    expect(draft.revision).toBe(1);
-    expect(draft.digest).toBe(baseDigest);
+    expect(createdResponse.status).toBe(201);
+    const created = await json(createdResponse);
+    const draft = created.draft;
+    expect(draft.origin).toBe('upload');
+    expect(test.sessions).toEqual(['eve-upload-1']);
 
-    const loaded = await test.handler(new Request(`${ORIGIN}/v1/drafts/${encodeURIComponent(draft.id)}`));
-    expect(loaded.status).toBe(200);
-    expect((await json(loaded)).draft).toMatchObject({ id: draft.id, revision: 1, baseResourceId: 'release-1' });
-
-    const updatedBundle: SkillBundle = {
-      format: 'pskills-bundle-v1',
-      files: [{
-        path: 'SKILL.md',
-        content: base64Text('---\nname: edited\ndescription: Edited release\n---\n# Edited\n'),
-      }],
+    const afterCreate = await test.repository.read(ORGANIZATION) as RegistryState & {
+      uploadReviewJobs?: Array<Record<string, any>>;
     };
-    const updatedDigest = await digestBytes(encodeBundle(updatedBundle));
-    const updated = await test.handler(new Request(`${ORIGIN}/v1/drafts/${encodeURIComponent(draft.id)}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'draft-update-1' },
-      body: JSON.stringify({ expectedRevision: 1, files: updatedBundle.files }),
-    }));
-    expect(updated.status).toBe(200);
-    expect((await json(updated)).draft).toMatchObject({ id: draft.id, revision: 2, digest: updatedDigest });
+    const firstJob = afterCreate.uploadReviewJobs?.[0];
+    expect(firstJob).toMatchObject({
+      state: 'pending',
+      eveSessionId: 'eve-upload-1',
+      binding: { draftId: draft.id, draftRevision: 1, contentDigest: draft.digest },
+    });
 
-    const published = await test.handler(new Request(`${ORIGIN}/v1/drafts/${encodeURIComponent(draft.id)}/publish`, {
+    const prepared = await test.handler(request('/internal/upload-review/prepare', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'draft-publish-1' },
-      body: JSON.stringify({ expectedRevision: 2, version: '1.1.0' }),
+      authorization: `Bearer ${REVIEW_TOKEN}`,
+      body: { sessionId: 'eve-upload-1' },
     }));
-    expect(published.status).toBe(202);
-    const operation = (await json(published)).operation as { id: string; resourceId: string; digest: string; state: string };
-    expect(operation).toMatchObject({ state: 'queued', digest: updatedDigest, scanRequired: true });
+    expect(prepared.status).toBe(200);
+    const preparedBody = await json(prepared);
+    expect(preparedBody).toMatchObject({ status: 'prepared', jobId: firstJob!.id, draftRevision: 1 });
+    expect(typeof preparedBody.leaseToken).toBe('string');
 
-    const queuedState = await test.repository.read(ORGANIZATION);
-    const pending = queuedState.skills.find((skill) => skill.id === operation.resourceId);
-    const pendingJob = queuedState.jobs.find((job) => job.id === operation.id);
-    expect(pending).toMatchObject({ state: 'pending', artifact: { digest: updatedDigest }, policyRevision: queuedState.policy.revision });
-    expect(pending?.authoring).toMatchObject({ baseResourceId: 'release-1', draftId: draft.id, draftRevision: 2 });
-    expect(pendingJob).toMatchObject({ state: 'queued', kind: 'scan', resourceId: operation.resourceId, artifact: { digest: updatedDigest } });
-
-    test.setPrincipal(worker());
-    const claim = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
-    expect(claim.status).toBe(200);
-    const claimed = (await json(claim)).job as { id: string; leaseToken: string; artifact: StoredBlob };
-    expect(claimed.id).toBe(operation.id);
-    expect(claimed.artifact.digest).toBe(updatedDigest);
-
-    const artifact = await test.handler(new Request(`${ORIGIN}/internal/jobs/${encodeURIComponent(operation.id)}/artifact`, {
-      headers: {
-        'x-worker-fencing-token': claimed.leaseToken,
-        'x-artifact-digest': claimed.artifact.digest,
+    const completed = await test.handler(request('/internal/upload-review/complete', {
+      method: 'POST',
+      authorization: `Bearer ${REVIEW_TOKEN}`,
+      body: {
+        sessionId: 'eve-upload-1',
+        jobId: firstJob!.id,
+        leaseToken: preparedBody.leaseToken,
+        findings: [{
+          severity: 'low',
+          category: 'style',
+          title: 'Native draft note',
+          summary: 'The draft has a bounded advisory note.',
+          path: 'SKILL.md',
+          line: 1,
+        }],
       },
     }));
-    expect(artifact.status).toBe(200);
-    expect(artifact.headers.get('x-artifact-digest')).toBe(updatedDigest);
-    expect(await artifact.arrayBuffer()).toEqual(encodeBundle(updatedBundle).buffer);
-
-    const scan = requiredScan(operation.id, updatedDigest as SkillVersion['artifact']['digest'], queuedState.policy.revision, 'published-scan');
-    const completed = await test.handler(new Request(`${ORIGIN}/internal/jobs/${encodeURIComponent(operation.id)}/complete`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': claimed.leaseToken },
-      body: JSON.stringify({
-        leaseToken: claimed.leaseToken,
-        artifactDigest: updatedDigest,
-        scanResults: [scan],
-      }),
-    }));
     expect(completed.status).toBe(200);
-    expect((await json(completed)).operation.state).toBe('completed');
+    const completedBody = await json(completed);
+    expect(completedBody.status).toBe('passed');
+    const firstResultId = completedBody.resultId as string;
 
-    test.setPrincipal(publisher());
-    const finalState = await test.repository.read(ORGANIZATION);
-    const approved = finalState.skills.find((skill) => skill.id === operation.resourceId);
-    expect(approved).toMatchObject({ state: 'approved', artifact: { digest: updatedDigest }, scanIds: ['published-scan'] });
+    const updatedResponse = await test.handler(request(`/v1/drafts/${encodeURIComponent(draft.id)}`, {
+      method: 'PUT',
+      authorization: auth,
+      idempotency: 'native-update-2',
+      body: { expectedRevision: 1, files: nativeFiles(2) },
+    }));
+    expect(updatedResponse.status).toBe(200);
+    const updated = await json(updatedResponse);
+    expect(updated.draft.revision).toBe(2);
+    expect(test.sessions).toEqual(['eve-upload-1', 'eve-upload-2']);
+
+    const afterUpdate = await test.repository.read(ORGANIZATION) as RegistryState & {
+      uploadReviewJobs?: Array<Record<string, any>>;
+      uploadReviewResults?: Array<Record<string, any>>;
+    };
+    const secondJob = afterUpdate.uploadReviewJobs?.find((job) => job.binding.draftRevision === 2);
+    expect(afterUpdate.uploadReviewJobs?.find((job) => job.id === firstJob!.id)).toMatchObject({ state: 'stale' });
+    expect(afterUpdate.uploadReviewResults?.find((result) => result.id === firstResultId)).toMatchObject({ state: 'stale' });
+
+    const secondPrepared = await test.handler(request('/internal/upload-review/prepare', {
+      method: 'POST',
+      authorization: `Bearer ${REVIEW_TOKEN}`,
+      body: { sessionId: 'eve-upload-2' },
+    }));
+    expect(secondPrepared.status).toBe(200);
+    const secondPreparedBody = await json(secondPrepared);
+
+    const updatedAgainResponse = await test.handler(request(`/v1/drafts/${encodeURIComponent(draft.id)}`, {
+      method: 'PUT',
+      authorization: auth,
+      idempotency: 'native-update-3',
+      body: { expectedRevision: 2, files: nativeFiles(3) },
+    }));
+    expect(updatedAgainResponse.status).toBe(200);
+
+    const staleCompletion = await test.handler(request('/internal/upload-review/complete', {
+      method: 'POST',
+      authorization: `Bearer ${REVIEW_TOKEN}`,
+      body: {
+        sessionId: 'eve-upload-2',
+        jobId: secondJob!.id,
+        leaseToken: secondPreparedBody.leaseToken,
+        findings: [],
+      },
+    }));
+    expect(staleCompletion.status).toBe(200);
+    expect((await json(staleCompletion)).status).toBe('stale');
+
+    // The public result contains the finding id; read it from the persisted
+    // state so the assertion exercises the stale-result decision gate.
+    const finalState = await test.repository.read(ORGANIZATION) as RegistryState & {
+      uploadReviewResults?: Array<{ id: string; findings: Array<{ id: string }> }>;
+    };
+    const findingId = finalState.uploadReviewResults?.find((result) => result.id === firstResultId)?.findings[0]?.id;
+    expect(findingId).toBeDefined();
+    const decision = await test.handler(request(`/v1/drafts/${encodeURIComponent(draft.id)}/reviews/${encodeURIComponent(firstResultId)}/decisions`, {
+      method: 'POST',
+      authorization: auth,
+      body: { findingId, decision: 'acknowledged' },
+    }));
+    expect(decision.status).toBe(409);
+    expect((await json(decision)).error.code).toBe('REVIEW_CONFLICT');
   });
 
-  it('keeps draft routes publisher-scoped and denies other namespaces before authoring writes', async () => {
-    const test = await fixture();
-    const before = await test.repository.read(ORGANIZATION);
-
-    test.setPrincipal({
-      organizationId: ORGANIZATION,
-      subject: 'reader',
-      roles: ['reader'],
-      namespaces: ['@team'],
-      scopes: ['skills:read', 'registry:read'],
-    });
-    const readerWrite = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
+  it('applies the existing auth and scope boundary to draft routes', async () => {
+    const test = fixture();
+    const unauthenticated = await test.handler(request('/v1/drafts', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'reader-write' },
-      body: JSON.stringify({ baseDigest: before.skills[0]!.artifact.digest }),
+      idempotency: 'unauthenticated',
+      body: { name: '@team/native-review', files: nativeFiles(1) },
     }));
-    expect(readerWrite.status).toBe(403);
+    expect(unauthenticated.status).toBe(401);
 
-    test.setPrincipal({ ...publisher(['@other']), subject: 'other-publisher' });
-    const otherNamespace = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
+    test.setPrincipal({ ...publisher(), scopes: [] });
+    const missingScope = await test.handler(request('/v1/drafts', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'other-write' },
-      body: JSON.stringify({ baseDigest: before.skills[0]!.artifact.digest }),
+      authorization: 'Bearer publisher-token',
+      idempotency: 'missing-scope',
+      body: { name: '@team/native-review', files: nativeFiles(1) },
     }));
-    expect(otherNamespace.status).toBe(404);
-
-    test.setPrincipal(worker());
-    const workerWrite = await test.handler(new Request(`${ORIGIN}/v1/drafts/missing`, {
-      headers: { authorization: 'Bearer worker' },
-    }));
-    expect(workerWrite.status).toBe(403);
-
-    expect(await test.repository.read(ORGANIZATION)).toEqual(before);
-  });
-
-  it('does not publish a draft when the current scanner admission is lost', async () => {
-    const test = await fixture();
-    const baseDigest = test.state.skills[0]!.artifact.digest;
-    const created = await test.handler(new Request(`${ORIGIN}/v1/skills/release-1/drafts`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'admission-create' },
-      body: JSON.stringify({ baseDigest }),
-    }));
-    const draftId = (await json(created)).draft.id as string;
-    await test.repository.transaction(ORGANIZATION, (state) => {
-      state.policy.revision = 'policy-changed';
-    });
-    const response = await test.handler(new Request(`${ORIGIN}/v1/drafts/${encodeURIComponent(draftId)}/publish`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'admission-publish' },
-      body: JSON.stringify({ expectedRevision: 1, version: '1.1.0' }),
-    }));
-    expect(response.status).toBe(404);
-    const after = await test.repository.read(ORGANIZATION);
-    expect(after.jobs).toHaveLength(0);
-    expect(after.skills).toHaveLength(1);
+    expect(missingScope.status).toBe(403);
   });
 });

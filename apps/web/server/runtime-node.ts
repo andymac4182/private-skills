@@ -11,6 +11,15 @@ import { PostgresSemanticIndex } from '../../../packages/search/src/postgres';
 import { StateSemanticIndex } from '../../../packages/search/src/state';
 import type { EmbeddingProfile, SemanticIndex } from '../../../packages/search/src/types';
 import { createHostedWorkerHandlerFromEnv } from '../../../workers/runner/src/hosted';
+import { resolveCurrentUploadReviewBinding } from '../../../packages/core/src/index';
+import {
+  createUploadReviewPersistenceService,
+  resolveUploadReviewModel,
+  resolveUploadReviewRevision,
+  type UploadReviewPersistenceService,
+} from '../../../packages/upload-reviews/src/index';
+import { createUploadReviewHttpHandler } from '../../../packages/upload-reviews/src/http';
+import { createUploadReviewTrigger } from '../../../packages/upload-reviews/src/trigger';
 import {
   createSkillsDirectoryGatewayTokenProvider,
   createUnavailableSkillsDirectoryTokenProvider,
@@ -21,6 +30,13 @@ import {
 } from '../../../packages/directory/src/index';
 
 export type RuntimeEnvironment = Record<string, string | undefined>;
+
+export interface UploadReviewRuntime {
+  service: UploadReviewPersistenceService;
+  trigger?: ReturnType<typeof createUploadReviewTrigger>;
+  httpHandler?: (request: Request) => Promise<Response | undefined>;
+  configured: boolean;
+}
 
 /**
  * Resolve one server-side directory bearer. The official helper is invoked
@@ -65,7 +81,7 @@ function required(env: RuntimeEnvironment, name: string): string {
   return value;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = () => defaultRegistryState({ production, allowUnscanned: env.PSKILLS_ALLOW_UNSCANNED === 'true' });
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -138,7 +154,11 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         : {},
     )
     : undefined;
-  return { repository, blobs, hostedWorker, directoryTokenProvider, directoryOfficialTokenProvider, directoryOfficialAvailable, createSearchIndex: (profile) => {
+  const uploadReviewEnabled = env.PSKILLS_UPLOAD_REVIEW_ENABLED === 'true';
+  const uploadReview = uploadReviewEnabled
+    ? createUploadReviewRuntime(env, repository)
+    : undefined;
+  return { repository, blobs, hostedWorker, directoryTokenProvider, directoryOfficialTokenProvider, directoryOfficialAvailable, ...(uploadReview === undefined ? {} : { uploadReview }), createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {
       if (!postgresPool) throw new Error('pgvector search requires PostgreSQL metadata');
@@ -147,4 +167,37 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     if (provider !== 'state') throw new Error('Unsupported PSKILLS_SEARCH_PROVIDER');
     return new StateSemanticIndex(repository, { profile });
   } };
+}
+
+function createUploadReviewRuntime(
+  env: RuntimeEnvironment,
+  repository: StateRepository,
+): UploadReviewRuntime {
+  const organizationId = env.PSKILLS_ORGANIZATION_ID ?? 'default';
+  const model = resolveUploadReviewModel(env);
+  const reviewerRevision = resolveUploadReviewRevision(env);
+  const resolveCurrentBinding = (state: Parameters<typeof resolveCurrentUploadReviewBinding>[0], draftId: string) =>
+    resolveCurrentUploadReviewBinding(state, draftId);
+  const service = createUploadReviewPersistenceService(repository, {
+    resolveCurrentBinding,
+    resolveCurrentContract: () => ({ model, reviewerRevision }),
+  });
+  const reviewerToken = env.PSKILLS_UPLOAD_REVIEW_REGISTRY_TOKEN?.trim();
+  const trigger = createUploadReviewTrigger(env);
+  const configured = reviewerToken !== undefined && trigger !== undefined;
+  const httpHandler = configured && reviewerToken
+    ? createUploadReviewHttpHandler({
+      repository,
+      organizationId,
+      reviewerToken,
+      resolveCurrentBinding,
+      service,
+    })
+    : undefined;
+  return {
+    service,
+    ...(trigger === undefined ? {} : { trigger }),
+    ...(httpHandler === undefined ? {} : { httpHandler }),
+    configured: configured && httpHandler !== undefined,
+  };
 }

@@ -146,6 +146,52 @@ describe('upload/edit review persistence', () => {
     )).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
   });
 
+  it('stales queued and completed reviews when the configured reviewer contract changes without a draft save', async () => {
+    const repository = new MemoryStateRepository();
+    let contract = { model: 'openai/gpt-5.5', reviewerRevision: 'upload-reviewer-v1' };
+    const service = createUploadReviewPersistenceService(repository, {
+      resolveCurrentBinding: () => binding(),
+      resolveCurrentContract: () => contract,
+    });
+    const job = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: contract.model,
+      reviewerRevision: contract.reviewerRevision,
+      now: BASE_TIME,
+    });
+    const claim = await service.claim('org-a', job.id, { eveSessionId: 'eve-session-1', now: BASE_TIME });
+    const result = await service.complete('org-a', job.id, claim.leaseToken!, {
+      findings: [{
+        severity: 'low',
+        category: 'style',
+        title: 'Note',
+        summary: 'Bounded note',
+        path: 'SKILL.md',
+        line: 1,
+      }],
+      now: BASE_TIME,
+    });
+
+    contract = { model: 'openai/gpt-5.5', reviewerRevision: 'upload-reviewer-v2' };
+    expect((await service.listJobs('org-a'))[0]).toMatchObject({
+      state: 'stale',
+      staleReason: 'current draft binding or reviewer contract differs',
+    });
+    expect((await service.listResults('org-a'))[0]).toMatchObject({
+      state: 'stale',
+      staleReason: 'current draft binding or reviewer contract differs',
+    });
+    await expect(service.updateFindingDecision(
+      'org-a',
+      result.id,
+      result.findings[0]!.id,
+      'acknowledged',
+      'publisher-1',
+      BASE_TIME,
+    )).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
+  });
+
   it('keeps tenants isolated and binds the completion to the leased snapshot', async () => {
     const { repository, service } = await fixture();
     const job = await service.enqueue('org-a', {

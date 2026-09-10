@@ -659,6 +659,7 @@ function mapReviewError(error: unknown): AuthoringApiError {
   if (code === 'UPLOAD_REVIEW_NOT_FOUND') return unavailableDraft();
   if (code === 'INVALID_UPLOAD_REVIEW_INPUT') return new AuthoringApiError('INVALID_REQUEST', 'Review request is invalid', 400);
   if (code === 'UPLOAD_REVIEW_CONFLICT') return new AuthoringApiError('REVIEW_CONFLICT', 'Review state changed; retry the request', 409);
+  if (code === 'UPLOAD_REVIEW_BINDING_STALE') return new AuthoringApiError('REVIEW_CONFLICT', 'Review binding is no longer current', 409);
   if (code === 'UPLOAD_REVIEW_LEASE_FENCED' || code === 'UPLOAD_REVIEW_LEASE_EXPIRED') {
     return new AuthoringApiError('REVIEW_CONFLICT', 'Review lease is no longer current', 409);
   }

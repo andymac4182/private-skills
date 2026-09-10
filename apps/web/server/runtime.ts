@@ -5,6 +5,7 @@ import { createBlobGatewayHandler } from '../../../packages/storage/src/http';
 import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastructure';
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
+import { resolveUploadReviewModel, resolveUploadReviewRevision } from '../../../packages/upload-reviews/src/index';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
 import {
   createSkillsDirectoryClient,
@@ -65,13 +66,23 @@ async function createRuntime(env: RuntimeEnvironment) {
   // Unlisted pack discovery is public and never uses a directory bearer token.
   const directoryPacks = env.PSKILLS_PACK_DIRECTORY_ENABLED === 'true' || env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsPackClient() : undefined;
+  const { uploadReview: uploadReviewRuntime, ...baseInfrastructure } = infrastructure;
   const registryDependencies = {
-    ...infrastructure,
+    ...baseInfrastructure,
     auth,
     config,
     directory,
     directoryPacks,
     directoryForBase,
+    ...(uploadReviewRuntime?.configured !== true ? {} : {
+      uploadReview: {
+        service: uploadReviewRuntime.service,
+        model: resolveUploadReviewModel(env),
+        reviewerRevision: resolveUploadReviewRevision(env),
+        configured: uploadReviewRuntime.configured,
+        ...(uploadReviewRuntime.trigger === undefined ? {} : { trigger: uploadReviewRuntime.trigger }),
+      },
+    }),
   };
   const registry = createRegistryHandler(registryDependencies);
   const embeddingProvider = createEmbeddingProvider(env);
@@ -98,6 +109,10 @@ async function createRuntime(env: RuntimeEnvironment) {
     const path = new URL(request.url).pathname;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
+    if (path.startsWith('/internal/upload-review/')) {
+      const response = await uploadReviewRuntime?.httpHandler?.(request);
+      if (response) return response;
+    }
     if (path === '/internal/worker/run') {
       return infrastructure.hostedWorker ? infrastructure.hostedWorker(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
