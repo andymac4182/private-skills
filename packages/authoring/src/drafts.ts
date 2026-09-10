@@ -83,6 +83,20 @@ export interface PublicSkillDraftPublication {
 const MAX_PUBLICATION_HISTORY = 16;
 
 /**
+ * A digest-only entry names one file in the exact current draft revision.
+ * The server resolves it from the sealed current object; callers never send
+ * or select a storage key.
+ */
+export interface DraftFileReference {
+  readonly path: string;
+  /** Current sealed path to copy; omitted when the file is not renamed. */
+  readonly sourcePath?: string;
+  readonly digest: Digest;
+}
+
+export type DraftFileInput = BundleFile | DraftFileReference;
+
+/**
  * A fully authenticated caller can use this seam to persist one complete
  * draft revision without reimplementing the bundle, blob, CAS, audit, or
  * advisory-review rules. The builder uses the `builder-proposal` kind after a
@@ -92,7 +106,10 @@ const MAX_PUBLICATION_HISTORY = 16;
 export interface DraftRevisionWriteInput {
   readonly draftId: string;
   readonly expectedRevision: number;
-  readonly files: readonly BundleFile[];
+  /** A complete manifest of inline files and/or digest-only current-file references. */
+  readonly files: readonly DraftFileInput[];
+  /** Required when `files` contains digest-only references; optional for legacy full PUTs. */
+  readonly expectedDigest?: Digest;
   readonly idempotencyKey: string;
   readonly principal: Principal;
   readonly deps: AuthoringHandlerDependencies;
@@ -953,6 +970,7 @@ async function updateDraft(
   const result = await writeDraftRevision({
     draftId,
     expectedRevision,
+    expectedDigest: body.expectedDigest === undefined ? undefined : requireDigest(body.expectedDigest, 'expectedDigest'),
     files: body.files,
     idempotencyKey,
     principal,
@@ -966,10 +984,11 @@ async function updateDraft(
 /**
  * Persist one complete canonical draft revision. This is the single CAS
  * writer for editor PUTs and human-approved builder proposals. Callers must
- * supply the authenticated human principal and the complete file set; this
- * function performs the canonicalization and sealed-blob verification before
- * the repository transaction, then enqueues the same advisory review as a
- * normal draft edit.
+ * supply the authenticated human principal and a complete file manifest; this
+ * function resolves any unchanged-file references from the exact sealed
+ * current revision, performs canonicalization and sealed-blob verification
+ * before the repository transaction, then enqueues the same advisory review
+ * as a normal draft edit.
  */
 export async function writeDraftRevision(
   input: DraftRevisionWriteInput,
@@ -981,6 +1000,9 @@ export async function writeDraftRevision(
   if (!isSafeId(input.draftId)) throw unavailableDraft();
   const idempotencyKey = requireIdempotencyKeyValue(input.idempotencyKey);
   const expectedRevision = requireRevision(input.expectedRevision);
+  const expectedDigest = input.expectedDigest === undefined
+    ? undefined
+    : requireDigest(input.expectedDigest, 'expectedDigest');
   if (!Array.isArray(input.files)) {
     throw new AuthoringApiError('INVALID_REQUEST', 'files must be an array', 400);
   }
@@ -992,24 +1014,58 @@ export async function writeDraftRevision(
     throw new AuthoringApiError('INVALID_REQUEST', 'draft revision write kind is invalid', 400);
   }
 
-  let bundle: ReturnType<typeof decodeBundle>;
+  let draftFiles: DraftFileInput[];
   try {
-    bundle = canonicalizeBundle(input.files);
-  } catch {
+    draftFiles = parseDraftFileInputs(input.files);
+  } catch (error) {
+    if (error instanceof AuthoringApiError) throw error;
     throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
   }
-  const encoded = encodeBundle(bundle);
-  const digest = await digestBytes(encoded);
-  const requestDigest = await digestText(JSON.stringify(
-    kind === 'builder-proposal'
-      ? { kind, proposalId, expectedRevision, digest }
-      : { expectedRevision, digest },
-  ));
+  const hasReferences = draftFiles.some(isDraftFileReference);
+  if (hasReferences && expectedDigest === undefined) {
+    throw new AuthoringApiError('INVALID_REQUEST', 'expectedDigest is required when using unchanged file references', 400);
+  }
+
   const stateBefore = await input.deps.repository.read(input.deps.config.organizationId);
   const before = findDraft(stateBefore, input.draftId, input.principal, input.deps.config.organizationId);
+  const requestDigest = hasReferences
+    ? await digestText(JSON.stringify(
+      kind === 'builder-proposal'
+        ? { kind, proposalId, expectedRevision, expectedDigest, files: canonicalDraftFileInputs(draftFiles) }
+        : { expectedRevision, expectedDigest, files: canonicalDraftFileInputs(draftFiles) },
+    ))
+    : undefined;
+  let bundle: ReturnType<typeof decodeBundle> | undefined;
+  let encoded: Uint8Array | undefined;
+  let digest: Digest | undefined;
+  if (!hasReferences) {
+    try {
+      bundle = canonicalizeBundle(draftFiles);
+    } catch {
+      throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
+    }
+    encoded = encodeBundle(bundle);
+    digest = await digestBytes(encoded);
+  }
+  const fullRequestDigest = hasReferences ? undefined : await digestText(JSON.stringify(
+    kind === 'builder-proposal'
+      ? {
+        kind,
+        proposalId,
+        expectedRevision,
+        ...(expectedDigest === undefined ? {} : { expectedDigest }),
+        digest,
+      }
+      : {
+        expectedRevision,
+        ...(expectedDigest === undefined ? {} : { expectedDigest }),
+        digest,
+      },
+  ));
+  const identityDigest = requestDigest ?? fullRequestDigest!;
   const prior = findIdempotency(before, idempotencyKey, input.principal.subject);
   if (prior) {
-    if (prior.requestDigest !== requestDigest) throw idempotencyConflict();
+    if (prior.requestDigest !== identityDigest) throw idempotencyConflict();
     const replay = await draftFromIdempotency(before, prior, input.deps);
     // Recover a queue write lost after the draft transaction. The current
     // binding guard prevents an old revision's replay from staling or
@@ -1023,17 +1079,33 @@ export async function writeDraftRevision(
   if (before.status !== 'open') {
     throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
   }
+  if (expectedDigest !== undefined && before.digest !== expectedDigest) {
+    throw draftDigestConflict(before.revision);
+  }
 
-  const stored = await putVerifiedDraftBlob(input.deps, encoded, digest);
+  if (hasReferences) {
+    let currentBundle: ReturnType<typeof decodeBundle>;
+    try {
+      currentBundle = await readDraftBundle(before, input.deps);
+      bundle = await resolveDraftFileInputs(currentBundle, draftFiles);
+    } catch (error) {
+      if (error instanceof AuthoringApiError) throw error;
+      throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
+    }
+    encoded = encodeBundle(bundle);
+    digest = await digestBytes(encoded);
+  }
+
+  const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
   const now = new Date().toISOString();
   const record: SkillDraftIdempotencyRecord = {
     key: idempotencyKey,
     subject: input.principal.subject,
-    requestDigest,
+    requestDigest: identityDigest,
     revision: expectedRevision + 1,
-    digest,
+    digest: digest!,
     artifact: stored,
-    manifest: await compactManifest(bundle.files),
+    manifest: await compactManifest(bundle!.files),
     updatedAt: now,
   };
 
@@ -1041,15 +1113,18 @@ export async function writeDraftRevision(
     const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
     const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
     if (concurrent) {
-      if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
+      if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
       return { draft: current, idempotent: true };
     }
     if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
     if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+    if (expectedDigest !== undefined && current.digest !== expectedDigest) {
+      throw draftDigestConflict(current.revision);
+    }
     current.revision = expectedRevision + 1;
-    current.digest = digest;
+    current.digest = digest!;
     current.artifact = stored;
-    current.files = bundle.files;
+    current.files = bundle!.files;
     current.updatedAt = now;
     current.idempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
     appendDraftAudit(
@@ -1691,6 +1766,116 @@ function canonicalizeBundle(files: readonly unknown[]): ReturnType<typeof decode
   return decodeBundle(encodeBundle(validated));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Normalize the two PUT entry forms before any bundle work. A digest-only
+ * entry is deliberately kept separate from BundleFile so a browser can never
+ * smuggle an arbitrary blob key into the resolver.
+ */
+function parseDraftFileInputs(value: readonly unknown[]): DraftFileInput[] {
+  return value.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.path !== 'string') {
+      throw new Error(`files[${index}] must contain a path`);
+    }
+    const hasContent = Object.prototype.hasOwnProperty.call(entry, 'content');
+    const hasDigest = Object.prototype.hasOwnProperty.call(entry, 'digest');
+    if (hasContent === hasDigest) {
+      throw new Error(`files[${index}] must contain exactly one of content or digest`);
+    }
+    if (hasDigest) {
+      if (Object.keys(entry).some((key) => key !== 'path' && key !== 'sourcePath' && key !== 'digest')) {
+        throw new Error(`files[${index}] digest references cannot include content or executable`);
+      }
+      // Reuse the canonical path/plugin-payload checks without accepting an
+      // empty or otherwise synthetic file into the resulting bundle.
+      validateBundle({ format: 'pskills-bundle-v1', files: [{ path: entry.path, content: '' }] });
+      if (entry.sourcePath !== undefined) {
+        if (typeof entry.sourcePath !== 'string') {
+          throw new Error(`files[${index}].sourcePath must be a string`);
+        }
+        validateBundle({ format: 'pskills-bundle-v1', files: [{ path: entry.sourcePath, content: '' }] });
+      }
+      return {
+        path: entry.path,
+        ...(entry.sourcePath === undefined ? {} : { sourcePath: entry.sourcePath }),
+        digest: requireDigest(entry.digest, `files[${index}].digest`),
+      };
+    }
+    if (Object.keys(entry).some((key) => key !== 'path' && key !== 'content' && key !== 'executable')) {
+      throw new Error(`files[${index}] contains an unsupported property`);
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error(`files[${index}].content must be a string`);
+    }
+    if (entry.executable !== undefined && typeof entry.executable !== 'boolean') {
+      throw new Error(`files[${index}].executable must be a boolean`);
+    }
+    return {
+      path: entry.path,
+      content: entry.content,
+      ...(entry.executable === true ? { executable: true } : {}),
+    };
+  });
+}
+
+function isDraftFileReference(file: DraftFileInput): file is DraftFileReference {
+  return 'digest' in file;
+}
+
+function canonicalDraftFileInputs(files: readonly DraftFileInput[]): Array<Record<string, unknown>> {
+  return [...files]
+    .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+    .map((file) => isDraftFileReference(file)
+      ? {
+        path: file.path,
+        ...(file.sourcePath === undefined ? {} : { sourcePath: file.sourcePath }),
+        digest: file.digest,
+      }
+      : {
+        path: file.path,
+        content: file.content,
+        ...(file.executable === true ? { executable: true } : {}),
+      });
+}
+
+async function resolveDraftFileInputs(
+  current: ReturnType<typeof decodeBundle>,
+  files: readonly DraftFileInput[],
+): Promise<ReturnType<typeof decodeBundle>> {
+  const currentByPath = new Map(current.files.map((file) => [file.path, file]));
+  const resolved: BundleFile[] = [];
+  for (const file of files) {
+    if (!isDraftFileReference(file)) {
+      resolved.push(file);
+      continue;
+    }
+    const currentPath = file.sourcePath ?? file.path;
+    const currentFile = currentByPath.get(currentPath);
+    if (!currentFile) {
+      throw draftDigestConflict(undefined, currentPath);
+    }
+    const actualDigest = await digestBytes(decodeBase64(currentFile.content));
+    if (actualDigest !== file.digest) {
+      throw draftDigestConflict(undefined, currentPath);
+    }
+    // Preserve executable state from the sealed current revision. The client
+    // cannot use a reference to toggle metadata on an unchanged byte stream.
+    resolved.push({
+      path: file.path,
+      content: currentFile.content,
+      ...(currentFile.executable === true ? { executable: true } : {}),
+    });
+  }
+  try {
+    return canonicalizeBundle(resolved);
+  } catch {
+    throw new AuthoringApiError('INVALID_BUNDLE', 'Draft files are not a safe canonical bundle', 400);
+  }
+}
+
 function draftMetadataOrEmpty(bundle: ReturnType<typeof decodeBundle>): { skillName: string; description: string } {
   try {
     const metadata = parseSkillMetadata(bundle);
@@ -1880,6 +2065,18 @@ function idempotencyConflict(): AuthoringApiError {
 
 function revisionConflict(currentRevision: number): AuthoringApiError {
   return new AuthoringApiError('DRAFT_CONFLICT', 'Draft revision is stale; rebase before saving', 409, { currentRevision });
+}
+
+function draftDigestConflict(currentRevision: number | undefined, path?: string): AuthoringApiError {
+  return new AuthoringApiError(
+    'DRAFT_CONFLICT',
+    'Draft digest is stale; reload before saving',
+    409,
+    {
+      ...(currentRevision === undefined ? {} : { currentRevision }),
+      ...(path === undefined ? {} : { path }),
+    },
+  );
 }
 
 function sameFiles(left: BundleFile[], right: BundleFile[]): boolean {

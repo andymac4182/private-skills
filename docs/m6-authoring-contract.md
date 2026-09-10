@@ -88,12 +88,20 @@ Release-fork creation is `POST /v1/skills/:resourceId/drafts` with
 `{ baseDigest }`; upload-origin creation is `POST /v1/drafts` with
 `{ name, files }`. Both require an `Idempotency-Key` header. The atomic file
 save is `PUT /v1/drafts/:draftId` with `{ expectedRevision, files }`, where
-`files` is the complete draft snapshot returned by the Diffs edit callback.
+`files` is the complete draft manifest returned by the Diffs edit callback.
+Entries may carry inline `{ path, content, executable? }` bytes (the original
+contract) or an unchanged-file reference `{ path, sourcePath?, digest }`.
+Reference saves also send `expectedDigest`, which binds every reference to the
+exact current sealed draft revision. `sourcePath` defaults to `path`; when it
+is supplied, the server verifies and copies only that current sealed file to
+the requested final `path`, preserving its executable flag. The browser never
+selects a blob key, and omitted manifest paths are deletions.
+
 The server canonicalizes path order before sealing, applies compare-and-swap
-on `expectedRevision`, computes the canonical digest, and writes a new
-immutable blob. Replaying the same idempotency key and payload returns the
-same draft; a stale revision returns `DRAFT_CONFLICT` without changing the
-draft or its immutable base.
+on `expectedRevision` and `expectedDigest`, computes the canonical digest, and
+writes a new immutable blob. Replaying the same idempotency key and payload
+returns the same draft without another revision; a stale revision or digest
+returns `DRAFT_CONFLICT` without changing the draft or its immutable base.
 
 The durable state is split between metadata and sealed blobs:
 
