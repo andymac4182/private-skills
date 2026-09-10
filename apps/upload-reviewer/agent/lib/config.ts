@@ -1,6 +1,9 @@
 import { createGateway, type LanguageModel } from 'ai';
 
-const DEFAULT_UPLOAD_REVIEW_MODEL = 'openai/gpt-5.6-luna';
+// Keep the upload reviewer independently configurable, but use a model ID
+// published by the AI Gateway catalog as the safe default. Deployments may
+// override this with PSKILLS_UPLOAD_REVIEW_MODEL after provider verification.
+const DEFAULT_UPLOAD_REVIEW_MODEL = 'openai/gpt-5.5';
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/iu;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 const UPLOAD_REVIEW_ENDPOINTS = new Set([

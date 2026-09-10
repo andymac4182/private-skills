@@ -31,6 +31,10 @@ const MAX_RECOMMENDATION_LENGTH = 4_000;
 const MAX_REASON_LENGTH = 1_000;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
+// Markdown, code, and reviewer prose commonly contain LF/CR/tab. Keep those
+// layout controls while rejecting invisible controls that can smuggle
+// terminal or protocol behavior into a review.
+const UNSUPPORTED_TEXT_CONTROL_CHARACTER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const SAFE_PATH_SEGMENT = /^(?:\.|\.{2})$/u;
 
 export type UploadReviewState = 'pending' | 'running' | 'passed' | 'failed' | 'stale';
@@ -273,6 +277,21 @@ function boundedString(value: unknown, field: string, maximum: number, allowEmpt
   return result;
 }
 
+/**
+ * Validate bounded text without changing its bytes or line structure.
+ * Markdown, code, and reviewer prose must not use the single-line identifier
+ * validator above because it trims and rejects ordinary formatting controls.
+ */
+function boundedText(value: unknown, field: string, maximum: number, allowEmpty = false): string {
+  if (typeof value !== 'string') throw new UploadReviewValidationError(field + ' must be a string');
+  if (!allowEmpty && value.trim().length === 0) throw new UploadReviewValidationError(field + ' must not be empty');
+  if ([...value].length > maximum) throw new UploadReviewValidationError(field + ' exceeds the maximum length');
+  if (UNSUPPORTED_TEXT_CONTROL_CHARACTER.test(value)) {
+    throw new UploadReviewValidationError(field + ' contains invalid characters');
+  }
+  return value;
+}
+
 function optionalString(value: unknown, field: string, maximum: number): string | undefined {
   if (value === undefined) return undefined;
   return boundedString(value, field, maximum);
@@ -340,7 +359,7 @@ function validateSnapshotFile(value: unknown, index: number): UploadReviewSnapsh
   }
   const digest = validateDigest(value.digest, 'snapshot.files[' + index + '].digest');
   if (kind === 'text') {
-    const text = boundedString(value.text, 'snapshot.files[' + index + '].text', MAX_UPLOAD_REVIEW_TEXT_CHARS, true);
+    const text = boundedText(value.text, 'snapshot.files[' + index + '].text', MAX_UPLOAD_REVIEW_TEXT_CHARS, true);
     if (new TextEncoder().encode(text).byteLength > size) {
       throw new UploadReviewValidationError('snapshot.files[' + index + '].text exceeds its declared size');
     }
@@ -398,7 +417,7 @@ function normalizeEnqueueInput(input: EnqueueUploadReviewInput): {
   const model = boundedString(input.model, 'model', MAX_MODEL_LENGTH);
   const reviewerRevision = boundedString(input.reviewerRevision, 'reviewerRevision', MAX_VERSION_LENGTH);
   const idempotencyKey = input.idempotencyKey === undefined
-    ? uploadReviewIdempotencyKey(binding, reviewerRevision)
+    ? uploadReviewIdempotencyKey(binding, reviewerRevision, model)
     : boundedString(input.idempotencyKey, 'idempotencyKey', MAX_KEY_LENGTH);
   return {
     idempotencyKey,
@@ -410,9 +429,14 @@ function normalizeEnqueueInput(input: EnqueueUploadReviewInput): {
   };
 }
 
-export function uploadReviewIdempotencyKey(binding: UploadReviewBinding, reviewerRevision: string): string {
+export function uploadReviewIdempotencyKey(
+  binding: UploadReviewBinding,
+  reviewerRevision: string,
+  model?: string,
+): string {
   const normalized = validateBinding(binding);
   const revision = boundedString(reviewerRevision, 'reviewerRevision', MAX_VERSION_LENGTH);
+  const normalizedModel = model === undefined ? undefined : boundedString(model, 'model', MAX_MODEL_LENGTH);
   return [
     'upload-edit-review',
     normalized.draftId,
@@ -422,6 +446,7 @@ export function uploadReviewIdempotencyKey(binding: UploadReviewBinding, reviewe
     normalized.baseDigest ?? '-',
     normalized.policyRevision,
     revision,
+    normalizedModel ?? '-',
   ].join(':');
 }
 
@@ -544,16 +569,16 @@ function validateFindings(
     const line = finding.line === undefined ? undefined : validateRevision(finding.line, 'findings[' + index + '].line');
     const evidence = finding.evidence === undefined
       ? undefined
-      : boundedString(finding.evidence, 'findings[' + index + '].evidence', MAX_EVIDENCE_LENGTH);
+      : boundedText(finding.evidence, 'findings[' + index + '].evidence', MAX_EVIDENCE_LENGTH);
     const recommendation = finding.recommendation === undefined
       ? undefined
-      : boundedString(finding.recommendation, 'findings[' + index + '].recommendation', MAX_RECOMMENDATION_LENGTH);
+      : boundedText(finding.recommendation, 'findings[' + index + '].recommendation', MAX_RECOMMENDATION_LENGTH);
     return {
       id: randomId('upload-review-finding'),
       severity,
       category: boundedString(finding.category, 'findings[' + index + '].category', MAX_CATEGORY_LENGTH),
       title: boundedString(finding.title, 'findings[' + index + '].title', MAX_TITLE_LENGTH),
-      summary: boundedString(finding.summary, 'findings[' + index + '].summary', MAX_SUMMARY_LENGTH),
+      summary: boundedText(finding.summary, 'findings[' + index + '].summary', MAX_SUMMARY_LENGTH),
       ...(evidence === undefined ? {} : { evidence }),
       ...(recommendation === undefined ? {} : { recommendation }),
       ...(path === undefined ? {} : { path }),
@@ -959,6 +984,7 @@ export function createUploadReviewPersistenceService(
   return new DefaultUploadReviewPersistenceService(repository, options.leaseSeconds);
 }
 
-export * from './http.js';
+// Keep the persistence contract portable. Node/provider adapters are explicit
+// entry points so importing the queue from Nitro edge code does not pull in
+// `node:crypto` or the Eve client transport.
 export * from './snapshot.js';
-export * from './trigger.js';

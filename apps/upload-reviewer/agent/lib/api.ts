@@ -6,6 +6,17 @@ const MAX_REQUEST_BYTES = 1_500_000;
 
 type JsonParser<T> = (value: unknown) => T;
 
+/** The status is retained for bounded, route-specific retry decisions. */
+export class UploadReviewApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`upload reviewer API returned HTTP ${status}`);
+    this.name = 'UploadReviewApiError';
+    this.status = status;
+  }
+}
+
 async function readBoundedText(response: Response): Promise<string> {
   if (!response.body) {
     const text = await response.text();
@@ -64,7 +75,7 @@ export async function postUploadReviewerJson<T>(
       signal: controller.signal,
     });
     const text = await readBoundedText(response);
-    if (!response.ok) throw new Error(`upload reviewer API returned HTTP ${response.status}`);
+    if (!response.ok) throw new UploadReviewApiError(response.status);
     let value: unknown;
     try {
       value = JSON.parse(text);

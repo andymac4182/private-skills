@@ -56,3 +56,8 @@ export const submitOutputSchema = z.object({
   resultId: z.string().min(1).max(256).optional(),
   findingCount: z.number().int().nonnegative().max(60),
 }).strict();
+
+export const failOutputSchema = z.object({
+  status: z.literal('failed'),
+  resultId: z.string().min(1).max(256).optional(),
+}).strict();

@@ -5,11 +5,11 @@ import {
   UploadReviewLeaseError,
   UploadReviewValidationError,
   createUploadReviewPersistenceService,
-  createUploadReviewHttpHandler,
   createUploadReviewSnapshot,
   type UploadReviewBinding,
   type UploadReviewSnapshot,
 } from '../src/index.js';
+import { createUploadReviewHttpHandler } from '../src/http.js';
 
 const BASE_TIME = '2026-01-02T03:04:05.000Z';
 
@@ -67,6 +67,26 @@ describe('upload/edit review persistence', () => {
     await expect(service.enqueue('org-a', { ...input, model: 'other/model' })).rejects.toBeInstanceOf(UploadReviewConflictError);
   });
 
+  it('includes the configured model in generated idempotency keys', async () => {
+    const { service } = await fixture();
+    const first = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const second = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
   it('keeps tenants isolated and binds the completion to the leased snapshot', async () => {
     const { repository, service } = await fixture();
     const job = await service.enqueue('org-a', {
@@ -89,8 +109,9 @@ describe('upload/edit review persistence', () => {
         severity: 'high',
         category: 'unsafe-execution',
         title: 'Suspicious execution',
-        summary: 'The draft contains a shell execution path.',
-        evidence: 'path is metadata only',
+        summary: 'The draft contains a shell execution path.\nThe path is reviewed as quoted data.',
+        evidence: 'path is metadata only\n\tno file was executed',
+        recommendation: 'Keep the path inert.\r\nRequire explicit human review.',
         path: 'SKILL.md',
         line: 1,
       }],
@@ -99,6 +120,9 @@ describe('upload/edit review persistence', () => {
     expect(result.state).toBe('passed');
     expect(result.binding).toEqual(binding());
     expect(result.findings[0]?.path).toBe('SKILL.md');
+    expect(result.findings[0]?.summary).toBe('The draft contains a shell execution path.\nThe path is reviewed as quoted data.');
+    expect(result.findings[0]?.evidence).toBe('path is metadata only\n\tno file was executed');
+    expect(result.findings[0]?.recommendation).toBe('Keep the path inert.\r\nRequire explicit human review.');
     expect(result.findings[0]?.decision).toBe('open');
     const findingId = result.findings[0]!.id;
     const acknowledged = await service.updateFindingDecision(
@@ -240,6 +264,10 @@ describe('upload/edit review persistence', () => {
         { path: 'skill.md', kind: 'text', size: 1, digest: digest('b'), text: 'y' },
       ] },
     })).rejects.toBeInstanceOf(UploadReviewValidationError);
+    await expect(service.enqueue('org-a', {
+      ...baseInput,
+      snapshot: { files: [{ path: 'SKILL.md', kind: 'text', size: 3, digest: digest('a'), text: 'a\u0000b' }] },
+    })).rejects.toBeInstanceOf(UploadReviewValidationError);
 
     const job = await service.enqueue('org-a', baseInput);
     const claim = await service.claim('org-a', job.id, { now: BASE_TIME });
@@ -316,5 +344,32 @@ describe('upload/edit review persistence', () => {
     expect(snapshot.files.find((file) => file.path === 'tool.bin')).toMatchObject({ kind: 'binary', size: 3 });
     expect(snapshot.files.find((file) => file.path === 'notes.txt')).toMatchObject({ kind: 'oversize', size: 16_001 });
     expect(snapshot.files.find((file) => file.path === 'tool.bin')).not.toHaveProperty('text');
+  });
+
+  it('preserves multiline text and falls back to whole-file metadata at the aggregate limit', async () => {
+    const encode = (value: string) => {
+      const bytes = new TextEncoder().encode(value);
+      let encoded = '';
+      for (const byte of bytes) encoded += String.fromCharCode(byte);
+      return btoa(encoded);
+    };
+    const files = Array.from({ length: 11 }, (_, index) => ({
+      path: `docs/file-${String(index + 1).padStart(2, '0')}.md`,
+      content: encode('line one\r\n\tline two\n' + 'x'.repeat(15_976)),
+    }));
+    const result = await createUploadReviewSnapshot(files);
+    expect(result.files.slice(0, 10).every((file) => file.kind === 'text')).toBe(true);
+    expect(result.files[0]?.text?.startsWith('line one\r\n\tline two\n')).toBe(true);
+    expect(result.files[10]).toMatchObject({ path: 'docs/file-11.md', kind: 'oversize' });
+    expect(result.files[10]).not.toHaveProperty('text');
+  });
+
+  it('classifies valid UTF-8 with unsupported controls as metadata-only', async () => {
+    const bytes = new TextEncoder().encode('safe\u0000content');
+    let encoded = '';
+    for (const byte of bytes) encoded += String.fromCharCode(byte);
+    const result = await createUploadReviewSnapshot([{ path: 'notes.md', content: btoa(encoded) }]);
+    expect(result.files[0]).toMatchObject({ path: 'notes.md', kind: 'binary', size: bytes.byteLength });
+    expect(result.files[0]).not.toHaveProperty('text');
   });
 });

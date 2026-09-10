@@ -1,7 +1,9 @@
 import { defineTool } from 'eve/tools';
 import { z } from 'zod';
 import { postUploadReviewerJson } from '../lib/api.js';
-import { prepareOutputSchema, prepareResponseSchema } from '../lib/schemas.js';
+import { uploadReviewModel } from '../lib/config.js';
+import { retryUnboundPrepare } from '../lib/prepare-retry.js';
+import { failOutputSchema, prepareOutputSchema, prepareResponseSchema } from '../lib/schemas.js';
 import { uploadReviewState, type UploadReviewFile } from '../lib/review-state.js';
 
 const emptyInput = z.object({}).strict();
@@ -30,10 +32,13 @@ export default defineTool({
     if (current.status === 'completed' || current.status === 'failed' || current.status === 'stale') {
       return { status: current.status === 'completed' ? 'already_completed' as const : current.status, files: [] };
     }
-    const response = await postUploadReviewerJson(
-      '/internal/upload-review/prepare',
-      { sessionId: ctx.session.id },
-      (value) => prepareResponseSchema.parse(value),
+    const response = await retryUnboundPrepare(
+      () => postUploadReviewerJson(
+        '/internal/upload-review/prepare',
+        { sessionId: ctx.session.id },
+        (value) => prepareResponseSchema.parse(value),
+        ctx.abortSignal,
+      ),
       ctx.abortSignal,
     );
     if (response.status !== 'prepared' || !response.leaseToken || !response.files) {
@@ -50,6 +55,23 @@ export default defineTool({
         leaseToken: null,
       }));
       return { status: response.status, files: [] };
+    }
+    const configuredModel = uploadReviewModel();
+    if (response.model !== configuredModel) {
+      // Do not let runtime environment drift misattribute findings to the
+      // queued model. Release the private lease with a sanitized reason.
+      await postUploadReviewerJson(
+        '/internal/upload-review/fail',
+        {
+          sessionId: ctx.session.id,
+          jobId: response.jobId,
+          leaseToken: response.leaseToken,
+          error: 'queued reviewer model does not match runtime configuration',
+        },
+        (value) => failOutputSchema.parse(value),
+        ctx.abortSignal,
+      ).catch(() => undefined);
+      throw new Error('upload review model configuration does not match the queued review');
     }
     const files = response.files as UploadReviewFile[];
     uploadReviewState.update((state) => ({
