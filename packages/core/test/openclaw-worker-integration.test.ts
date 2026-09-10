@@ -430,7 +430,13 @@ describe('OpenClaw trusted-feed worker composition', () => {
       headers: { authorization: `Bearer ${USER_TOKEN}` },
     });
     expect(privateFeed.status).toBe(200);
+    const privateFeedForConsumer = privateFeed.clone();
     expect(await json(privateFeed)).toMatchObject({ id: 'private/openclaw', entries: [{ id: '@acme/demo' }] });
+    const parsedPrivateFeed = parseOpenClawFeed(await privateFeedForConsumer.text(), {
+      expectedFeedId: 'private/openclaw',
+      checkExpiry: true,
+    });
+    expect(parsedPrivateFeed.entries).toMatchObject([{ id: '@acme/demo', version: '1.0.0' }]);
 
     const jobsAfterApproval = repository.state.jobs.length;
     const warm = await requestHandler(handler, '/v1/feeds/skills/import', {

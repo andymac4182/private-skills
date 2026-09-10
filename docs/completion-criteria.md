@@ -719,6 +719,39 @@ producer uses a separately assigned feed ID and cannot impersonate
 feed contains only explicitly public records. No upstream feed credential,
 private bytes, or scanner report is placed in a feed or browser response.
 
+### Current composed implementation checkpoint
+
+The current core/runtime composition exposes the following bounded consumer
+surface when an operator configures an OpenClaw feed. `GET
+/v1/feeds/skills/catalog` requires an authenticated reader with
+`registry:read`; it refreshes a trusted, allowlisted feed and returns metadata
+plus feed digest/validator state. `POST /v1/feeds/skills/import` accepts only
+`{ "externalId": "..." }`, requires an authenticated reader with explicit
+`proxy:resolve`, and returns a `202` operation. The server derives the source
+candidate, internal record, revision, and worker target; callers do not submit
+a source URL, private name, version, or upstream mapping. `POST
+/v1/feeds/skills/refresh` remains administrator-only, and `GET
+/v1/feeds/skills` is the authenticated tenant feed after current policy,
+source-proof, namespace, and required-scan checks.
+
+The Node runtime reads `PSKILLS_OPENCLAW_FEED_ID`,
+`PSKILLS_OPENCLAW_FEED_URL`, `PSKILLS_OPENCLAW_NAMESPACE`, and
+`PSKILLS_OPENCLAW_SOURCE_ORIGIN` for the private feed and worker source
+boundary. `PSKILLS_OPENCLAW_TRUSTED_FEED_URL` and the optional
+`PSKILLS_OPENCLAW_TRUSTED_FEED_ID` configure the server-side metadata feed; the
+URL must be HTTPS without credentials, query, or fragment. Hosted worker
+execution is separately enabled with `PSKILLS_HOSTED_WORKER=true`. Feed and
+source credentials remain deployment-owned and are never returned to callers.
+
+The checked-in composition fixture proves the protocol boundary with an
+in-memory trusted feed, injected source bytes, and a deterministic local
+scanner under the required-scan policy. It observes metadata refresh, one
+deduplicated queue operation, worker acquisition, canonical bundle validation,
+required scan completion, source-proof recording, private publication, and a
+reference-consumer parse of the published bytes. It is not live ClawHub
+traffic, a production scanner run, or production deployment evidence; the
+hosted source-fetcher construction remains a deployment/worker concern.
+
 Completion requires all of the following:
 
 1. **M7-SPEC — pinned wire contract.** The implementation documentation and
