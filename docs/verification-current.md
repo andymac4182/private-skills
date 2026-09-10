@@ -30,8 +30,9 @@ revision 114, five digest/size-verified target objects, and post-restore target
 cleanup. The copy window uses operator-quiescence attestation and does not
 claim a provider lifecycle guarantee or a restored-origin health/scanner run.
 The OpenClaw backend is shipped but its feed remains disabled pending review and
-explicit activation, with no live interoperability evidence. M6 and M7 remain
-outside the current C1 release gate.
+explicit activation. There is no hosted registry artifact import or private
+publication acceptance; the recorded public metadata acceptance is scoped to
+the separate probe below. M6 and M7 remain outside the current C1 release gate.
 
 ## Recorded local required-scan portability proof
 
@@ -102,6 +103,25 @@ authorization-bearing public source request or unexpected route.
 This is local fixture evidence, not native CLI syscall tracing, native CI,
 Docker scanner execution, or production acceptance. It does not establish
 hosted source availability or a separately attested CLI build source.
+
+## Recorded local Compose required-scan proof
+
+As of `2026-09-10T14:50:30Z`, source commit
+`62c4a58ab9075a8267d784f1ed7bfaf3634cb309` has a sanitized [local Compose
+proof](evidence/local-compose-required-scan-62c4.json). The production-mode
+local stack used PostgreSQL `17.6`, the Files SDK filesystem adapter, and
+SkillsGuard `1.1.1`. Its policy returned `allowUnscanned=false`, Cisco and
+NVIDIA disabled, and SkillsGuard required. The required scan completed with
+2/2 files enumerated and analyzed, zero findings, and an approved release.
+The authorized install resolved the same artifact digest and transferred 347
+bytes with matching download digest.
+
+The API origin was loopback HTTP with an HTTPS-shaped local public-origin
+validation; this proof did not provision a TLS terminator. It is local Compose
+evidence, not hosted Cloudflare/TLS or production deployment proof, and does
+not close the broader container, provider, or semantic-search gates. No
+credentials, raw artifact bytes, scanner report content, or grant URL were
+retained.
 
 ## Recorded Git-triggered M6 read-only release-file checkpoint
 

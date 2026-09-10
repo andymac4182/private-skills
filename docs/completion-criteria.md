@@ -65,6 +65,13 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
 - **verified for the recorded failure check:** the production worker/hosting
   boundary proves required scanner failures are fail-closed and does not expose
   artifact bytes, credentials, or reports;
+- **recorded local Compose support:** the sanitized [required-scan portability
+  proof](evidence/local-compose-required-scan-62c4.json) records a local
+  PostgreSQL 17.6/Files SDK filesystem stack with SkillsGuard 1.1.1 required,
+  `allowUnscanned=false`, 2/2 files analyzed, approval, and a digest-matched
+  347-byte authorized transfer. It is loopback HTTP with an HTTPS-shaped local
+  origin and does not close hosted Cloudflare/TLS, provider, or semantic-search
+  gates;
 - **E7 source review reported green:** source head `0f9da75` has 286 tests
   passed and two environment-dependent skips; TypeScript, five SDK probes,
   Files SDK checks, and the Cloudflare build pass, and two independent reviews
