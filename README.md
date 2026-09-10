@@ -14,13 +14,18 @@ source remains a separate release step, and in-flight or prerelease packaging
 is not represented as a published release.
 
 The latest portable directory-gateway evidence is tracked in
-[`docs/verification-current.md`](docs/verification-current.md). PR22 is merged
-on `origin/main`, and the guarded prebuilt rollout
+[`docs/verification-current.md`](docs/verification-current.md). PR23 is merged
+on `origin/main` at `7c7a33e`; the earlier guarded prebuilt rollout
 `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE` is READY. Its current probes are read-only:
 18 authenticated GETs, two unauthenticated negative GETs, one metadata-only
 Pack preview POST, and zero private-registry data mutations (no feed, import,
 scan, install, role, or policy writes). The connected GitHub project
-still needs an observed Git-triggered deployment. Pack-preview UI proof passed
+then produced the READY Git-triggered deployment
+`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH` from that main commit; its separate
+readback records seven authenticated GETs, the expected unauthenticated Topics
+401, and zero private-registry data mutations. This closes the Git-trigger
+observation while keeping the earlier prebuilt and browser evidence
+source-specific. Pack-preview UI proof passed
 during a stable-alias cutover whose exact deployment attribution is unknown;
 positive scanner-to-warm evidence, hosted restore, and native CI remain
 pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
@@ -44,7 +49,7 @@ remain future milestones.
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The current guarded prebuilt registry rollout is
+The earlier guarded prebuilt registry rollout is
 [`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`](https://private-skills-theta.vercel.app),
 at the stable alias [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app)
 and unique URL
@@ -61,8 +66,12 @@ CLI install.
 The existing Vercel project is connected to GitHub repository
 `andymac4182/private-skills` on production branch `main`, without an additional
 grant, as shown by the sanitized [Git-link readback](docs/evidence/vercel-git-link-20260910T070859Z.json).
-The guarded prebuilt rollout did not observe a Git-triggered deployment; that
-observation remains pending.
+The sanitized [Git-main deployment evidence](docs/evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json)
+records a push of main commit `7c7a33e` producing READY deployment
+`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH`; its eight-request readback had seven
+authenticated successes, the expected unauthenticated Topics 401, and no
+registry writes. The earlier guarded prebuilt rollout remains a separate
+source-specific record.
 
 Prior deployment-specific OIDC, Topics, security, pagination, browser, feed
 quarantine, and CLI evidence remains linked from
@@ -85,14 +94,13 @@ cancelled. The primary run was created 2.067 seconds after the cron observation
 and completed 14.353 seconds after it. This is deployment-scoped temporal
 correlation; no explicit opaque scheduler/session correlation or
 proposal/prompt/report/event payload was retained.
-Git-triggered deployment verification, full C1 catalog acceptance, and hosted
-restore remain pending.
+Full C1 catalog acceptance and hosted restore remain pending.
 See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
 The v0.3.0 and C1 records preserve earlier deployment-specific source, scan,
 pagination, browser, and Topics evidence with their own provenance. Current
 C1 remains open because the new rollout is read-only and the positive
-scanner-to-warm, hosted restore, and Git-triggered deployment gates are not
+scanner-to-warm and hosted restore gates are not
 complete. Pack-preview UI proof is complete, with exact deployment attribution
 left unknown by the stable-alias cutover. See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,

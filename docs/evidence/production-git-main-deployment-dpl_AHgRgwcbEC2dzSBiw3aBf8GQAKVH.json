@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-git-main-deployment",
+  "recordedAt": "2026-09-10T07:27:28.438Z",
+  "source": {
+    "provider": "github",
+    "repository": "andymac4182/private-skills",
+    "organization": "andymac4182",
+    "ref": "main",
+    "commitSha": "7c7a33ec57ead2365cddcf83c93b2992bd92f201",
+    "mergePullRequest": 23,
+    "mergeCommitSha": "7c7a33ec57ead2365cddcf83c93b2992bd92f201",
+    "docsHeadSha": "280e15dba2297b74e6d0b8be6075e0d5f18fa08c",
+    "trigger": "git_push_to_main"
+  },
+  "project": {
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "orgId": "team_74K7woAfF1e48ypNcBTJ8NSC",
+    "stableAlias": "https://private-skills-theta.vercel.app"
+  },
+  "deployment": {
+    "id": "dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH",
+    "uniqueUrl": "https://private-skills-m5eqoug51-andrewmcclenaghan-6046s-projects.vercel.app",
+    "aliases": [
+      "https://private-skills-theta.vercel.app",
+      "https://private-skills-andrewmcclenaghan-6046s-projects.vercel.app",
+      "https://private-skills-git-main-andrewmcclenaghan-6046s-projects.vercel.app"
+    ],
+    "target": "production",
+    "readyState": "READY",
+    "buildConfig": {
+      "framework": "tanstack-start",
+      "node": "24.x",
+      "installCommand": "pnpm install --frozen-lockfile",
+      "buildCommand": "node scripts/build-vercel.mjs"
+    },
+    "providerMetadata": {
+      "observedFrom": "vercel ls --format json",
+      "sourceFields": {
+        "gitCommitSha": "7c7a33ec57ead2365cddcf83c93b2992bd92f201",
+        "gitCommitRef": "main",
+        "gitCommitRepo": "private-skills",
+        "gitCommitOrg": "andymac4182"
+      },
+      "providerSource": "git"
+    }
+  },
+  "readback": {
+    "evidencePath": "/private/tmp/private-skills-01a08524/work/production-c1-api-evidence-1789025205162-823-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json",
+    "requestCount": 8,
+    "mutatingRequests": 0,
+    "statuses": {
+      "health": 200,
+      "authenticatedMe": 200,
+      "policy": 200,
+      "directoryList": 200,
+      "directorySearch": 200,
+      "topicReact": "fresh",
+      "topicMarketing": "fresh",
+      "unauthenticatedTopic": 401
+    },
+    "credentialPatternNegative": true,
+    "authenticatedGets": 7,
+    "unauthenticatedNegativeGets": 1
+  },
+  "registryWritesPerformed": false
+}
