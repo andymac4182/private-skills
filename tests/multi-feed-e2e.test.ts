@@ -15,6 +15,7 @@ import {
   resolveSkillsDirectoryGateways,
   type SkillsFetch,
 } from '../packages/directory/src/index.js';
+import { decodeBundle } from '../packages/storage/src/index.js';
 import { createNodeFilesSdkBlobStore } from '../packages/storage/src/node.js';
 import type {
   Authenticator,
@@ -319,8 +320,23 @@ describe('multi-feed directory admission across core, worker, and Files SDK', ()
     expect(persistedState).not.toContain(TOKEN_A);
     expect(persistedState).not.toContain(TOKEN_B);
 
-    // Catalog snapshots avoid source-provider requests altogether, and the
-    // private artifact route still requires a registry principal/capability.
+    // Read the sealed Files SDK objects and decode the repository's canonical
+    // bundle format. Key the check by server-derived feed provenance so equal
+    // external IDs cannot make the assertion depend on job or array order.
+    for (const [feed, base] of [[feedA, BASE_A], [feedB, BASE_B]] as const) {
+      const skill = state.skills.find((candidate) => candidate.provenance.feedId === feed.id);
+      expect(skill).toBeDefined();
+      const stored = await blobs.get(skill!.artifact.key);
+      const bundle = decodeBundle(stored);
+      const skillFile = bundle.files.find((file) => file.path === 'SKILL.md');
+      expect(skillFile).toBeDefined();
+      const sealedContents = Buffer.from(skillFile!.content, 'base64').toString('utf8');
+      expect(sealedContents).toBe(snapshots[base].contents);
+    }
+
+    // This fixture intentionally exercises the inline catalog-snapshot path,
+    // so it makes no source-provider request. The private artifact route still
+    // requires a registry principal/capability.
     const unauthorizedArtifact = await handler(new Request(
       `${ORIGIN}/v1/artifacts/${encodeURIComponent(resolvedA.digest)}/download`,
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
