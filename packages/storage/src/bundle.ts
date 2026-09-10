@@ -25,7 +25,6 @@ const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u;
 const WINDOWS_RESERVED_CHARACTER = /[<>"|?*]/u;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const MAX_FILE_BASE64_CHARS = Math.ceil(MAX_FILE_BYTES / 3) * 4;
 /** Bound frontmatter before handing it to the YAML composer. */
 export const MAX_FRONTMATTER_BYTES = 128 * 1024;
@@ -134,8 +133,49 @@ function encodeBase64(bytes: Uint8Array): string {
   return globalThis.btoa(binary);
 }
 
+function base64Sextet(code: number): number {
+  if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+  if (code === 0x2b) return 62;
+  if (code === 0x2f) return 63;
+  return -1;
+}
+
+/**
+ * Check the padded RFC 4648 spelling without a backtracking expression.
+ *
+ * Large bundle files are valid input, so this must stay linear and avoid a
+ * regex whose repeated groups can consume the JavaScript engine's stack.
+ */
+function isCanonicalBase64(value: string): boolean {
+  if (value.length === 0) return true;
+  if (value.length % 4 !== 0) return false;
+
+  let padding = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x3d) {
+      // Padding is legal only in the final two positions.
+      if (index < value.length - 2 || ++padding > 2) return false;
+      continue;
+    }
+    if (padding > 0 || base64Sextet(code) < 0) return false;
+  }
+
+  if (padding === 0) return true;
+
+  // Canonical base64 requires unused low bits to be zero. The final data
+  // sextet is immediately before the padding, for either padding length.
+  const finalSextet = base64Sextet(
+    value.charCodeAt(value.length - padding - 1)
+  );
+  const unusedBits = padding === 2 ? 4 : 2;
+  return finalSextet >= 0 && (finalSextet & ((1 << unusedBits) - 1)) === 0;
+}
+
 function decodeBase64(value: unknown, path: string): Uint8Array {
-  if (typeof value !== "string" || !BASE64_PATTERN.test(value)) {
+  if (typeof value !== "string" || !isCanonicalBase64(value)) {
     throw new BundleValidationError(
       "bundle file content must be canonical base64",
       "invalid_base64",
