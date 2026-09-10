@@ -9,13 +9,14 @@ import type {
   StateRepository,
 } from '../../contracts/src/index.js';
 import {
+  AuthoringApiError,
   assertPublisher,
   canReadNamespace,
   type AuthoringHandlerDependencies,
 } from '../../authoring/src/index.js';
 import { writeDraftRevision } from '../../authoring/src/drafts.js';
 import { digestBytes } from '../../storage/src/index.js';
-import { validateDraftBinding, type DraftBinding } from '../../skill-builder/src/index.js';
+import { SkillBuilderError, validateDraftBinding, type DraftBinding } from '../../skill-builder/src/index.js';
 
 const MAX_BODY_BYTES = 96 * 1024;
 const MAX_TURNS = 200;
@@ -69,6 +70,18 @@ interface BuilderEvent {
 
 type BuilderSessionLifecycle = 'ready' | 'running' | 'failed' | 'completed';
 
+class BuilderApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = 'BuilderApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 /**
  * Same-origin registry facade for the separate Eve builder app. All calls to
  * Eve are made with server credentials after the registry has authenticated
@@ -83,7 +96,7 @@ export function createBuilderBffHandler(deps: BuilderBffDependencies): (request:
     try {
       if (request.method.toUpperCase() === 'POST') assertSameOriginMutation(request, deps.config.publicOrigin);
       const draft = await readBoundDraft(deps.repository, parsed.draftId, principal, deps.config.organizationId);
-      const binding = parseBindingFromRequest(request, parsed.draftId, draft.revision, draft.digest);
+      const binding = parseBindingFromRequest(request, parsed.draftId, draft.revision, draft.digest, parsed.operation !== 'availability');
       if (binding.revision !== draft.revision || binding.digest !== draft.digest) throw builderError('STALE_BINDING', 'Draft revision is stale', 409);
 
       if (parsed.operation === 'availability') {
@@ -184,7 +197,7 @@ async function sendPrompt(
   request: Request,
 ): Promise<Response> {
   const body = await readBoundedJson(request);
-  assertBodyBinding(body, binding, draftId);
+  assertOptionalBodyBinding(body, binding, draftId);
   const prompt = boundedText(body.prompt, 'prompt', MAX_PROMPT_BYTES);
   const requestId = boundedText(body.requestId, 'requestId', MAX_REQUEST_ID_BYTES);
   const selectedPath = optionalSelectedPath(body.selectedPath);
@@ -579,13 +592,17 @@ function parseBuilderPath(rawUrl: string): { draftId: string; operation: 'availa
   return undefined;
 }
 
-function parseBindingFromRequest(request: Request, draftId: string, fallbackRevision: number, fallbackDigest: Digest): DraftBinding {
+function parseBindingFromRequest(request: Request, draftId: string, fallbackRevision: number, fallbackDigest: Digest, required: boolean): DraftBinding {
   const url = new URL(request.url);
   const revisionValue = url.searchParams.get('revision');
+  const digestValue = url.searchParams.get('digest');
+  if (required && (revisionValue === null || revisionValue.trim() === '' || digestValue === null || digestValue.trim() === '')) {
+    throw builderError('INVALID_REQUEST', 'revision and digest are required for the selected draft', 400);
+  }
   const raw = {
     draftId,
     revision: revisionValue === null || revisionValue.trim() === '' ? fallbackRevision : Number(revisionValue),
-    digest: url.searchParams.get('digest') ?? fallbackDigest,
+    digest: digestValue === null || digestValue.trim() === '' ? fallbackDigest : digestValue,
   };
   try {
     const binding = validateDraftBinding(raw);
@@ -607,6 +624,14 @@ function assertBodyBinding(body: Record<string, unknown>, binding: DraftBinding,
   } catch {
     throw builderError('STALE_BINDING', 'Draft revision is stale', 409);
   }
+}
+
+function assertOptionalBodyBinding(body: Record<string, unknown>, binding: DraftBinding, draftId: string): void {
+  if (body.draftId !== undefined && body.draftId !== draftId) throw builderError('STALE_BINDING', 'Draft binding does not match the selected draft', 409);
+  const hasRevision = body.revision !== undefined || body.draftRevision !== undefined;
+  const hasDigest = body.digest !== undefined || body.draftDigest !== undefined;
+  if (!hasRevision && !hasDigest) return;
+  assertBodyBinding(body, binding, draftId);
 }
 
 async function fetchEve(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, path: string, init: RequestInit): Promise<Response> {
@@ -755,16 +780,16 @@ function methodNotAllowed(methods: string[]): Response {
   return json({ code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' }, 405, { allow: methods.join(', ') });
 }
 
-function builderError(code: string, message: string, status: number): Error & { code: string; status: number } {
-  return Object.assign(new Error(message), { code, status });
+function builderError(code: string, message: string, status: number): BuilderApiError {
+  return new BuilderApiError(code, message, status);
 }
 
 function builderErrorResponse(error: unknown): Response {
-  const value = error as { code?: unknown; status?: unknown; message?: unknown };
-  const status = typeof value.status === 'number' && Number.isSafeInteger(value.status) ? value.status : 500;
-  const code = typeof value.code === 'string' ? value.code : 'BUILDER_UNAVAILABLE';
-  const message = typeof value.message === 'string' && value.message.length <= 240 ? value.message : 'The skill builder is unavailable.';
-  return json({ code, message }, status);
+  if (error instanceof BuilderApiError || error instanceof AuthoringApiError || error instanceof SkillBuilderError) {
+    const status = error instanceof SkillBuilderError ? error.status ?? 400 : error.status;
+    return json({ code: error.code, message: error.message }, status);
+  }
+  return json({ code: 'BUILDER_UNAVAILABLE', message: 'The skill builder is unavailable.' }, 500);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

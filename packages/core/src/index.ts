@@ -880,6 +880,12 @@ function requireRouteScopes(principal: Principal, required: readonly string[]): 
 function scopesForRoute(method: HttpMethod, path: string, segments: string[]): readonly string[] {
   if (path === '/v1/me') return [];
   if (path === '/v1/capabilities') return ['registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'drafts' && (segments[3] === 'builder-context' || segments[3] === 'builder-file')) {
+    return ['skills:builder'];
+  }
+  if (segments[0] === 'v1' && segments[1] === 'drafts' && segments[3] === 'proposals' && segments.length === 4 && method === 'POST') {
+    return ['skills:builder'];
+  }
   if (segments[0] === 'v1' && segments[1] === 'skills') {
     if (segments.length === 2 || (segments.length === 3 && method === 'GET')) return ['skills:read', 'registry:read'];
     if (segments.length === 4 && (segments[3] === 'files' || segments[3] === 'file')) return ['skills:read', 'registry:read'];
