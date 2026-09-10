@@ -191,7 +191,12 @@ class DirectoryFixture implements RegistryDirectoryClient {
   }
 }
 
-function setup(options: { source?: string; slug?: string; sourceType?: 'github' | 'well-known' } = {}) {
+function setup(options: {
+  source?: string;
+  slug?: string;
+  sourceType?: 'github' | 'well-known';
+  allowLoopbackUpstreams?: boolean;
+} = {}) {
   const repository = createMemoryStateRepository({
     stateFactory: () => defaultRegistryState({ production: false, allowUnscanned: true }),
   });
@@ -212,9 +217,10 @@ function setup(options: { source?: string; slug?: string; sourceType?: 'github' 
     maxBodyBytes: 2 * 1024 * 1024,
     organizationId: ORGANIZATION_ID,
     leaseSeconds: 60,
+    ...(options.allowLoopbackUpstreams === undefined ? {} : { allowLoopbackUpstreams: options.allowLoopbackUpstreams }),
   };
   const handler = createRegistryHandler({ repository, blobs, auth, directory, config });
-  return { repository, blobs, directory, handler };
+  return { repository, blobs, directory, auth, config, handler };
 }
 
 async function createFeed(
@@ -585,5 +591,61 @@ describe('transparent directory pull-through', () => {
     }));
     expect(response.status).toBe(400);
     expect(await responseJson<{ error: { code: string } }>(response)).toHaveProperty('error.code', 'INVALID_FEED');
+  });
+
+  it('persists loopback feeds only in the explicit test mode and rechecks the runtime gate', async () => {
+    const test = setup({ allowLoopbackUpstreams: true });
+    const feed = await createFeed(test, { baseUrl: 'http://127.0.0.1:4317/catalog' });
+
+    const listed = await test.handler(new Request(`${ORIGIN}/v1/feeds/${encodeURIComponent(feed.id)}`, {
+      method: 'GET',
+      headers: headers('reader'),
+    }));
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({ feed: { baseUrl: 'http://127.0.0.1:4317/catalog' } });
+
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID }),
+    }));
+    expect(queued.status).toBe(202);
+    expect(test.directory.detailCalls).toBe(1);
+
+    const productionHandler = createRegistryHandler({
+      repository: test.repository,
+      blobs: test.blobs,
+      auth: test.auth,
+      directory: test.directory,
+      config: { ...test.config, allowLoopbackUpstreams: false },
+    });
+    test.directory.detailCalls = 0;
+    const blocked = await productionHandler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID, refresh: true }),
+    }));
+    expect(blocked.status).toBe(503);
+    expect(await responseJson<{ error: { code: string } }>(blocked)).toHaveProperty('error.code', 'FEED_UNTRUSTED');
+    expect(test.directory.detailCalls).toBe(0);
+  });
+
+  it('rejects loopback feed creation before persistence when test mode is disabled', async () => {
+    const test = setup();
+    const response = await test.handler(new Request(`${ORIGIN}/v1/feeds`, {
+      method: 'POST',
+      headers: headers('owner'),
+      body: JSON.stringify({
+        name: 'local',
+        kind: 'skills-sh',
+        namespace: '@team',
+        repositories: [test.directory.source],
+        baseUrl: 'http://127.0.0.1:4317/catalog',
+      }),
+    }));
+    expect(response.status).toBe(400);
+    expect(await responseJson<{ error: { code: string } }>(response)).toHaveProperty('error.code', 'INVALID_FEED');
+    expect((await test.repository.read(ORGANIZATION_ID)).feeds ?? []).toHaveLength(0);
+    expect(test.directory.detailCalls).toBe(0);
   });
 });

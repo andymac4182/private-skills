@@ -4840,7 +4840,8 @@ function validateFeedState(feed: Feed): void {
   } catch {
     throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed base URL is invalid', 500);
   }
-  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
+  const loopbackHttp = base.protocol === 'http:' && isLoopbackHost(base.hostname);
+  if ((base.protocol !== 'https:' && !loopbackHttp) || base.username || base.password || base.search || base.hash) {
     throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Feed base URL is invalid', 500);
   }
   if (
