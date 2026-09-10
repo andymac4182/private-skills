@@ -869,10 +869,12 @@ export async function readLogicalBackup(
 function emptyState(state: RegistryState): boolean {
   const collections = ['skills', 'packs', 'jobs', 'scans', 'upstreams', 'authorizations', 'grants', 'audit'] as const;
   const extensions = state as RegistryState & {
+    feeds?: unknown[];
     reviewRuns?: unknown[];
     reviewSuggestions?: unknown[];
   };
   return collections.every((field) => state[field].length === 0) &&
+    (extensions.feeds?.length ?? 0) === 0 &&
     (state.installReceiptTickets?.length ?? 0) === 0 &&
     (state.installReceipts?.length ?? 0) === 0 &&
     (extensions.reviewRuns?.length ?? 0) === 0 &&

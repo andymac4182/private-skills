@@ -22,6 +22,7 @@ import type {
 import {
   assertRegistryState,
   cloneRegistryState,
+  defaultRegistryState,
   StateRepositoryError,
   stateRevision,
   type PgClientLike,
@@ -30,10 +31,13 @@ import {
 import { createNodeFilesSdkBlobStore } from '../packages/storage/src/node.js';
 import {
   createLogicalBackup,
+  restoreLogicalBackup,
   type CaptureConsistency,
   type CreateLogicalBackupResult,
   type DeletionFenceEvidence,
+  type IsolatedStateSeed,
   type QualifiedLocation,
+  type RestoreLogicalBackupResult,
   RestoreBackupError,
 } from './restore-backup.js';
 
@@ -45,7 +49,12 @@ export type PostgresSnapshotErrorCode =
   | 'FENCE_REQUIRED'
   | 'SNAPSHOT_MISSING'
   | 'SNAPSHOT_INVALID'
-  | 'SNAPSHOT_UNAVAILABLE';
+  | 'SNAPSHOT_UNAVAILABLE'
+  | 'TARGET_NOT_EMPTY'
+  | 'TARGET_CONFLICT'
+  | 'TARGET_STATE_MISMATCH'
+  | 'TARGET_UNAVAILABLE'
+  | 'TARGET_NOT_ISOLATED';
 
 /** Errors are intentionally short and contain no connection or credential data. */
 export class PostgresSnapshotError extends Error {
@@ -67,6 +76,30 @@ export interface PostgresSnapshotRow {
 export interface ReadPostgresSnapshotOptions {
   organizationId: string;
   tableName?: string;
+}
+
+export interface PostgresRestoreTargetOptions {
+  tableName?: string;
+}
+
+export interface PostgresRestoreTarget {
+  /** Read-only preflight; unlike the runtime repository it never creates a row. */
+  repository: StateRepository;
+  /** Atomic empty-target seed that preserves the captured metadata revision. */
+  targetSeed: IsolatedStateSeed;
+}
+
+export interface PostgresLogicalRestoreOptions {
+  /** An explicitly isolated destination database pool. */
+  targetPool: PgPoolLike;
+  targetBlobs: BlobStore;
+  organizationId: string;
+  targetIdentity: string;
+  targetLocation: QualifiedLocation;
+  backupDirectory: string;
+  targetIsolated: true;
+  tableName?: string;
+  maxTotalObjectBytes?: number;
 }
 
 export interface PostgresLogicalBackupOptions {
@@ -232,6 +265,157 @@ function frozenSnapshotRepository(snapshot: PostgresSnapshotRow): StateRepositor
   };
 }
 
+function emptyRestoreState(state: RegistryState): boolean {
+  const extensions = state as RegistryState & {
+    feeds?: unknown[];
+    reviewRuns?: unknown[];
+    reviewSuggestions?: unknown[];
+  };
+  const collections = [
+    'skills',
+    'packs',
+    'jobs',
+    'scans',
+    'upstreams',
+    'authorizations',
+    'grants',
+    'audit',
+  ] as const;
+  return collections.every((field) => state[field].length === 0) &&
+    (extensions.feeds?.length ?? 0) === 0 &&
+    (state.installReceiptTickets?.length ?? 0) === 0 &&
+    (state.installReceipts?.length ?? 0) === 0 &&
+    (extensions.reviewRuns?.length ?? 0) === 0 &&
+    (extensions.reviewSuggestions?.length ?? 0) === 0 &&
+    stateRevision(state) === 0;
+}
+
+function stateWithRevision(state: RegistryState): RegistryState {
+  const copy = cloneRegistryState(state) as RegistryState & { metadataRevision?: number };
+  copy.metadataRevision = stateRevision(copy);
+  assertRegistryState(copy);
+  return copy;
+}
+
+async function readRestoreTargetState(
+  pool: PgPoolLike,
+  tableName: string | undefined,
+  organizationId: string,
+): Promise<RegistryState> {
+  try {
+    return (await readPostgresOrganizationSnapshot(pool, { organizationId, tableName })).state;
+  } catch (error) {
+    if (error instanceof PostgresSnapshotError && error.code === 'SNAPSHOT_MISSING') {
+      // This is an in-memory preflight sentinel only.  The seed below creates
+      // the row atomically after rechecking the empty target under a lock.
+      return defaultRegistryState({ production: false, allowUnscanned: true });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Build a PostgreSQL target that never creates a row during preflight.  The
+ * normal runtime repository's `read()` intentionally ensures a row, which is
+ * unsuitable for a restore because a target must remain untouched until all
+ * backup objects have passed verification.
+ */
+export function createPostgresRestoreTarget(
+  pool: PgPoolLike,
+  options: PostgresRestoreTargetOptions = {},
+): PostgresRestoreTarget {
+  if (!pool) throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL restore target pool is required');
+  const tableName = options.tableName ?? DEFAULT_POSTGRES_STATE_TABLE;
+  quoteIdentifier(boundedString(tableName, 'tableName', 128));
+  const targetSeed = createPostgresStateSeed(pool, { tableName });
+  const repository: StateRepository = {
+    async read(organizationId: string): Promise<RegistryState> {
+      return cloneRegistryState(await readRestoreTargetState(pool, tableName, boundedString(organizationId, 'organizationId', 512)));
+    },
+    async transaction<T>(): Promise<T> {
+      throw new StateRepositoryError('READ_ONLY_RESTORE_TARGET', 'PostgreSQL restore preflight is read-only');
+    },
+  };
+  return { repository, targetSeed };
+}
+
+/**
+ * Seed an isolated PostgreSQL target in one transaction.  The placeholder
+ * insert handles an absent row without calling the runtime ensure-row path;
+ * the locked read then rejects any occupied organization before replacing it.
+ */
+export function createPostgresStateSeed(
+  pool: PgPoolLike,
+  options: PostgresRestoreTargetOptions = {},
+): IsolatedStateSeed {
+  if (!pool) throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL restore target pool is required');
+  const tableName = options.tableName ?? DEFAULT_POSTGRES_STATE_TABLE;
+  const table = quoteIdentifier(boundedString(tableName, 'tableName', 128));
+  return {
+    kind: 'isolated-empty-state-v1',
+    async seed(organizationId, state) {
+      const boundedOrganizationId = boundedString(organizationId, 'organizationId', 512);
+      let seededState: RegistryState;
+      try {
+        seededState = stateWithRevision(state);
+      } catch {
+        throw new PostgresSnapshotError('SNAPSHOT_INVALID', 'restore state failed validation');
+      }
+      const placeholder = defaultRegistryState({ production: false, allowUnscanned: true });
+      let client: PgClientLike | undefined;
+      let inTransaction = false;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        inTransaction = true;
+        await client.query(
+          `INSERT INTO ${table} (organization_id, revision, state)
+           VALUES ($1, 0, $2::jsonb)
+           ON CONFLICT (organization_id) DO NOTHING`,
+          [boundedOrganizationId, JSON.stringify(placeholder)],
+        );
+        const selected = await client.query<Record<string, unknown>>(
+          `SELECT organization_id, revision, state FROM ${table} WHERE organization_id = $1 FOR UPDATE`,
+          [boundedOrganizationId],
+        );
+        if (selected.rows.length !== 1) {
+          throw new PostgresSnapshotError('TARGET_UNAVAILABLE', 'restore target organization row is unavailable');
+        }
+        const current = asSnapshotRow(selected.rows[0], boundedOrganizationId);
+        if (!emptyRestoreState(current.state)) {
+          throw new PostgresSnapshotError('TARGET_NOT_EMPTY', 'restore target organization is not empty');
+        }
+        const update = await client.query(
+          `UPDATE ${table} SET state = $2::jsonb, revision = $3, updated_at = now()
+           WHERE organization_id = $1 AND revision = 0`,
+          [boundedOrganizationId, JSON.stringify(seededState), stateRevision(seededState)],
+        );
+        if ((update.rowCount ?? 0) !== 1) {
+          throw new PostgresSnapshotError('TARGET_CONFLICT', 'restore target changed during seed');
+        }
+        const verified = await client.query<Record<string, unknown>>(
+          `SELECT organization_id, revision, state FROM ${table} WHERE organization_id = $1 FOR UPDATE`,
+          [boundedOrganizationId],
+        );
+        const after = asSnapshotRow(verified.rows[0], boundedOrganizationId);
+        if (JSON.stringify(after.state) !== JSON.stringify(seededState)) {
+          throw new PostgresSnapshotError('TARGET_STATE_MISMATCH', 'restore target state failed verification');
+        }
+        await client.query('COMMIT');
+        inTransaction = false;
+      } catch (error) {
+        if (inTransaction) {
+          try { await client?.query('ROLLBACK'); } catch { /* retain sanitized target error */ }
+        }
+        if (error instanceof PostgresSnapshotError) throw error;
+        throw new PostgresSnapshotError('TARGET_UNAVAILABLE', 'PostgreSQL restore target could not be seeded');
+      } finally {
+        try { await client?.release?.(); } catch { /* release failure cannot expose target details */ }
+      }
+    },
+  };
+}
+
 /**
  * Capture a logical backup from a PostgreSQL MVCC row and its referenced
  * private objects.  The backup utility owns state/reference traversal,
@@ -263,6 +447,35 @@ export async function createPostgresLogicalBackup(
     deletionFence: options.deletionFence,
     maxTotalObjectBytes: options.maxTotalObjectBytes,
     now: options.now,
+  });
+}
+
+/**
+ * Restore a logical backup into an explicitly isolated PostgreSQL target.
+ * The target repository is a non-creating preflight view and the seed takes
+ * the final empty-target lock before committing metadata.
+ */
+export async function restorePostgresLogicalBackup(
+  options: PostgresLogicalRestoreOptions,
+): Promise<RestoreLogicalBackupResult> {
+  if (!options?.targetPool || !options.targetBlobs) {
+    throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL target pool and blob store are required');
+  }
+  if (options.targetIsolated !== true) {
+    throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'restore requires an explicitly isolated target');
+  }
+  const organizationId = boundedString(options.organizationId, 'organizationId', 512);
+  const target = createPostgresRestoreTarget(options.targetPool, { tableName: options.tableName });
+  return restoreLogicalBackup({
+    targetRepository: target.repository,
+    targetBlobs: options.targetBlobs,
+    organizationId,
+    targetIdentity: boundedString(options.targetIdentity, 'targetIdentity', 512),
+    targetLocation: options.targetLocation,
+    backupDirectory: options.backupDirectory,
+    targetIsolated: true,
+    targetSeed: target.targetSeed,
+    maxTotalObjectBytes: options.maxTotalObjectBytes,
   });
 }
 
@@ -307,12 +520,15 @@ export function createPostgresBackupPool(databaseUrl: string): PostgresBackupPoo
 }
 
 interface CliArguments {
-  command: 'capture';
+  command: 'capture' | 'restore';
   values: Map<string, string>;
 }
 
 function parseCliArguments(argv: string[]): CliArguments {
-  if (argv[0] !== 'capture') throw new PostgresSnapshotError('INVALID_OPTIONS', 'usage: restore-backup-postgres.ts capture --output directory');
+  const command = argv[0];
+  if (command !== 'capture' && command !== 'restore') {
+    throw new PostgresSnapshotError('INVALID_OPTIONS', 'usage: restore-backup-postgres.ts capture|restore --options');
+  }
   const values = new Map<string, string>();
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index]!;
@@ -323,7 +539,7 @@ function parseCliArguments(argv: string[]): CliArguments {
     values.set(argument.slice(2), value);
     index += 1;
   }
-  return { command: 'capture', values };
+  return { command, values };
 }
 
 function cliValue(values: Map<string, string>, name: string, environment: Record<string, string | undefined>, envName?: string): string {
@@ -355,56 +571,123 @@ function fenceFromCli(values: Map<string, string>, environment: Record<string, s
 }
 
 /**
- * CLI capture command.  It reads only DATABASE_URL and BLOB_READ_WRITE_TOKEN
- * from the environment and prints status metadata without source IDs, keys,
- * connection strings, object bytes, or manifest contents.
+ * CLI capture/restore commands.  They read credentials only from the process
+ * environment and print status metadata without IDs that identify providers,
+ * connection strings, object keys, bytes, or manifest contents.  Restore uses
+ * separately named target credentials so a source token cannot be selected by
+ * accident.
  */
 export async function main(
   argv = process.argv.slice(2),
   environment: Record<string, string | undefined> = process.env,
 ): Promise<void> {
   const parsed = parseCliArguments(argv);
-  if (environment.PSKILLS_STATE_PROVIDER && environment.PSKILLS_STATE_PROVIDER !== 'postgres') {
-    throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL source capture requires PSKILLS_STATE_PROVIDER=postgres');
-  }
   const organizationId = cliValue(parsed.values, 'organization', environment, 'PSKILLS_ORGANIZATION_ID');
-  const sourceIdentity = cliValue(parsed.values, 'source-id', environment, 'PSKILLS_BACKUP_SOURCE_ID');
-  const output = resolve(cliValue(parsed.values, 'output', environment));
-  const databaseUrl = boundedString(environment.DATABASE_URL, 'DATABASE_URL', 16_384);
-  const blobToken = boundedString(environment.BLOB_READ_WRITE_TOKEN, 'BLOB_READ_WRITE_TOKEN', 32_768);
-  const tableName = parsed.values.get('table') ?? environment.PSKILLS_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
   const maxTotalObjectBytes = optionalPositiveInteger(
     parsed.values.get('max-total-object-bytes') ?? environment.PSKILLS_BACKUP_MAX_TOTAL_OBJECT_BYTES,
     'max-total-object-bytes',
   );
-  const prefix = parsed.values.get('blob-prefix') ?? environment.PSKILLS_STORAGE_PREFIX;
-  const fence = fenceFromCli(parsed.values, environment);
-  const runtime = createPostgresBackupPool(databaseUrl);
+
+  if (parsed.command === 'capture') {
+    if (environment.PSKILLS_STATE_PROVIDER && environment.PSKILLS_STATE_PROVIDER !== 'postgres') {
+      throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL source capture requires PSKILLS_STATE_PROVIDER=postgres');
+    }
+    const sourceIdentity = cliValue(parsed.values, 'source-id', environment, 'PSKILLS_BACKUP_SOURCE_ID');
+    const output = resolve(cliValue(parsed.values, 'output', environment));
+    const databaseUrl = boundedString(environment.DATABASE_URL, 'DATABASE_URL', 16_384);
+    const blobToken = boundedString(environment.BLOB_READ_WRITE_TOKEN, 'BLOB_READ_WRITE_TOKEN', 32_768);
+    const tableName = parsed.values.get('table') ?? environment.PSKILLS_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
+    const prefix = parsed.values.get('blob-prefix') ?? environment.PSKILLS_STORAGE_PREFIX;
+    const fence = fenceFromCli(parsed.values, environment);
+    const runtime = createPostgresBackupPool(databaseUrl);
+    try {
+      const blobs = await createNodeFilesSdkBlobStore({
+        provider: 'vercel-blob',
+        prefix,
+        credentials: { token: blobToken },
+      });
+      const result = await createPostgresLogicalBackup({
+        pool: runtime.pool,
+        sourceBlobs: blobs,
+        organizationId,
+        sourceIdentity,
+        backupDirectory: output,
+        tableName,
+        maxTotalObjectBytes,
+        deletionFence: fence,
+      });
+      console.log(JSON.stringify({
+        ok: true,
+        operation: 'postgres-backup',
+        organizationId,
+        metadataRevision: result.manifest.metadataRevision,
+        objectCount: result.objectCount,
+      }));
+    } finally {
+      await runtime.close();
+    }
+    return;
+  }
+
+  if (parsed.values.get('target-isolated') !== 'true') {
+    throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'restore requires --target-isolated true');
+  }
+  const targetIdentity = cliValue(parsed.values, 'target-id', environment, 'PSKILLS_BACKUP_TARGET_ID');
+  const backupDirectory = resolve(cliValue(parsed.values, 'backup', environment));
+  const targetDatabaseUrl = boundedString(
+    parsed.values.get('target-database-url') ?? environment.PSKILLS_TARGET_DATABASE_URL,
+    'target-database-url',
+    16_384,
+  );
+  // A byte-for-byte URL comparison is only a defense in depth check.  The
+  // target identity and isolated-target attestation remain mandatory because
+  // pooler aliases can refer to the same logical database.
+  if (environment.DATABASE_URL && targetDatabaseUrl === environment.DATABASE_URL) {
+    throw new PostgresSnapshotError('TARGET_NOT_ISOLATED', 'target database must not equal the source database URL');
+  }
+  const targetBlobToken = boundedString(
+    parsed.values.get('target-blob-token') ?? environment.PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN,
+    'target-blob-token',
+    32_768,
+  );
+  const targetProvider = parsed.values.get('target-blob-provider') ?? environment.PSKILLS_TARGET_BLOB_PROVIDER ?? 'vercel-blob';
+  if (targetProvider !== 'vercel-blob') {
+    throw new PostgresSnapshotError('INVALID_OPTIONS', 'PostgreSQL restore currently supports only the private Vercel Blob target adapter');
+  }
+  const targetTableName = parsed.values.get('target-table') ?? environment.PSKILLS_TARGET_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
+  const targetPrefix = parsed.values.get('target-blob-prefix') ?? environment.PSKILLS_TARGET_STORAGE_PREFIX;
+  const targetStoreId = parsed.values.get('target-blob-store-id') ?? environment.PSKILLS_TARGET_BLOB_STORE_ID;
+  const targetRuntime = createPostgresBackupPool(targetDatabaseUrl);
   try {
-    const blobs = await createNodeFilesSdkBlobStore({
+    const targetBlobs = await createNodeFilesSdkBlobStore({
       provider: 'vercel-blob',
-      prefix,
-      credentials: { token: blobToken },
+      prefix: targetPrefix,
+      credentials: {
+        token: targetBlobToken,
+        ...(targetStoreId ? { storeId: boundedString(targetStoreId, 'target-blob-store-id', 512) } : {}),
+      },
     });
-    const result = await createPostgresLogicalBackup({
-      pool: runtime.pool,
-      sourceBlobs: blobs,
+    const result = await restorePostgresLogicalBackup({
+      targetPool: targetRuntime.pool,
+      targetBlobs,
       organizationId,
-      sourceIdentity,
-      backupDirectory: output,
-      tableName,
+      targetIdentity,
+      targetLocation: { kind: 'composite', identity: targetIdentity },
+      backupDirectory,
+      targetIsolated: true,
+      tableName: targetTableName,
       maxTotalObjectBytes,
-      deletionFence: fence,
     });
     console.log(JSON.stringify({
       ok: true,
-      operation: 'postgres-backup',
+      operation: 'postgres-restore',
       organizationId,
-      metadataRevision: result.manifest.metadataRevision,
+      metadataRevision: result.metadataRevision,
       objectCount: result.objectCount,
+      remappedObjectCount: result.remappedObjectCount,
     }));
   } finally {
-    await runtime.close();
+    await targetRuntime.close();
   }
 }
 
