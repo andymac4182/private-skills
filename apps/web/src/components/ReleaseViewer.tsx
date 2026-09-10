@@ -53,6 +53,7 @@ function displayPreviewState(file: ReleaseFileView): string {
 export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: ReleaseViewerProps) {
   const [open, setOpen] = useState(false)
   const [draftOpen, setDraftOpen] = useState(false)
+  const [draftCloseRequest, setDraftCloseRequest] = useState(0)
   const [manifest, setManifest] = useState<ReleaseFilesResponse | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<ReleaseFileView | null>(null)
@@ -88,6 +89,7 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: 
     requestGeneration.current += 1
     setOpen(false)
     setDraftOpen(false)
+    setDraftCloseRequest(0)
     setManifest(null)
     setSelectedPath(null)
     setSelectedFile(null)
@@ -154,7 +156,7 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: 
         <h3>Explore files in this version</h3>
         <p className="helper">Read-only view of the selected version.</p>
       </div>
-      <div className="row-actions"><Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>{canEdit && <Button kind="quiet" type="button" onClick={() => setDraftOpen((current) => !current)}>{draftOpen ? 'Hide editor' : 'Open draft editor'}</Button>}</div>
+      <div className="row-actions"><Button kind="secondary" type="button" onClick={openViewer}>{open ? 'Hide files' : 'Browse files'}</Button>{canEdit && <Button kind="quiet" type="button" onClick={() => { if (draftOpen) setDraftCloseRequest((current) => current + 1); else { setDraftCloseRequest(0); setDraftOpen(true) } }}>{draftOpen ? 'Hide editor' : 'Open draft editor'}</Button>}</div>
     </div>
     {open && <div className="release-viewer-body">
       {manifestLoading && <LoadingState label="Loading the release manifest…" />}
@@ -179,7 +181,7 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit }: 
         </OptionalRendererBoundary>
       </>}
     </div>}
-    {draftOpen && <DraftEditor resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onClose={() => setDraftOpen(false)} />}
+    {draftOpen && <DraftEditor closeRequest={draftCloseRequest} resourceId={resourceId} baseDigest={baseDigest} baseVersion={baseVersion} onClose={() => { setDraftCloseRequest(0); setDraftOpen(false) }} />}
   </section>
 }
 
