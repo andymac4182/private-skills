@@ -415,10 +415,13 @@ This is a future requirement inside M1. It is not an active implementation
 milestone, a new bundle count, or a G0/C1/M6/M7 release gate. Completion
 requires both directions of the contract:
 
-1. A configured source adapter consumes skills from an explicitly registered and
-   allowlisted MCP server using only approved discovery and resource-read
-   operations. It preserves the MCP server/resource identity, upstream
-   revision, and upstream digest; it never invents versions or executes an
+1. A configured source adapter consumes skills and packs from an explicitly
+   registered and allowlisted MCP server using only approved discovery and
+   resource-read operations. It preserves the MCP server/resource identity and
+   any upstream revision and digest that the provider supplies. If the source
+   omits either value, it records a clearly labeled immutable local snapshot
+   with a computed canonical digest; it never invents an upstream version or
+   presents the local digest as a provider digest, and never executes an
    arbitrary tool, hook, server, or skill code.
 2. Source reads are bounded, on demand, and authorization checked. Changed or
    missing bytes, digest mismatches, revoked or unauthorized resources,

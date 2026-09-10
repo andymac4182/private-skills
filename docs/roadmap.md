@@ -106,11 +106,14 @@ new content and execution boundaries.
   integrations. Add workspace membership and lifecycle controls where the
   one-organization baseline becomes a team-hosted service.
 - **FUTURE M1-MCP-DISTRIBUTION — bidirectional authenticated MCP distribution.**
-  Support consuming skills from an explicitly registered and allowlisted MCP
-  server as a source, preserving server/resource identity, revision, and
-  upstream digest. Reads are bounded and on demand; changed or missing source
-  bytes, invented versions, transport errors, and stale cache entries fail
-  closed before existing bundle validation, required scans, quarantine,
+  Support consuming skills and packs from an explicitly registered and
+  allowlisted MCP server as a source, preserving server/resource identity and
+  any upstream revision and digest that the provider supplies. If the source
+  omits either value, record a clearly labeled immutable local snapshot with a
+  computed canonical digest; never invent an upstream version or present the
+  local digest as a provider digest. Reads are bounded and on demand; changed
+  or missing source bytes, invented versions, transport errors, and stale cache
+  entries fail closed before existing bundle validation, required scans, quarantine,
   provenance, and tenant authorization. The source adapter permits only the
   approved discovery/resource-read operations and never executes arbitrary MCP
   tools, hooks, or skill code. In the other direction, provide a narrow
