@@ -22,7 +22,10 @@ behavior.
 The Diffs review was added on 10 September 2026 from the official
 [`diffs.com`](https://diffs.com/) pages and the linked
 [`pierrecomputer/pierre` source](https://github.com/pierrecomputer/pierre).
-It describes an optional future editor surface, not a current release gate.
+M6 and M7 are now active implementation milestones selected for the current
+product work, while remaining separate from the G0/C1 release gates until
+their evidence passes. The concise M6 authoring contract is in
+[`m6-authoring-contract.md`](m6-authoring-contract.md).
 
 ## Ordering
 
@@ -60,20 +63,21 @@ new content and execution boundaries.
   cold requests deduplicate, and an explicit refresh reports source failure
   instead of presenting an older cache as fresh. Optional source restrictions
   are an administrator policy, not a prerequisite for a public catalog row.
-- **Deferred P1/P2: full browser editor and upload/edit review.** Integrate the
+- **Active implementation, incomplete: M6 full browser editor and upload/edit review.** Integrate the
   Diffs editor primitives with a Private Skills file tree, durable private
   drafts, immutable new releases, and a separate upload/edit Eve reviewer.
   The Diffs integration, persistence, identity, review jobs, UI findings,
   scanner authority, malicious-content boundary, and accessibility gates are
   specified in **M6** below and [`completion-criteria.md`](completion-criteria.md).
-  This milestone is deliberately later work; it is not a G0 or C1 blocker.
-- **Deferred P1/P2: OpenClaw skills feed interoperability.** After the
-  skills.sh contract is stable, add a versioned producer and consumer for the
+  This milestone is active implementation work, but it is not a G0 or C1
+  release gate until its criteria and evidence pass.
+- **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.** In parallel with M6, add a
+  versioned producer and consumer for the
   official ClawHub hosted skills-feed contract. The later **M7** milestone
   below covers the wire schema, exact source/digest mapping, bounded snapshot
   refresh, tenant-safe publication, local scanner admission, and
   producer/consumer fixtures. It is an interoperability milestone, not a
-  requirement to mirror the public catalog or a G0, C1, or M6 blocker.
+  requirement to mirror the public catalog or a G0, C1, or M6 release gate.
 - **P1: CLI compatibility after the cloud contract.** Add registry-mediated
   `find`/source selectors, lock check/restore/sync, source-aware lock
   provenance, multi-skill selection, and a data-driven agent registry only
@@ -126,10 +130,10 @@ with the homepage’s aggregate install headline. Full coverage means every
 enumerated row is represented with a status; it does not mean a refresh stores
 every artifact.
 
-## Deferred Diffs editor and upload/edit review
+## M6 — Diffs editor and upload/edit review (active implementation, incomplete)
 
-This milestone is a product request recorded on 10 September 2026 and is
-explicitly deliver-later. The official Diffs material confirms an open source
+This milestone is a product request recorded on 10 September 2026 and is now
+selected for implementation. The official Diffs material confirms an open source
 `@pierre/diffs` renderer and beta edit mode. It does not establish a hosted
 editor service or provide Private Skills' release, identity, scanner, storage,
 or review orchestration.
@@ -166,17 +170,17 @@ The proposed delivery order is:
 | M6-SAFE | Malicious or untrusted uploaded content is treated as data, validated and scanned in the existing isolated worker; no script, hook, MCP, or candidate instruction executes or escapes tenant boundaries. | Existing canonical bundle and scanner controls are authoritative; Diffs annotations/rendering cannot weaken them. |
 | M6-A11Y | File tree, editor, diff, findings, and actions pass keyboard/focus/screen-reader/contrast/reduced-motion checks at 390px and desktop widths. | Requires browser evidence for the complete route, including narrow layouts; current production catalog mobile overflow is a known separate verification gap. |
 
-M6 is complete only when the checkable gates in
+M6 is incomplete until all checkable gates in
 [`completion-criteria.md`](completion-criteria.md) pass. Diffs features are
 the UI substrate; draft durability, release identity, review persistence,
 tenant isolation, safety, and policy behavior remain Private Skills product
 criteria.
 
-## M7 — OpenClaw skills feed interoperability (future P1/P2)
+## M7 — OpenClaw skills feed interoperability (active implementation, incomplete)
 
-M7 is a later interoperability milestone for producing and consuming a
-versioned OpenClaw skills feed. It is not a G0, C1, or M6 prerequisite and does
-not require a mirror of the public catalog. The source review found a concrete
+M7 is an active interoperability milestone for producing and consuming a
+versioned OpenClaw skills feed. It is not a G0, C1, or M6 release prerequisite
+and does not require a mirror of the public catalog. The source review found a concrete
 primary contract in ClawHub's hosted-feed specification: the ClawHub skills
 feed uses feed ID `clawhub-official`, `schemaVersion: 1`, and the
 `/v1/feeds/skills` route. It uses the same envelope as the hosted plugin feed,
@@ -266,7 +270,7 @@ The comparison rows map to the completion criteria as follows: context package,
 manifest, MCP, and native-agent work to **M1**; quality review and scenario
 evaluation to **M2**; memberships and artifact lifecycle to **M3**; author CI to
 **M4-1**, standards to **M4-2**, and library context to **M4-3**; and
-visibility/automation to **M5**. The deferred Diffs editor and upload/edit
+visibility/automation to **M5**. The active Diffs editor and upload/edit
 review slices map to **M6-EDITOR**, **M6-DRAFT**, **M6-TREE-DIFF**,
 **M6-RELEASE**, **M6-UPLOAD-EVE**, **M6-REVIEW**, **M6-POLICY**,
 **M6-AUTH**, **M6-SAFETY**, **M6-A11Y**, and **M6-EVIDENCE**; the explicit

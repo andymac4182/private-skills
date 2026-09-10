@@ -42,6 +42,7 @@ export default defineTool({
       {
         idempotencyKey: dailyReviewIdempotencyKey(),
         model: reviewModel(),
+        eveSessionId: ctx.session.id,
       },
       (value) => prepareResponseSchema.parse(value),
       ctx.abortSignal,

@@ -177,6 +177,50 @@ export interface RegistryDirectoryClient {
   topic?(slug: string, options?: { signal?: AbortSignal }): Promise<SkillsTopicResponse>;
 }
 
+/**
+ * Server-owned context attached to discovery responses.  `feedName` is null
+ * for the global directory view, even when a default catalog client is
+ * configured; it is populated only after a caller explicitly selects and is
+ * authorized for a persisted feed.  Per-row source metadata remains owned by
+ * the directory adapter, so core never invents freshness timestamps or
+ * interprets catalog status as registry approval.
+ */
+export interface DirectoryDiscoveryContext {
+  feedName: string | null;
+}
+
+export type DirectoryDiscoveryResponse<T extends object> = T & DirectoryDiscoveryContext;
+
+/** Public route DTOs widen the server-owned feed context without changing the
+ * directory adapter's normalized `feedName: null` provider contract. */
+export type DirectoryPublicSkill = Omit<V1Skill, 'feedName'> & DirectoryDiscoveryContext;
+export type DirectoryPublicSkillListResponse = Omit<SkillListResponse, 'data'> & {
+  data: DirectoryPublicSkill[];
+} & DirectoryDiscoveryContext;
+export type DirectoryPublicSkillSearchResponse = Omit<SkillSearchResponse, 'data'> & {
+  data: DirectoryPublicSkill[];
+} & DirectoryDiscoveryContext;
+export type DirectoryPublicCuratedResponse = Omit<CuratedSkillsResponse, 'data'> & {
+  data: Array<Omit<CuratedSkillsResponse['data'][number], 'skills'> & { skills: DirectoryPublicSkill[] }>;
+} & DirectoryDiscoveryContext;
+export type DirectoryPublicDetailResponse = Omit<SkillDetailMetadataResponse, 'feedName'> & DirectoryDiscoveryContext;
+export type DirectoryPublicAuditResponse = SkillAuditResponse & DirectoryDiscoveryContext;
+
+type DirectorySourceStatus =
+  | 'metadata-only'
+  | 'snapshot-available'
+  | 'source-resolved'
+  | 'changed'
+  | 'unavailable'
+  | 'rejected';
+
+interface DirectoryFoundationMetadata {
+  provider?: 'skills.sh';
+  fetchedAt?: string;
+  sourceStatus?: DirectorySourceStatus;
+  sourceReason?: string;
+}
+
 /** Metadata-only pack discovery seam; member bytes remain a separate worker operation. */
 export interface RegistryDirectoryPackClient {
   inspect(input: string | URL): Promise<SkillsPackManifest>;
@@ -1009,16 +1053,15 @@ async function handleDirectoryRoute(
     return await createDirectoryImport(body, principal, deps, config, requestId, request.signal);
   }
 
-  if (!directory) throw directoryUnavailable();
-
   if (segments.length === 3 && segments[2] === 'skills') {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
     const view = optionalDirectoryView(url.searchParams.get('view'));
     const page = optionalDirectoryInteger(url.searchParams.get('page'), 'page', 0, Number.MAX_SAFE_INTEGER);
     const perPage = optionalDirectoryInteger(url.searchParams.get('per_page'), 'per_page', 1, 500);
-    const result = await directoryRequest(() => directory.list({ view, page, perPage }));
-    return jsonResponse(result);
+    const target = await resolveDirectoryBrowseTarget(url, principal, deps, config);
+    const result = await directoryRequest(() => target.directory.list({ view, page, perPage, signal: request.signal }));
+    return jsonResponse(withDirectoryDiscoveryContext(result, target.feedName));
   }
 
   if (segments.length === 3 && segments[2] === 'search') {
@@ -1034,21 +1077,23 @@ async function handleDirectoryRoute(
       throw new RegistryApiError('INVALID_REQUEST', 'owner is invalid', 400);
     }
     const limit = optionalDirectoryInteger(url.searchParams.get('limit'), 'limit', 1, 200);
-    const result = await directoryRequest(() => directory.search({ q, owner, limit }));
-    return jsonResponse(result);
+    const target = await resolveDirectoryBrowseTarget(url, principal, deps, config);
+    const result = await directoryRequest(() => target.directory.search({ q, owner, limit, signal: request.signal }));
+    return jsonResponse(withDirectoryDiscoveryContext(result, target.feedName));
   }
 
   if (segments.length === 3 && segments[2] === 'official') {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
-    const result = await directoryRequest(() => directory.curated());
-    return jsonResponse(result);
+    const target = await resolveDirectoryBrowseTarget(url, principal, deps, config);
+    const result = await directoryRequest(() => target.directory.curated({ signal: request.signal }));
+    return jsonResponse(withDirectoryDiscoveryContext(result, target.feedName));
   }
 
   if (segments.length === 3 && segments[2] === 'topic') {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
-    if (typeof directory.topic !== 'function') throw directoryUnavailable();
+    if (!directory || typeof directory.topic !== 'function') throw directoryUnavailable();
     const slugValues = url.searchParams.getAll('slug');
     if (slugValues.length !== 1) {
       throw new RegistryApiError('INVALID_REQUEST', 'slug is invalid', 400);
@@ -1062,15 +1107,108 @@ async function handleDirectoryRoute(
     if (method !== 'GET') return methodNotAllowed(['GET']);
     requireReader(principal);
     const id = requireDirectoryId(url.searchParams.get('id'));
+    const target = await resolveDirectoryBrowseTarget(url, principal, deps, config);
     if (segments[2] === 'detail') {
-      const detail = await directoryRequest(() => directory.detail(id));
-      return jsonResponse(toDirectoryDetailMetadata(detail));
+      const detail = await directoryRequest(() => target.directory.detail(id, { signal: request.signal }));
+      return jsonResponse(withDirectoryDiscoveryContext(toDirectoryDetailMetadata(detail), target.feedName));
     }
-    const result = await directoryRequest(() => directory.audit(id));
-    return jsonResponse(result);
+    const result = await directoryRequest(() => target.directory.audit(id, { signal: request.signal }));
+    return jsonResponse(withDirectoryDiscoveryContext(result, target.feedName));
   }
 
   throw new RegistryApiError('NOT_FOUND', 'Route not found', 404);
+}
+
+interface DirectoryBrowseTarget {
+  directory: RegistryDirectoryClient;
+  feedName: string | null;
+}
+
+/**
+ * Resolve an optional discovery-feed selector without changing the existing
+ * global directory behavior.  An omitted selector deliberately uses the
+ * injected global client and does not infer a feed from the configured
+ * default or from the available state records.
+ */
+async function resolveDirectoryBrowseTarget(
+  url: URL,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+): Promise<DirectoryBrowseTarget> {
+  const feedValues = url.searchParams.getAll('feed');
+  if (feedValues.length > 1) {
+    throw new RegistryApiError('INVALID_FEED', 'feed may be specified only once', 400);
+  }
+  if (feedValues.length === 0) {
+    if (!deps.directory) throw directoryUnavailable();
+    return { directory: deps.directory, feedName: null };
+  }
+
+  const feedName = requireFeedName(feedValues[0]);
+  const state = await readState(deps.repository, config.organizationId);
+  const feed = findTransparentFeed(state, feedName, principal, config);
+  const directory = deps.directoryForBase?.(feed.baseUrl);
+  if (!directory) throw directoryUnavailable();
+  return { directory, feedName: feed.name };
+}
+
+function withDirectoryDiscoveryContext<T extends object>(
+  value: T,
+  feedName: string | null,
+): DirectoryDiscoveryResponse<T> {
+  const record = value as Record<string, unknown>;
+  const data = Array.isArray(record.data)
+    ? record.data.map((entry) => projectDirectorySkillCollectionEntry(entry, feedName))
+    : record.data;
+  return {
+    ...record,
+    ...(data === undefined ? {} : { data }),
+    feedName,
+  } as DirectoryDiscoveryResponse<T>;
+}
+
+/**
+ * Catalog rows are cached by the provider client.  Clone only the response
+ * collection being returned so a selected tenant feed cannot be written into
+ * a shared row or into a different request's global view.
+ */
+function projectDirectorySkillCollectionEntry(value: unknown, feedName: string | null): unknown {
+  if (!isObject(value)) return value;
+  if (Array.isArray(value.skills)) {
+    return {
+      ...value,
+      skills: value.skills.map((skill) => projectDirectorySkillRow(skill, feedName)),
+    };
+  }
+  return projectDirectorySkillRow(value, feedName);
+}
+
+function projectDirectorySkillRow(value: unknown, feedName: string | null): unknown {
+  if (!isObject(value)) return value;
+  return { ...value, feedName };
+}
+
+/**
+ * Keep the foundation metadata produced by the directory adapter at the
+ * detail response boundary.  These are bounded metadata strings only; core
+ * does not create a request-time timestamp or translate source status into
+ * approval.
+ */
+function directoryFoundationProjection(value: unknown): DirectoryFoundationMetadata {
+  if (!isObject(value)) return {};
+  const projected: DirectoryFoundationMetadata = {};
+  if (value.provider === 'skills.sh') projected.provider = value.provider;
+  if (isCanonicalIsoTimestamp(value.fetchedAt)) projected.fetchedAt = value.fetchedAt;
+  if (isDirectorySourceStatus(value.sourceStatus)) projected.sourceStatus = value.sourceStatus;
+  if (typeof value.sourceReason === 'string' &&
+      value.sourceReason.length > 0 &&
+      value.sourceReason.length <= 512 &&
+      isWellFormedUnicodeString(value.sourceReason) &&
+      new TextEncoder().encode(value.sourceReason).byteLength <= 2_048) {
+    projected.sourceReason = value.sourceReason;
+  }
+  return projected;
 }
 
 /**
@@ -1080,6 +1218,7 @@ async function handleDirectoryRoute(
  */
 function toDirectoryDetailMetadata(detail: SkillDetailResponse): SkillDetailMetadataResponse {
   return {
+    ...directoryFoundationProjection(detail),
     id: detail.id,
     source: detail.source,
     slug: detail.slug,
@@ -1421,6 +1560,21 @@ function isWellFormedUnicodeString(value: string): boolean {
     }
   }
   return true;
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 64 || !isWellFormedUnicodeString(value)) return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
+function isDirectorySourceStatus(value: unknown): value is DirectorySourceStatus {
+  return value === 'metadata-only' ||
+    value === 'snapshot-available' ||
+    value === 'source-resolved' ||
+    value === 'changed' ||
+    value === 'unavailable' ||
+    value === 'rejected';
 }
 
 async function directoryRequest<T>(action: () => Promise<T>): Promise<T> {
@@ -4456,6 +4610,7 @@ function normalizeProvenance(
   const suppliedFeedConfigRevision = optionalProvenanceString(raw.feedConfigRevision, 'feedConfigRevision', 256);
   const suppliedSourceReference = optionalProvenanceString(raw.sourceReference, 'sourceReference', 2_048);
   const suppliedSourceProviderOrigin = optionalProvenanceString(raw.sourceProviderOrigin, 'sourceProviderOrigin', 512);
+  const suppliedFetchedAt = optionalCanonicalProvenanceTimestamp(raw.fetchedAt, 'fetchedAt');
   const suppliedSourceResolutionKind = raw.sourceResolutionKind === undefined || raw.sourceResolutionKind === null
     ? undefined
     : raw.sourceResolutionKind;
@@ -4501,7 +4656,7 @@ function normalizeProvenance(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different transparent feed', 409);
   }
   const skillsShEvidence = upstream.kind === 'skills-sh'
-    ? normalizeSkillsShEvidence(raw, request, suppliedRepository, suppliedExternalId, suppliedExternalSourceType, suppliedExternalSnapshotHash)
+    ? normalizeSkillsShEvidence(raw, request, suppliedRepository, suppliedExternalId, suppliedExternalSourceType, suppliedExternalSnapshotHash, suppliedFetchedAt)
     : {};
   const suppliedSourceDigest = stringValue(raw.sourceDigest);
   if (suppliedSourceDigest !== undefined && (!isDigest(suppliedSourceDigest) || suppliedSourceDigest !== digest)) {
@@ -4521,6 +4676,7 @@ function normalizeProvenance(
     ...(request.feedConfigRevision ? { feedConfigRevision: request.feedConfigRevision } : {}),
     ...(request.sourceReference ? { sourceReference: request.sourceReference } : {}),
     ...(suppliedSourceProviderOrigin ? { sourceProviderOrigin: suppliedSourceProviderOrigin } : {}),
+    ...(suppliedFetchedAt === undefined ? {} : { fetchedAt: suppliedFetchedAt }),
     ...(suppliedSourceResolutionKind ? { sourceResolutionKind: suppliedSourceResolutionKind as Provenance['sourceResolutionKind'] } : {}),
     ...skillsShEvidence,
     ...(suppliedSourceDigest ? { sourceDigest: suppliedSourceDigest } : {}),
@@ -4543,6 +4699,7 @@ function normalizeSkillsShEvidence(
   externalId: string | undefined,
   sourceType: unknown,
   snapshotHash: string | null | undefined,
+  fetchedAt: string | undefined,
 ): Partial<Provenance> {
   const nestedValue = raw.external;
   if (nestedValue !== undefined && !isObject(nestedValue)) {
@@ -4556,6 +4713,11 @@ function normalizeSkillsShEvidence(
   const nestedSourceType = nested?.sourceType ?? raw.sourceType ?? sourceType;
   const nestedSourceUrl = optionalProvenanceString(nested?.sourceUrl ?? raw.sourceUrl, 'external.sourceUrl', 4_096);
   const sourceProviderOrigin = optionalProvenanceString(nested?.sourceProviderOrigin ?? raw.sourceProviderOrigin, 'sourceProviderOrigin', 512);
+  const nestedFetchedAt = optionalCanonicalProvenanceTimestamp(nested?.fetchedAt, 'external.fetchedAt');
+  if (nestedFetchedAt !== undefined && fetchedAt !== undefined && nestedFetchedAt !== fetchedAt) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external fetch timestamp is inconsistent', 409);
+  }
+  const effectiveFetchedAt = nestedFetchedAt ?? fetchedAt;
   const sourceResolutionKind = nested?.sourceResolutionKind ?? raw.sourceResolutionKind;
   if (sourceResolutionKind !== undefined && sourceResolutionKind !== 'snapshot' && sourceResolutionKind !== 'github' && sourceResolutionKind !== 'well-known') {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact source resolution kind is invalid', 409);
@@ -4588,7 +4750,10 @@ function normalizeSkillsShEvidence(
   if (externalDigest !== undefined && !isDigest(externalDigest)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact external digest is invalid', 409);
   }
-  const skillPath = optionalProvenanceString(nested?.skillPath ?? raw.skillPath, 'skillPath', 4_096);
+  const rawSkillPath = nested?.skillPath ?? raw.skillPath;
+  const skillPath = rawSkillPath === ''
+    ? ''
+    : optionalProvenanceString(rawSkillPath, 'skillPath', 4_096);
   const requestedRef = optionalProvenanceString(nested?.requestedRef ?? raw.requestedRef, 'requestedRef', 256);
   const resolvedCommit = optionalProvenanceString(nested?.resolvedCommit ?? raw.resolvedCommit, 'resolvedCommit', 128);
   const resolvedTree = optionalProvenanceString(nested?.resolvedTree ?? raw.resolvedTree, 'resolvedTree', 128);
@@ -4597,6 +4762,20 @@ function normalizeSkillsShEvidence(
   }
   if (resolvedTree !== undefined && !/^[0-9a-f]{40}$/iu.test(resolvedTree)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact resolved tree is invalid', 409);
+  }
+  if (skillPath === '' && (
+    sourceResolutionKind !== 'github' ||
+    nestedSourceType !== 'github' ||
+    verifiedSourceOrigin(sourceProviderOrigin) !== 'github.com' ||
+    !isCommit(resolvedCommit) ||
+    !isSafeRepository(repository) ||
+    externalId === undefined ||
+    nestedSource !== repository ||
+    nestedSlug === undefined ||
+    externalId !== `${nestedSource}/${nestedSlug}` ||
+    nestedSourceUrl === undefined
+  )) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'An empty GitHub skill path requires verified repository-root evidence', 409);
   }
   const wellKnownIndexUrl = optionalProvenanceString(nested?.wellKnownIndexUrl ?? raw.wellKnownIndexUrl, 'wellKnownIndexUrl', 4_096);
   const wellKnownEntryName = optionalProvenanceString(nested?.wellKnownEntryName ?? raw.wellKnownEntryName, 'wellKnownEntryName', 2_048);
@@ -4616,6 +4795,7 @@ function normalizeSkillsShEvidence(
       sourceUrl,
       ...(sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin }),
       ...(sourceResolutionKind === undefined ? {} : { sourceResolutionKind: sourceResolutionKind as ExternalProvenance['sourceResolutionKind'] }),
+      ...(effectiveFetchedAt === undefined ? {} : { fetchedAt: effectiveFetchedAt }),
       ...(pageUrl === undefined ? {} : { pageUrl }),
       externalSnapshotHash: effectiveSnapshotHash ?? null,
       ...(externalDigest === undefined ? {} : { externalDigest }),
@@ -4635,6 +4815,7 @@ function normalizeSkillsShEvidence(
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
     ...(sourceProviderOrigin === undefined ? {} : { sourceProviderOrigin }),
     ...(sourceResolutionKind === undefined ? {} : { sourceResolutionKind: sourceResolutionKind as Provenance['sourceResolutionKind'] }),
+    ...(effectiveFetchedAt === undefined ? {} : { fetchedAt: effectiveFetchedAt }),
     ...(pageUrl === undefined ? {} : { pageUrl }),
     ...(artifactUrl === undefined ? {} : { artifactUrl }),
     ...(skillPath === undefined ? {} : { skillPath }),
@@ -4653,6 +4834,14 @@ function normalizeSkillsShEvidence(
 function optionalProvenanceString(value: unknown, field: string, maximum: number): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', `Imported artifact ${field} is invalid`, 409);
+  }
+  return value;
+}
+
+function optionalCanonicalProvenanceTimestamp(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isCanonicalIsoTimestamp(value)) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', `Imported artifact ${field} is invalid`, 409);
   }
   return value;

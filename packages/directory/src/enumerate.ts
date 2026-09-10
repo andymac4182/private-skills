@@ -475,6 +475,9 @@ function retainRow(state: MutableState, row: V1Skill, page: number): void {
 }
 
 const SKILL_COMPARISON_FIELDS: ReadonlyArray<keyof V1Skill> = [
+  // Exclude server-generated provenance context. A repeated upstream row may
+  // be normalized at a different time or in a different feed context without
+  // being catalog drift.
   'id',
   'slug',
   'name',

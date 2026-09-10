@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "verifier": "production-directory-candidate-detail-readonly",
+  "verified": true,
+  "checkedAt": "2026-09-10T07:50:17.770Z",
+  "deployment": {
+    "id": "dpl_CpAApe78RJs3oXuuk4iPzbtdnczb",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "e6a4b33e3a0077d716ee455e31d8c077839b730b"
+  },
+  "priorSearchEvidence": "production-candidate-readonly-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb-1789026355440.json",
+  "candidate": {
+    "id": "vercel-labs/agent-skills/web-design-guidelines",
+    "source": "vercel-labs/agent-skills",
+    "slug": "web-design-guidelines",
+    "sourceType": "github",
+    "installs": 621711,
+    "installUrl": "https://github.com/vercel-labs/agent-skills",
+    "url": "https://www.skills.sh/vercel-labs/agent-skills/web-design-guidelines"
+  },
+  "requestPolicy": {
+    "authenticatedGets": 1,
+    "mutationRequests": 0,
+    "resolveRequests": 0,
+    "importRequests": 0,
+    "workerRequests": 0,
+    "scanRequests": 0,
+    "installRequests": 0
+  },
+  "responseStatus": 200,
+  "detail": {
+    "id": "vercel-labs/agent-skills/web-design-guidelines",
+    "source": "vercel-labs/agent-skills",
+    "slug": "web-design-guidelines",
+    "installs": 621734,
+    "snapshotHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474",
+    "snapshotHashKind": "opaque_provider_hash",
+    "fileCount": 1,
+    "filePathSample": [
+      "SKILL.md"
+    ],
+    "metadataOnly": true
+  }
+}

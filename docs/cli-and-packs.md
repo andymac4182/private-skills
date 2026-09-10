@@ -35,7 +35,7 @@ Preserve agent-specific metadata without enabling extra products. Claude reserve
 | --- | --- |
 | Authentication | `pskills login --registry <url>`, `logout`, `whoami` |
 | Registry configuration | `pskills registry add/list/remove` |
-| Discovery | `pskills search`, `show @team/review`, `versions @team/review` |
+| Discovery | `pskills search`, `show @team/review`, `versions @team/review`, and `pskills --feed <feed> directory list`, `search`, `show`, `official`, or `audits` |
 | Installation | `pskills install @team/review@1.2.0 --agent codex` or `pskills install <full-source-id-or-exact-supported-url> --feed <feed> --agent codex` |
 | Reproduction | `pskills install --frozen-lockfile` |
 | Maintenance | `pskills list`, `update`, `outdated`, `remove`, `verify`, `doctor` |
@@ -65,6 +65,13 @@ scanner failures, or blocked scans never cause a direct-upstream fallback.
 Existing Vercel `skills` workflows inform familiarity, but this is not a promise
 of protocol or drop-in CLI compatibility, including unmodified `npx skills`
 behavior. [Vercel skills CLI](https://github.com/vercel-labs/skills)
+
+Directory discovery also accepts the global `--feed` selector. For
+`directory list`, `search`, `show`, `official`, and `audits`, the CLI forwards
+an explicit feed as the registry query parameter `feed`; when omitted it sends
+no feed parameter and the registry keeps its global catalog behavior. The CLI
+does not contact the selected feed origin or preflight feed existence; the
+registry owns feed validation, authorization, and disabled/unknown errors.
 
 ## Packs and deterministic locks
 

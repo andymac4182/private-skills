@@ -27,9 +27,12 @@ readback records seven authenticated GETs, the expected unauthenticated Topics
 observation while keeping the earlier prebuilt and browser evidence
 source-specific. Pack-preview UI proof passed
 during a stable-alias cutover whose exact deployment attribution is unknown;
-positive scanner-to-warm evidence, hosted restore, and native CI remain
-pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
-remain future milestones.
+one snapshot-only production candidate now has recorded required-scan
+admission, isolated CLI install/repeat, and analytics evidence. Physical
+GitHub/well-known resolution, direct zero-upstream instrumentation, hosted
+restore, and native CI remain pending. M6 Diffs/editor/upload-review Eve and M7 OpenClaw
+are active implementation milestones with incomplete evidence; they remain
+outside the current C1 release gate.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -44,7 +47,7 @@ remain future milestones.
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
 | CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_8ru…` rollout proves authenticated read-only API/detail/policy and metadata-only Pack preview with zero private-registry data mutations. Pack-preview UI proof passed during a stable-alias cutover with unknown exact deployment attribution. Prior production evidence covers a quarantined `find-skills` import and a same-root CLI repeat; local multi-feed and edge records cover fixture-only behavior. Positive scanner-to-warm admission, hosted restore, and tenant/secrecy acceptance remain pending |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The current `dpl_8ru…` rollout proves authenticated read-only API/detail/policy and metadata-only Pack preview with zero private-registry data mutations. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, hosted restore, and tenant/secrecy acceptance remain pending. Pack-preview UI proof passed during a stable-alias cutover with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
@@ -99,9 +102,10 @@ See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
 
 The v0.3.0 and C1 records preserve earlier deployment-specific source, scan,
 pagination, browser, and Topics evidence with their own provenance. Current
-C1 remains open because the new rollout is read-only and the positive
-scanner-to-warm and hosted restore gates are not
-complete. Pack-preview UI proof is complete, with exact deployment attribution
+C1 remains open because physical-source pullthrough, direct warm-path
+instrumentation, concurrent deduplication, and hosted restore are not complete.
+The snapshot candidate record is intentionally narrower and does not claim
+those gates. Pack-preview UI proof is complete, with exact deployment attribution
 left unknown by the stable-alias cutover. See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
 compatibility, and the distinction between implementation and live verification.

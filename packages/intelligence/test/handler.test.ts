@@ -311,7 +311,7 @@ describe('intelligence HTTP handler', () => {
     const prepare = await harness.handler(request('/internal/reviewer/prepare', {
       method: 'POST',
       headers: { authorization: 'Bearer reviewer-secret' },
-      body: { model: 'test-reviewer' },
+      body: { model: 'test-reviewer', eveSessionId: 'eve-session-test-opaque' },
     }));
     expect(prepare?.status).toBe(200);
     const prepared = await json<{
@@ -334,6 +334,7 @@ describe('intelligence HTTP handler', () => {
     const runningBody = await json<{ runs: Array<Record<string, unknown>> }>(reviewsWhileRunning!);
     expect(runningBody.runs[0]).not.toHaveProperty('leaseToken');
     expect(runningBody.runs[0]).not.toHaveProperty('leaseExpiresAt');
+    expect(runningBody.runs[0]?.eveSessionId).toBe('eve-session-test-opaque');
 
     const complete = await harness.handler(request('/internal/reviewer/complete', {
       method: 'POST',
@@ -404,6 +405,18 @@ describe('intelligence HTTP handler', () => {
       body: {},
     }));
     expect(accepted?.status).toBe(200);
+  });
+
+  it('rejects unsafe Eve session metadata at the reviewer boundary', async () => {
+    const harness = await fixture();
+    for (const eveSessionId of ['eve\nsession', 'x'.repeat(257)]) {
+      const response = await harness.handler(request('/internal/reviewer/prepare', {
+        method: 'POST',
+        headers: { authorization: 'Bearer reviewer-secret' },
+        body: { eveSessionId },
+      }));
+      expect(response?.status).toBe(400);
+    }
   });
 
   it('does not return an active review lease to a duplicate prepare caller', async () => {

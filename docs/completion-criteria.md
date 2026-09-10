@@ -5,18 +5,22 @@ future feature is not complete because a route, CLI command, or design mockup
 exists; the listed behavior and evidence must pass. G0 records the original
 shipment gates; C1 records the explicitly requested catalog follow-up. Both
 must be satisfied before the complete current goal can be marked achieved.
-M1–M5, the deferred M6 editor/reviewer milestone, and future M7 OpenClaw feed
-interoperability are later product work;
-they do not become current-release gates unless the roadmap explicitly moves
-one into the current delivery.
+M1–M5 remain later product work. M6 editor/reviewer and M7 OpenClaw feed
+interoperability are active implementation milestones selected for current
+product work, but they remain separate from the G0/C1 release gates until
+their own criteria and evidence pass. They do not silently expand the current
+release checklist.
 
 The latest source, portability, and deployment status is recorded in
 [`verification-current.md`](verification-current.md). The current guarded
 prebuilt rollout is READY and its read-only API/Pack checks are recorded there.
 The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
-and metadata-only Pack preview are partial evidence; they do not mark C1
-complete. Positive scanner-to-warm admission, hosted recovery, and native CI
-remain open. Pack-preview UI proof passed during a
+and metadata-only Pack preview are partial evidence. A later production record
+also closes snapshot-only candidate admission, required scanning, isolated CLI
+install/repeat, and analytics for one selected row; it does not establish
+physical GitHub or well-known source resolution, direct zero-upstream
+instrumentation, or complete C1. Hosted recovery and native CI remain open.
+Pack-preview UI proof passed during a
 stable-alias cutover, but its exact deployment attribution is unknown.
 
 ## G0 — v0.2.0 shipment
@@ -134,6 +138,20 @@ Representative GitHub/well-known pullthrough, scanner admission, warm-cache,
 and concurrent-deduplication evidence remains pending; a conditionally
 approved isolated CLI folder is not import acceptance evidence. Optional source
 restrictions must not become a prerequisite for the default catalog path.
+
+The current production [snapshot candidate record](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+closes the snapshot-admission slice for
+`vercel-labs/agent-skills/web-design-guidelines`: the existing feed and
+fail-closed policy were read back, one cold operation reached approved after
+required SkillGuard evidence, and an isolated original-external-ID CLI install
+and same-root repeat produced the expected analytics delta. Its server
+reference remains `@snapshot/skills-sh/<externalId>`. The one warm request was
+HTTP 200 with no new import operation, while its body-shape assertion was
+preserved as `responseValidated:false` after a verifier mismatch; this record
+does not claim direct zero-upstream instrumentation. The companion
+[negative record](evidence/production-candidate-web-design-guidelines-negative-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+proves unauthenticated and unknown-feed rejection. The prior `find-skills`
+quarantine remains separate negative evidence.
 
 Completion requires all of the following:
 
@@ -470,10 +488,12 @@ Completion requires an approved threat model, an opt-in pilot, a clean disable
 path, and evidence that disabling the capability removes collection without
 breaking registry distribution.
 
-## M6 — full Diffs editor and upload/edit review (deferred P1/P2)
+## M6 — full Diffs editor and upload/edit review (active implementation, incomplete)
 
-M6 is the later editor and upload/edit reviewer requested for the Private
-Skills web application. It is not a G0 or C1 prerequisite. The official
+M6 is the editor and upload/edit reviewer requested for the Private Skills web
+application. It is active implementation work, but it is not a G0 or C1
+release prerequisite. The concise API/type and ownership sketch is in
+[`m6-authoring-contract.md`](m6-authoring-contract.md). The official
 [Diffs home](https://diffs.com/) and [edit page](https://diffs.com/edit)
 confirm an open source `@pierre/diffs` renderer and beta in-place edit mode;
 the [official package source](https://github.com/pierrecomputer/pierre) and
@@ -486,7 +506,8 @@ Private Skills must own.
 
 Dependencies: the existing authenticated web/API boundary, canonical bundle
 validator, Files SDK/state repositories, scanner worker and policy; a pinned
-and reviewed Diffs/Trees dependency; and a versioned draft/review result
+and reviewed Diffs/Trees dependency recorded in the package manifest/lock and
+primary release metadata; and a versioned draft/review result
 contract with an explicit AI Gateway configuration. M6 may reuse M2 review
 fields, but it has its own upload/edit queue and authorization boundary. The
 existing daily common-skill consolidation Eve remains a separate agent and
@@ -622,15 +643,15 @@ Completion requires all of the following:
     and its evidence proves the draft digest, base digest, scan decision, and
     immutable-release preservation end to end.
 
-M6 should be scheduled only after the current G0 and C1 delivery is stable
-enough to supply the storage, policy, and external-source boundaries above.
-Its UI primitives can be prototyped earlier, but a prototype does not satisfy
+M6 implementation may proceed alongside the current G0/C1 work, but its
+storage, policy, and external-source dependencies must be available before
+the end-to-end gates pass. Its UI primitives can be prototyped earlier, but a prototype does not satisfy
 the durable draft, exact-review, safety, authorization, or release gates.
 
-## M7 — OpenClaw skills feed interoperability (future P1/P2)
+## M7 — OpenClaw skills feed interoperability (active implementation, incomplete)
 
-M7 is a future producer/consumer interoperability milestone. It does not block
-G0, C1, or M6, and it must not turn the current release into a public-catalog
+M7 is an active producer/consumer interoperability milestone. It does not
+block G0, C1, or M6, and it must not turn the current release into a public-catalog
 mirror. The pinned target is the official [ClawHub hosted catalog feed
 specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md):
 the skills route is `/v1/feeds/skills`, its feed ID is `clawhub-official`, and

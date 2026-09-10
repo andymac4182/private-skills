@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "verifier": "transparent-feed-production-acceptance",
+  "deployment": {
+    "id": "dpl_CpAApe78RJs3oXuuk4iPzbtdnczb",
+    "origin": "https://private-skills-theta.vercel.app",
+    "sourceSha": "e6a4b33e3a0077d716ee455e31d8c077839b730b",
+    "fingerprintSha256": "not-captured"
+  },
+  "binary": {
+    "sha256": "6a048cdcb190c2948226ea0efa0ec3a703aa659d535b1775864a348271c2b76a",
+    "sourceCommit": "8c8e41eb4ad172fc033bc5593f400874095ec656"
+  },
+  "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+  "verified": true,
+  "operation": {
+    "id": "job_705564e4-e555-41f9-bde6-02aa15a095f1",
+    "state": "completed",
+    "resourceId": "skill_976be6b7-1dc6-4ab0-b64a-e7c7f9192be0",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "import": {
+      "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+      "feedId": "feed_eaa83418-bc50-443c-a3f4-e13792331f28",
+      "feedName": "skills-sh",
+      "feedConfigRevision": "feed-config_77feaf66-779f-4e84-999b-1a5ce9b46ec9",
+      "name": "@acme/skills-sh-770277d05e23717ed1fa5b1c7d78651950c6e1650b24d5de",
+      "version": "0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982"
+    }
+  },
+  "checkpoint": {
+    "phase": "resume-completed-operation",
+    "recordedAt": "2026-09-10T07:59:39.131Z"
+  },
+  "activeBeforeWorker": [],
+  "preflight": {
+    "healthVersion": "0.3.0",
+    "organizationId": "default",
+    "roles": [
+      "owner"
+    ],
+    "policy": {
+      "revision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+      "allowUnscanned": false,
+      "required": [
+        {
+          "id": "skillsguard",
+          "mode": "required",
+          "blockSeverities": [
+            "high",
+            "critical"
+          ]
+        }
+      ]
+    },
+    "initialFeedCount": 1,
+    "feedMutation": false,
+    "analyticsBefore": {
+      "installOperations": 3,
+      "skillInstalls": 2,
+      "upToDateChecks": 1,
+      "packInstalls": 0
+    }
+  },
+  "feed": {
+    "id": "feed_eaa83418-bc50-443c-a3f4-e13792331f28",
+    "name": "skills-sh",
+    "kind": "skills-sh",
+    "enabled": true,
+    "configRevision": "feed-config_77feaf66-779f-4e84-999b-1a5ce9b46ec9",
+    "repositories": [
+      "*"
+    ],
+    "baseUrl": "https://skills.sh",
+    "namespace": "@acme"
+  },
+  "source": {
+    "reference": "@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines",
+    "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+    "feed": "skills-sh",
+    "sourcePresent": true
+  },
+  "skill": {
+    "state": "approved",
+    "resourceId": "skill_976be6b7-1dc6-4ab0-b64a-e7c7f9192be0",
+    "name": "@acme/skills-sh-770277d05e23717ed1fa5b1c7d78651950c6e1650b24d5de",
+    "version": "0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982",
+    "artifactDigest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+    "artifactSize": 1717,
+    "approvedAt": "2026-09-10T07:55:14.198Z",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "scanIds": [
+      "3e65a580-fbcb-4775-8155-ba1f932f9e6b"
+    ],
+    "sourceReference": "@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines"
+  },
+  "scans": [
+    {
+      "id": "3e65a580-fbcb-4775-8155-ba1f932f9e6b",
+      "scannerId": "skillsguard",
+      "status": "completed",
+      "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+      "filesEnumerated": 1,
+      "filesAnalyzed": 1,
+      "filesSkipped": 0,
+      "filesUnsupported": 0,
+      "findingCount": 0
+    }
+  ],
+  "warm": {
+    "status": 200,
+    "resolution": {
+      "status": 200,
+      "reference": "@snapshot/skills-sh/vercel-labs/agent-skills/web-design-guidelines",
+      "sourcePresent": true,
+      "responseValidated": false,
+      "validatorNote": "The single warm response returned HTTP 200; the original verifier rejected SkillVersion members using resourceId/digest instead of id/artifact.digest. It was not replayed."
+    },
+    "newImportOperations": 0
+  },
+  "installs": {
+    "first": {
+      "ok": true,
+      "changed": true,
+      "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+      "feed": "skills-sh",
+      "privateReference": "@acme/skills-sh-770277d05e23717ed1fa5b1c7d78651950c6e1650b24d5de",
+      "version": "0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982",
+      "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+      "stdoutBytes": 548,
+      "stderrBytes": 0
+    },
+    "repeat": {
+      "ok": true,
+      "changed": false,
+      "externalId": "vercel-labs/agent-skills/web-design-guidelines",
+      "feed": "skills-sh",
+      "privateReference": "@acme/skills-sh-770277d05e23717ed1fa5b1c7d78651950c6e1650b24d5de",
+      "version": "0.0.0+skills-sh.sion671a86e6-c762-4016-aeed-6ac6852c2982",
+      "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+      "stdoutBytes": 549,
+      "stderrBytes": 0
+    },
+    "verifyExitCode": 0,
+    "explicitDirectoryEntries": 4
+  },
+  "receipts": [
+    {
+      "id": "receipt_2324bcb8-0e09-4c3d-b6da-c571a7529b7b",
+      "resourceId": "skill_976be6b7-1dc6-4ab0-b64a-e7c7f9192be0",
+      "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+      "changed": true,
+      "agent": "universal",
+      "platform": "macos",
+      "createdAt": null
+    },
+    {
+      "id": "receipt_d1b2ab5a-dab0-4621-a236-3020b6c618c8",
+      "resourceId": "skill_976be6b7-1dc6-4ab0-b64a-e7c7f9192be0",
+      "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+      "changed": false,
+      "agent": "universal",
+      "platform": "macos",
+      "createdAt": null
+    }
+  ],
+  "analytics": {
+    "before": {
+      "installOperations": 3,
+      "skillInstalls": 2,
+      "upToDateChecks": 1,
+      "packInstalls": 0
+    },
+    "after": {
+      "installOperations": 5,
+      "skillInstalls": 3,
+      "upToDateChecks": 2,
+      "packInstalls": 0
+    },
+    "delta": {
+      "installOperations": 2,
+      "skillInstalls": 1,
+      "upToDateChecks": 1,
+      "packInstalls": 0
+    }
+  }
+}

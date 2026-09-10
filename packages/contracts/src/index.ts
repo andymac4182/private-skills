@@ -45,6 +45,8 @@ export interface Provenance {
   sourceProviderOrigin?: string;
   /** How the worker established the source identity. */
   sourceResolutionKind?: 'snapshot' | 'github' | 'well-known';
+  /** Trusted worker time when the external source bytes were fetched. */
+  fetchedAt?: string;
   /** Digest advertised by a well-known source, kept distinct from the local artifact digest. */
   externalDigest?: Digest;
   /** Optional source-resolution evidence returned by the skills.sh worker. */
@@ -71,6 +73,8 @@ export interface ExternalProvenance {
   sourceUrl: string;
   sourceProviderOrigin?: string;
   sourceResolutionKind?: 'snapshot' | 'github' | 'well-known';
+  /** Trusted worker time when the external source bytes were fetched. */
+  fetchedAt?: string;
   pageUrl?: string;
   externalSnapshotHash: string | null;
   externalDigest?: Digest;

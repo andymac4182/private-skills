@@ -53,7 +53,7 @@ The implemented public surface is:
 | `GET /health` | Minimal unauthenticated liveness response |
 | `POST /auth/session`, `DELETE /auth/session` | Token-to-session exchange and cookie clearing |
 | `GET /v1/me`, `GET /v1/capabilities` | Principal and protocol/capability discovery |
-| **Follow-up** `GET /v1/feeds` | Planned readable tenant feed metadata: id, name, kind, enabled state, configured prefix metadata (not a canonical skill namespace), and configuration revision |
+| `GET /v1/feeds` | Readable tenant feed metadata: id, name, kind, enabled state, discovery configuration, and configuration revision |
 | `GET /v1/skills`, `GET /v1/skills/:id` | Authorized catalog and detail metadata |
 | `POST /v1/publish` | Validate and queue a native bundle for scan/policy processing |
 | `GET /v1/scans` | Authorized scan evidence for accessible artifacts |
@@ -100,6 +100,19 @@ The feed base must be canonical skills.sh or an operator-trusted gateway listed
 in `trustedSkillsShBaseUrls`; a caller-supplied `credentialEnv` is rejected.
 An omitted feed auto-selects only when exactly one enabled feed exists; with
 multiple enabled feeds the caller must select one explicitly.
+
+The metadata-only directory views (`GET /v1/directory/skills`, `search`,
+`official`, `detail`, and `audits`) accept an optional `feed` query parameter.
+Without it, the injected global directory view is returned with `feedName: null`;
+core does not infer a feed from that client. With it, the server resolves the
+named organization feed and checks its enabled state, `skills-sh` kind,
+operator-trusted base URL, and namespace ACL before constructing the bound
+directory client. A selected response carries that server-owned `feedName` at
+the response boundary and on cloned skill rows; provider rows remain unscoped
+inside the directory adapter. Duplicate, unknown, disabled, unauthorized, or
+untrusted feed selectors fail before catalog I/O. Detail responses remain
+metadata-only and omit source file contents; directory freshness/status fields
+are producer metadata and do not represent registry approval.
 
 ## Authentication boundary
 

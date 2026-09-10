@@ -23,7 +23,7 @@ struct Cli {
     /// Registry origin. Credentials are bound to this exact origin.
     #[arg(long, global = true, env = "PSKILLS_REGISTRY")]
     registry: Option<String>,
-    /// Select a configured external catalog feed for skills.sh installs.
+    /// Select a configured external catalog feed for skills.sh discovery and installs.
     #[arg(long, global = true, value_name = "NAME")]
     feed: Option<String>,
     /// Emit machine-readable JSON on stdout.
@@ -445,7 +445,12 @@ fn directory(context: &Context, command: DirectoryCommand) -> Result<(), CliErro
             }
             emit(
                 context.json,
-                client(context)?.directory_list(view, args.page, args.per_page)?,
+                client(context)?.directory_list_with_feed(
+                    view,
+                    args.page,
+                    args.per_page,
+                    context.feed.as_deref(),
+                )?,
             )
         }
         DirectoryCommand::Search(args) => {
@@ -458,17 +463,27 @@ fn directory(context: &Context, command: DirectoryCommand) -> Result<(), CliErro
             let owner = args.owner.as_deref().map(directory_owner).transpose()?;
             emit(
                 context.json,
-                client(context)?.directory_search(&query, owner.as_deref(), args.limit)?,
+                client(context)?.directory_search_with_feed(
+                    &query,
+                    owner.as_deref(),
+                    args.limit,
+                    context.feed.as_deref(),
+                )?,
             )
         }
         DirectoryCommand::Show { id } => emit(
             context.json,
-            client(context)?.directory_detail(directory_identifier(&id)?)?,
+            client(context)?
+                .directory_detail_with_feed(directory_identifier(&id)?, context.feed.as_deref())?,
         ),
-        DirectoryCommand::Official => emit(context.json, client(context)?.directory_official()?),
+        DirectoryCommand::Official => emit(
+            context.json,
+            client(context)?.directory_official_with_feed(context.feed.as_deref())?,
+        ),
         DirectoryCommand::Audits { id } => emit(
             context.json,
-            client(context)?.directory_audits(directory_identifier(&id)?)?,
+            client(context)?
+                .directory_audits_with_feed(directory_identifier(&id)?, context.feed.as_deref())?,
         ),
         DirectoryCommand::Import(args) => directory_import(context, &args),
     }
@@ -572,9 +587,10 @@ fn show(context: &Context, reference: &str) -> Result<(), CliError> {
     let parsed = parse_install_reference(reference)?;
     let client = client(context)?;
     match parsed {
-        InstallReference::SkillsSh { external_id } => {
-            emit(context.json, client.directory_detail(&external_id)?)
-        }
+        InstallReference::SkillsSh { external_id } => emit(
+            context.json,
+            client.directory_detail_with_feed(&external_id, context.feed.as_deref())?,
+        ),
         InstallReference::Native { reference, version } => emit(
             context.json,
             serde_json::to_value(client.show_skill(&reference, version.as_deref())?)
@@ -2424,6 +2440,26 @@ mod tests {
             }
             _ => panic!("expected directory import"),
         }
+    }
+
+    #[test]
+    fn directory_discovery_accepts_the_explicit_global_feed() {
+        let cli = Cli::try_parse_from([
+            "pskills",
+            "--feed",
+            "community",
+            "directory",
+            "search",
+            "find",
+        ])
+        .expect("directory discovery arguments");
+        assert_eq!(cli.feed.as_deref(), Some("community"));
+        assert!(matches!(
+            cli.command,
+            Command::Directory {
+                command: DirectoryCommand::Search(DirectorySearchArgs { query, .. }),
+            } if query == "find"
+        ));
     }
 
     #[test]
