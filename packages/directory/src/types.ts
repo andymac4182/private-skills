@@ -269,6 +269,10 @@ export interface SkillsDirectoryErrorOptions {
   status?: number;
   retryAfterMs?: number;
   cause?: unknown;
+  /** True only when a normalized detail body identified a different skill. */
+  detailIdentityMismatch?: boolean;
+  /** True only when a bounded detail error body is the documented invalid path shape. */
+  detailInvalidPath?: boolean;
 }
 
 /** Sanitized, stable error returned by the directory client. */
@@ -276,6 +280,8 @@ export class SkillsDirectoryError extends Error {
   readonly code: SkillsDirectoryErrorCode;
   readonly status?: number;
   readonly retryAfterMs?: number;
+  readonly detailIdentityMismatch?: boolean;
+  readonly detailInvalidPath?: boolean;
 
   constructor(
     code: SkillsDirectoryErrorCode,
@@ -287,5 +293,18 @@ export class SkillsDirectoryError extends Error {
     this.code = code;
     this.status = options.status;
     this.retryAfterMs = options.retryAfterMs;
+    this.detailIdentityMismatch = options.detailIdentityMismatch;
+    this.detailInvalidPath = options.detailInvalidPath;
   }
 }
+
+/**
+ * A detail route can be unavailable for a nested catalog ID even when the
+ * metadata row remains discoverable through the list/search API.  Only these
+ * narrowly classified failures may enter the exact-row fallback; callers
+ * must still verify the full ID and all source metadata before acquisition.
+ */
+export type SkillsDirectoryNestedDetailFallbackReason =
+  | 'invalid_path'
+  | 'not_found'
+  | 'identity_mismatch';

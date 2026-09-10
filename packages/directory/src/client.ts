@@ -25,6 +25,7 @@ import {
   type SkillSourceType,
   type SkillView,
   type SkillsDirectoryClientOptions,
+  type SkillsDirectoryNestedDetailFallbackReason,
   type SkillsFetch,
   type SkillsTokenProvider,
   type V1Skill,
@@ -59,6 +60,11 @@ const MAX_OWNER_BYTES = 512;
 const MAX_IDENTIFIER_BYTES = 2_048;
 const MAX_IDENTIFIER_SEGMENTS = 64;
 const MAX_IDENTIFIER_SEGMENT_BYTES = 512;
+const EXACT_METADATA_PAGE_SIZE = 500;
+const EXACT_METADATA_SEARCH_LIMIT = 200;
+const EXACT_METADATA_MAX_PAGES = 64;
+const EXACT_METADATA_MAX_ROWS = 32_000;
+const EXACT_METADATA_DEADLINE_MS = 30_000;
 const SOURCE_METADATA_REASON = 'Catalog metadata has no validated source snapshot; source resolution may still be available.';
 const SOURCE_EMPTY_REASON = 'skills.sh returned no source files; source resolution is required.';
 const SOURCE_SNAPSHOT_REASON = 'skills.sh returned a bounded and validated source snapshot.';
@@ -176,10 +182,80 @@ export class SkillsDirectoryClient {
       options.signal,
       (body, fetchedAt) => {
         const detail = normalizeSkillDetailResponse(body, this.limits, this.baseURL, fetchedAt);
-        if (detail.id !== normalizedId) throw invalidResponseError('detail.id');
+        if (detail.id !== normalizedId) throw invalidResponseError('detail.id', { detailIdentityMismatch: true });
         return detail;
       },
+      undefined,
+      true,
     );
+  }
+
+  /**
+   * Find one fresh, exact catalog row for a complete skill ID.  This method
+   * deliberately bypasses the metadata cache: it is used after a detail route
+   * incompatibility and must establish current source identity before any
+   * pull-through acquisition.  Search terms are hints only; a row is accepted
+   * only when its server-returned full `id` exactly matches the requested ID.
+   */
+  async findExact(id: string, options: RequestOptions = {}): Promise<V1Skill> {
+    const normalizedId = normalizeSkillId(id);
+    const deadline = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onParentAbort: (() => void) | undefined;
+    if (options.signal?.aborted) throw requestTimeoutError();
+    if (options.signal) {
+      onParentAbort = () => deadline.abort(options.signal?.reason);
+      options.signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+    timer = setTimeout(() => deadline.abort(), EXACT_METADATA_DEADLINE_MS);
+    const parentSignal = options.signal;
+    try {
+      const searchQueries = [normalizedId];
+      const terminal = normalizedId.slice(normalizedId.lastIndexOf('/') + 1);
+      if ([...terminal].length >= 2 && terminal !== normalizedId) searchQueries.push(terminal);
+
+      for (const queryValue of searchQueries) {
+        const query = new URLSearchParams({ q: queryValue, limit: String(EXACT_METADATA_SEARCH_LIMIT) });
+        const response = await this.request(
+          'skills/search',
+          query,
+          deadline.signal,
+          (body, fetchedAt) => normalizeSkillSearchResponse(body, this.limits, this.baseURL, fetchedAt),
+        );
+        const match = exactMetadataMatch(response.data, normalizedId);
+        if (match) return match;
+      }
+
+      let observedRows = 0;
+      for (let page = 0; page < EXACT_METADATA_MAX_PAGES; page += 1) {
+        const query = new URLSearchParams({
+          view: 'all-time',
+          page: String(page),
+          per_page: String(EXACT_METADATA_PAGE_SIZE),
+        });
+        const response = await this.request(
+          'skills',
+          query,
+          deadline.signal,
+          (body, fetchedAt) => normalizeSkillListResponse(body, this.limits, this.baseURL, fetchedAt),
+        );
+        if (response.pagination.page !== page) {
+          throw invalidResponseError('exact metadata pagination page');
+        }
+        observedRows += response.data.length;
+        if (observedRows > EXACT_METADATA_MAX_ROWS) throw invalidResponseError('exact metadata bound');
+        const match = exactMetadataMatch(response.data, normalizedId);
+        if (match) return match;
+        if (!response.pagination.hasMore) break;
+      }
+      throw new SkillsDirectoryError('not_found', 'The requested skills.sh skill was not found', { status: 404 });
+    } catch (error) {
+      if (deadline.signal.aborted && !parentSignal?.aborted) throw requestTimeoutError();
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (onParentAbort !== undefined) parentSignal?.removeEventListener('abort', onParentAbort);
+    }
   }
 
   /** Return partner audit evidence without translating it into local policy. */
@@ -251,6 +327,7 @@ export class SkillsDirectoryClient {
     signal: AbortSignal | undefined,
     normalize: (body: unknown, fetchedAt: string) => T,
     cacheEndpoint?: DirectoryCacheEndpoint,
+    detailRoute = false,
   ): Promise<T> {
     if (signal?.aborted) throw requestTimeoutError();
 
@@ -259,7 +336,7 @@ export class SkillsDirectoryClient {
       // to this invocation and is never saved on the client or shared
       // globally.
       const token = await this.resolveToken(signal);
-      const result = await this.requestUncached(endpoint, query, signal, normalize, token);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute);
       return result.value;
     }
 
@@ -274,7 +351,7 @@ export class SkillsDirectoryClient {
       // or otherwise weaken the identity by caching it under a collision-prone
       // key.
       const token = await this.resolveToken(signal);
-      const result = await this.requestUncached(endpoint, query, signal, normalize, token);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute);
       return result.value;
     }
     try {
@@ -289,6 +366,7 @@ export class SkillsDirectoryClient {
           loadSignal,
           normalize,
           credential as string | undefined,
+          detailRoute,
         ),
       });
     } catch (error) {
@@ -306,6 +384,7 @@ export class SkillsDirectoryClient {
     signal: AbortSignal | undefined,
     normalize: (body: unknown, fetchedAt: string) => T,
     token: string | undefined,
+    detailRoute: boolean,
   ): Promise<DirectoryCacheLoadResult<T>> {
     if (signal?.aborted) throw requestTimeoutError();
     const url = this.urlFor(endpoint, query);
@@ -354,6 +433,28 @@ export class SkillsDirectoryClient {
         if (response.status === 404) {
           cancelBody(response);
           throw new SkillsDirectoryError('not_found', 'The requested skills.sh resource was not found', { status: 404 });
+        }
+
+        if (response.status === 400 && detailRoute) {
+          let body: unknown;
+          try {
+            body = await withTimeout(
+              readJsonResponse(response, this.limits.maxResponseBytes, attemptResult.controller.signal),
+              this.limits.requestTimeoutMs,
+              () => attemptResult.controller.abort(),
+            );
+          } catch {
+            cancelBody(response);
+            throw new SkillsDirectoryError('http_error', 'skills.sh rejected the request', { status: 400 });
+          }
+          if (isInvalidPathDetailBody(body)) {
+            throw new SkillsDirectoryError(
+              'http_error',
+              'skills.sh rejected the nested detail path',
+              { status: 400, detailInvalidPath: true },
+            );
+          }
+          throw new SkillsDirectoryError('http_error', 'skills.sh rejected the request', { status: 400 });
         }
 
         if (response.status === 401 || response.status === 403) {
@@ -1167,8 +1268,48 @@ function invalidInputError(field: string): SkillsDirectoryError {
   return new SkillsDirectoryError('invalid_input', `Invalid skills.sh client option: ${field}`);
 }
 
-function invalidResponseError(field: string): SkillsDirectoryError {
-  return new SkillsDirectoryError('invalid_response', `skills.sh returned an invalid ${field}`);
+function invalidResponseError(field: string, options: { detailIdentityMismatch?: boolean; detailInvalidPath?: boolean } = {}): SkillsDirectoryError {
+  return new SkillsDirectoryError('invalid_response', `skills.sh returned an invalid ${field}`, options);
+}
+
+function exactMetadataMatch(rows: readonly V1Skill[], requestedId: string): V1Skill | undefined {
+  const matches = rows.filter((row) => row.id === requestedId);
+  if (matches.length > 1) throw invalidResponseError('exact metadata identity');
+  return matches[0];
+}
+
+/**
+ * Classify only the detail failures for which an exact metadata lookup can
+ * safely recover a nested ID.  A caller must still use the returned row's
+ * complete identity and source metadata; this helper never parses a source or
+ * slug from the requested ID.
+ */
+export function classifyNestedDetailFallback(
+  error: unknown,
+  id: string,
+): SkillsDirectoryNestedDetailFallbackReason | undefined {
+  if (!isNestedSkillId(id) || !(error instanceof SkillsDirectoryError)) return undefined;
+  if (error.detailIdentityMismatch) return 'identity_mismatch';
+  if (error.detailInvalidPath) return 'invalid_path';
+  if (error.code === 'not_found' && error.status === 404) return 'not_found';
+  return undefined;
+}
+
+function isInvalidPathDetailBody(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return keys.length === 2 && keys[0] === 'error' && keys[1] === 'message' &&
+    record.error === 'invalid_path' && typeof record.message === 'string' &&
+    record.message.length > 0 && record.message.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(record.message);
+}
+
+function isNestedSkillId(value: string): boolean {
+  try {
+    return normalizeSkillId(value).split('/').length >= 3;
+  } catch {
+    return false;
+  }
 }
 
 function unavailableError(status?: number): SkillsDirectoryError {

@@ -481,6 +481,250 @@ describe('skills.sh source acquisition', () => {
     expect((explicitlyTrusted.provenance as unknown as Record<string, unknown>).sourceProviderOrigin).toBe('https://github.enterprise.example');
   });
 
+  it('recovers a nested GitHub skill from a fresh exact catalog row after an invalid detail path', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const skill = Buffer.from('---\nname: meta-ads\ndescription: Nested fallback\n---\n# meta ads\n', 'utf8');
+    const skillSha = sha(skill);
+    const calls: Array<{ path: string; authorization?: string }> = [];
+    const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push({ path: `${url.pathname}${url.search}`, authorization: init?.headers?.authorization });
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) return json({ error: 'invalid_path', message: 'Nested detail IDs are not supported by this route' }, 400);
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        expect(url.searchParams.get('q')).toBe(externalId);
+        expect(url.searchParams.get('limit')).toBe('200');
+        return json({
+          data: [{
+            id: externalId,
+            source: 'catalog-owner/skills',
+            slug: 'facebook/meta-ads',
+            name: 'meta-ads',
+            installs: 1,
+            sourceType: 'github',
+            installUrl: null,
+            url: `https://skills.sh/${externalId}`,
+          }],
+          query: externalId,
+          searchType: 'fuzzy',
+          count: 1,
+          durationMs: 1,
+        });
+      }
+      if (url.pathname === '/github/repos/catalog-owner/skills') return json({ default_branch: 'main' });
+      if (url.pathname === '/github/repos/catalog-owner/skills/commits/main') return json({ sha: COMMIT });
+      if (url.pathname === `/github/repos/catalog-owner/skills/git/trees/${COMMIT}`) {
+        return json({ sha: TREE, truncated: false, tree: [
+          { path: 'skills/facebook/meta-ads', mode: '040000', type: 'tree', sha: TREE },
+          { path: 'skills/facebook/meta-ads/SKILL.md', mode: '100644', type: 'blob', sha: skillSha, size: skill.length },
+        ] });
+      }
+      if (url.pathname === `/github/repos/catalog-owner/skills/git/blobs/${skillSha}`) {
+        return json({ encoding: 'base64', content: skill.toString('base64'), size: skill.length, sha: skillSha });
+      }
+      return json({ error: 'unexpected request' }, 404);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = {
+      ...input.upstream!,
+      repositories: ['catalog-owner/skills'],
+      githubApiBaseUrl: `${BASE}/github`,
+    } as AcquireSkillInput['upstream'];
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId,
+      externalSourceType: 'github',
+    };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files.map((file) => file.path)).toEqual(['SKILL.md']);
+    expect(result.provenance.externalId).toBe(externalId);
+    expect(result.provenance.repository).toBe('catalog-owner/skills');
+    expect(result.provenance.externalSnapshotHash).toBeNull();
+    const provenance = result.provenance as unknown as Record<string, unknown>;
+    expect(provenance.catalogDetailFallback).toBe('invalid_path');
+    expect((provenance.external as Record<string, unknown>).catalogDetailFallback).toBe('invalid_path');
+    expect(calls.slice(0, 2).map((entry) => entry.path)).toEqual([
+      `/catalog/api/v1/skills/${externalId}`,
+      `/catalog/api/v1/skills/search?q=${encodeURIComponent(externalId)}&limit=200`,
+    ]);
+    expect(calls.filter((entry) => entry.path.startsWith('/github/')).every((entry) => entry.authorization === undefined)).toBe(true);
+  });
+
+  it('recovers a nested well-known skill from an exact row after a missing detail route', async () => {
+    const externalId = 'example.com/team/tool';
+    const skill = Buffer.from('---\nname: tool\ndescription: Nested well-known fallback\n---\n# tool\n', 'utf8');
+    const expected = digest(skill);
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) return json({ error: 'not found' }, 404);
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        return json({
+          data: [{
+            id: externalId,
+            source: 'example.com',
+            slug: 'team/tool',
+            name: 'tool',
+            installs: 1,
+            sourceType: 'well-known',
+            installUrl: 'https://example.com/published',
+            url: `https://skills.sh/${externalId}`,
+          }],
+          query: url.searchParams.get('q'),
+          searchType: 'fuzzy',
+          count: 1,
+          durationMs: 1,
+        });
+      }
+      if (url.pathname === '/published/.well-known/agent-skills/index.json') {
+        return json({ $schema: DISCOVERY_SCHEMA, skills: [{
+          name: 'tool',
+          type: 'skill-md',
+          description: 'Nested well-known fallback',
+          url: '/published/team/tool/SKILL.md',
+          digest: expected,
+        }] });
+      }
+      if (url.pathname === '/published/team/tool/SKILL.md') return bytes(skill, 'text/markdown');
+      return json({ error: 'unexpected request' }, 404);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['example.com'] } as AcquireSkillInput['upstream'];
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId,
+      externalSourceType: 'well-known',
+      repository: 'example.com',
+    };
+
+    const result = await acquireSkillsShSkill(input);
+
+    expect(result.bundle.files).toEqual([{ path: 'SKILL.md', content: skill.toString('base64') }]);
+    expect(result.provenance.externalSourceType).toBe('well-known');
+    expect(result.provenance.revision).toBe(expected);
+    expect((result.provenance as unknown as Record<string, unknown>).catalogDetailFallback).toBe('not_found');
+  });
+
+  it('fails closed on a detail fallback when a non-null snapshot hash is expected', async () => {
+    let metadataRequests = 0;
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) return json({ error: 'invalid_path', message: 'Nested detail IDs are not supported by this route' }, 400);
+      metadataRequests += 1;
+      return json({ error: 'metadata must not be used to verify a pinned hash' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = {
+      ...input.importRequest!,
+      externalId,
+      externalSnapshotHash: 'snapshot-pinned-before-detail-failure',
+    };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'source_changed' });
+    expect(metadataRequests).toBe(0);
+  });
+
+  it('does not recover from a transient nested detail failure', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      return json({ error: 'temporary' }, 503);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'upstream_http_error', status: 503 });
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
+  it('does not treat an arbitrary nested detail HTTP 400 as an invalid path', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (calls.length === 1) return json({ error: 'invalid_path' }, 400);
+      return json({ error: 'metadata lookup must not run' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'upstream_http_error', status: 400 });
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
+  it('does not recover an ordinary GitHub row when only the external ID has three segments', async () => {
+    const externalId = 'catalog-owner/skills/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) return json({ error: 'not found' }, 404);
+      if (url.pathname === '/catalog/api/v1/skills/search') {
+        return json({
+          data: [{
+            id: externalId,
+            source: 'catalog-owner/skills',
+            slug: 'meta-ads',
+            name: 'meta-ads',
+            installs: 1,
+            sourceType: 'github',
+            installUrl: null,
+            url: `https://skills.sh/${externalId}`,
+          }],
+          query: url.searchParams.get('q'),
+          searchType: 'fuzzy',
+          count: 1,
+          durationMs: 1,
+        });
+      }
+      return json({ error: 'source acquisition must not run' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'upstream_http_error', status: 404 });
+    expect(calls).toEqual([
+      `/catalog/api/v1/skills/${externalId}`,
+      `/catalog/api/v1/skills/search?q=${encodeURIComponent(externalId)}&limit=200`,
+    ]);
+  });
+
+  it('does not classify a malformed wrong-ID detail body as recoverable identity mismatch', async () => {
+    const externalId = 'catalog-owner/skills/facebook/meta-ads';
+    const calls: string[] = [];
+    const fetchImpl = async (input: string | URL): Promise<Response> => {
+      const url = new URL(input.toString());
+      calls.push(`${url.pathname}${url.search}`);
+      if (url.pathname === `/catalog/api/v1/skills/${externalId}`) {
+        return json({
+          id: 'other-owner/skills/facebook/meta-ads',
+          source: 'other-owner/skills',
+          slug: 'facebook/meta-ads',
+          name: 'meta-ads',
+          sourceType: 'github',
+          installUrl: null,
+          // Missing files/hash keeps this response malformed even though its
+          // identity differs from the requested ID.
+        });
+      }
+      return json({ error: 'metadata lookup must not run' }, 500);
+    };
+    const input = request(externalId, fetchImpl);
+    input.upstream = { ...input.upstream!, repositories: ['catalog-owner/skills'] } as AcquireSkillInput['upstream'];
+    input.importRequest = { ...input.importRequest!, externalId };
+
+    await expect(acquireSkillsShSkill(input)).rejects.toMatchObject({ code: 'invalid_source' });
+    expect(calls).toEqual([`/catalog/api/v1/skills/${externalId}`]);
+  });
+
   it('records the canonical GitHub origin for the default resolver without an install URL', async () => {
     const skill = Buffer.from('---\nname: default-origin\ndescription: Default GitHub origin\n---\n# default\n', 'utf8');
     const skillSha = sha(skill);
@@ -1034,6 +1278,7 @@ describe('skills.sh source acquisition', () => {
       if (url.pathname === '/catalog/api/v1/skills/octo/repo/demo') {
         return json({ id: 'octo/repo/demo', source: 'evil/repo', slug: 'demo', installs: 1, hash: null, files: null });
       }
+      if (url.origin === BASE && url.pathname.startsWith('/catalog/')) return json({ error: 'catalog row not found' }, 404);
       githubCalled = true;
       return json({ error: 'unexpected source request' }, 404);
     };

@@ -51,6 +51,8 @@ export interface Provenance {
   externalDigest?: Digest;
   /** Optional source-resolution evidence returned by the skills.sh worker. */
   sourceUrl?: string;
+  /** Detail route fallback used only after a fresh exact nested catalog match. */
+  catalogDetailFallback?: 'invalid_path' | 'not_found' | 'identity_mismatch';
   pageUrl?: string;
   artifactUrl?: string;
   skillPath?: string;
@@ -71,6 +73,8 @@ export interface ExternalProvenance {
   slug: string;
   sourceType: 'github' | 'well-known';
   sourceUrl: string;
+  /** Detail route fallback used only after a fresh exact nested catalog match. */
+  catalogDetailFallback?: 'invalid_path' | 'not_found' | 'identity_mismatch';
   sourceProviderOrigin?: string;
   sourceResolutionKind?: 'snapshot' | 'github' | 'well-known';
   /** Trusted worker time when the external source bytes were fetched. */
