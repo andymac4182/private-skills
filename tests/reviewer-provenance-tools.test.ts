@@ -288,4 +288,67 @@ describe("review provenance tool executor state", () => {
       info.mockRestore();
     }
   });
+
+  it("keeps API sessions out of the log and replaces arbitrary failure codes", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const { default: hook } = await import("../apps/reviewer/agent/hooks/review-provenance.js") as unknown as {
+        default: {
+          events: {
+            "session.started": (event: unknown, context: unknown) => void;
+            "session.failed": (event: unknown, context: unknown) => void;
+          };
+        };
+      };
+      const apiContext = {
+        session: {
+          id: "eve-session-api-observability",
+          auth: { current: null, initiator: null },
+        },
+        channel: { kind: "channel" },
+      };
+      hook.events["session.started"]({ meta: { id: "api-event" } }, apiContext);
+      expect(info).not.toHaveBeenCalled();
+
+      fakes.resetState({
+        status: "completed",
+        runId: null,
+        leaseToken: null,
+        candidates: [],
+        prepareCalls: 1,
+        submitCalls: 0,
+        invocation: {
+          source: "eve-schedule",
+          scheduleId: "daily-review",
+          invocationId: "eve-review-invocation-failed",
+          observedAt: "2026-01-02T03:04:05.000Z",
+          eveSessionId: "eve-session-failed-observability",
+          status: "pending",
+        },
+      });
+      const scheduleContext = {
+        session: {
+          id: "eve-session-failed-observability",
+          auth: { current: null, initiator: null },
+        },
+        channel: { kind: "schedule" },
+      };
+      const arbitraryFailureCode = "ProviderError: secret model output must not be logged";
+      hook.events["session.failed"](
+        { meta: { id: "failure-event" }, data: { code: arbitraryFailureCode } },
+        scheduleContext,
+      );
+
+      expect(info).toHaveBeenCalledTimes(1);
+      const record = JSON.parse(info.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+      expect(record).toMatchObject({
+        phase: "failed",
+        status: "pending",
+        failureCode: "session_failed",
+      });
+      expect(JSON.stringify(record)).not.toContain(arbitraryFailureCode);
+    } finally {
+      info.mockRestore();
+    }
+  });
 });

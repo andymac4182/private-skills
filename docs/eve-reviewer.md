@@ -110,7 +110,9 @@ The provenance hook also emits one-line `private-skills.reviewer.invocation`
 records for scheduled sessions. Each record contains only the opaque Eve
 session, invocation, stream-event, and optional run IDs; the fixed schedule
 identity; the bounded phase/status; and ISO timestamps (plus a failure code
-when the session fails). `started`, `status`, `completed`, and `failed` phases
+`session_failed` when the session fails). Eve exposes failure codes as open
+strings, so the original code is deliberately not copied. `started`, `status`,
+`completed`, and `failed` phases
 make the provider runtime log a discovery surface when no `ReviewRun` exists.
 The record deliberately omits Eve state, prompts, messages, candidate text,
 reports, credentials, and tool payloads. These logs must still be paired with

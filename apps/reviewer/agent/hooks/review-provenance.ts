@@ -29,7 +29,7 @@ function emitReviewInvocationAudit(
   phase: ReviewAuditPhase,
   eventId: string | undefined,
   ctx: HookContext,
-  failureCode?: string,
+  failed = false,
 ): void {
   const audit = reviewState.get().invocation;
   // API sessions are intentionally excluded. The provider-visible record is
@@ -56,10 +56,12 @@ function emitReviewInvocationAudit(
   };
   const safeEventId = eventId === undefined ? undefined : safeOpaqueId(eventId);
   const safeRunId = audit.runId === undefined ? undefined : safeOpaqueId(audit.runId);
-  const safeFailureCode = failureCode === undefined ? undefined : safeOpaqueId(failureCode);
   if (safeEventId) record.streamEventId = safeEventId;
   if (safeRunId) record.runId = safeRunId;
-  if (safeFailureCode) record.failureCode = safeFailureCode;
+  // Eve's public failure code is an open string and may be derived from an
+  // authored Error name. Keep the provider record at a fixed failure class;
+  // never copy that value or its accompanying message into the log.
+  if (failed) record.failureCode = "session_failed";
 
   // Keep this as one JSON line containing only opaque identifiers, bounded
   // phase/status values, and timestamps. Never log state, prompts, or tool
@@ -91,7 +93,7 @@ export default defineHook({
       emitReviewInvocationAudit("completed", event.meta?.id, ctx);
     },
     "session.failed"(event, ctx) {
-      emitReviewInvocationAudit("failed", event.meta?.id, ctx, event.data.code);
+      emitReviewInvocationAudit("failed", event.meta?.id, ctx, true);
     },
   },
 });
