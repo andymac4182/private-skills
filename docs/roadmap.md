@@ -36,12 +36,12 @@ amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
 - **Now: close v0.2.0 and the remaining C1 evidence.** Finish the remaining
-  physical-source and source-revision checks. The latest verified production
-  release checkpoint is PR34 merge SHA
-  `34e4f56e6bdefa54806a5eb2c8f3cd33dfcbb0d2`; its [sanitized release
-  evidence](evidence/production-release-checkpoint-34e4f56.json) records READY
-  registry, builder, and upload-reviewer deployments. The authenticated
-  [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+  physical-source and source-revision checks. The latest verified deployment
+  checkpoint is PR36's docs-only source commit
+  `c7a0f03a4c482afa219f4c86339163b40161f944`; its [sanitized release
+  evidence](evidence/production-release-checkpoint-c7a0f03.json) records READY
+  registry, builder, and upload-reviewer deployments. PR34 remains the
+  functional release checkpoint; its authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
   is read-only and records selected-file digest, keyboard focus, responsive
   overflow, and zero console/page errors. The Neon production integration,
   storage, secrets, authenticated production flow, released CLI evidence, and
@@ -60,9 +60,10 @@ new content and execution boundaries.
   owner has authorized the Vercel project OIDC destination. Source `0f9da75`
   implements the directory, Topics parser, bounded cache, enumeration, and
   security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
-  API evidence. The PR34 release checkpoint records the current READY
-  deployment set and hosted read-only viewer evidence while preserving the
-  earlier verified release manifest and selected-file GET evidence; physical source
+  API evidence. The PR36 docs-only checkpoint records the current READY
+  deployment set; PR34 retains the functional hosted read-only viewer evidence
+  while preserving the earlier verified release manifest and selected-file GET
+  evidence; physical source
   acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
   remain open. The required install
   path supports multiple tenant feeds, with one origin/restriction configuration
@@ -299,9 +300,9 @@ root.
 
 | Evidence status | Primary source | Confirmed capability | Private Skills gap |
 | --- | --- | --- | --- |
-| Confirmed | [ClawHub hosted catalog feed specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md) | Canonical producer contract: feed ID, schema version, `/v1/feeds/skills`, skill entry identity/type, exact version/integrity/trust/state, expiry/sequence, eligibility filters, deterministic bytes/order, cache validators, and the 1,000-entry interim cap. | No OpenClaw feed producer, consumer, schema adapter, feed cache, or source/provenance mapping exists in the current product. |
-| Confirmed | [ClawHub GitHub-backed skills specification](https://github.com/openclaw/clawhub/blob/main/specs/github-backed-skills.md) | A GitHub-backed skill remains tied to the upstream repository/path and immutable commit/content hash; current content must complete the required scan before normal install/update. | The current cloud pullthrough work has source mapping and local scanning goals, but no OpenClaw feed-specific `public-github` adapter or commit/content-hash contract is accepted yet. |
-| Confirmed, scoped | [OpenClaw marketplace documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/cli/plugins.md) and [official catalog consumer](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts) | Hosted consumer behavior includes HTTPS URL restrictions, bounded UTF-8 JSON, schema/id/time/sequence validation, expiry, expected SHA, ETag/Last-Modified snapshots, offline fallback, and DSSE/feed-ID binding when signing is configured. The command surface is documented for plugin catalogs. | Write a skills-specific adapter and map entries into Private Skills' admission flow. Do not equate plugin-catalog install authority or generic v2 support with the ClawHub skills-feed contract. |
+| Confirmed | [ClawHub hosted catalog feed specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md) | Canonical producer contract: feed ID, schema version, `/v1/feeds/skills`, skill entry identity/type, exact version/integrity/trust/state, expiry/sequence, eligibility filters, deterministic bytes/order, cache validators, and the 1,000-entry interim cap. | Source `c7a0f03` includes the OpenClaw feed producer/consumer, schema adapter, bounded cache, and source/provenance mapping. Feed activation, hosted artifact import/private publication, and live producer/consumer acceptance remain unverified. |
+| Confirmed | [ClawHub GitHub-backed skills specification](https://github.com/openclaw/clawhub/blob/main/specs/github-backed-skills.md) | A GitHub-backed skill remains tied to the upstream repository/path and immutable commit/content hash; current content must complete the required scan before normal install/update. | Source `c7a0f03` includes the OpenClaw GitHub acquisition adapter and commit/content-hash mapping; hosted GitHub source resolution and live admission remain unverified. |
+| Confirmed, scoped | [OpenClaw marketplace documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/cli/plugins.md) and [official catalog consumer](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts) | Hosted consumer behavior includes HTTPS URL restrictions, bounded UTF-8 JSON, schema/id/time/sequence validation, expiry, expected SHA, ETag/Last-Modified snapshots, offline fallback, and DSSE/feed-ID binding when signing is configured. The command surface is documented for plugin catalogs. | The skills-specific adapter and admission mapping are implemented in source `c7a0f03`; hosted activation, live producer/consumer, artifact import, and private publication remain unverified. Do not equate plugin-catalog install authority or generic v2 support with the ClawHub skills-feed contract. |
 | Confirmed, separate format | [OpenClaw skills documentation source](https://raw.githubusercontent.com/openclaw/openclaw/main/docs/tools/skills.md), [ClawHub skill format](https://docs.openclaw.ai/clawhub/skill-format), and [ClawHub product spec](https://github.com/openclaw/clawhub/blob/main/specs/spec.md) | Individual skills are `SKILL.md` folders with supporting files and versioned releases; third-party skill content is untrusted and local policy applies. These pages do not replace the hosted-feed envelope. | Feed ingestion must transfer metadata or selected bytes only to the canonical validator and scanner. It must never execute a skill, hook, MCP server, or OpenClaw package manager. |
 | Conditional/unverified | [ClawHub hosted feed specification](https://github.com/openclaw/clawhub/blob/main/specs/hosted-catalog-feed.md) and [OpenClaw catalog consumer](https://raw.githubusercontent.com/openclaw/openclaw/main/src/plugins/official-external-plugin-catalog.ts) | The checked ClawHub spec describes an unsigned current publication; OpenClaw supports DSSE for configured generic feeds. A production signing key/trust root for the skills route was not established by this review. | Store and display signed/unsigned status. Verify DSSE only after the skills publisher declares the envelope and our trusted keys are explicitly configured; never bootstrap trust from the feed. |
 

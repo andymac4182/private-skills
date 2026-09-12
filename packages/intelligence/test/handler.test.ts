@@ -18,6 +18,7 @@ import { createIntelligenceHandler } from '../src/handler.js';
 
 const ORIGIN = 'https://registry.example.test';
 const ORGANIZATION = 'org-test';
+const baseTime = '2026-01-02T03:04:05.000Z';
 
 type AuthenticatedPrincipal = Principal & { scopes?: string[]; identity?: 'user' | 'worker' };
 
@@ -311,7 +312,16 @@ describe('intelligence HTTP handler', () => {
     const prepare = await harness.handler(request('/internal/reviewer/prepare', {
       method: 'POST',
       headers: { authorization: 'Bearer reviewer-secret' },
-      body: { model: 'test-reviewer', eveSessionId: 'eve-session-test-opaque' },
+      body: {
+        model: 'test-reviewer',
+        eveSessionId: 'eve-session-test-opaque',
+        provenance: {
+          source: 'eve-schedule',
+          scheduleId: 'daily-review',
+          invocationId: 'eve-review-invocation-test',
+          observedAt: baseTime,
+        },
+      },
     }));
     expect(prepare?.status).toBe(200);
     const prepared = await json<{
@@ -335,6 +345,13 @@ describe('intelligence HTTP handler', () => {
     expect(runningBody.runs[0]).not.toHaveProperty('leaseToken');
     expect(runningBody.runs[0]).not.toHaveProperty('leaseExpiresAt');
     expect(runningBody.runs[0]?.eveSessionId).toBe('eve-session-test-opaque');
+    expect(runningBody.runs[0]?.provenance).toEqual({
+      source: 'eve-schedule',
+      scheduleId: 'daily-review',
+      invocationId: 'eve-review-invocation-test',
+      observedAt: baseTime,
+    });
+    expect(runningBody.runs[0]?.provenance).not.toHaveProperty('attributes');
 
     const complete = await harness.handler(request('/internal/reviewer/complete', {
       method: 'POST',

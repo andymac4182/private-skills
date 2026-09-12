@@ -1,5 +1,6 @@
 import { defineTool } from "eve/tools";
 import { postReviewerJson } from "../lib/api.js";
+import { withReviewInvocationOutcome } from "../lib/provenance.js";
 import { submitInputSchema, submitOutputSchema } from "../lib/schemas.js";
 import { reviewState } from "../lib/review-state.js";
 
@@ -51,22 +52,36 @@ export default defineTool({
     }
 
     reviewState.update((state) => ({ ...state, submitCalls: state.submitCalls + 1 }));
-    await postReviewerJson(
-      "/internal/reviewer/complete",
-      {
-        runId: current.runId,
-        leaseToken: current.leaseToken,
-        summary: input.summary,
-        suggestions: input.suggestions,
-      },
-      completionResponse,
-      ctx.abortSignal,
-    );
+    try {
+      await postReviewerJson(
+        "/internal/reviewer/complete",
+        {
+          runId: current.runId,
+          leaseToken: current.leaseToken,
+          summary: input.summary,
+          suggestions: input.suggestions,
+        },
+        completionResponse,
+        ctx.abortSignal,
+      );
+    } catch (error) {
+      reviewState.update((state) => state.invocation ? {
+        ...state,
+        // The request may have committed remotely before its response was
+        // lost. Keep this explicitly uncertain for authoritative external
+        // correlation; the one-call budget prevents an automatic repost.
+        invocation: withReviewInvocationOutcome(state.invocation, "submission_uncertain"),
+      } : state);
+      throw error;
+    }
     reviewState.update((state) => ({
       ...state,
       status: "completed",
       leaseToken: null,
       candidates: [],
+      invocation: state.invocation
+        ? withReviewInvocationOutcome(state.invocation, "completed", current.runId!)
+        : state.invocation,
     }));
     return {
       status: "completed" as const,

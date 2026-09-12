@@ -18,6 +18,7 @@ import {
   ReviewServiceError,
   type ReviewPersistenceService,
   type ReviewRun,
+  type ReviewRunProvenance,
   type ReviewSkillSnapshot,
   type ReviewSuggestion,
 } from '../../reviews/src/index.js';
@@ -492,6 +493,12 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
   const eveSessionId = body.eveSessionId === undefined
     ? undefined
     : boundedOpaqueId(body.eveSessionId, MAX_ID_LENGTH, 'Eve session ID');
+  // The reviews service performs strict validation. Keep this boundary
+  // structural so the reviewer app can carry only its bounded provenance
+  // object without exposing prompt or report content.
+  const provenance = body.provenance === undefined
+    ? undefined
+    : body.provenance as ReviewRunProvenance;
   const day = new Date().toISOString().slice(0, 10);
   const idempotencyKey = `common-skill-review:${day}`;
   try {
@@ -528,6 +535,7 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
       model,
       snapshot: selected.map(toReviewSnapshot),
       ...(eveSessionId === undefined ? {} : { eveSessionId }),
+      ...(provenance === undefined ? {} : { provenance }),
     });
   } catch (error) {
     throw mapReviewError(error);

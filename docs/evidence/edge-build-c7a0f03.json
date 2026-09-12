@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "kind": "cloudflare-edge-local-build",
+  "source": {
+    "sha": "c7a0f03a4c482afa219f4c86339163b40161f944",
+    "state": "clean isolated checkout"
+  },
+  "dependencies": {
+    "command": "CI=true pnpm install --frozen-lockfile --offline",
+    "packageCount": 428,
+    "frozenLockfile": true,
+    "networkDownloads": 0
+  },
+  "build": {
+    "command": "CI=true pnpm exec tsx scripts/platform-build.ts cloudflare",
+    "exitCode": 0,
+    "nitroPreset": "cloudflare_module",
+    "runtimeProfile": "edge",
+    "artifactSha256": "10912c5922323ca8bc0a4542ccb3bca0772e9f489ac33a64ad78ca1d77ff5f57",
+    "serverOutputFiles": 34,
+    "serverOutputTreeSha256": "2603f8caf1167f4dd47f660f2bc1f6868c62d7c7c62f6e25f1fbd015a12ebda9",
+    "wranglerMetadataSha256": "7473a0d18dff039fe081d155ec7bdf8d3cb97054497bec825e8666001d673702",
+    "nitroMetadataSha256": "62c5b4a5fc431d9965d86cde89d4635f7577ed637b55ac3fad48d506caf1a217"
+  },
+  "staticBoundaryScan": {
+    "filesSdkImportFiles": 0,
+    "postgresImportFiles": 0,
+    "runtimeNodeImportFiles": 0,
+    "awsSdkImportFiles": 0,
+    "vercelBlobImportFiles": 0,
+    "optionalAiGatewayNodeFsFiles": 1,
+    "interpretation": "edge storage/provider boundary is clean; the guarded optional AI Gateway OIDC/node-fs module remains, so hosted semantic proof requires explicit AI_GATEWAY_API_KEY"
+  },
+  "providerAccess": {
+    "wranglerVersion": "4.130.0",
+    "wranglerWhoami": "not_authenticated",
+    "cloudflared": "missing"
+  },
+  "scope": {
+    "deploymentAttempted": false,
+    "cloudflareResourcesCreated": false,
+    "vercelResourcesCreated": false,
+    "neonOrBlobResourcesCreated": false,
+    "productionCredentialsRead": false,
+    "productionDataRead": false,
+    "tunnelUsed": false
+  },
+  "limitations": [
+    "This is a local Cloudflare-module build and static boundary scan, not a hosted Cloudflare deployment or TLS certificate-validation proof.",
+    "No public catalog, production state, scanner, model, or external credentials were contacted; the reader-only fixture used allowUnscanned=true and is not scanner evidence."
+  ]
+}

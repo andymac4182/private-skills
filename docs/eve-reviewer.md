@@ -90,6 +90,39 @@ tool sends the deterministic idempotency key `common-skill-review:YYYY-MM-DD`
 (UTC); the root API owns the daily claim and must keep retries for that day
 idempotent, so a retry cannot create a second lease or proposal.
 
+At `session.started`, the reviewer records a bounded invocation audit in Eve
+durable state before model work begins. The hook uses the framework-owned
+`channel.kind === "schedule"` signal; the authored `daily-review` name is
+fixed by the schedule file. The prepare tool sends the same safe metadata with
+the existing Eve session ID to the root API. Other session channels and
+principals, including manual API sessions, are recorded as `source: "api"`.
+Each invocation gets an application-generated opaque ID and an
+application-observed ISO timestamp. Eve 0.52.3 does not expose the provider
+cron request ID through the
+public authored context, so the generated ID is never presented as one. Review
+runs retain this bounded provenance alongside `eveSessionId`; active and
+completed idempotent duplicates keep the original claimant, while failed or
+expired lease reclamation records the new claimant. Provider execution logs
+still need to be paired with the persisted session and run IDs before claiming
+a calendar-triggered production run.
+
+The invocation audit lives in Eve's durable session state until `prepare_review`
+calls the root API. The root `ReviewRun` record is created only after a
+nonempty approved snapshot is claimed, so a scheduled session that never calls
+the tool, or a no-candidate invocation, may have no corresponding review row;
+provider session/workflow metadata remains necessary for that evidence.
+
+The durable audit distinguishes a response with an existing run ID and no
+candidates (`not_claimed`, because another session owns the active lease) from
+a response with no run ID (`no_candidates`, because the approved snapshot was
+empty). Both keep the existing public `prepare_review` result shape. A failed
+prepare request is recorded as `request_failed`; a completion request whose
+response is lost is recorded as `submission_uncertain`, because the remote
+completion may already have committed. A cached prepare does not erase that
+uncertainty. The one-call submission budget prevents an automatic repost or
+reconciliation in the same session; authoritative API/run data must resolve
+the outcome. A known successful completion RPC records `completed`.
+
 An authenticated backend can start the same fixed prompt through Eve's Client
 SDK. The caller, not the model, supplies the host and bearer token:
 

@@ -94,6 +94,12 @@ describe('review persistence service', () => {
       idempotencyKey: 'daily-2026-01-02',
       model: 'eve-reviewer',
       eveSessionId: 'eve-session-test-opaque',
+      provenance: {
+        source: 'eve-schedule' as const,
+        invocationId: 'eve-review-invocation_first',
+        scheduleId: 'daily-review',
+        observedAt: baseTime,
+      },
       snapshot: snapshotOf(first, second),
       now: baseTime,
     };
@@ -104,6 +110,7 @@ describe('review persistence service', () => {
     expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
     expect(claims[0]?.run.id).toBe(claims[1]?.run.id);
     expect(claims[0]?.run.eveSessionId).toBe('eve-session-test-opaque');
+    expect(claims[0]?.run.provenance).toEqual(input.provenance);
     expect((await service.listRuns('org-a')).map((run) => run.id)).toHaveLength(1);
     expect((await repository.read('org-a') as ReviewStateForTest).reviewRuns).toHaveLength(1);
 
@@ -117,6 +124,7 @@ describe('review persistence service', () => {
     });
     expect(completedRead.claimed).toBe(false);
     expect(completedRead.run.eveSessionId).toBe('eve-session-test-opaque');
+    expect(completedRead.run.provenance).toEqual(input.provenance);
   });
 
   it('fences stale leases and permits failed and expired retries', async () => {
@@ -149,6 +157,7 @@ describe('review persistence service', () => {
     expect(retry.run.id).toBe(firstClaim.run.id);
     expect(retry.run.leaseToken).not.toBe(firstClaim.run.leaseToken);
     expect(retry.run.eveSessionId).toBeUndefined();
+    expect(retry.run.provenance).toBeUndefined();
     await expect(
       service.failRun('org-a', retry.run.id, firstClaim.run.leaseToken!, 'stale', baseTime),
     ).rejects.toMatchObject({ code: 'REVIEW_LEASE_FENCED' });
@@ -159,6 +168,12 @@ describe('review persistence service', () => {
       idempotencyKey: 'expired',
       model: 'eve-reviewer',
       eveSessionId: 'eve-session-expired-old',
+      provenance: {
+        source: 'eve-schedule',
+        invocationId: 'eve-review-invocation_old',
+        scheduleId: 'daily-review',
+        observedAt: baseTime,
+      },
       snapshot: snapshotOf(otherFixture.first, otherFixture.second),
       now: baseTime,
     });
@@ -166,11 +181,23 @@ describe('review persistence service', () => {
       idempotencyKey: 'expired',
       model: 'eve-reviewer',
       eveSessionId: 'eve-session-expired-new',
+      provenance: {
+        source: 'eve-schedule',
+        invocationId: 'eve-review-invocation_new',
+        scheduleId: 'daily-review',
+        observedAt: new Date(Date.parse(baseTime) + 2_000).toISOString(),
+      },
       snapshot: snapshotOf(otherFixture.first, otherFixture.second),
       now: Date.parse(baseTime) + 2_000,
     });
     expect(reclaimed.claimed).toBe(true);
     expect(reclaimed.run.eveSessionId).toBe('eve-session-expired-new');
+    expect(reclaimed.run.provenance).toEqual({
+      source: 'eve-schedule',
+      invocationId: 'eve-review-invocation_new',
+      scheduleId: 'daily-review',
+      observedAt: new Date(Date.parse(baseTime) + 2_000).toISOString(),
+    });
     await expect(
       expiringService.completeRun('org-a', expiringClaim.run.id, expiringClaim.run.leaseToken!, [], Date.parse(baseTime) + 2_000),
     ).rejects.toMatchObject({ code: 'REVIEW_LEASE_FENCED' });
@@ -189,6 +216,44 @@ describe('review persistence service', () => {
     await expect(service.beginRun('org-a', { ...input, eveSessionId: 'x'.repeat(257) }))
       .rejects.toBeInstanceOf(ReviewValidationError);
     expect(await service.listRuns('org-a')).toEqual([]);
+  });
+
+  it('validates trigger provenance and does not retain private or provider fields', async () => {
+    const { service, first, second } = await fixture();
+    const input = {
+      idempotencyKey: 'provenance-shape',
+      model: 'eve-reviewer',
+      eveSessionId: 'eve-session-provenance',
+      snapshot: snapshotOf(first, second),
+      now: baseTime,
+    };
+    const apiClaim = await service.beginRun('org-a', {
+      ...input,
+      provenance: {
+        source: 'api',
+        invocationId: 'eve-review-invocation-api',
+        observedAt: baseTime,
+      },
+    });
+    expect(apiClaim.run.provenance).toEqual({
+      source: 'api',
+      invocationId: 'eve-review-invocation-api',
+      observedAt: baseTime,
+    });
+    expect(apiClaim.run.provenance).not.toHaveProperty('attributes');
+    expect(apiClaim.run.provenance).not.toHaveProperty('requestId');
+
+    for (const provenance of [
+      { source: 'eve-schedule', invocationId: 'invocation', observedAt: baseTime },
+      { source: 'api', invocationId: 'invocation', scheduleId: 'daily-review', observedAt: baseTime },
+      { source: 'api', invocationId: 'invocation', observedAt: 'not-a-date' },
+    ]) {
+      await expect(service.beginRun('org-a', {
+        ...input,
+        idempotencyKey: `bad-${JSON.stringify(provenance)}`,
+        provenance: provenance as never,
+      })).rejects.toBeInstanceOf(ReviewValidationError);
+    }
   });
 
   it('rejects invented candidates and malformed model output without committing', async () => {
