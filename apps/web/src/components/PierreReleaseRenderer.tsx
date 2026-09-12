@@ -3,6 +3,7 @@ import { File } from '@pierre/diffs/react'
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import type { ReleaseFileView } from '../lib/types'
 import { Badge, LoadingState } from './Primitives'
+import { onPierrePostRender, PIERRE_ACCESSIBLE_CSS } from './pierreAccessibility'
 
 export interface PierreReleaseRendererProps {
   files: ReleaseFileView[]
@@ -43,7 +44,7 @@ export function PierreReleaseRenderer({ files, selectedPath, selectedFile, fileL
       {fileLoading ? <LoadingState label="Loading file…" /> : selectedFile?.previewState === 'text' && typeof selectedFile.contents === 'string' ? <File
         className="release-pierre-file"
         file={{ name: selectedFile.path, contents: selectedFile.contents, cacheKey: selectedFile.contentDigest }}
-        options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }}
+        options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
         disableWorkerPool
       /> : selectedFile && selectedFile.previewState !== 'text' ? <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(selectedFile)} /><p>This file is available, but this preview type exposes metadata only.</p></div> : <div className="release-file-placeholder">Select a file to inspect its contents.</div>}
     </div>

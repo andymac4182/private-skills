@@ -7,6 +7,7 @@ import type { ReleaseFilePreviewState, SkillBundle } from '../lib/types'
 import { formatBytes } from '../lib/format'
 import { Badge, LoadingState } from './Primitives'
 import type { DraftWorkingFile } from './DraftEditor'
+import { onPierrePostRender, PIERRE_ACCESSIBLE_CSS } from './pierreAccessibility'
 
 type DraftFile = SkillBundle['files'][number]
 
@@ -147,7 +148,7 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
         file={current}
         edit
         editStateKey={pierreEditStateKey(draftId, draftRevision, draftDigest, current.name)}
-        options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }}
+        options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
         disableWorkerPool
         onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}
         onEditComplete={(event) => { onContentChange(event.file.contents); return 'accept' }}
@@ -155,7 +156,7 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
         key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}`}
         className="draft-pierre-file"
         fileDiff={diff}
-        options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }}
+        options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
         disableWorkerPool
       /> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState, maxPreviewBytes)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}
       {mode === 'edit' && busy && <div className="draft-surface-busy"><LoadingState label="Saving revision…" /></div>}
