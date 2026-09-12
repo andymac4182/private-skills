@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryStateRepository, defaultRegistryState } from "../../../../packages/database/src/index.js";
 import { createRegistryHandler } from "../../../../packages/core/src/index.js";
 import { digestBytes } from "../../../../packages/storage/src/index.js";
@@ -16,6 +16,13 @@ import {
   type DraftBinding,
 } from "../../../../packages/skill-builder/src/index.js";
 import { resolveBuilderTools } from "../../agent/tools/draft.js";
+
+const { registryClientMock } = vi.hoisted(() => ({ registryClientMock: vi.fn() }));
+
+vi.mock("../../agent/lib/config.js", () => ({
+  builderStatus: () => ({ enabled: true }),
+  registryClient: registryClientMock,
+}));
 
 const ORIGIN = "https://registry.example.test";
 const ORGANIZATION = "org-test";
@@ -181,12 +188,14 @@ describe("skill-builder proposal tool integration", () => {
         return await test.handler(request);
       },
     });
+    registryClientMock.mockReturnValue(client);
     const tools = await resolveBuilderTools({
       channel: {
         kind: "skill-builder",
         metadata: { audience: "private", bound: true, ...binding, registrySessionId: REGISTRY_SESSION_ID },
       },
-    }, { client, enabled: true });
+    }, { enabled: true });
+    expect(registryClientMock).not.toHaveBeenCalled();
     expect(tools).not.toBeNull();
     if (!tools) throw new Error("builder tools were not resolved");
 
