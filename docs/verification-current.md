@@ -26,6 +26,9 @@ retains names and exit codes only. Active settings establish runtime
 configuration; they do not prove feed import or publication, and M7 remains
 incomplete. The public metadata probe remains interoperability evidence only.
 
+The published v0.2.0 CLI package lacks feed, directory, and current pullthrough
+support. v0.3 packaging is in progress; no v0.3 publication is claimed.
+
 The isolated hosted-edge proof from source `c7a0f03` passed through a temporary
 Cloudflare Worker and Node gateway with required SkillsGuard scanning, private
 storage, semantic search, authentication negatives, revocation, and cleanup.
@@ -35,16 +38,18 @@ replace production release gates or claim M7 completion. The earlier
 [local Cloudflare build record](evidence/edge-build-c7a0f03.json) remains local
 build evidence with its original limits.
 
-M6 remains incomplete: terminal-session restart PR39 (`0f71d4`) has its
-browser-passed final UI guard and awaits release; draft-resume and accessibility
-changes remain pending, and model/apply/review/scan proof is still pending. C1
-telemetry/parser work is in progress; physical GitHub/well-known source
-pullthrough remains open. No publication is claimed.
+M6 remains incomplete: terminal-session restart PR39 (`0f71d4`) shipped in the
+verified `57bce924` checkpoint with its browser-passed final UI guard;
+draft-resume and accessibility changes remain pending. A new live Eve proposal
+is verified, while its apply, review, scan, and publication steps remain
+pending. C1 telemetry/parser work is in progress; physical GitHub/well-known
+source pullthrough remains open. No publication is claimed.
 
-The daily reviewer remains registered at `0 22 * * *` UTC.
-The short dated probe was inconclusive; a fuller `00:00–01:05` UTC 13 September
-2026 probe is being prepared. Treat the earlier run as deployment-scoped
-temporal correlation until an explicit scheduler/session identifier is captured.
+The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
+the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September 2026
+proof window. The short dated probe was inconclusive and the fuller proof is
+being prepared. Treat the earlier run as deployment-scoped temporal correlation
+until an explicit scheduler/session identifier is captured.
 
 **Earlier PR34 functional release checkpoint:** PR34 was merged at
 `2026-09-10T15:02:13Z` with approved head
@@ -400,16 +405,17 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   restore evidence](evidence/hosted-restore-20260910.json), with its original
   operator-quiescence and provider-lifecycle limits.
 - M6 editor/authoring API and source are shipped, and the local synthetic
-  editor/browser fixture passes. Terminal-session restart PR39 (`0f71d4`) has
-  its browser-passed final UI guard and awaits release; draft-resume and
-  accessibility changes remain pending, while live model/apply/review/scan,
-  durable draft/CAS/publication, cross-tenant denial, and
-  screenreader/contrast/reduced-motion checks remain open.
-- The daily reviewer remains registered at `0 22 * * *` UTC.
-  The short dated probe was inconclusive; a fuller `00:00–01:05` UTC 13
-  September 2026 probe is being prepared. The earlier run is deployment-scoped
-  temporal correlation until an explicit scheduler/session identifier is
-  captured.
+  editor/browser fixture passes. Terminal-session restart PR39 (`0f71d4`) shipped
+  in the verified `57bce924` checkpoint with its browser-passed final UI guard;
+  draft-resume and accessibility changes remain pending. A new live Eve proposal
+  is verified, while its apply, review, scan, durable draft/CAS/publication,
+  cross-tenant denial, and screenreader/contrast/reduced-motion checks remain
+  open.
+- The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
+  the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September
+  2026 proof window. The short dated probe was inconclusive and the fuller proof
+  is being prepared. The earlier run is deployment-scoped temporal correlation
+  until an explicit scheduler/session identifier is captured.
 - M7 OpenClaw backend code is shipped and its seven reviewed nonsecret
   production settings are active. The public metadata probe remains
   interoperability evidence only. Two hosted M7 candidates failed closed on

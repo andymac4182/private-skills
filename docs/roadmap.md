@@ -44,6 +44,8 @@ new content and execution boundaries.
   instrumentation, and tenant/secrecy acceptance remain open. Native CI was
   waived by explicit repository-owner instruction on 13 September 2026 for this
   delivery/review scope; workflows remain enabled and no native target pass is
+  claimed. The published v0.2.0 CLI package lacks feed, directory, and current
+  pullthrough support; v0.3 packaging is in progress and no v0.3 publication is
   claimed. The isolated hosted-edge proof passed separately with its disposable
   resources cleaned up; it does not close the remaining product gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,
@@ -59,9 +61,11 @@ new content and execution boundaries.
   The current READY service set and historic [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
   establish the viewer boundary only. The [local synthetic editor/browser
   evidence](evidence/m6-editor-browser-local-29f7.json) passes bounded
-  desktop/mobile draft checks. Terminal-session restart PR39 (`0f71d4`) has its
-  browser-passed final UI guard and awaits release; draft-resume and accessibility changes remain pending, and live
-  model/apply/review/scan proof remains pending. Complete M6 still requires the
+  desktop/mobile draft checks. Terminal-session restart PR39 (`0f71d4`) shipped in
+  the verified `57bce924` checkpoint with its browser-passed final UI guard;
+  draft-resume and accessibility changes remain pending. A new live Eve proposal
+  is verified, while its apply, review, scan, and publication steps remain
+  pending. Complete M6 still requires the
   composed editor, durable drafts, upload/edit reviewer, builder, and their
   end-to-end evidence. This milestone is active implementation work, but it is
   not a G0 or C1 release gate until its criteria and evidence pass.

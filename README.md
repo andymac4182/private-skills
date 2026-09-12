@@ -8,9 +8,10 @@ The baseline implementation and its recorded v0.2 checks were established on
 9 September 2026. The v0.3 production checkpoint and its remaining gates are
 tracked separately in [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md);
 that record distinguishes completed evidence from pending deployment/provider
-checks. The private v0.2.0 archives/checksums and clean-consumer verification
-are recorded as complete; current-source packaging remains a separate release
-step and is not represented as a published release.
+checks. The private v0.2.0 archives/checksums and clean-consumer verification are
+recorded as complete, but the published v0.2.0 CLI package lacks feed,
+directory, and current pullthrough support. v0.3 packaging is in progress; no
+v0.3 publication is claimed.
 
 The latest delivery status is tracked in
 [`docs/verification-current.md`](docs/verification-current.md). The latest
@@ -30,9 +31,10 @@ provider billing/payment or spending-limit admission prevented runner steps, and
 no native target pass is claimed. The authenticated [hosted M6 viewer evidence](docs/evidence/production-m6-hosted-viewer-34e4f56.json)
 and local synthetic [editor-browser record](docs/evidence/m6-editor-browser-local-29f7.json)
 remain source-specific, read-only or fixture evidence. M6 terminal-session
-restart PR39 (`0f71d4`) has its browser-passed final UI guard and awaits release;
-draft-resume and accessibility changes remain pending, and model/apply/review/
-scan proof is still pending.
+restart PR39 (`0f71d4`) shipped in the verified `57bce924` checkpoint with its
+browser-passed final UI guard; draft-resume and accessibility changes remain
+pending. A new live Eve proposal is verified, while its apply, review, scan, and
+publication steps remain pending.
 
 Seven reviewed nonsecret OpenClaw production settings are active. The sanitized
 [settings-stage record](docs/evidence/openclaw-production-settings-staged-20260910.json)
@@ -49,10 +51,11 @@ added after that workstream's approved merge.
 
 C1 telemetry/parser work is in progress and physical GitHub/well-known source
 pullthrough remains open. No publication is claimed, and M7 remains incomplete.
-The daily reviewer schedule is registered at `0 22 * * *` UTC;
-the short dated probe was inconclusive and a fuller `00:00–01:05` UTC 13
-September 2026 probe is being prepared. The earlier run remains temporal
-correlation only until an explicit scheduler/session identifier is captured.
+The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
+the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September
+2026 proof window. The short dated probe was inconclusive and the fuller proof
+is being prepared. The earlier run remains temporal correlation only until an
+explicit scheduler/session identifier is captured.
 
 M1–M5 remain future product work. This status is separate from the G0, C1, M6,
 and M7 verification gates; local or read-only fixtures do not mark a milestone
@@ -70,7 +73,7 @@ complete.
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. Native CI is waived for this delivery/review scope and no native target pass is claimed |
+| CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | The published v0.2.0 CLI package lacks feed, directory, and current pullthrough support; v0.3 packaging is in progress and no v0.3 publication is claimed. Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI. Native CI is waived for this delivery/review scope and no native target pass is claimed |
 | skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | C1 telemetry/parser work is in progress; physical GitHub/well-known source resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain open. The current Git-triggered registry/builder/upload-reviewer deployments are READY at exact source `57bce924`; prior release, viewer, Pack-preview, restore, and snapshot-candidate records remain linked in [`docs/verification-current.md`](docs/verification-current.md). |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 

@@ -32,21 +32,27 @@ retains names and exit codes only. Active settings establish runtime
 configuration but do not prove feed import or publication, and M7 remains
 incomplete.
 
+The published v0.2.0 CLI package lacks feed, directory, and current pullthrough
+support. v0.3 packaging is in progress; no v0.3 publication is claimed.
+
 The isolated hosted-edge proof from source `c7a0f03` passed through a temporary
 Cloudflare Worker and Node gateway with required scanning, private storage,
 semantic search, authentication negatives, revocation, and cleanup. Its
 detailed record is maintained by the edge-proof workstream and will be linked
 after that workstream's approved merge; it is a separate acceptance record and
 does not replace release gates. M6 remains incomplete: terminal-session restart
-PR39 (`0f71d4`) has its browser-passed final UI guard and awaits release;
-draft-resume and accessibility changes remain pending, and model/apply/review/
-scan proof is pending. C1 telemetry/parser work is in progress; physical
-GitHub/well-known source pullthrough remains open. No publication is claimed.
+PR39 (`0f71d4`) shipped in the verified `57bce924` checkpoint with its
+browser-passed final UI guard; draft-resume and accessibility changes remain
+pending. A new live Eve proposal is verified, while its apply, review, scan, and
+publication steps remain pending. C1 telemetry/parser work is in progress;
+physical GitHub/well-known source pullthrough remains open. No publication is
+claimed.
 
-The daily reviewer remains registered at `0 22 * * *` UTC.
-The short dated probe was inconclusive; a fuller `00:00–01:05` UTC 13 September
-2026 probe is being prepared. The earlier run is deployment-scoped temporal
-correlation until an explicit scheduler/session identifier is captured. The
+The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
+the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September 2026
+proof window. The short dated probe was inconclusive and the fuller proof is
+being prepared. The earlier run is deployment-scoped temporal correlation until
+an explicit scheduler/session identifier is captured. The
 earlier PR32 activation and PR30 release-file records retain their own
 source/deployment provenance below.
 
@@ -92,7 +98,9 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
   approve. The private v0.2.0 archives/checksums and clean-consumer verification
   are complete in [`verification-v0.2.0.md`](verification-v0.2.0.md) and the
   retained [release evidence](../work/release-verification-v0.2.0-4E13vA/);
-  no v0.3 archive is claimed published.
+  the published v0.2.0 CLI package lacks feed, directory, and current
+  pullthrough support; v0.3 packaging is in progress, and no v0.3 publication
+  is claimed.
 - **verified for the local rehearsal:** the recovery test resolves the original
   digest and preserves revocation, authorization, and tenant boundaries;
 - **verified for the bounded hosted logical restore:** the sanitized [restore
@@ -114,8 +122,8 @@ health/scanner run and native CI remain outside this proof. The optional
 unfenced mode is not implemented and its mandatory-fence relaxation remains
 separately approval-pending.
 
-The separate Eve route and registered `0 22 * * *` UTC schedule (22:00 UTC,
-subject to the hosting execution window) now have a sanitized production
+The historical Eve run used the default `0 22 * * *` UTC schedule (22:00 UTC,
+subject to the hosting execution window) and has a sanitized production
 [cron evidence record](../work/reviewer-cron-completion-evidence.json) for
 deployment `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e`. The cron path was observed at
 2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary
@@ -641,9 +649,10 @@ configuration is enabled in the current deployment. The local synthetic
 editor/browser fixture passes its bounded desktop/mobile checks, while hosted UI
 acceptance, live Eve/model execution, and screenreader, contrast, and
 reduced-motion evidence remain pending. Terminal-session restart PR39 (`0f71d4`)
-has its browser-passed final UI guard and awaits release; draft-resume and
-accessibility changes remain pending, and model/apply/review/scan proof is still
-pending. Its read-only release-file VIEW
+shipped in the verified `57bce924` checkpoint with its browser-passed final UI
+guard; draft-resume and accessibility changes remain pending. A new live Eve
+proposal is verified, while its apply, review, scan, and publication steps
+remain pending. Its read-only release-file VIEW
 slice has delivered production GET evidence for manifest, selected text-file
 retrieval, digest verification, and unauthenticated rejection; the full
 composed editor, durable draft, upload/edit review, and builder evidence
