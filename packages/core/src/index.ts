@@ -40,6 +40,7 @@ import {
   type TransferDescriptor,
   type TransferGrant,
   type Upstream,
+  type UpstreamRequestObserver,
 } from '../../contracts/src/index.js';
 import {
   digestBytes,
@@ -205,20 +206,26 @@ export interface RegistryHandler {
  * small test fakes alike.
  */
 export interface RegistryDirectoryClient {
-  list(options?: { view?: 'all-time' | 'trending' | 'hot'; page?: number; perPage?: number; signal?: AbortSignal }): Promise<SkillListResponse>;
-  search(options: { q: string; owner?: string; limit?: number; signal?: AbortSignal }): Promise<SkillSearchResponse>;
-  curated(options?: { signal?: AbortSignal }): Promise<CuratedSkillsResponse>;
-  detail(id: string, options?: { signal?: AbortSignal }): Promise<SkillDetailResponse>;
+  list(options?: DirectoryRequestOptions & { view?: 'all-time' | 'trending' | 'hot'; page?: number; perPage?: number }): Promise<SkillListResponse>;
+  search(options: DirectoryRequestOptions & { q: string; owner?: string; limit?: number }): Promise<SkillSearchResponse>;
+  curated(options?: DirectoryRequestOptions): Promise<CuratedSkillsResponse>;
+  detail(id: string, options?: DirectoryRequestOptions): Promise<SkillDetailResponse>;
   /**
    * Optional bounded exact-row lookup used only after a nested detail route
    * incompatibility. The implementation must perform fresh search/list
    * reconciliation and return the complete server row; core rechecks its
    * identity and the selected feed allowlist before queueing an import.
    */
-  findExact?(id: string, options?: { signal?: AbortSignal }): Promise<V1Skill>;
-  audit(id: string, options?: { signal?: AbortSignal }): Promise<SkillAuditResponse>;
+  findExact?(id: string, options?: DirectoryRequestOptions): Promise<V1Skill>;
+  audit(id: string, options?: DirectoryRequestOptions): Promise<SkillAuditResponse>;
   /** Return one validated, source-backed topic page DTO. */
-  topic?(slug: string, options?: { signal?: AbortSignal }): Promise<SkillsTopicResponse>;
+  topic?(slug: string, options?: DirectoryRequestOptions): Promise<SkillsTopicResponse>;
+}
+
+interface DirectoryRequestOptions {
+  signal?: AbortSignal;
+  /** Request-local diagnostics observer; it receives only catalog/source counts. */
+  upstreamObserver?: UpstreamRequestObserver;
 }
 
 /**
@@ -1776,10 +1783,11 @@ async function resolveDirectoryDetail(
   directory: RegistryDirectoryClient,
   id: string,
   requestSignal?: AbortSignal,
+  upstreamObserver?: UpstreamRequestObserver,
 ): Promise<DirectoryDetailResolution> {
   try {
     return {
-      detail: await directory.detail(id, { signal: requestSignal }),
+      detail: await directory.detail(id, { signal: requestSignal, upstreamObserver }),
     };
   } catch (error) {
     if (!(error instanceof SkillsDirectoryError)) throw error;
@@ -1789,7 +1797,7 @@ async function resolveDirectoryDetail(
 
     let row: V1Skill;
     try {
-      row = await directory.findExact(id, { signal: requestSignal });
+      row = await directory.findExact(id, { signal: requestSignal, upstreamObserver });
     } catch (fallbackError) {
       if (fallbackError instanceof SkillsDirectoryError) throw directoryApiError(fallbackError);
       throw fallbackError;
@@ -1842,6 +1850,7 @@ async function lookupDirectoryCatalogRow(
   directory: RegistryDirectoryClient,
   detail: SkillDetailResponse,
   requestSignal?: AbortSignal,
+  upstreamObserver?: UpstreamRequestObserver,
 ): Promise<V1Skill> {
   const deadline = createDirectoryLookupSignal(requestSignal, DIRECTORY_METADATA_LOOKUP_DEADLINE_MS);
   try {
@@ -1850,6 +1859,7 @@ async function lookupDirectoryCatalogRow(
       q: detail.slug,
       limit: 200,
       signal: deadline.signal,
+      upstreamObserver,
       ...(owner === undefined ? {} : { owner }),
     };
     // The public search API requires at least two characters.  A one-character
@@ -1867,6 +1877,7 @@ async function lookupDirectoryCatalogRow(
           q: detail.slug,
           limit: 200,
           signal: deadline.signal,
+          upstreamObserver,
         }));
         const unfilteredMatch = unfiltered ? exactDirectoryCatalogRow(unfiltered.data, detail) : undefined;
         if (unfilteredMatch) return unfilteredMatch;
@@ -1879,6 +1890,7 @@ async function lookupDirectoryCatalogRow(
         page,
         perPage: 500,
         signal: deadline.signal,
+        upstreamObserver,
       }));
       if (!listed) continue;
       const listMatch = exactDirectoryCatalogRow(listed.data, detail);
@@ -4168,6 +4180,65 @@ interface TransparentProxyRequest {
   refresh: boolean;
 }
 
+const MAX_REQUEST_DIAGNOSTIC_EVENTS = 4_096;
+
+interface RequestUpstreamDiagnostics {
+  version: 1;
+  upstreamRequests: {
+    catalog: number;
+    source: number;
+  };
+  queuedJobsCreated: number;
+  overflow: boolean;
+}
+
+interface RequestUpstreamCounter extends UpstreamRequestObserver {
+  recordQueuedJob(): void;
+  snapshot(): RequestUpstreamDiagnostics;
+}
+
+/**
+ * Keep upstream observations isolated to one request. The counter has a
+ * bounded event budget so a malformed or unexpectedly chatty adapter cannot
+ * grow response state without limit, and stores no URL, credential, or body.
+ */
+function createRequestUpstreamCounter(): RequestUpstreamCounter {
+  let events = 0;
+  let catalog = 0;
+  let source = 0;
+  let queuedJobsCreated = 0;
+  let overflow = false;
+
+  const consume = (): boolean => {
+    if (events >= MAX_REQUEST_DIAGNOSTIC_EVENTS) {
+      overflow = true;
+      return false;
+    }
+    events += 1;
+    return true;
+  };
+
+  return {
+    record(kind) {
+      if (!consume()) return;
+      if (kind === 'catalog') catalog += 1;
+      else source += 1;
+    },
+    recordQueuedJob() {
+      if (!consume()) return;
+      queuedJobsCreated += 1;
+    },
+    snapshot() {
+      return {
+        version: 1,
+        upstreamRequests: { catalog, source },
+        queuedJobsCreated,
+        overflow,
+      };
+    },
+  };
+}
+
 /** A canonical source identity is derived from verified worker provenance. */
 interface CanonicalSourceIdentity {
   provider: 'github' | 'well-known' | 'snapshot';
@@ -4261,6 +4332,7 @@ async function resolveTransparentProxyRequest(
   requestSignal?: AbortSignal,
 ): Promise<Response> {
   const request = parseTransparentProxyRequest(body);
+  const requestCounter = createRequestUpstreamCounter();
   const state = await readState(deps.repository, config.organizationId);
   const feed = findTransparentFeed(state, request.feed, principal, config);
   const upstream = feedAsUpstream(feed);
@@ -4270,7 +4342,7 @@ async function resolveTransparentProxyRequest(
   // release.  An explicit refresh is the only way to revalidate the catalog.
   if (!request.refresh) {
     const cached = findTransparentCachedResult(state, request.externalId, upstream, principal, config);
-    if (cached) return transparentProxyResponse(cached, feed, request.externalId);
+    if (cached) return transparentProxyResponse(cached, feed, request.externalId, principal, requestCounter);
   }
 
   // The global directory client serves browse/default API routes only. A
@@ -4279,7 +4351,7 @@ async function resolveTransparentProxyRequest(
   // could hydrate the wrong catalog row under the caller's external ID.
   const directory = deps.directoryForBase?.(feed.baseUrl);
   if (!directory) throw directoryUnavailable();
-  const detailResolution = await resolveDirectoryDetail(directory, request.externalId, requestSignal);
+  const detailResolution = await resolveDirectoryDetail(directory, request.externalId, requestSignal, requestCounter);
   const detail = detailResolution.detail;
   if (
     detail.id !== request.externalId ||
@@ -4298,7 +4370,7 @@ async function resolveTransparentProxyRequest(
   // worker performs its own authenticated source resolution before bytes are
   // admitted.
   const trustedRow = detailResolution.catalogRow ?? (detail.hash === null || detail.files === null
-    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
+    ? await lookupDirectoryCatalogRow(directory, detail, requestSignal, requestCounter)
     : undefined);
   const managedName = await transparentManagedName(upstream.namespace, request.externalId);
   const template: TransparentImportTemplate = {
@@ -4321,8 +4393,9 @@ async function resolveTransparentProxyRequest(
     deps,
     config,
     requestId,
+    requestCounter,
   );
-  return transparentProxyResponse(result, feed, request.externalId);
+  return transparentProxyResponse(result, feed, request.externalId, principal, requestCounter);
 }
 
 /**
@@ -4814,7 +4887,13 @@ function findTransparentCachedResult(
   return undefined;
 }
 
-function transparentProxyResponse(result: TransparentCachedResult | ImportResolutionResult, feed: Feed, externalId: string): Response {
+function transparentProxyResponse(
+  result: TransparentCachedResult | ImportResolutionResult,
+  feed: Feed,
+  externalId: string,
+  principal: Principal,
+  requestCounter: RequestUpstreamCounter,
+): Response {
   const skill = result.status === 200 ? result.resolution.members[0] : undefined;
   const source = skill ? canonicalSourceFromSkill(skill) : undefined;
   const common = {
@@ -4822,8 +4901,18 @@ function transparentProxyResponse(result: TransparentCachedResult | ImportResolu
     externalId,
     ...(source ? { reference: sourceReferenceFromCanonical(source), source: canonicalSourceDto(source) } : {}),
   };
-  if (result.status === 200) return jsonResponse({ ...common, resolution: result.resolution }, 200);
-  return jsonResponse({ ...common, operation: result.job }, 202);
+  const diagnostics = canReadTransparentDiagnostics(principal)
+    ? { diagnostics: requestCounter.snapshot() }
+    : {};
+  if (result.status === 200) return jsonResponse({ ...common, ...diagnostics, resolution: result.resolution }, 200);
+  return jsonResponse({ ...common, ...diagnostics, operation: result.job }, 202);
+}
+
+function canReadTransparentDiagnostics(principal: Principal): boolean {
+  if (!hasRole(principal, 'owner') && !hasRole(principal, 'admin')) return false;
+  // Explicit scopes opt a principal into scope enforcement. Legacy injected
+  // principals with no scopes retain their role-based admin boundary.
+  return hasAnyScope(principal, ['registry:admin']);
 }
 
 async function transparentManagedName(namespace: string, externalId: string): Promise<string> {
@@ -4841,6 +4930,7 @@ async function queueTransparentImport(
   deps: RegistryDependencies,
   config: Required<RegistryConfiguration>,
   requestId: string,
+  requestCounter?: RequestUpstreamCounter,
 ): Promise<TransparentCachedResult> {
   const state = await readState(deps.repository, config.organizationId);
   const configuredFeed = (state.feeds ?? []).find((candidate) => candidate.id === feed.id);
@@ -4848,7 +4938,7 @@ async function queueTransparentImport(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'The feed configuration changed while this import was being resolved', 409);
   }
   const upstream = feedAsUpstream(configuredFeed);
-  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+  const committed = await deps.repository.transaction<{ value: TransparentCachedResult; created: boolean }>(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
     const currentFeed = (mutable.feeds ?? []).find((candidate) => candidate.id === feed.id);
     if (!currentFeed || currentFeed.name !== feed.name || !currentFeed.enabled || !canReadNamespace(principal, feedNamespace(currentFeed))) {
@@ -4879,7 +4969,7 @@ async function queueTransparentImport(
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
 
     const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
-    if (active) return { status: 202 as const, job: active };
+    if (active) return { value: { status: 202 as const, job: active }, created: false };
 
     for (const candidate of candidates) {
       if (candidate.state !== 'completed' || !candidate.resourceId || !candidate.import) continue;
@@ -4891,14 +4981,14 @@ async function queueTransparentImport(
           job.resourceId === skill.id &&
           (job.state === 'queued' || job.state === 'running'),
         );
-        if (scanJob) return { status: 202 as const, job: scanJob };
+        if (scanJob) return { value: { status: 202 as const, job: scanJob }, created: false };
         continue;
       }
       if (importProvenanceMatches(skill, candidate.import, currentUpstream)) {
         // A non-null catalog hash is immutable evidence for this revision. A
         // null hash is deliberately not enough to satisfy an explicit refresh.
         if (!refresh || template.externalSnapshotHash !== null) {
-          return { status: 200 as const, job: candidate, resolution: skillResolution(skill) };
+          return { value: { status: 200 as const, job: candidate, resolution: skillResolution(skill) }, created: false };
         }
       }
     }
@@ -4929,8 +5019,13 @@ async function queueTransparentImport(
       refresh,
       requestId,
     }, config.organizationId));
-    return { status: 202 as const, job };
+    return { value: { status: 202 as const, job }, created: true };
   });
+  // The transaction may retry or roll back. Count only the committed result,
+  // after the repository has returned successfully, so one request cannot
+  // overcount a job created by an abandoned transaction attempt.
+  if (committed.created) requestCounter?.recordQueuedJob();
+  return committed.value;
 }
 
 function generatedTransparentVersion(): string {

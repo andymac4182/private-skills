@@ -9,6 +9,8 @@ import type {
   Provenance,
   SkillBundle,
   Upstream,
+  UpstreamRequestKind,
+  UpstreamRequestObserver,
 } from '../../contracts/src/index.js';
 import type {
   OpenClawFeedCompatibilityProfile,
@@ -130,6 +132,8 @@ export interface AcquireSkillOptions {
    * The singular field remains for callers on the pre-multi-feed seam.
    */
   skillsShGatewayCredentials?: readonly SkillsShGatewayCredential[];
+  /** Optional request-local observer for bounded catalog/source fetch counts. */
+  upstreamObserver?: UpstreamRequestObserver;
 }
 
 export interface AcquireSkillInput extends AcquireSkillOptions {
@@ -172,6 +176,7 @@ export interface OpenClawSourceFetcher {
   fetch(
     source: OpenClawNormalizedSource,
     signal?: AbortSignal,
+    upstreamObserver?: UpstreamRequestObserver,
   ): Promise<OpenClawFetchedSource>;
 }
 
@@ -348,6 +353,8 @@ export interface OpenClawSourceAcquireInput {
   externalSnapshotHash?: string | null;
   limits?: Partial<AcquisitionLimits>;
   signal?: AbortSignal;
+  /** Optional request-local observer for bounded source fetch-attempt counts. */
+  upstreamObserver?: UpstreamRequestObserver;
 }
 
 export interface OpenClawSourceResolution extends AcquisitionResult {
@@ -680,7 +687,7 @@ export async function acquireOpenClawSource(
   if (input.signal?.aborted) {
     throw new UpstreamAcquisitionError('cancelled', 'OpenClaw source acquisition cancelled');
   }
-  const fetched = await input.fetcher.fetch(source, input.signal);
+  const fetched = await input.fetcher.fetch(source, input.signal, input.upstreamObserver);
   const fetchedAt = sourceFetchedAt();
   const transport = validateOpenClawFetchedSource(fetched, allowedOrigins, limits);
   const sourceProviderOrigin = normalizeOpenClawSourceProviderOrigin(
@@ -762,7 +769,7 @@ export function createOpenClawHttpFetcher(
   const limits = mergeLimits(options.limits);
   const fetchImpl = options.fetchImpl ?? DEFAULT_FETCH;
   return {
-    async fetch(source, signal): Promise<OpenClawFetchedSource> {
+    async fetch(source, signal, upstreamObserver): Promise<OpenClawFetchedSource> {
       if (signal?.aborted) throw new UpstreamAcquisitionError('cancelled', 'OpenClaw source acquisition cancelled');
       const location = await options.locator.locate(source, signal);
       const allowedOrigins = normalizeOpenClawArtifactOrigins(location.allowedArtifactOrigins);
@@ -773,8 +780,9 @@ export function createOpenClawHttpFetcher(
         limits,
         ...(options.allowLoopbackForTests === undefined ? {} : { allowLoopbackForTests: options.allowLoopbackForTests }),
         ...(signal === undefined ? {} : { signal }),
+        ...(upstreamObserver === undefined ? {} : { upstreamObserver }),
       };
-      const client = new HttpClient(fetchImpl, limits, clientOptions, url.origin);
+      const client = new HttpClient(fetchImpl, limits, clientOptions, url.origin, 'source');
       const response = await client.bytes(url, {
         headers: {
           accept: 'application/octet-stream, application/gzip, application/zip, application/json',
@@ -978,6 +986,7 @@ function normalizeInput(
     getSkillsShToken,
     skillsShGatewayCredential,
     skillsShGatewayCredentials,
+    upstreamObserver,
     options: nestedOptions,
   } = input;
   const mergedOptions: AcquireSkillOptions = {
@@ -992,6 +1001,7 @@ function normalizeInput(
     getSkillsShToken: getSkillsShToken ?? nestedOptions?.getSkillsShToken,
     skillsShGatewayCredential: skillsShGatewayCredential ?? nestedOptions?.skillsShGatewayCredential,
     skillsShGatewayCredentials: skillsShGatewayCredentials ?? nestedOptions?.skillsShGatewayCredentials,
+    upstreamObserver: upstreamObserver ?? nestedOptions?.upstreamObserver,
   };
   return {
     job,
@@ -1024,7 +1034,7 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
   const apiBase = normalizeGithubApiBase(upstream.baseUrl, options.allowLoopbackForTests);
   const credential = credentialHeader(upstream, 'github');
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
-  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
+  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin, 'source');
   const headers: FetchHeaders = {
     accept: 'application/vnd.github+json',
     'x-github-api-version': GITHUB_API_VERSION,
@@ -1193,7 +1203,7 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     options.allowLoopbackForTests,
   );
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
-  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
+  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin, 'catalog');
   const headers: FetchHeaders = {
     accept: 'application/json',
     'user-agent': 'private-skills/0.1',
@@ -2191,7 +2201,7 @@ async function acquireSkillsShGithub(args: {
     options.allowLoopbackForTests ?? false,
   );
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
-  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin);
+  const client = new HttpClient(fetchImpl, limits, options, apiBase.origin, 'source');
   const headers: FetchHeaders = {
     accept: 'application/vnd.github+json',
     'x-github-api-version': GITHUB_API_VERSION,
@@ -2438,7 +2448,7 @@ async function acquireSkillsShWellKnown(args: {
   const upstreamRecord = upstream as unknown as Record<string, unknown>;
   const base = normalizeWellKnownSourceBase(detail, upstreamRecord, options.allowLoopbackForTests);
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
-  const client = new HttpClient(fetchImpl, limits, options, base.origin);
+  const client = new HttpClient(fetchImpl, limits, options, base.origin, 'source');
   const headers: FetchHeaders = { accept: 'application/json', 'user-agent': 'private-skills/0.1' };
   let lastUnavailable: UpstreamAcquisitionError | undefined;
   for (const wellKnownDirectory of ['agent-skills', 'skills'] as const) {
@@ -2627,7 +2637,7 @@ async function fetchWellKnownV2(
   // artifact host, while no catalog/source credentials can be forwarded.
   const artifactClient = artifactUrl.origin === base.origin
     ? client
-    : new HttpClient(fetchImpl, limits, options, artifactUrl.origin);
+    : new HttpClient(fetchImpl, limits, options, artifactUrl.origin, 'source');
   const response = await artifactClient.bytes(artifactUrl, {});
   const actualDigest = digestBytes(response.bytes);
   if (actualDigest !== entry.digest) throw new UpstreamAcquisitionError('digest_mismatch', 'Well-known artifact digest does not match its discovery entry');
@@ -3406,7 +3416,7 @@ async function acquireRegistry(input: NormalizedInput): Promise<AcquisitionResul
 
   const credential = credentialHeader(upstream, 'registry');
   const fetchImpl = options.fetchImpl ?? options.fetch ?? DEFAULT_FETCH;
-  const client = new HttpClient(fetchImpl, limits, options, base.origin);
+  const client = new HttpClient(fetchImpl, limits, options, base.origin, 'source');
   const headers: FetchHeaders = {
     accept: 'application/json',
     'content-type': 'application/json',
@@ -4312,6 +4322,7 @@ class HttpClient {
   private readonly limits: AcquisitionLimits;
   private readonly options: AcquireSkillOptions;
   private readonly fixedOrigin: string;
+  private readonly defaultRequestKind: UpstreamRequestKind;
   private nextRequestAt = 0;
   private requestGate: Promise<void> = Promise.resolve();
 
@@ -4320,11 +4331,13 @@ class HttpClient {
     limits: AcquisitionLimits,
     options: AcquireSkillOptions,
     fixedOrigin: string,
+    defaultRequestKind: UpstreamRequestKind = 'source',
   ) {
     this.fetchImpl = fetchImpl;
     this.limits = limits;
     this.options = options;
     this.fixedOrigin = fixedOrigin;
+    this.defaultRequestKind = defaultRequestKind;
   }
 
   async json<T>(url: URL, request: ClientRequest): Promise<T> {
@@ -4366,6 +4379,7 @@ class HttpClient {
         retryable,
         attempts,
         signal: request.signal,
+        requestKind: request.requestKind,
       });
       const status = response.status;
       if (isRedirectStatus(status)) {
@@ -4465,6 +4479,9 @@ class HttpClient {
     }
     const timer = setTimeout(() => controller.abort(), this.limits.requestTimeoutMs);
     try {
+      // Record at the fetch boundary so retries and redirects are counted as
+      // actual attempts. The observer receives only a coarse category.
+      this.options.upstreamObserver?.record(request.requestKind ?? this.defaultRequestKind);
       const response = await this.fetchImpl(url, {
         method: request.method ?? 'GET',
         headers: request.headers,
@@ -4525,6 +4542,8 @@ interface ClientRequest {
   /** The request is the selected skills.sh detail route. */
   detailRoute?: boolean;
   expectJson?: boolean;
+  /** Override the client category for mixed catalog/source clients. */
+  requestKind?: UpstreamRequestKind;
 }
 
 function withoutCredentialHeaders(headers: FetchHeaders): FetchHeaders {

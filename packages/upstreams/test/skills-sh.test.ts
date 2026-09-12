@@ -135,6 +135,7 @@ describe('skills.sh source acquisition', () => {
     const skill = Buffer.from('---\nname: demo\ndescription: Fixture demo\n---\n# demo\n', 'utf8');
     const expectedFetchedAt = '2026-09-10T08:00:00.000Z';
     const calls: string[] = [];
+    const observed: Array<'catalog' | 'source'> = [];
     const fetchImpl = async (input: string | URL, init?: { headers?: Record<string, string> }): Promise<Response> => {
       const url = new URL(input.toString());
       calls.push(`${url.pathname}${url.search}`);
@@ -156,6 +157,7 @@ describe('skills.sh source acquisition', () => {
       const result = await acquireSkillsShSkill({
         ...request('octo/repo/demo', fetchImpl),
         upstream: { ...request('octo/repo/demo', fetchImpl).upstream!, credentialEnv: 'PSKILLS_SKILLS_SH_TOKEN' },
+        upstreamObserver: { record: (kind) => observed.push(kind) },
       });
       expect(result.bundle.files.map((file) => file.path)).toEqual(['SKILL.md']);
       expect(result.provenance.kind).toBe('skills-sh');
@@ -172,6 +174,7 @@ describe('skills.sh source acquisition', () => {
       expect((result.provenance.external as unknown as Record<string, unknown>).fetchedAt).toBe(expectedFetchedAt);
       expect(result.provenance.fetchedAt).not.toBe('2000-01-01T00:00:00.000Z');
       expect(calls).toEqual(['/catalog/api/v1/skills/octo/repo/demo']);
+      expect(observed).toEqual(['catalog']);
     } finally {
       delete process.env.PSKILLS_SKILLS_SH_TOKEN;
       vi.useRealTimers();

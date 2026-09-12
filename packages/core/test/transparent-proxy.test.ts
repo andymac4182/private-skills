@@ -26,6 +26,7 @@ import type {
   RegistryConfiguration,
   SkillBundle,
   StoredBlob,
+  UpstreamRequestObserver,
 } from '../../contracts/src/index.js';
 
 const ORIGIN = 'https://registry.example.test';
@@ -46,6 +47,14 @@ const READER: Principal & { scopes: string[] } = {
   organizationId: ORGANIZATION_ID,
   subject: 'reader',
   roles: ['reader'],
+  namespaces: ['@team'],
+  scopes: ['registry:read', 'proxy:resolve'],
+};
+
+const ADMIN_WITHOUT_DIAGNOSTICS: Principal & { scopes: string[] } = {
+  organizationId: ORGANIZATION_ID,
+  subject: 'admin-without-diagnostics',
+  roles: ['admin', 'reader'],
   namespaces: ['@team'],
   scopes: ['registry:read', 'proxy:resolve'],
 };
@@ -153,16 +162,18 @@ class DirectoryFixture implements RegistryDirectoryClient {
     };
   }
 
-  async list(): Promise<SkillListResponse> {
+  async list(options: { upstreamObserver?: UpstreamRequestObserver } = {}): Promise<SkillListResponse> {
     this.listCalls += 1;
+    options.upstreamObserver?.record('catalog');
     return {
       data: [this.row()],
       pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
     };
   }
 
-  async search(options: { q: string }): Promise<SkillSearchResponse> {
+  async search(options: { q: string; upstreamObserver?: UpstreamRequestObserver }): Promise<SkillSearchResponse> {
     this.searchCalls += 1;
+    options.upstreamObserver?.record('catalog');
     return {
       data: [this.row()],
       query: options.q,
@@ -176,8 +187,9 @@ class DirectoryFixture implements RegistryDirectoryClient {
     return { data: [], totalOwners: 0, totalSkills: 0, generatedAt: '2026-01-01T00:00:00.000Z' };
   }
 
-  async detail(id: string): Promise<SkillDetailResponse> {
+  async detail(id: string, options: { upstreamObserver?: UpstreamRequestObserver } = {}): Promise<SkillDetailResponse> {
     this.detailCalls += 1;
+    options.upstreamObserver?.record('catalog');
     return {
       id,
       source: this.source,
@@ -209,6 +221,7 @@ function setup(options: {
   const principals = new Map<string, Principal>([
     ['owner', OWNER],
     ['reader', READER],
+    ['admin-without-diagnostics', ADMIN_WITHOUT_DIAGNOSTICS],
     ['read-only', READ_ONLY_READER],
     ['publisher', PUBLISHER],
     ['worker', WORKER],
@@ -470,19 +483,31 @@ describe('transparent directory pull-through', () => {
     expect(test.directoryForBaseCalls).toEqual([]);
   });
 
-  it('coalesces cold requests and serves a warm snapshot without a directory call', async () => {
+  it('coalesces cold requests with isolated diagnostics and serves a warm snapshot without a directory call', async () => {
     const test = setup();
     await createFeed(test);
     const body = JSON.stringify({ externalId: EXTERNAL_ID });
     const [first, second] = await Promise.all([
-      test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, { method: 'POST', headers: headers('reader'), body })),
-      test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, { method: 'POST', headers: headers('reader'), body })),
+      test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, { method: 'POST', headers: headers('owner'), body })),
+      test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, { method: 'POST', headers: headers('owner'), body })),
     ]);
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
-    const firstOperation = (await responseJson<{ operation: { id: string } }>(first)).operation.id;
-    const secondOperation = (await responseJson<{ operation: { id: string } }>(second)).operation.id;
+    const firstBody = await responseJson<{ operation: { id: string }; diagnostics: { upstreamRequests: { catalog: number; source: number }; queuedJobsCreated: number; overflow: boolean } }>(first);
+    const secondBody = await responseJson<{ operation: { id: string }; diagnostics: { upstreamRequests: { catalog: number; source: number }; queuedJobsCreated: number; overflow: boolean } }>(second);
+    const firstOperation = firstBody.operation.id;
+    const secondOperation = secondBody.operation.id;
     expect(secondOperation).toBe(firstOperation);
+    expect(firstBody.diagnostics).toMatchObject({
+      upstreamRequests: { catalog: 1, source: 0 },
+      overflow: false,
+    });
+    expect(secondBody.diagnostics).toMatchObject({
+      upstreamRequests: { catalog: 1, source: 0 },
+      overflow: false,
+    });
+    expect(firstBody.diagnostics.queuedJobsCreated + secondBody.diagnostics.queuedJobsCreated).toBe(1);
+    expect([firstBody.diagnostics.queuedJobsCreated, secondBody.diagnostics.queuedJobsCreated].sort()).toEqual([0, 1]);
     expect((await test.repository.read(ORGANIZATION_ID)).jobs.filter((job) => job.kind === 'import')).toHaveLength(1);
 
     const job = await claimJob(test);
@@ -497,6 +522,62 @@ describe('transparent directory pull-through', () => {
     expect(test.directory.detailCalls).toBe(0);
     expect(test.directoryForBaseCalls).toHaveLength(2);
     expect(await warm.json()).toHaveProperty('resolution.digest');
+  });
+
+  it('returns request-local upstream diagnostics only to an authorized admin', async () => {
+    const test = setup();
+    await createFeed(test);
+
+    const cold = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('owner'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID }),
+    }));
+    expect(cold.status).toBe(202);
+    expect(await responseJson<{ diagnostics: unknown }>(cold)).toMatchObject({
+      diagnostics: {
+        version: 1,
+        upstreamRequests: { catalog: 1, source: 0 },
+        queuedJobsCreated: 1,
+        overflow: false,
+      },
+    });
+
+    const job = await claimJob(test);
+    expect((await completeSnapshot(test, job)).status).toBe(200);
+    test.directory.detailCalls = 0;
+
+    const warm = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('owner'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID }),
+    }));
+    expect(warm.status).toBe(200);
+    expect(test.directory.detailCalls).toBe(0);
+    expect(await responseJson<{ diagnostics: unknown }>(warm)).toMatchObject({
+      diagnostics: {
+        version: 1,
+        upstreamRequests: { catalog: 0, source: 0 },
+        queuedJobsCreated: 0,
+        overflow: false,
+      },
+    });
+
+    const readerWarm = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('reader'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID }),
+    }));
+    expect(readerWarm.status).toBe(200);
+    expect(await responseJson<Record<string, unknown>>(readerWarm)).not.toHaveProperty('diagnostics');
+
+    const scopedAdminWarm = await test.handler(new Request(`${ORIGIN}/v1/proxy/resolve`, {
+      method: 'POST',
+      headers: headers('admin-without-diagnostics'),
+      body: JSON.stringify({ externalId: EXTERNAL_ID }),
+    }));
+    expect(scopedAdminWarm.status).toBe(200);
+    expect(await responseJson<Record<string, unknown>>(scopedAdminWarm)).not.toHaveProperty('diagnostics');
   });
 
   it('binds cold and refresh metadata to the selected feed origin', async () => {

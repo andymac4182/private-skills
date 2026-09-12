@@ -10,6 +10,7 @@ import {
   type OpenClawFetchedSource,
 } from '../src/index.js';
 import type { OpenClawNormalizedSource } from '../../openclaw/src/types.js';
+import type { UpstreamRequestKind } from '../../contracts/src/index.js';
 
 const COMMIT = '0123456789012345678901234567890123456789';
 const OTHER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98';
@@ -345,6 +346,7 @@ describe('OpenClaw source verification', () => {
       artifactDigest: digest,
     };
     let calls = 0;
+    const observed: UpstreamRequestKind[] = [];
     const fetcher = createOpenClawHttpFetcher({
       allowLoopbackForTests: true,
       fetchImpl: async (_input, init) => {
@@ -369,14 +371,18 @@ describe('OpenClaw source verification', () => {
       fetcher,
       allowedArtifactOrigins: ['https://127.0.0.1:34443'],
       sourceProviderOrigin: 'https://artifacts.example.test',
+      upstreamObserver: { record: (kind) => observed.push(kind) },
     });
     expect(first.bundle.files).toHaveLength(1);
+    expect(observed).toEqual(['source']);
     await expect(acquireOpenClawSource({
       source,
       fetcher,
       allowedArtifactOrigins: ['https://127.0.0.1:34443'],
       sourceProviderOrigin: 'https://artifacts.example.test',
+      upstreamObserver: { record: (kind) => observed.push(kind) },
     })).rejects.toMatchObject({ code: 'redirect_denied' });
     expect(calls).toBe(2);
+    expect(observed).toEqual(['source', 'source']);
   });
 });
