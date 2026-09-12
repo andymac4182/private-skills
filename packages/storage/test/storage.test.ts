@@ -241,6 +241,52 @@ describe("canonical skill bundles", () => {
     });
   });
 
+  it("accepts bounded structured extension frontmatter without rewriting the bundle", () => {
+    const source = [
+      "name: twitter-automation",
+      "description: Automate bounded Twitter workflows",
+      "version: 1.0",
+      "tags:",
+      "  - twitter",
+      "  - automation",
+      "routing:",
+      "  category: social",
+      "  triggers:",
+      "    - tweet",
+      "    - x",
+      "  enabled: false",
+    ].join("\n");
+    const bundle = skill(source);
+    const original = JSON.stringify(bundle);
+
+    const metadata = parseSkillMetadata(bundle);
+
+    expect(metadata.frontmatter.version).toBe(1);
+    expect(metadata.frontmatter.tags).toEqual(["twitter", "automation"]);
+    expect(metadata.frontmatter.routing).toMatchObject({
+      category: "social",
+      triggers: ["tweet", "x"],
+      enabled: false,
+    });
+    expect(JSON.stringify(bundle)).toBe(original);
+  });
+
+  it("keeps known fields scalar and rejects malformed structured extensions", () => {
+    const rejected = [
+      "name: [hello]\ndescription: safe",
+      "name: hello\ndescription:\n  text: safe",
+      "name: hello\ndescription: safe\nlicense:\n  - Apache-2.0",
+      "name: hello\ndescription: safe\ntags:\n  - null",
+      "name: hello\ndescription: safe\nrouting:\n  plugins: enabled",
+      "name: hello\ndescription: safe\ntags: &labels [one]\nother: *labels",
+    ];
+    for (const frontmatter of rejected) {
+      expect(() => parseSkillMetadata(skill(frontmatter))).toThrow(
+        /frontmatter|plugin|unsafe|scalar|alias|anchor/u,
+      );
+    }
+  });
+
   it("accepts bounded OpenClaw metadata in a canonical bundle", () => {
     const source = [
       "name: openclaw-fixture",
