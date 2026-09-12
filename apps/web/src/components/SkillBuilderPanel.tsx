@@ -254,8 +254,10 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   const [proposalAction, setProposalAction] = useState<'apply' | 'reject' | null>(null)
   const [lastRequest, setLastRequest] = useState<{ prompt: string; requestId: string } | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
+  const [restarting, setRestarting] = useState(false)
   const generation = useRef(0)
   const activeRequest = useRef<{ requestId: string; controller: AbortController } | null>(null)
+  const restartPending = useRef(false)
   const proposalRequestIds = useRef(new Map<string, string>())
   const stopRequestIds = useRef(new Map<string, string>())
   const draftRef = useRef<SkillBuilderDraftContext | null>(draft)
@@ -263,9 +265,11 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   const bindingKey = contextKey(draft)
   const sessionActive = session?.state === 'running'
-  const busy = loading || sessionPolling || sending || refreshing || stopping || proposalAction !== null || sessionActive
+  const terminalSession = session?.state === 'failed' || session?.state === 'stopped' || session?.state === 'completed'
   const turns = useMemo(() => (session?.turns ?? []).slice(-MAX_DISPLAYED_TURNS), [session?.turns])
   const effectiveProposal = proposal ?? session?.proposal ?? null
+  const canStartNewConversation = terminalSession && effectiveProposal?.state !== 'pending'
+  const busy = loading || sessionPolling || sending || refreshing || stopping || restarting || proposalAction !== null || sessionActive
 
   useEffect(() => {
     if (enabled === false) {
@@ -340,10 +344,21 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     }).finally(() => {
       if (currentGeneration !== generation.current) return
       setSessionPolling(false)
+      if (restartPending.current) {
+        restartPending.current = false
+        setRestarting(false)
+      }
       if (activeRequest.current?.requestId === loadRequestId) activeRequest.current = null
     })
     return () => { controller.abort(); generation.current += 1 }
   }, [adapter, availability?.enabled, bindingKey, loadAttempt])
+
+  function startNewConversation(): void {
+    if (!draft || availability?.enabled !== true || !canStartNewConversation || busy || restartPending.current) return
+    restartPending.current = true
+    setRestarting(true)
+    setLoadAttempt((attempt) => attempt + 1)
+  }
 
   async function refreshStatus(): Promise<void> {
     const currentDraft = draft
@@ -584,7 +599,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     <form className={styles.composer} onSubmit={submit}>
       <label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label>
       <textarea id="skill-builder-prompt" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
-      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
+      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{canStartNewConversation && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={startNewConversation}>{restarting ? 'Starting…' : 'Start new conversation'}</button>}{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
     </form>
   </section>
 }

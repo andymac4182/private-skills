@@ -209,45 +209,14 @@ async function sendPrompt(
   const requestId = boundedText(body.requestId, 'requestId', MAX_REQUEST_ID_BYTES);
   const selectedPath = optionalSelectedPath(body.selectedPath);
   const state = await deps.repository.read(deps.config.organizationId);
-  const matchingSessions = (state.builderSessions ?? [])
-    .filter((session) => session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId && session.draftRevision === binding.revision && session.draftDigest === binding.digest)
-    .sort(compareUpdated)
-    .reverse();
-  let candidate = requestedSessionId === undefined
-    ? matchingSessions[0]
+  const candidate = requestedSessionId === undefined
+    ? (state.builderSessions ?? []).filter((session) => session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId && session.draftRevision === binding.revision && session.draftDigest === binding.digest).sort(compareUpdated).at(-1)
     : (state.builderSessions ?? []).find((session) => session.id === requestedSessionId && session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId);
-  let candidateRequestDigest: Digest | undefined;
-  if (requestedSessionId === undefined) {
-    // A terminal attempt may be restarted, but an idempotent replay must first
-    // find the completed request on any exact-binding historical attempt. Use
-    // that record's own id when recomputing the digest because the id is part
-    // of the canonical request data. Reject a reused request id with changed
-    // prompt data before allocating a fresh attempt.
-    for (const session of matchingSessions) {
-      const existing = session.requests.find((request) => request.id === requestId);
-      if (!existing) continue;
-      const digest = await digestBuilderRequest({
-        draftId,
-        revision: binding.revision,
-        digest: binding.digest,
-        sessionId: session.id,
-        prompt,
-        ...(selectedPath === undefined ? {} : { selectedPath }),
-      });
-      if (existing.requestDigest !== digest) {
-        throw builderError('IDEMPOTENCY_CONFLICT', 'That request id was already used with different prompt data', 409);
-      }
-      candidate = session;
-      candidateRequestDigest = digest;
-      break;
-    }
-  }
   let record: SkillBuilderSessionRecord;
   if (candidate) {
     // A local session has no Eve id until the first prompt is accepted.
     assertSessionBinding(candidate, principal, binding, false);
-    const historicalRequestMatch = candidateRequestDigest !== undefined;
-    candidateRequestDigest ??= await digestBuilderRequest({
+    const candidateRequestDigest = await digestBuilderRequest({
       draftId,
       revision: binding.revision,
       digest: binding.digest,
@@ -255,22 +224,7 @@ async function sendPrompt(
       prompt,
       ...(selectedPath === undefined ? {} : { selectedPath }),
     });
-    // The route normally carries an explicit session id. Keep the optional
-    // no-id path safe as well: a terminal attempt is restarted transactionally
-    // before any provider request is sent.
-    if (requestedSessionId === undefined && !historicalRequestMatch && isTerminalRestartable(candidate)) {
-      record = await createPendingSession(deps.repository, principal, binding);
-      record = await reserveRequest(deps.repository, record.id, principal, requestId, binding, await digestBuilderRequest({
-        draftId,
-        revision: binding.revision,
-        digest: binding.digest,
-        sessionId: record.id,
-        prompt,
-        ...(selectedPath === undefined ? {} : { selectedPath }),
-      }));
-    } else {
-      record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding, candidateRequestDigest);
-    }
+    record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding, candidateRequestDigest);
   } else {
     if (requestedSessionId !== undefined) throw builderError('BUILDER_SESSION_NOT_FOUND', 'Builder session is unavailable', 404);
     record = await createPendingSession(deps.repository, principal, binding);
@@ -693,7 +647,6 @@ function parseBuilderPath(rawUrl: string): { draftId: string; operation: 'availa
   try { segments = new URL(rawUrl).pathname.replaceAll('\\', '/').split('/').filter(Boolean).map(decodeURIComponent); } catch { return undefined; }
   if (segments[0] !== 'v1' || segments[1] !== 'drafts' || !segments[2] || segments[3] !== 'builder') return undefined;
   if (segments.length === 5 && (segments[4] === 'availability' || segments[4] === 'session')) return { draftId: segments[2], operation: segments[4] };
-  if (segments.length === 6 && segments[4] === 'session' && segments[5] === 'prompt') return { draftId: segments[2], operation: 'sessionId', action: 'prompt' };
   if (segments.length === 6 && segments[4] === 'session') return { draftId: segments[2], operation: 'sessionId', sessionId: segments[5] };
   if (segments.length === 7 && segments[4] === 'session' && (segments[6] === 'prompt' || segments[6] === 'stop' || segments[6] === 'stream')) return { draftId: segments[2], operation: 'sessionId', sessionId: segments[5], action: segments[6] };
   return undefined;
