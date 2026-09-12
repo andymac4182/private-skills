@@ -9,56 +9,54 @@ The baseline implementation and its recorded v0.2 checks were established on
 tracked separately in [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md);
 that record distinguishes completed evidence from pending deployment/provider
 checks. The private v0.2.0 archives/checksums and clean-consumer verification
-are recorded as complete; any archive/checksum publication for the current
-source remains a separate release step, and in-flight or prerelease packaging
-is not represented as a published release.
+are recorded as complete; current-source packaging remains a separate release
+step and is not represented as a published release.
 
-The latest portable directory-gateway evidence is tracked in
+The latest delivery status is tracked in
 [`docs/verification-current.md`](docs/verification-current.md). The latest
-verified deployment checkpoint is PR36's docs-only source commit
-`c7a0f03a4c482afa219f4c86339163b40161f944`; its three Git-triggered registry,
-builder, and upload-reviewer deployments are READY. The sanitized [PR36 release
-evidence](docs/evidence/production-release-checkpoint-c7a0f03.json) records
-the exact source/deployment mapping and no production configuration,
-environment, registry-data, feed, or authenticated application-data change.
-Native CI stopped before runner execution because of the documented account
-payment/spending admission failure; the Node container job was skipped.
-PR34 remains the functional release checkpoint: its authenticated [hosted M6
-viewer evidence](docs/evidence/production-m6-hosted-viewer-34e4f56.json) records
-auth 200, genuine Pierre rendering, selected-file digest and 1231-byte size,
-keyboard tree focus, responsive overflow checks, inner code scrolling, and zero
-console/page errors. It is read-only viewer evidence and does not prove the M6
-model/apply/review/scan workflow, durable upload-draft resume, screenreader,
-contrast, or reduced-motion acceptance. The editor API and authoring source are
-shipped, while the local synthetic [editor-browser record](docs/evidence/m6-editor-browser-local-29f7.json)
-retains its own source-scoped checks. The current source-34e4f56 local Compose
-reproducibility and source-built CLI records, plus the source-c7a0f03 local
-[Cloudflare build record](docs/evidence/edge-build-c7a0f03.json), are linked from
-[`docs/verification-current.md`](docs/verification-current.md); they retain
-local transport, scanner, native-CI, hosted-provider, and syscall-capture
-limits. PR35 candidate source `c4cd24a` remains pending approval after 62 tests
-and three Vercel previews passed; native CI remains billing-blocked and two UI
-fixes are pending approval, not shipped. A bounded hosted Neon/object-storage
-logical restore is recorded in the [sanitized restore evidence](docs/evidence/hosted-restore-20260910.json);
-it verifies an exact target revision and digest-checked objects but does not
-claim a provider lifecycle guarantee or restored-origin health/scanner run.
-OpenClaw's seven nonsecret production settings are staged in the sanitized
-[settings-stage record](docs/evidence/openclaw-production-settings-staged-20260910.json)
-with names and exit codes only, and await exact activation approval; the current
-c7 runtime remains inactive. Its public metadata probe is interoperability
-evidence only and does not prove hosted artifact import or private publication.
-Subsequent main production deployments are held pending that approval to avoid
-implicitly activating the staged settings. M6 and M7 remain outside the current
-C1 release gate.
+explicitly verified Git-triggered production cascade is sourced from merged main commit
+`57bce92403af37e8303c654d7a03da634c63445f`, which includes PR40 merge
+`8ed18be`, PR39 merge `3e000aa`, and PR41 merge `57bce92`. Fresh
+root-coordinated Vercel API evidence reports exact source `57bce924` and READY
+deployments for the registry (`dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`), builder
+(`dpl_6qo7B4evMTgxDg6Zt76LXQuXZcuy`), and upload-reviewer
+(`dpl_CNTXXWDfppG7D8ZKuYVhVnhzmuhU`). The earlier `878c636` cascade remains a
+historical checkpoint with its source and deployment records retained in the
+verification history.
 
-The current unfinished product inventory has three areas: builder Eve,
-upload/edit Eve, and OpenClaw feed interoperability. Seven later product bundles
-remain separate: M1 context packages/agent bridge, M2 quality/evaluation, M3
-team governance/lifecycle, M4 author CI/standards/library context, M5
-organization-wide visibility/automation, CLI parity, and external pack
-migration. This feature count is separate from the G0, C1, M6, and M7
-verification gates; passing a local or read-only fixture does not mark a
-milestone complete.
+Native CI was waived by explicit repository-owner instruction on 13 September
+2026 for this delivery/review scope. The workflows remain enabled, the captured
+provider billing/payment or spending-limit admission prevented runner steps, and
+no native target pass is claimed. The authenticated [hosted M6 viewer evidence](docs/evidence/production-m6-hosted-viewer-34e4f56.json)
+and local synthetic [editor-browser record](docs/evidence/m6-editor-browser-local-29f7.json)
+remain source-specific, read-only or fixture evidence. M6 terminal-session
+restart PR39 (`0f71d4`) has its browser-passed final UI guard and awaits release;
+draft-resume and accessibility changes remain pending, and model/apply/review/
+scan proof is still pending.
+
+Seven reviewed nonsecret OpenClaw production settings are active. The sanitized
+[settings-stage record](docs/evidence/openclaw-production-settings-staged-20260910.json)
+retains names and exit codes only; activation is configuration evidence and does
+not prove import or publication. The public metadata probe remains
+interoperability evidence only. Two hosted M7 candidates failed closed on
+artifact digest mismatches. The public-GitHub M7 candidate failure was diagnosed
+as a PAX parser issue; a local fix with the exact NVIDIA digest passed and awaits
+its PR. The isolated hosted-edge proof passed through a
+temporary Cloudflare Worker and Node gateway with required scanning, private
+storage, semantic search, authentication negatives, revocation, and cleanup;
+the edge-proof workstream owns the detailed record; its repository link will be
+added after that workstream's approved merge.
+
+C1 telemetry/parser work is in progress and physical GitHub/well-known source
+pullthrough remains open. No publication is claimed, and M7 remains incomplete.
+The daily reviewer schedule is registered at `0 22 * * *` UTC;
+the short dated probe was inconclusive and a fuller `00:00–01:05` UTC 13
+September 2026 probe is being prepared. The earlier run remains temporal
+correlation only until an explicit scheduler/session identifier is captured.
+
+M1–M5 remain future product work. This status is separate from the G0, C1, M6,
+and M7 verification gates; local or read-only fixtures do not mark a milestone
+complete.
 
 | Area | Current status | Boundary |
 | --- | --- | --- |
@@ -72,74 +70,31 @@ milestone complete.
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. GitHub native CI admission currently fails before any job step because recent account payments failed or the spending limit needs to be increased |
-| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | The latest verified PR36 docs-only checkpoint records READY registry/builder/reviewer deployments; the PR34 functional release checkpoint and authenticated hosted read-only M6 viewer evidence retain selected-file digest, keyboard focus, responsive overflow, and zero console/page errors. The earlier `dpl_39j65…` probe retains authenticated release metadata/file retrieval and OpenClaw-disabled behavior. Deployment `dpl_CpAApe78RJs3oXuuk4iPzbtdnczb` separately proves one snapshot-only candidate through required-scan approval, isolated CLI install/repeat, and analytics; physical GitHub/well-known resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain pending. The bounded hosted logical restore is separately recorded in the [restore evidence](docs/evidence/hosted-restore-20260910.json). Local synthetic editor/browser acceptance and hosted viewer acceptance are recorded, while live Eve/model, durable upload-draft resume, screenreader, contrast, and reduced-motion acceptance remain pending. Earlier Pack-preview UI proof remains a separate browser fixture with unknown exact deployment attribution. See [`docs/verification-current.md`](docs/verification-current.md) for source-specific records |
+| CLI | Implemented Rust package and binary named `pskills`; an approved same-root record on the prior production deployment proves an unchanged warm repeat | Release targets are Linux x86_64, macOS arm64, and Windows x86_64; multi-feed CLI evidence remains a loopback fixture, not current CI or a published release. Native CI is waived for this delivery/review scope and no native target pass is claimed |
+| skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | C1 telemetry/parser work is in progress; physical GitHub/well-known source resolution, direct zero-upstream instrumentation, and tenant/secrecy acceptance remain open. The current Git-triggered registry/builder/upload-reviewer deployments are READY at exact source `57bce924`; prior release, viewer, Pack-preview, restore, and snapshot-candidate records remain linked in [`docs/verification-current.md`](docs/verification-current.md). |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
 The repository includes Node production, Vercel, and Cloudflare/Nitro build profiles. A checked-in profile or a successful local build is not evidence of a live hosted deployment; live authenticated flows, provider conformance, and restore rehearsal belong in the verification record. The scanner runner is wired to real adapter and executor interfaces, but installed scanner images and their end-to-end findings must be verified in the target worker environment.
 
-The earlier guarded prebuilt registry rollout is
-[`dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`](https://private-skills-theta.vercel.app),
-at the stable alias [`private-skills-theta.vercel.app`](https://private-skills-theta.vercel.app)
-and unique URL
-`https://private-skills-pvsgvckvq-andrewmcclenaghan-6046s-projects.vercel.app`.
-It is from merged main `fecd6baa1411c2f3c2ad60b13c2c0e37761d2826`, with
-artifact source `b1d3b6d77162899491f742e2930abe0b36137d8e` and manifest
-fingerprint `64d3833b2c107546011efc38e34bddea9df519a0e17e36f506b5674c46a504bf`.
-The [sanitized rollout evidence](docs/evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
-records the read-only probes, fail-closed policy (`allowUnscanned=false`),
-SkillsGuard required, Cisco/NVIDIA disabled, metadata-only detail, and zero
-private-registry data mutations. It does not claim a feed, import, scan, or
-CLI install.
-
-The existing Vercel project is connected to GitHub repository
-`andymac4182/private-skills` on production branch `main`, without an additional
-grant, as shown by the sanitized [Git-link readback](docs/evidence/vercel-git-link-20260910T070859Z.json).
-The sanitized [Git-main deployment evidence](docs/evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json)
-records a push of main commit `7c7a33e` producing READY deployment
-`dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH`; its eight-request readback had seven
-authenticated successes, the expected unauthenticated Topics 401, and no
-registry writes. The earlier guarded prebuilt rollout remains a separate
-source-specific record.
-
-Prior deployment-specific OIDC, Topics, security, pagination, browser, feed
-quarantine, and CLI evidence remains linked from
+Historical deployment, catalog, browser, scanner, CLI, and restore records retain
+their own source and provider limits in
 [`docs/verification-current.md`](docs/verification-current.md) and
-[`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md); it is not silently
-promoted to current `dpl_8ru…` proof. The current rollout is read-only, and the
-local multi-feed/edge records remain fixture evidence.
+[`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md). The earlier
+guarded prebuilt rollout remains recorded in its
+[sanitized evidence](docs/evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
+(deployment `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`); its former stable alias is now
+shared by a later deployment. The earlier Git-link and Git-main records remain linked
+([Git-link](docs/evidence/vercel-git-link-20260910T070859Z.json),
+[Git-main deployment](docs/evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json)).
+The prior reviewer run and its [cron evidence](work/reviewer-cron-completion-evidence.json)
+remain deployment-scoped temporal correlation; the current schedule/probe status
+is stated above. The bounded hosted restore remains recorded in the
+[restore evidence](docs/evidence/hosted-restore-20260910.json).
 
-Previously recorded authenticated publishing, search, CLI pack installation,
-analytics, and Eve review flows remain evidence from the verified private
-registry run; they were not re-exercised by this read-only rollout. The
-separate reviewer runs at
-[`private-skills-reviewer.vercel.app`](https://private-skills-reviewer.vercel.app)
-with a registered daily `0 22 * * *` UTC schedule (22:00 UTC, subject to the
-hosting execution window). The sanitized [production cron evidence](work/reviewer-cron-completion-evidence.json)
-for deployment `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e` observed the cron path at
-2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary `workflowEntry`
-and `turnWorkflow` runs completed, with the `sessionTimeoutWorkflow` run
-cancelled. The primary run was created 2.067 seconds after the cron observation
-and completed 14.353 seconds after it. This is deployment-scoped temporal
-correlation; no explicit opaque scheduler/session correlation or
-proposal/prompt/report/event payload was retained.
-The next 22:00 UTC run still needs an explicit causal scheduler/session
-identifier; the earlier record is only deployment-scoped temporal correlation.
-Full C1 catalog acceptance remains pending. The bounded hosted logical restore
-is complete for its recorded revision and referenced objects, subject to the
-documented provider-lifecycle and restored-origin health/scanner limitations.
-See [`docs/verification-v0.3.0.md`](docs/verification-v0.3.0.md).
-
-The v0.3.0 and C1 records preserve earlier deployment-specific source, scan,
-pagination, browser, and Topics evidence with their own provenance. Current
-C1 remains open because physical-source pullthrough, direct warm-path
-instrumentation, concurrent deduplication, and tenant/secrecy acceptance are
-not complete.
-The snapshot candidate record is intentionally narrower and does not claim
-those gates. Pack-preview UI proof is complete, with exact deployment attribution
-left unknown by the stable-alias cutover. See [`docs/skills-sh.md`](docs/skills-sh.md) and
+See [`docs/skills-sh.md`](docs/skills-sh.md) and
 [`docs/sandbox-providers.md`](docs/sandbox-providers.md) for configuration,
-compatibility, and the distinction between implementation and live verification.
+compatibility, and the distinction between implementation and live verification;
+source-specific fixture limits remain in the verification records.
 
 ## Quickstart
 

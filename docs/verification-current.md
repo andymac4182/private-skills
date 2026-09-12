@@ -1,37 +1,50 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-10T16:46:37Z
+**As of:** 2026-09-13 (latest root-coordinated provider readback captured on
+12 September 2026 UTC)
 
-**Latest verified deployment checkpoint:** PR36's docs-only source commit
-`c7a0f03a4c482afa219f4c86339163b40161f944` produced READY Git-triggered
-production deployments for the registry, builder, and upload-reviewer. The
-sanitized [PR36 release evidence](evidence/production-release-checkpoint-c7a0f03.json)
-records the exact source/deployment mapping and no production configuration,
-environment, registry-data, feed, or authenticated application-data change.
-Native CI again stopped before runner execution because of the documented
-account payment/spending admission failure; the Node container job was skipped.
+**Current verified delivery checkpoint:** merged main source
+`57bce92403af37e8303c654d7a03da634c63445f` contains PR40 merge `8ed18be`,
+PR39 merge `3e000aa`, and PR41 merge `57bce92`. Fresh root-coordinated Vercel
+API evidence maps that exact source to READY Git-triggered production
+deployments for the registry (`dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`), builder
+(`dpl_6qo7B4evMTgxDg6Zt76LXQuXZcuy`), and upload-reviewer
+(`dpl_CNTXXWDfppG7D8ZKuYVhVnhzmuhU`). The earlier `878c636` cascade remains a
+historical checkpoint. The capture is deployment/source provenance; it does
+not by itself close the remaining product gates.
 
-After that deployment capture, seven reviewed nonsecret OpenClaw production
-settings were staged successfully. The sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
-retains names and exit codes only; it contains no setting values. The active c7
-registry deployment `dpl_C4miE1vUTCygLpQUyEwXqttXZ1me` has not consumed them
-because the normal Git-source redeploy was blocked before execution pending the
-exact activation approval. No import, publication, model call, registry-data
-call, or feed activity occurred.
-Subsequent main production deployments are held pending that approval to avoid
-implicitly activating the staged settings.
+Native CI was waived by explicit repository-owner instruction on 13 September
+2026 for this delivery/review scope. The workflows remain enabled, the captured
+provider billing/payment or spending-limit admission prevented runner steps, and
+no native target pass is claimed. The historical [PR36 release evidence](evidence/production-release-checkpoint-c7a0f03.json)
+and [PR34 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+remain linked below with their original source and read-only limits.
 
-The corresponding [local Cloudflare build record](evidence/edge-build-c7a0f03.json)
-passes the frozen offline install and Cloudflare-module edge build from source
-`c7a0f03`, with a clean static storage/provider boundary. Wrangler was not
-authenticated and no Cloudflare deployment or resources were attempted, so
-hosted Cloudflare access, TLS, and runtime behavior remain unverified.
+Seven reviewed nonsecret OpenClaw production settings are now active. The
+sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
+retains names and exit codes only. Active settings establish runtime
+configuration; they do not prove feed import or publication, and M7 remains
+incomplete. The public metadata probe remains interoperability evidence only.
 
-PR35 candidate source commit `c4cd24a` remains pending approval. Its source
-verification reports 62 tests and three Vercel previews passed, while native CI
-stopped at the same billing admission boundary. Two UI fixes are pending
-approval and are not shipped in this checkpoint. PR35 remains a candidate
-status record, not a deployed or live M6 verification.
+The isolated hosted-edge proof from source `c7a0f03` passed through a temporary
+Cloudflare Worker and Node gateway with required SkillsGuard scanning, private
+storage, semantic search, authentication negatives, revocation, and cleanup.
+Its detailed record is maintained by the edge-proof workstream and will be
+linked after that workstream's approved merge; this isolated run does not
+replace production release gates or claim M7 completion. The earlier
+[local Cloudflare build record](evidence/edge-build-c7a0f03.json) remains local
+build evidence with its original limits.
+
+M6 remains incomplete: terminal-session restart PR39 (`0f71d4`) has its
+browser-passed final UI guard and awaits release; draft-resume and accessibility
+changes remain pending, and model/apply/review/scan proof is still pending. C1
+telemetry/parser work is in progress; physical GitHub/well-known source
+pullthrough remains open. No publication is claimed.
+
+The daily reviewer remains registered at `0 22 * * *` UTC.
+The short dated probe was inconclusive; a fuller `00:00–01:05` UTC 13 September
+2026 probe is being prepared. Treat the earlier run as deployment-scoped
+temporal correlation until an explicit scheduler/session identifier is captured.
 
 **Earlier PR34 functional release checkpoint:** PR34 was merged at
 `2026-09-10T15:02:13Z` with approved head
@@ -56,11 +69,11 @@ authoring mutations or publication, with `modelCalls: false` for this viewer
 capture, and does not prove the M6 model/apply/review/scan workflow,
 screenreader, contrast, or reduced-motion acceptance. The upload-draft resume
 gap remains active because `PublishView` keeps an upload draft in memory while
-the catalog release query is not a compatible upload-draft resume route. The
-OpenClaw is configured but awaiting activation; the current c7 runtime remains
-inactive pending review and exact activation approval, and native CI remains
-open. This checkpoint does not claim all G0, C1, or M6
-criteria complete.
+the catalog release query is not a compatible upload-draft resume route. At
+this historical capture OpenClaw was configured but inactive; the current
+delivery status above supersedes that activation state. Native CI was also open
+at this historical checkpoint. This checkpoint does not claim all G0, C1, or
+M6 criteria complete.
 
 A separate bounded [M6 Eve session record](evidence/production-m6-eve-session-34e4f56.json)
 captures one accepted prompt in a ready two-turn session. No proposal was
@@ -86,7 +99,7 @@ digest/size-verified target objects, and post-restore target cleanup. The copy
 window uses operator-quiescence attestation and does not claim a provider
 lifecycle guarantee or restored-origin health/scanner run. The earlier PR32
 activation and PR30 read-only records retain their own source/deployment
-provenance below. The current source-34e4f56 local [Compose reproducibility
+provenance below. The source-34e4f56 local [Compose reproducibility
 proof](evidence/local-compose-required-scan-34e4f56.json) and [source-built CLI
 proof](evidence/transparent-proxy-cli-evidence-1789055769960.json) close the
 earlier dependency-alignment and unattested-build-source qualifications while
@@ -115,8 +128,9 @@ Cloudflare/container deployment, PostgreSQL/pgvector, production object
 storage, or positive semantic search. The edge run used development mode for
 the loopback HTTP gateway because production runtime guards reject that path;
 the inert synthetic fixture demonstrates required-scan coverage and clean
-policy evaluation, not malicious-pattern detection breadth. OpenClaw remains
-disabled, and no secrets or artifact contents were retained.
+policy evaluation, not malicious-pattern detection breadth. OpenClaw was
+disabled for this historical local run, and no secrets or artifact contents were
+retained.
 ## Recorded public OpenClaw metadata interoperability probe
 
 As of `2026-09-10T14:36:59Z`, the sanitized [public ClawHub feed
@@ -373,33 +387,37 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
 
 ## Remaining gates
 
-- Prove representative physical GitHub and well-known source resolution,
-  concurrent cold deduplication, and direct instrumentation that a warm cache
-  path makes no upstream request. The snapshot candidate record above closes
-  snapshot admission/install/analytics only; the quarantined CI-004 record
-  remains separate fail-closed evidence.
-- Native CI admission currently stops before any job step with the account
-  payments/spending-limit message; no test failure is claimed. The bounded
-  hosted Neon/object-storage logical restore is complete for source revision 114
-  and five referenced objects, as recorded in the [sanitized restore
-  evidence](evidence/hosted-restore-20260910.json). Its operator-quiescence
-  attestation, isolated target checks, and cleanup do not establish a provider
-  lifecycle guarantee or a restored-origin health/scanner run.
-- Recheck nested upstream detail and any remaining provider limits recorded in
-  the C1 criteria.
+- C1 telemetry/parser work is in progress. Prove representative physical
+  GitHub and well-known source resolution, concurrent cold deduplication, and
+  direct instrumentation that a warm cache path makes no upstream request. The
+  snapshot candidate and quarantined CI-004 records remain source-specific
+  evidence.
+- Native CI was waived by explicit repository-owner instruction on 13 September
+  2026 for this delivery/review scope. Workflows remain enabled and no native
+  target pass is claimed; the captured provider billing/payment or
+  spending-limit admission stopped runner steps. The bounded hosted
+  Neon/object-storage logical restore remains recorded in the [sanitized
+  restore evidence](evidence/hosted-restore-20260910.json), with its original
+  operator-quiescence and provider-lifecycle limits.
 - M6 editor/authoring API and source are shipped, and the local synthetic
-  editor/browser fixture passes. Complete hosted UI acceptance, live
-  upload-review/model execution, durable draft/CAS and publication flow,
-  cross-tenant denial, and screenreader/contrast/reduced-motion checks. The
-  next 22:00 UTC Eve run still needs an explicit causal scheduler/session
-  identifier; the earlier cron record is only deployment-scoped temporal
-  correlation.
-- M7 OpenClaw backend code is shipped, and its production settings are staged
-  but awaiting activation. The current c7 runtime remains inactive; the public
-  metadata probe above is interoperability evidence only. Keep activation held
-  pending exact activation approval. After activation, perform fresh
-  trusted-catalog resolution, required-scan-governed import, and private-
-  publication verification.
+  editor/browser fixture passes. Terminal-session restart PR39 (`0f71d4`) has
+  its browser-passed final UI guard and awaits release; draft-resume and
+  accessibility changes remain pending, while live model/apply/review/scan,
+  durable draft/CAS/publication, cross-tenant denial, and
+  screenreader/contrast/reduced-motion checks remain open.
+- The daily reviewer remains registered at `0 22 * * *` UTC.
+  The short dated probe was inconclusive; a fuller `00:00–01:05` UTC 13
+  September 2026 probe is being prepared. The earlier run is deployment-scoped
+  temporal correlation until an explicit scheduler/session identifier is
+  captured.
+- M7 OpenClaw backend code is shipped and its seven reviewed nonsecret
+  production settings are active. The public metadata probe remains
+  interoperability evidence only. Two hosted M7 candidates failed closed on
+  artifact digest mismatches. The public-GitHub M7 candidate failure was
+  diagnosed as a PAX parser issue; a local fix with the exact NVIDIA digest
+  passed and awaits its PR. No feed import or publication is claimed, and M7
+  remains incomplete. The isolated hosted-edge proof is a separate
+  source-specific acceptance record with cleaned-up disposable resources.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and
 the other configured scanner policy remain authoritative, and uploaded skill
@@ -410,8 +428,7 @@ quality/evaluation, M3 team governance/lifecycle, M4 author CI/standards/library
 context, M5 organization-wide visibility/automation, CLI parity, and external
 pack migration. This feature count is separate from the G0, C1, M6, and M7
 verification gates. M6's local synthetic browser proof passes, but its hosted,
-model, and accessibility gates remain incomplete. M7's source slices are
-current, but its configured OpenClaw feed remains inactive. The public metadata probe above
-is interoperability evidence only; hosted artifact import, private publication,
-and feed activation remain unproven. Both remain outside the current release
-gates here.
+model, and accessibility gates remain incomplete. M7's settings are active, but
+the public metadata probe above is interoperability evidence only; hosted
+artifact import and private publication remain unproven. Both remain outside
+the current release gates here.
