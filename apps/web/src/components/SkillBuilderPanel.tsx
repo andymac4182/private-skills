@@ -399,7 +399,10 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   async function sendPrompt(value = prompt, retryRequestId?: string): Promise<void> {
     const text = value.trim()
-    if (!draft || !session || !availability?.enabled || busy || !text || text.length > MAX_PROMPT_LENGTH) return
+    if (!draft || !session || !availability?.enabled || busy || terminalSession || !text || text.length > MAX_PROMPT_LENGTH) {
+      if (terminalSession && !busy) setError('This conversation has ended. Start a new conversation to continue.')
+      return
+    }
     const currentGeneration = generation.current
     const request = { prompt: text, requestId: retryRequestId ?? requestId('prompt') }
     const controller = new AbortController()
@@ -599,7 +602,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     <form className={styles.composer} onSubmit={submit}>
       <label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label>
       <textarea id="skill-builder-prompt" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
-      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{canStartNewConversation && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={startNewConversation}>{restarting ? 'Starting…' : 'Start new conversation'}</button>}{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || prompt.trim().length === 0} type="submit">{sending || sessionActive ? 'Working…' : 'Send prompt'}</button></div></div>
+      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{canStartNewConversation && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={startNewConversation}>{restarting ? 'Starting…' : 'Start new conversation'}</button>}{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || terminalSession || prompt.trim().length === 0} title={terminalSession ? 'Start a new conversation before sending another prompt.' : undefined} type="submit">{sending || sessionActive ? 'Working…' : terminalSession ? 'Start a new conversation first' : 'Send prompt'}</button></div></div>
     </form>
   </section>
 }
