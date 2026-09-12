@@ -443,6 +443,9 @@ async function createBuilderProposal(
   if (!session || session.draftRevision !== binding.revision || session.draftDigest !== binding.digest) {
     throw new AuthoringApiError('DRAFT_CONFLICT', 'Builder session is not bound to this draft revision', 409);
   }
+  if (session.state === 'failed' || session.state === 'stopped' || session.state === 'completed') {
+    throw new AuthoringApiError('DRAFT_CONFLICT', 'Builder session is terminal', 409);
+  }
   const before = await readDraftBundle(draft, deps);
   const after = applyBuilderOperations(before, operations);
   const proposedDigest = await digestBytes(encodeBundle(after));
@@ -473,6 +476,9 @@ async function createBuilderProposal(
   const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
     const currentSession = findBuilderSession(state, draftId, sessionId, deps.config.organizationId);
     if (!currentSession || currentSession.subject !== session.subject) throw unavailableDraft();
+    if (currentSession.state === 'failed' || currentSession.state === 'stopped' || currentSession.state === 'completed') {
+      throw new AuthoringApiError('DRAFT_CONFLICT', 'Builder session is terminal', 409);
+    }
     const existing = currentSession.proposals.find((candidate) => candidate.idempotencyKey === idempotencyKey);
     if (existing) {
       if (existing.requestDigest !== requestDigest) throw idempotencyConflict();
