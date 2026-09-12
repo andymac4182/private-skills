@@ -211,7 +211,7 @@ describe('skills.sh gateway credentials', () => {
     expect(seen.filter((entry) => !entry.path.startsWith('/directory/api/')).every((entry) => entry.authorization === undefined)).toBe(true);
   });
 
-  it('strips a gateway token before following a same-origin catalog redirect', async () => {
+  it('rejects a same-origin gateway catalog redirect before following it', async () => {
     const authorizations: Array<string | undefined> = [];
     const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
       const url = new URL(raw.toString());
@@ -231,11 +231,11 @@ describe('skills.sh gateway credentials', () => {
       getToken: async () => 'gateway-token',
     };
 
-    await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
-    expect(authorizations).toEqual(['Bearer gateway-token', undefined]);
+    await expect(acquireSkillsShSkill(request)).rejects.toMatchObject({ code: 'redirect_denied', status: 302 });
+    expect(authorizations).toEqual(['Bearer gateway-token']);
   });
 
-  it('strips a canonical OIDC token before following a same-origin catalog redirect', async () => {
+  it('rejects a same-origin canonical catalog redirect before following it', async () => {
     const authorizations: Array<string | undefined> = [];
     let tokenCalls = 0;
     const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
@@ -257,9 +257,9 @@ describe('skills.sh gateway credentials', () => {
       return 'oidc-token';
     };
 
-    await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
+    await expect(acquireSkillsShSkill(request)).rejects.toMatchObject({ code: 'redirect_denied', status: 302 });
     expect(tokenCalls).toBe(1);
-    expect(authorizations).toEqual(['Bearer oidc-token', undefined]);
+    expect(authorizations).toEqual(['Bearer oidc-token']);
   });
 
   it('retains authenticated same-origin redirects for noncatalog source requests', async () => {
@@ -459,7 +459,7 @@ describe('skills.sh gateway credentials', () => {
     expect(fetchCalls).toBe(0);
   });
 
-  it('uses canonical OIDC with a plural gateway profile and strips it on redirects', async () => {
+  it('uses canonical OIDC with a plural gateway profile and rejects redirects', async () => {
     const authorizations: Array<string | undefined> = [];
     let oidcCalls = 0;
     const fetchImpl: NonNullable<AcquireSkillInput['fetchImpl']> = async (raw, init) => {
@@ -485,8 +485,8 @@ describe('skills.sh gateway credentials', () => {
       return 'oidc-token';
     };
 
-    await expect(acquireSkillsShSkill(request)).resolves.toMatchObject({ provenance: { externalId: 'octo/repo/demo' } });
+    await expect(acquireSkillsShSkill(request)).rejects.toMatchObject({ code: 'redirect_denied', status: 302 });
     expect(oidcCalls).toBe(1);
-    expect(authorizations).toEqual(['Bearer oidc-token', undefined]);
+    expect(authorizations).toEqual(['Bearer oidc-token']);
   });
 });
