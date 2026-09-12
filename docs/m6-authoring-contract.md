@@ -307,6 +307,15 @@ authoritative; upload/edit review remains advisory unless its separately
 versioned optional gate is configured. Missing or stale builder conversations or
 proposals never authorize a release.
 
+A terminal builder session is never rebound to a later provider session. When
+the exact draft revision still needs another prompt, the registry creates a
+new session record only after the prior attempt has no active, accepted, or
+uncertain request and no pending proposal. The completed attempt, provider
+identity, and proposal history remain addressable by their original registry
+session ID; late proposal callbacks for that terminal ID are rejected. Active,
+in-flight, uncertain, and pending-proposal attempts remain single-flight
+fenced.
+
 ## Ownership and implementation order
 
 | Owner | First slice | Boundary |

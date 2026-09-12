@@ -182,7 +182,12 @@ export interface SkillBuilderRequestRecord {
   createdAt: string;
   updatedAt: string;
 }
-/** Registry-owned mapping; the Eve session key and service credentials never leave the server. */
+/**
+ * Registry-owned mapping; the Eve session key and service credentials never
+ * leave the server. A terminal record is retained as attempt history. A later
+ * attempt for the same exact draft binding gets a distinct record, so
+ * provider callbacks cannot be rebound to a different attempt.
+ */
 export interface SkillBuilderSessionRecord {
   id: string;
   organizationId: string;

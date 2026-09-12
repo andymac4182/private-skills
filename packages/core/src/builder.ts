@@ -210,20 +210,36 @@ async function sendPrompt(
   const selectedPath = optionalSelectedPath(body.selectedPath);
   const state = await deps.repository.read(deps.config.organizationId);
   const candidate = requestedSessionId === undefined
-    ? (state.builderSessions ?? []).find((session) => session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId && session.draftRevision === binding.revision && session.draftDigest === binding.digest)
+    ? (state.builderSessions ?? []).filter((session) => session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId && session.draftRevision === binding.revision && session.draftDigest === binding.digest).sort(compareUpdated).at(-1)
     : (state.builderSessions ?? []).find((session) => session.id === requestedSessionId && session.organizationId === deps.config.organizationId && session.subject === principal.subject && session.draftId === draftId);
   let record: SkillBuilderSessionRecord;
   if (candidate) {
     // A local session has no Eve id until the first prompt is accepted.
     assertSessionBinding(candidate, principal, binding, false);
-    record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding, await digestBuilderRequest({
+    const candidateRequestDigest = await digestBuilderRequest({
       draftId,
       revision: binding.revision,
       digest: binding.digest,
       sessionId: candidate.id,
       prompt,
       ...(selectedPath === undefined ? {} : { selectedPath }),
-    }));
+    });
+    // The route normally carries an explicit session id. Keep the optional
+    // no-id path safe as well: a terminal attempt is restarted transactionally
+    // before any provider request is sent.
+    if (requestedSessionId === undefined && isTerminalRestartable(candidate)) {
+      record = await createPendingSession(deps.repository, principal, binding);
+      record = await reserveRequest(deps.repository, record.id, principal, requestId, binding, await digestBuilderRequest({
+        draftId,
+        revision: binding.revision,
+        digest: binding.digest,
+        sessionId: record.id,
+        prompt,
+        ...(selectedPath === undefined ? {} : { selectedPath }),
+      }));
+    } else {
+      record = await reserveRequest(deps.repository, candidate.id, principal, requestId, binding, candidateRequestDigest);
+    }
   } else {
     if (requestedSessionId !== undefined) throw builderError('BUILDER_SESSION_NOT_FOUND', 'Builder session is unavailable', 404);
     record = await createPendingSession(deps.repository, principal, binding);
@@ -393,7 +409,11 @@ async function createPendingSession(repository: StateRepository, principal: Prin
   };
   return await repository.transaction(principal.organizationId, (state) => {
     state.builderSessions ??= [];
-    const existing = state.builderSessions.find((candidate) => candidate.organizationId === principal.organizationId && candidate.subject === principal.subject && candidate.draftId === binding.draftId && candidate.draftRevision === binding.revision && candidate.draftDigest === binding.digest);
+    const existing = state.builderSessions
+      .filter((candidate) => candidate.organizationId === principal.organizationId && candidate.subject === principal.subject && candidate.draftId === binding.draftId && candidate.draftRevision === binding.revision && candidate.draftDigest === binding.digest)
+      .filter((candidate) => !isTerminalRestartable(candidate))
+      .sort(compareUpdated)
+      .at(-1);
     if (existing) {
       return existing;
     }
@@ -422,6 +442,9 @@ async function reserveRequest(
     if (unresolved && unresolved.id !== requestId) {
       throw builderError('BUILDER_RECONCILIATION_REQUIRED', 'The previous prompt has an unresolved provider result', 409);
     }
+    if (isTerminalSession(record)) {
+      throw builderError('BUILDER_SESSION_TERMINAL', 'That builder session is terminal; create a new session for another prompt', 409);
+    }
     const activeRequest = record.activeRequestId ?? record.requests.find((candidate) => candidate.state === 'accepted')?.id;
     if (activeRequest && activeRequest !== requestId) throw builderError('BUILDER_BUSY', 'That builder session is already processing a prompt', 409);
     if (existing?.state === 'accepted' || record.state === 'running') throw builderError('BUILDER_BUSY', 'That builder session is already processing a prompt', 409);
@@ -435,6 +458,7 @@ async function bindAcceptedSession(repository: StateRepository, organizationId: 
   return await repository.transaction(organizationId, (state) => {
     const record = (state.builderSessions ?? []).find((candidate) => candidate.id === sessionId && candidate.draftId === binding.draftId);
     if (!record || record.draftRevision !== binding.revision || record.draftDigest !== binding.digest) throw builderError('STALE_BINDING', 'Builder session binding changed', 409);
+    if (isTerminalSession(record)) throw builderError('BUILDER_SESSION_TERMINAL', 'That builder session is terminal; create a new session for another prompt', 409);
     if (record.eveSessionId && record.eveSessionId !== eveSessionId) throw builderError('BUILDER_UPSTREAM', 'Builder session identity changed', 502);
     record.eveSessionId = eveSessionId;
     record.state = 'running';
@@ -501,6 +525,23 @@ function assertSessionBinding(record: SkillBuilderSessionRecord, principal: Prin
   if (record.organizationId !== principal.organizationId || record.subject !== principal.subject || record.draftId !== binding.draftId || record.draftRevision !== binding.revision || record.draftDigest !== binding.digest || (requireEve && !record.eveSessionId)) {
     throw builderError('STALE_BINDING', 'Builder session is not bound to this draft revision', 409);
   }
+}
+
+function isTerminalSession(record: SkillBuilderSessionRecord): boolean {
+  return record.state === 'failed' || record.state === 'stopped' || record.state === 'completed';
+}
+
+/**
+ * A terminal attempt can be replaced only after all local/provider work and
+ * proposal work has settled. The old record remains available for history and
+ * exact-session authorization.
+ */
+function isTerminalRestartable(record: SkillBuilderSessionRecord): boolean {
+  if (!isTerminalSession(record)) return false;
+  if (record.activeRequestId) return false;
+  if (record.requests.some((request) => request.state === 'accepted' || request.state === 'uncertain')) return false;
+  if (record.proposals.some((proposal) => proposal.state === 'pending')) return false;
+  return true;
 }
 
 async function readBoundDraft(repository: StateRepository, draftId: string, principal: Principal, organizationId: string): Promise<{ id: string; name: string; revision: number; digest: Digest }> {

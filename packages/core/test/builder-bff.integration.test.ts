@@ -95,6 +95,8 @@ interface Fixture {
 interface FixtureOptions {
   holdFirstModel?: boolean;
   providerSessionId?: unknown;
+  providerSessionIds?: readonly string[];
+  createProposal?: boolean;
   streamBody?: string;
   manifest?: {
     extraFiles: number;
@@ -229,32 +231,35 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
       if (!session || session.draftId !== payload.draftId || session.draftRevision !== payload.revision || session.draftDigest !== payload.digest) {
         return Response.json({ error: 'invalid-session-binding' }, { status: 409 });
       }
-      const proposalResponse = await registryHandler(new Request(`${ORIGIN}/v1/drafts/${session.draftId}/proposals`, {
-        method: 'POST',
-        headers: {
-          authorization: 'Bearer publisher-token',
-          'content-type': 'application/json',
-          'idempotency-key': `proposal-${session.id}`,
-          'x-pskills-tool-identity': 'skill-builder',
-        },
-        body: JSON.stringify({
-          draftId: session.draftId,
-          revision: session.draftRevision,
-          digest: session.draftDigest,
-          sessionId: session.id,
-          operations: [{
-            op: 'edit',
-            path: 'SKILL.md',
-            content: '---\nname: demo\ndescription: Builder proposal\n---\n# Builder proposal\n',
-          }],
-        }),
-      }));
-      if (proposalResponse.status !== 201 && proposalResponse.status !== 200) {
-        return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
+      if (options.createProposal !== false) {
+        const proposalResponse = await registryHandler(new Request(`${ORIGIN}/v1/drafts/${session.draftId}/proposals`, {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer publisher-token',
+            'content-type': 'application/json',
+            'idempotency-key': `proposal-${session.id}`,
+            'x-pskills-tool-identity': 'skill-builder',
+          },
+          body: JSON.stringify({
+            draftId: session.draftId,
+            revision: session.draftRevision,
+            digest: session.draftDigest,
+            sessionId: session.id,
+            operations: [{
+              op: 'edit',
+              path: 'SKILL.md',
+              content: '---\nname: demo\ndescription: Builder proposal\n---\n# Builder proposal\n',
+            }],
+          }),
+        }));
+        if (proposalResponse.status !== 201 && proposalResponse.status !== 200) {
+          return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
+        }
       }
+      const acceptedProviderSessionId = options.providerSessionIds?.[Math.min(modelCalls - 1, options.providerSessionIds.length - 1)] ?? options.providerSessionId ?? 'eve-session-1';
       return Response.json({
         status: 'accepted',
-        sessionId: options.providerSessionId ?? 'eve-session-1',
+        sessionId: acceptedProviderSessionId,
         sessionKey: payload.sessionKey,
         registrySessionId: payload.registrySessionId,
         draftId: payload.draftId,
@@ -266,9 +271,9 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
       });
     }
 
-    const providerSessionIdValue = options.providerSessionId ?? 'eve-session-1';
-    const providerSessionId = encodeURIComponent(typeof providerSessionIdValue === 'string' ? providerSessionIdValue : 'invalid-provider-session');
-    if (url.startsWith(`${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/stream`)) {
+    const providerSessionIds = options.providerSessionIds ?? [options.providerSessionId ?? 'eve-session-1'];
+    const encodedProviderSessionIds = providerSessionIds.map((value) => encodeURIComponent(typeof value === 'string' ? value : 'invalid-provider-session'));
+    if (encodedProviderSessionIds.some((providerSessionId) => url.startsWith(`${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/stream`))) {
       streamCalls += 1;
       const stream = options.streamBody ?? [
         JSON.stringify({
@@ -288,7 +293,7 @@ async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
       });
     }
 
-    if (url === `${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/cancel`) {
+    if (encodedProviderSessionIds.some((providerSessionId) => url === `${SERVICE_ORIGIN}/eve/v1/session/${providerSessionId}/cancel`)) {
       cancellations.push(call);
       return Response.json({ ok: true, status: 'accepted' });
     }
@@ -709,6 +714,18 @@ describe('builder BFF draft contract', () => {
     expect(oversizedResponse.status).toBe(502);
     expect((await json(oversizedResponse)).code).toBe('BUILDER_UPSTREAM');
     expect(oversized.streamCalls).toBe(0);
+
+    const uncertain = await makeFixture({ providerSessionId: 123 });
+    const uncertainDraft = await createReleaseDraft(uncertain, 'uncertain-provider-draft');
+    const uncertainSession = await createSession(uncertain, uncertainDraft, 'uncertain-provider-session');
+    const uncertainResponse = await prompt(uncertain, uncertainDraft, uncertainSession.id, 'uncertain-provider-prompt');
+    expect(uncertainResponse.status).toBe(502);
+    const repeatedUncertainSession = await createSession(uncertain, uncertainDraft, 'uncertain-provider-restart');
+    expect(repeatedUncertainSession.id).toBe(uncertainSession.id);
+    const blockedUncertainRetry = await prompt(uncertain, uncertainDraft, uncertainSession.id, 'uncertain-provider-retry');
+    expect(blockedUncertainRetry.status).toBe(409);
+    expect((await json(blockedUncertainRetry)).code).toBe('BUILDER_RECONCILIATION_REQUIRED');
+    expect(uncertain.modelCalls).toBe(1);
   });
 
   it('does not expose raw Eve stream secrets and bounds oversized stream payloads', async () => {
@@ -795,12 +812,119 @@ describe('builder BFF draft contract', () => {
     await fixture.firstModelEntered;
 
     const secondPrompt = await prompt(fixture, draft, session.id, 'prompt-fence-second');
+    const repeatedSession = await createSession(fixture, draft, 'prompt-fence-repeated-session');
     fixture.releaseFirstModel?.();
     const firstResponse = await firstPrompt;
 
     expect(secondPrompt.status).toBe(409);
     expect((await json(secondPrompt)).code).toBe('BUILDER_BUSY');
+    expect(repeatedSession.id).toBe(session.id);
     expect(firstResponse.status).toBe(202);
+    expect(fixture.modelCalls).toBe(1);
+  });
+
+  it('starts one fresh provider session after a completed attempt while retaining old history and rejecting late callbacks', async () => {
+    const completedStream = JSON.stringify({
+      type: 'session.completed',
+      meta: { id: 'completed-event', at: '2026-09-10T00:03:00.000Z' },
+      data: {},
+    }) + '\n';
+    const fixture = await makeFixture({
+      createProposal: false,
+      providerSessionIds: ['eve-session-1', 'eve-session-2'],
+      streamBody: completedStream,
+    });
+    const draft = await createReleaseDraft(fixture, 'terminal-restart-draft');
+    const first = await createSession(fixture, draft, 'terminal-first-session');
+    const firstPrompt = await prompt(fixture, draft, first.id, 'terminal-first-prompt');
+    expect(firstPrompt.status).toBe(202);
+    const firstState = await fixture.repository.read(ORGANIZATION);
+    expect(firstState.builderSessions?.find((candidate) => candidate.id === first.id)).toMatchObject({
+      eveSessionId: 'eve-session-1',
+      state: 'completed',
+      proposals: [],
+    });
+
+    const [second, concurrentSecond] = await Promise.all([
+      createSession(fixture, draft, 'terminal-second-session'),
+      createSession(fixture, draft, 'terminal-second-session-retry'),
+    ]);
+    expect(second.id).not.toBe(first.id);
+    expect(concurrentSecond.id).toBe(second.id);
+    expect((await fixture.repository.read(ORGANIZATION)).builderSessions).toHaveLength(2);
+
+    const secondPrompt = await prompt(fixture, draft, second.id, 'terminal-second-prompt');
+    expect(secondPrompt.status).toBe(202);
+    const afterRestart = await fixture.repository.read(ORGANIZATION);
+    expect(afterRestart.builderSessions?.find((candidate) => candidate.id === first.id)).toMatchObject({
+      eveSessionId: 'eve-session-1',
+      state: 'completed',
+    });
+    expect(afterRestart.builderSessions?.find((candidate) => candidate.id === second.id)).toMatchObject({
+      eveSessionId: 'eve-session-2',
+      state: 'completed',
+    });
+    expect(fixture.modelCalls).toBe(2);
+    const providerCalls = fixture.calls.filter((call) => call.url.endsWith('/internal/builder/sessions'));
+    expect(providerCalls).toHaveLength(2);
+    expect(JSON.parse(providerCalls[0]?.body ?? '{}')).toMatchObject({ registrySessionId: first.id });
+    expect(JSON.parse(providerCalls[1]?.body ?? '{}')).toMatchObject({ registrySessionId: second.id });
+
+    const lateProposal = await internalProposal(fixture, draft, first.id, 'late-terminal-proposal', '---\nname: demo\ndescription: late\n---\n# Late\n');
+    expect(lateProposal.status).toBe(409);
+    expect(errorCode(await json(lateProposal))).toBe('DRAFT_CONFLICT');
+    expect((await fixture.repository.read(ORGANIZATION)).builderSessions?.find((candidate) => candidate.id === first.id)?.proposals).toEqual([]);
+  });
+
+  it('does not restart a terminal attempt while its proposal is pending', async () => {
+    const completedStream = JSON.stringify({
+      type: 'session.completed',
+      meta: { id: 'completed-with-proposal', at: '2026-09-10T00:04:00.000Z' },
+      data: {},
+    }) + '\n';
+    const fixture = await makeFixture({ streamBody: completedStream, providerSessionIds: ['eve-session-1', 'eve-session-2'] });
+    const draft = await createReleaseDraft(fixture, 'terminal-pending-proposal-draft');
+    const session = await createSession(fixture, draft, 'terminal-pending-proposal-session');
+    expect((await prompt(fixture, draft, session.id, 'terminal-pending-proposal-prompt')).status).toBe(202);
+    const before = await fixture.repository.read(ORGANIZATION);
+    expect(before.builderSessions?.[0]).toMatchObject({ state: 'completed', proposals: [expect.objectContaining({ state: 'pending' })] });
+
+    const repeated = await createSession(fixture, draft, 'terminal-pending-proposal-retry');
+    expect(repeated.id).toBe(session.id);
+    const blocked = await prompt(fixture, draft, session.id, 'terminal-pending-proposal-second-prompt');
+    expect(blocked.status).toBe(409);
+    expect((await json(blocked)).code).toBe('BUILDER_SESSION_TERMINAL');
+    expect(fixture.modelCalls).toBe(1);
+    const after = await fixture.repository.read(ORGANIZATION);
+    expect(after.builderSessions).toHaveLength(1);
+    expect(after.builderSessions?.[0]?.proposals).toEqual(before.builderSessions?.[0]?.proposals);
+  });
+
+  it('rejects a terminal-session restart request when the draft binding is stale', async () => {
+    const completedStream = JSON.stringify({
+      type: 'session.completed',
+      meta: { id: 'completed-stale-binding', at: '2026-09-10T00:05:00.000Z' },
+      data: {},
+    }) + '\n';
+    const fixture = await makeFixture({ createProposal: false, streamBody: completedStream });
+    const draft = await createReleaseDraft(fixture, 'terminal-stale-binding-draft');
+    const session = await createSession(fixture, draft, 'terminal-stale-binding-session');
+    expect((await prompt(fixture, draft, session.id, 'terminal-stale-binding-prompt')).status).toBe(202);
+    await fixture.repository.transaction(ORGANIZATION, (state) => {
+      const current = state.drafts?.find((candidate) => candidate.id === draft.id);
+      if (!current) throw new Error('draft missing');
+      current.revision = 2;
+      current.digest = `sha256:${'1'.repeat(64)}`;
+    });
+
+    const staleRestart = await request(fixture, `/v1/drafts/${draft.id}/builder/session?${bindingQuery(draft)}`, {
+      method: 'POST',
+      token: 'publisher-token',
+      body: { revision: draft.revision, digest: draft.digest, requestId: 'terminal-stale-restart' },
+    });
+    expect(staleRestart.status).toBe(409);
+    expect((await json(staleRestart)).code).toBe('STALE_BINDING');
+    expect((await fixture.repository.read(ORGANIZATION)).builderSessions).toHaveLength(1);
     expect(fixture.modelCalls).toBe(1);
   });
 
