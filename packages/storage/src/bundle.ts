@@ -78,7 +78,7 @@ export interface SkillMetadata {
 
 export type FrontmatterScalar = string | number | boolean;
 export type FrontmatterMetadata = Record<string, string>;
-/** Bounded, data-only nested values accepted under `metadata.openclaw`. */
+/** Bounded, data-only nested values accepted in extension metadata. */
 export interface FrontmatterOpenClawMetadata {
   [key: string]: FrontmatterOpenClawValue;
 }
@@ -91,6 +91,16 @@ export type FrontmatterValue =
   | FrontmatterMetadata
   | FrontmatterOpenClawMetadata
   | FrontmatterOpenClawValue[];
+
+/** Standard Agent Skills fields keep their defined scalar/map shapes. */
+const KNOWN_FRONTMATTER_FIELDS = new Set([
+  "name",
+  "description",
+  "license",
+  "compatibility",
+  "metadata",
+  "allowedtools",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -752,6 +762,22 @@ function parseYamlScalar(
   );
 }
 
+function parseYamlString(
+  node: unknown,
+  key: string,
+  maxChars: number,
+  allowEmpty: boolean,
+): string {
+  const value = parseYamlScalar(node, key, maxChars, allowEmpty);
+  if (typeof value !== "string") {
+    frontmatterError(
+      "SKILL.md frontmatter field " + key + " must be a string",
+      "invalid_frontmatter",
+    );
+  }
+  return value;
+}
+
 function parseMetadataMap(node: unknown): Record<string, FrontmatterValue> {
   if (!isMap(node)) {
     frontmatterError(
@@ -800,7 +826,7 @@ function parseMetadataMap(node: unknown): Record<string, FrontmatterValue> {
           "unsafe_frontmatter",
         );
       }
-      metadata[key] = parseOpenClawMetadataMap(pair.value, "metadata." + key);
+      metadata[key] = parseStructuredMetadataMap(pair.value, "metadata." + key);
       continue;
     }
     const value = parseYamlScalar(
@@ -821,11 +847,12 @@ function parseMetadataMap(node: unknown): Record<string, FrontmatterValue> {
 }
 
 /**
- * Parse OpenClaw's nested metadata as inert data.  This deliberately accepts
- * bounded maps and sequences only below `metadata.openclaw`; ordinary
- * frontmatter metadata remains the flat string map used by Agent Skills.
+ * Parse extension metadata as inert data. This accepts only the bounded maps,
+ * sequences, and scalar values already approved by `assertSafeYamlNode`.
+ * Dangerous keys remain blocked at every nesting level so an extension field
+ * cannot opt into plugins, hooks, or execution.
  */
-function parseOpenClawMetadataMap(
+function parseStructuredMetadataMap(
   node: unknown,
   location: string,
   depth = 0,
@@ -859,12 +886,12 @@ function parseOpenClawMetadataMap(
       );
     }
     seen.add(normalizedKey);
-    metadata[key] = parseOpenClawValue(pair.value, location + "." + key, depth + 1);
+    metadata[key] = parseStructuredValue(pair.value, location + "." + key, depth + 1);
   }
   return metadata;
 }
 
-function parseOpenClawValue(
+function parseStructuredValue(
   node: unknown,
   location: string,
   depth: number,
@@ -886,11 +913,11 @@ function parseOpenClawValue(
       );
     }
     return node.items.map((item, index) =>
-      parseOpenClawValue(item, location + "[" + index + "]", depth + 1),
+      parseStructuredValue(item, location + "[" + index + "]", depth + 1),
     );
   }
   if (isMap(node)) {
-    return parseOpenClawMetadataMap(node, location, depth);
+    return parseStructuredMetadataMap(node, location, depth);
   }
   frontmatterError(
     "SKILL.md frontmatter " + location + " contains an unsupported YAML node",
@@ -1009,13 +1036,19 @@ function parseFrontmatter(text: string): Record<string, FrontmatterValue> {
     seen.add(normalizedKey);
     if (frontmatterKey(key) === "metadata") {
       result[key] = parseMetadataMap(pair.value);
-    } else {
-      result[key] = parseYamlScalar(
+    } else if (KNOWN_FRONTMATTER_FIELDS.has(normalizedKey)) {
+      result[key] = parseYamlString(
         pair.value,
         key,
         MAX_FRONTMATTER_VALUE_CHARS,
-        false
+        false,
       );
+    } else {
+      // The core specification defines a small set of known fields, but
+      // real-world skills use additional top-level metadata such as `tags`,
+      // `triggers`, and `category`. Preserve those values as bounded inert
+      // data while keeping the known fields strict.
+      result[key] = parseStructuredValue(pair.value, key, 0);
     }
   }
   return result;

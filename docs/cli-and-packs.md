@@ -15,6 +15,8 @@ Use a Cargo workspace with a thin `pskills-cli` binary crate and a reusable `psk
 
 Preserve the standard skill directory: `SKILL.md` containing YAML frontmatter and Markdown, plus supporting files. Validate required `name`/`description`, naming constraints and relative references. Keep registry versions, access control, provenance and scan decisions outside skill content. This registry and pack protocol is an application extension to the content standard. [Agent Skills specification](https://agentskills.io/specification)
 
+Known standard frontmatter fields retain their defined scalar or map shapes. For ecosystem compatibility, unrecognized frontmatter fields may carry bounded inert scalars, lists, or maps; these values are retained as metadata, never treated as executable configuration, and the original `SKILL.md` bytes remain unchanged.
+
 `@team/review@1.2.0` means namespace `team`, skill `review`, release `1.2.0`. Namespace is distinct from organization: internal identity also includes organization, registry origin and resource kind. Published releases are immutable; changing content requires another version. Channels resolve to exact releases. Source-only imports use immutable source revisions and digests, without fabricated semantic versions. [SemVer](https://semver.org/)
 
 Initial adapters:
