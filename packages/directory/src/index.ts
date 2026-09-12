@@ -3,6 +3,7 @@ export {
   SkillsClient,
   SkillsDirectoryClient,
   SkillsShClient,
+  classifyNestedDetailFallback,
   createSkillsDirectoryClient,
 } from './client.js';
 
@@ -92,6 +93,7 @@ export type {
   SkillsDirectoryClientOptions,
   SkillsDirectoryErrorCode,
   SkillsDirectoryErrorOptions,
+  SkillsDirectoryNestedDetailFallbackReason,
   SkillsFetch,
   SkillsTokenProvider,
   SkillDetailResponse as SkillDetail,

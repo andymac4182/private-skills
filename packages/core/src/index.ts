@@ -49,6 +49,7 @@ import {
 } from '../../storage/src/index.js';
 import {
   SkillsDirectoryError,
+  classifyNestedDetailFallback,
   type CuratedSkillsResponse,
   type SkillAuditResponse,
   type SkillDetailMetadataResponse,
@@ -208,6 +209,13 @@ export interface RegistryDirectoryClient {
   search(options: { q: string; owner?: string; limit?: number; signal?: AbortSignal }): Promise<SkillSearchResponse>;
   curated(options?: { signal?: AbortSignal }): Promise<CuratedSkillsResponse>;
   detail(id: string, options?: { signal?: AbortSignal }): Promise<SkillDetailResponse>;
+  /**
+   * Optional bounded exact-row lookup used only after a nested detail route
+   * incompatibility. The implementation must perform fresh search/list
+   * reconciliation and return the complete server row; core rechecks its
+   * identity and the selected feed allowlist before queueing an import.
+   */
+  findExact?(id: string, options?: { signal?: AbortSignal }): Promise<V1Skill>;
   audit(id: string, options?: { signal?: AbortSignal }): Promise<SkillAuditResponse>;
   /** Return one validated, source-backed topic page DTO. */
   topic?(slug: string, options?: { signal?: AbortSignal }): Promise<SkillsTopicResponse>;
@@ -1708,7 +1716,8 @@ async function createDirectoryImport(
   // Fetch exactly the selected catalog row.  A bounded metadata lookup is
   // performed only when this row has no immutable snapshot hash, and the
   // returned identity is checked before queueing.
-  const detail = await directoryRequest(() => directory.detail(id));
+  const detailResolution = await resolveDirectoryDetail(directory, id, requestSignal);
+  const detail = detailResolution.detail;
   if (
     detail.id !== id ||
     detail.id !== `${detail.source}/${detail.slug}` ||
@@ -1728,9 +1737,9 @@ async function createDirectoryImport(
   // public source is GitHub or a well-known host. Resolve that one row from
   // the trusted list/search metadata before queueing; never infer the type
   // from an ID shape or pass a browser-supplied hint through to the worker.
-  const trustedRow = detail.hash === null || detail.files === null
+  const trustedRow = detailResolution.catalogRow ?? (detail.hash === null || detail.files === null
     ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
-    : undefined;
+    : undefined);
 
   const importBody: JsonObject = {
     upstreamId: selected.id,
@@ -1748,6 +1757,78 @@ async function createDirectoryImport(
     ...(detail.hash ? { ref: detail.hash } : {}),
   };
   return await createImportJob(importBody, principal, deps, config, requestId);
+}
+
+interface DirectoryDetailResolution {
+  detail: SkillDetailResponse;
+  /** Present only when a nested detail route was recovered from findExact. */
+  catalogRow?: V1Skill;
+}
+
+/**
+ * Fetch detail first. Some skills.sh deployments cannot route nested IDs
+ * through the detail endpoint even while the same ID is present in the
+ * authenticated catalog. Only the directory adapter's explicit classifier
+ * can authorize the bounded exact-row recovery; auth, redirect, rate-limit,
+ * timeout, server, and malformed-response failures stay terminal.
+ */
+async function resolveDirectoryDetail(
+  directory: RegistryDirectoryClient,
+  id: string,
+  requestSignal?: AbortSignal,
+): Promise<DirectoryDetailResolution> {
+  try {
+    return {
+      detail: await directory.detail(id, { signal: requestSignal }),
+    };
+  } catch (error) {
+    if (!(error instanceof SkillsDirectoryError)) throw error;
+    if (classifyNestedDetailFallback(error, id) === undefined || typeof directory.findExact !== 'function') {
+      throw directoryApiError(error);
+    }
+
+    let row: V1Skill;
+    try {
+      row = await directory.findExact(id, { signal: requestSignal });
+    } catch (fallbackError) {
+      if (fallbackError instanceof SkillsDirectoryError) throw directoryApiError(fallbackError);
+      throw fallbackError;
+    }
+    return {
+      detail: detailFromExactCatalogRow(row, id),
+      catalogRow: row,
+    };
+  }
+}
+
+function detailFromExactCatalogRow(row: V1Skill, requestedId: string): SkillDetailResponse {
+  if (
+    row.id !== requestedId ||
+    row.id !== `${row.source}/${row.slug}` ||
+    !row.source ||
+    !row.slug ||
+    !isSafeDirectoryExternalValue(row.source) ||
+    !isSafeDirectoryExternalValue(row.slug) ||
+    (row.sourceType !== 'github' && row.sourceType !== 'well-known')
+  ) {
+    throw new RegistryApiError('DIRECTORY_INTEGRITY', 'The directory returned inconsistent source metadata', 502, { retryable: true });
+  }
+  // A three-segment ID is only a fallback candidate: ordinary GitHub
+  // owner/repository/skill IDs have a single-segment slug.  Require the
+  // recovered, normalized row to prove that the slug itself is nested before
+  // treating a failed detail route as the known nested-path incompatibility.
+  if (!row.slug.includes('/')) throw unavailable();
+
+  // A list/search row never supplies an immutable source snapshot. Do not
+  // manufacture one from metadata or copy caller/upstream freshness fields.
+  return {
+    id: row.id,
+    source: row.source,
+    slug: row.slug,
+    installs: row.installs,
+    hash: null,
+    files: null,
+  };
 }
 
 /**
@@ -4198,7 +4279,8 @@ async function resolveTransparentProxyRequest(
   // could hydrate the wrong catalog row under the caller's external ID.
   const directory = deps.directoryForBase?.(feed.baseUrl);
   if (!directory) throw directoryUnavailable();
-  const detail = await directoryRequest(() => directory.detail(request.externalId, { signal: requestSignal }));
+  const detailResolution = await resolveDirectoryDetail(directory, request.externalId, requestSignal);
+  const detail = detailResolution.detail;
   if (
     detail.id !== request.externalId ||
     detail.id !== `${detail.source}/${detail.slug}` ||
@@ -4215,9 +4297,9 @@ async function resolveTransparentProxyRequest(
   // only the exact trusted row when the detail snapshot is incomplete; the
   // worker performs its own authenticated source resolution before bytes are
   // admitted.
-  const trustedRow = detail.hash === null || detail.files === null
+  const trustedRow = detailResolution.catalogRow ?? (detail.hash === null || detail.files === null
     ? await lookupDirectoryCatalogRow(directory, detail, requestSignal)
-    : undefined;
+    : undefined);
   const managedName = await transparentManagedName(upstream.namespace, request.externalId);
   const template: TransparentImportTemplate = {
     upstreamId: upstream.id,

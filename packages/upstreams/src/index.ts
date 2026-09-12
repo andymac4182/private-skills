@@ -362,12 +362,23 @@ export interface OpenClawSourceResolution extends AcquisitionResult {
 export class UpstreamAcquisitionError extends Error {
   readonly code: string;
   readonly status?: number;
+  /** True only for a fully validated detail identity mismatch. */
+  readonly detailIdentityMismatch?: boolean;
+  /** True only for the bounded documented nested-detail invalid_path body. */
+  readonly detailInvalidPath?: boolean;
 
-  constructor(code: string, message: string, status?: number) {
+  constructor(
+    code: string,
+    message: string,
+    status?: number,
+    options: { detailIdentityMismatch?: boolean; detailInvalidPath?: boolean } = {},
+  ) {
     super(message);
     this.name = 'UpstreamAcquisitionError';
     this.code = code;
     this.status = status;
+    this.detailIdentityMismatch = options.detailIdentityMismatch;
+    this.detailInvalidPath = options.detailInvalidPath;
   }
 }
 
@@ -468,7 +479,11 @@ interface SkillsShResolutionMetadata {
   artifactUrl?: string;
   frontmatterName?: string;
   frontmatterDescription?: string;
+  /** Why a nested detail route was replaced by an exact fresh catalog row. */
+  catalogDetailFallback?: SkillsShDetailFallbackReason;
 }
+
+type SkillsShDetailFallbackReason = 'invalid_path' | 'not_found' | 'identity_mismatch';
 
 interface SkillsShTreeResponse extends GitHubTreeResponse {
   tree?: unknown;
@@ -1186,22 +1201,10 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
   const credential = await skillsShCatalogCredential(upstream, apiBase, options, limits.requestTimeoutMs);
   if (credential) headers.authorization = credential;
 
-  const detailURL = appendSkillsShDetailPath(apiBase, externalId);
-  const detailValue = await client.json<SkillsShDetailResponse>(detailURL, {
-    headers,
-    allowedOrigin: apiBase.origin,
-    retryable: false,
-    stripCredentialsOnRedirect: true,
-  });
   const importSourceType = (importRequest as unknown as { externalSourceType?: unknown }).externalSourceType;
   if (importSourceType !== undefined && importSourceType !== 'github' && importSourceType !== 'well-known') {
     throw new UpstreamAcquisitionError('invalid_source', 'skills.sh import source type is invalid');
   }
-  let detail = parseSkillsShDetail(
-    detailValue,
-    externalId,
-    importSourceType,
-  );
   const requestedExternalId = (importRequest as unknown as { externalId?: unknown }).externalId;
   if (requestedExternalId !== undefined && requestedExternalId !== externalId) {
     throw new UpstreamAcquisitionError(
@@ -1210,6 +1213,79 @@ async function acquireSkillsSh(input: NormalizedInput): Promise<AcquisitionResul
     );
   }
   const requestedSnapshotHash = (importRequest as unknown as { externalSnapshotHash?: unknown }).externalSnapshotHash;
+  const detailURL = appendSkillsShDetailPath(apiBase, externalId);
+  let detail: ParsedSkillsShDetail;
+  try {
+    const detailValue = await client.json<SkillsShDetailResponse>(detailURL, {
+      headers,
+      allowedOrigin: apiBase.origin,
+      retryable: false,
+      stripCredentialsOnRedirect: true,
+      rejectRedirects: true,
+      detailRoute: true,
+    });
+    detail = parseSkillsShDetail(
+      detailValue,
+      externalId,
+      importSourceType,
+    );
+  } catch (error) {
+    const fallbackReason = classifySkillsShDetailFallback(error, externalId);
+    if (fallbackReason === undefined) throw error;
+    // A detail route failure cannot prove that a previously pinned snapshot is
+    // still current.  A null/omitted expectation means the caller explicitly
+    // allows source re-resolution; a non-null hash must fail closed.
+    if (requestedSnapshotHash !== undefined && requestedSnapshotHash !== null) {
+      throw new UpstreamAcquisitionError(
+        'source_changed',
+        'skills.sh detail is unavailable; the expected snapshot hash cannot be verified',
+      );
+    }
+    let metadata: SkillsShCatalogMetadata;
+    try {
+      metadata = await discoverSkillsShMetadataById(
+        client,
+        apiBase,
+        headers,
+        externalId,
+        limits,
+        options.signal,
+      );
+    } catch (metadataError) {
+      // If the fresh catalog has no exact row, preserve the original detail
+      // failure. Recovery is conditional on a proven row; an absent row must
+      // not turn an ordinary GitHub miss or a detail identity error into a
+      // broader source lookup result.
+      if (metadataError instanceof UpstreamAcquisitionError && metadataError.code === 'source_unavailable') {
+        throw error;
+      }
+      throw metadataError;
+    }
+    if (importSourceType !== undefined && metadata.sourceType !== importSourceType) {
+      throw new UpstreamAcquisitionError(
+        'identity_mismatch',
+        'skills.sh catalog source type does not match the import request',
+      );
+    }
+    // A three-segment external ID also describes an ordinary GitHub
+    // owner/repository/skill row. Only a row whose validated slug is itself
+    // nested proves that this detail route failure is the documented nested
+    // path incompatibility. Never infer the source/slug split from the caller
+    // supplied ID.
+    if (!metadata.slug.includes('/')) {
+      // A three-segment ID can still be an ordinary GitHub owner/repository/
+      // skill identity. Without a nested slug in the fresh exact row, retain
+      // the original route error and do not broaden acquisition.
+      throw error;
+    }
+    // Apply the selected feed's source policy to the exact recovered row
+    // before inspecting or using its physical locator. A fallback row cannot
+    // broaden an administrator mapping merely because its catalog identity is
+    // valid.
+    assertSkillsShSourceAllowed(upstream, metadata.source, importRequest.repository);
+    assertSkillsShCatalogLocator(metadata);
+    detail = parsedSkillsShDetailFromCatalogMetadata(externalId, metadata, fallbackReason);
+  }
   if (requestedSnapshotHash !== undefined && requestedSnapshotHash !== detail.externalSnapshotHash) {
     throw new UpstreamAcquisitionError('source_changed', 'skills.sh snapshot hash changed since the import request');
   }
@@ -1368,6 +1444,97 @@ interface SkillsShCatalogMetadataPage {
 }
 
 /**
+ * Recover a nested ID from an exact, fresh catalog row after its detail route
+ * proves incompatible.  The requested ID is used only as a complete equality
+ * key; source and slug are taken exclusively from the validated response row.
+ */
+async function discoverSkillsShMetadataById(
+  client: HttpClient,
+  apiBase: URL,
+  headers: FetchHeaders,
+  externalId: string,
+  limits: AcquisitionLimits,
+  signal?: AbortSignal,
+): Promise<SkillsShCatalogMetadata> {
+  const deadline = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onParentAbort: (() => void) | undefined;
+  if (signal?.aborted) throw new UpstreamAcquisitionError('request_cancelled', 'Upstream request was cancelled');
+  if (signal) {
+    onParentAbort = () => deadline.abort(signal.reason);
+    signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  timer = setTimeout(() => deadline.abort(), Math.min(SKILLS_SH_METADATA_DEADLINE_MS, limits.requestTimeoutMs));
+  try {
+    const terminal = externalId.slice(externalId.lastIndexOf('/') + 1);
+    const queryValues = [externalId];
+    if ([...terminal].length >= 2 && terminal !== externalId) queryValues.push(terminal);
+    for (const queryValue of queryValues) {
+      let value: unknown;
+      try {
+        value = await client.json<unknown>(appendApiPath(apiBase, ['api', 'v1', 'skills', 'search'], {
+          q: queryValue,
+          limit: String(SKILLS_SH_METADATA_SEARCH_LIMIT),
+        }), {
+          headers,
+          allowedOrigin: apiBase.origin,
+          retryable: false,
+          signal: deadline.signal,
+          stripCredentialsOnRedirect: true,
+          rejectRedirects: true,
+        });
+      } catch (error) {
+        if (isCatalogNotFound(error)) continue;
+        throw error;
+      }
+      const page = parseSkillsShCatalogMetadataPage(value, limits, false);
+      const match = selectSkillsShMetadataById(page.rows, externalId);
+      if (match) return match;
+    }
+
+    for (let pageNumber = 0; pageNumber < SKILLS_SH_METADATA_MAX_PAGES; pageNumber += 1) {
+      let value: unknown;
+      try {
+        value = await client.json<unknown>(appendApiPath(apiBase, ['api', 'v1', 'skills'], {
+          view: 'all-time',
+          page: String(pageNumber),
+          per_page: String(SKILLS_SH_METADATA_PAGE_SIZE),
+        }), {
+          headers,
+          allowedOrigin: apiBase.origin,
+          retryable: false,
+          signal: deadline.signal,
+          stripCredentialsOnRedirect: true,
+          rejectRedirects: true,
+        });
+      } catch (error) {
+        if (isCatalogNotFound(error)) break;
+        throw error;
+      }
+      const parsed = parseSkillsShCatalogMetadataPage(value, limits, true);
+      if (parsed.page !== pageNumber) {
+        throw new UpstreamAcquisitionError('invalid_response', 'skills.sh catalog metadata page is inconsistent');
+      }
+      const match = selectSkillsShMetadataById(parsed.rows, externalId);
+      if (match) return match;
+      if (!parsed.hasMore) break;
+    }
+    throw new UpstreamAcquisitionError(
+      'source_unavailable',
+      'skills.sh catalog has no exact source metadata for this skill',
+    );
+  } catch (error) {
+    if (deadline.signal.aborted && !signal?.aborted) {
+      throw new UpstreamAcquisitionError('metadata_timeout', 'skills.sh catalog metadata lookup timed out');
+    }
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onParentAbort !== undefined) signal?.removeEventListener('abort', onParentAbort);
+  }
+}
+
+/**
  * Rehydrate a missing well-known source location from authenticated catalog
  * metadata.  The matching identity is checked in full before its install URL
  * is used.  Search is preferred; the list walk is deliberately bounded and
@@ -1447,6 +1614,7 @@ async function discoverSkillsShMetadata(
         retryable: false,
         signal,
         stripCredentialsOnRedirect: true,
+        rejectRedirects: true,
       });
       const page = parseSkillsShCatalogMetadataPage(value, limits, false);
       const match = selectSkillsShMetadata(page.rows, detail);
@@ -1469,6 +1637,7 @@ async function discoverSkillsShMetadata(
         retryable: false,
         signal,
         stripCredentialsOnRedirect: true,
+        rejectRedirects: true,
       });
     } catch (error) {
       if (isCatalogNotFound(error)) break;
@@ -1537,6 +1706,111 @@ function parseSkillsShCatalogMetadata(
     ? null
     : requireSkillsShURL(value.installUrl, `${context}.installUrl`);
   return { id, source, slug, name, sourceType, installUrl };
+}
+
+function selectSkillsShMetadataById(
+  rows: readonly SkillsShCatalogMetadata[],
+  externalId: string,
+): SkillsShCatalogMetadata | undefined {
+  const matches = rows.filter((row) => row.id === externalId);
+  if (matches.length > 1) {
+    throw new UpstreamAcquisitionError('ambiguous_source', 'skills.sh catalog metadata contains duplicate source identities');
+  }
+  return matches[0];
+}
+
+/**
+ * The exact catalog row is the only trusted source of the source/slug split.
+ * This validation makes the row's advertised physical locator usable by the
+ * existing immutable source resolvers without accepting a caller-derived URL.
+ */
+function assertSkillsShCatalogLocator(metadata: SkillsShCatalogMetadata): void {
+  if (metadata.sourceType === 'github') {
+    let repository: string | undefined;
+    try {
+      repository = normalizeRepositoryIdentity(metadata.source);
+    } catch {
+      const hint = parseGithubInstallHint(metadata.installUrl);
+      if (hint === undefined) {
+        throw new UpstreamAcquisitionError('invalid_source', 'skills.sh catalog row has no valid GitHub source locator');
+      }
+      repository = hint.repository;
+    }
+    const hint = parseGithubInstallHint(metadata.installUrl);
+    if (hint !== undefined && hint.repository.toLocaleLowerCase('en-US') !== repository.toLocaleLowerCase('en-US')) {
+      throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh catalog GitHub locator does not match its source identity');
+    }
+    return;
+  }
+
+  if (metadata.installUrl === null) {
+    if (!isSafeWellKnownHostIdentity(metadata.source)) {
+      throw new UpstreamAcquisitionError('source_unavailable', 'skills.sh catalog row has no safe well-known source locator');
+    }
+    return;
+  }
+  let install: URL;
+  try {
+    install = new URL(metadata.installUrl);
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_source', 'skills.sh catalog well-known locator is invalid');
+  }
+  if (!isSafeWellKnownHostIdentity(metadata.source) || install.hostname.toLocaleLowerCase('en-US') !== metadata.source.toLocaleLowerCase('en-US')) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh catalog well-known locator does not match its source identity');
+  }
+}
+
+function isSafeWellKnownHostIdentity(source: string): boolean {
+  if (source.length > 253 || !source.includes('.') || source.includes('/') || source.includes('\\') || source.includes(':')) return false;
+  try {
+    const url = new URL(`https://${source}`);
+    return url.hostname.toLocaleLowerCase('en-US') === source.toLocaleLowerCase('en-US') && url.pathname === '/';
+  } catch {
+    return false;
+  }
+}
+
+function parsedSkillsShDetailFromCatalogMetadata(
+  externalId: string,
+  metadata: SkillsShCatalogMetadata,
+  fallbackReason: SkillsShDetailFallbackReason,
+): ParsedSkillsShDetail {
+  // `parseSkillsShCatalogMetadata` has already checked this relationship, and
+  // the explicit guard keeps this constructor safe if its caller changes.
+  if (metadata.id !== externalId || metadata.id !== `${metadata.source}/${metadata.slug}`) {
+    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh catalog metadata identity does not match the requested skill');
+  }
+  return {
+    externalId,
+    source: metadata.source,
+    slug: metadata.slug,
+    name: metadata.name,
+    sourceType: metadata.sourceType,
+    installUrl: metadata.installUrl,
+    pageUrl: `https://skills.sh/${externalId}`,
+    externalSnapshotHash: null,
+    files: null,
+    catalogDetailFallback: fallbackReason,
+  };
+}
+
+function classifySkillsShDetailFallback(
+  error: unknown,
+  externalId: string,
+): SkillsShDetailFallbackReason | undefined {
+  if (!isNestedSkillsShId(externalId) || !(error instanceof UpstreamAcquisitionError)) return undefined;
+  if (error.detailInvalidPath) return 'invalid_path';
+  if (error.code === 'upstream_http_error' && error.status === 404) return 'not_found';
+  if (error.detailIdentityMismatch) return 'identity_mismatch';
+  return undefined;
+}
+
+function isNestedSkillsShId(value: string): boolean {
+  try {
+    return validateSkillsShId(value).split('/').length >= 3;
+  } catch {
+    return false;
+  }
 }
 
 function selectSkillsShMetadata(
@@ -1615,6 +1889,7 @@ interface ParsedSkillsShDetail {
   externalSnapshotHash: string | null;
   files: SkillsShFile[] | null;
   ref?: string;
+  catalogDetailFallback?: SkillsShDetailFallbackReason;
 }
 
 function parseSkillsShDetail(
@@ -1631,14 +1906,17 @@ function parseSkillsShDetail(
   const name = value.name === undefined || value.name === null
     ? slug
     : requireSkillsShString(value.name, 'skills.sh detail name', 512);
-  const sourceType = value.sourceType ?? sourceTypeHint;
-  if (sourceType !== undefined && sourceType !== 'github' && sourceType !== 'well-known') {
+  const explicitSourceType = value.sourceType;
+  if (explicitSourceType !== undefined && explicitSourceType !== null && explicitSourceType !== 'github' && explicitSourceType !== 'well-known') {
     throw new UpstreamAcquisitionError('unsupported_source', 'skills.sh detail has an unsupported sourceType');
   }
-  const canonicalId = validateSkillsShId(`${source}/${slug}`);
-  if (canonicalId !== requestedId || id !== requestedId) {
-    throw new UpstreamAcquisitionError('identity_mismatch', 'skills.sh detail identity does not match the requested source/slug');
+  if (explicitSourceType !== undefined && explicitSourceType !== null && sourceTypeHint !== undefined && explicitSourceType !== sourceTypeHint) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh detail sourceType does not match the import request',
+    );
   }
+  const sourceType = explicitSourceType ?? sourceTypeHint;
   const files = value.files;
   if (files === undefined) {
     throw new UpstreamAcquisitionError('invalid_source', 'skills.sh detail omitted files');
@@ -1649,6 +1927,10 @@ function parseSkillsShDetail(
   if (files === null && sourceType === undefined) {
     throw new UpstreamAcquisitionError('source_unavailable', 'skills.sh detail has no verified sourceType for source fallback');
   }
+  // Parse every file before deciding whether the detail identity mismatch is
+  // recoverable. A malformed file must never be hidden behind the nested-row
+  // fallback marker.
+  const parsedFiles = files === null ? null : files.map((file: unknown) => parseSkillsShFile(file));
   const installUrl = value.installUrl === null || value.installUrl === undefined
     ? null
     : requireSkillsShURL(value.installUrl, 'skills.sh installUrl');
@@ -1668,6 +1950,21 @@ function parseSkillsShDetail(
     ? null
     : requireSkillsShString(hashValue, 'skills.sh snapshot hash', 512);
   const ref = value.ref === undefined ? undefined : validateRef(requireSkillsShString(value.ref, 'skills.sh detail ref', 256));
+  const canonicalId = validateSkillsShId(`${source}/${slug}`);
+  if (canonicalId !== id) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh detail id does not match its source/slug identity',
+    );
+  }
+  if (canonicalId !== requestedId || id !== requestedId) {
+    throw new UpstreamAcquisitionError(
+      'identity_mismatch',
+      'skills.sh detail identity does not match the requested source/slug',
+      undefined,
+      { detailIdentityMismatch: true },
+    );
+  }
   return {
     externalId: requestedId,
     source,
@@ -1677,7 +1974,7 @@ function parseSkillsShDetail(
     installUrl,
     ...(pageUrl === undefined ? {} : { pageUrl }),
     externalSnapshotHash,
-    files: files === null ? null : files.map((file: unknown) => parseSkillsShFile(file)),
+    files: parsedFiles,
     ...(ref === undefined ? {} : { ref }),
   };
 }
@@ -1737,6 +2034,7 @@ function skillsShProvenance(
     ...(values.artifactUrl === undefined ? {} : { artifactUrl: values.artifactUrl }),
     ...(values.frontmatterName === undefined ? {} : { frontmatterName: values.frontmatterName }),
     ...(values.frontmatterDescription === undefined ? {} : { frontmatterDescription: values.frontmatterDescription }),
+    ...(detail.catalogDetailFallback === undefined ? {} : { catalogDetailFallback: detail.catalogDetailFallback }),
   };
   // Keep both the flat fields and, when the source type is verified, a grouped
   // copy.  A detail snapshot can legitimately omit sourceType; emitting a
@@ -4105,6 +4403,19 @@ class HttpClient {
         continue;
       }
       if (status < 200 || status >= 300) {
+        if (status === 400 && request.detailRoute === true && await hasInvalidPathDetailBody(
+          response,
+          this.limits.maxResponseBytes,
+          request.signal ?? this.options.signal,
+          this.limits.requestTimeoutMs,
+        )) {
+          throw new UpstreamAcquisitionError(
+            'upstream_http_error',
+            'Upstream request failed with HTTP 400',
+            status,
+            { detailInvalidPath: true },
+          );
+        }
         if (retryable && isRetryableStatus(status) && attempts + 1 < this.limits.maxAttempts) {
           await boundedRetryDelay(response.headers.get('retry-after'), attempts);
           attempts += 1;
@@ -4211,6 +4522,8 @@ interface ClientRequest {
   stripCredentialsOnRedirect?: boolean;
   /** Reject redirects before any location/body is consumed. */
   rejectRedirects?: boolean;
+  /** The request is the selected skills.sh detail route. */
+  detailRoute?: boolean;
   expectJson?: boolean;
 }
 
@@ -4275,6 +4588,60 @@ async function readResponseBytes(response: Response, maxBytes: number, signal?: 
     offset += chunk.byteLength;
   }
   return result;
+}
+
+async function hasInvalidPathDetailBody(
+  response: Response,
+  maxBytes: number,
+  signal?: AbortSignal,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  if (signal?.aborted) return false;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onParentAbort: (() => void) | undefined;
+  let stop!: () => void;
+  const stopped = new Promise<undefined>((resolve) => {
+    stop = () => {
+      controller.abort();
+      try {
+        const cancellation = response.body?.cancel();
+        if (cancellation) void cancellation.catch(() => undefined);
+      } catch {
+        // The body may already be locked by readResponseBytes' reader.
+      }
+      resolve(undefined);
+    };
+  });
+  if (signal) {
+    onParentAbort = () => stop();
+    signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  timer = setTimeout(stop, Math.max(1, timeoutMs));
+  const bodyRead = readResponseBytes(response, maxBytes, controller.signal);
+  // A timed-out reader may remain pending if a non-conforming stream ignores
+  // cancellation. Observe its eventual rejection so the bounded classifier
+  // can return without creating an unhandled promise.
+  void bodyRead.catch(() => undefined);
+  try {
+    const bytes = await Promise.race([bodyRead, stopped]);
+    if (bytes === undefined) return false;
+    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return keys.length === 2 && keys[0] === 'error' && keys[1] === 'message' &&
+      record.error === 'invalid_path' && typeof record.message === 'string' &&
+      record.message.length > 0 && record.message.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(record.message);
+  } catch {
+    // An unreadable/malformed error body is never evidence of the narrow route
+    // incompatibility and therefore remains a normal HTTP failure.
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onParentAbort !== undefined) signal?.removeEventListener('abort', onParentAbort);
+    controller.abort();
+  }
 }
 
 function assertSafeURL(url: URL, allowLoopbackForTests = false): void {

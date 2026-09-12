@@ -498,6 +498,44 @@ Rules:
   installs, first-seen time, display name, and mutable branch names never become
   an upstream release version.
 
+### Nested detail-route compatibility
+
+The selected detail request is authoritative only after the response has passed
+all normal schema checks: `id`, `source`, and `slug` must form the same canonical
+full ID, and every returned file entry must be valid. A redirect is terminal for
+the detail and metadata requests; it is never converted into a same-origin
+`invalid_path` fallback. This prevents a redirect target from changing the
+catalog identity or credential boundary.
+
+For a valid, fully parsed nested catalog ID, the adapter may recover from only
+these bounded detail failures:
+
+- a `404`;
+- a `400` whose complete public body is exactly
+  `{ "error": "invalid_path", "message": "..." }`;
+- a fully valid detail response whose canonical `id` differs from the requested
+  full ID, which is treated as an identity mismatch.
+
+The adapter then performs a fresh authenticated exact-ID catalog lookup, using
+the complete ID as the equality key. It takes `source`, `slug`, `sourceType`,
+and the source locator only from the validated matching row; it never splits a
+caller string by slash or guesses a repository/path. Recovery is allowed only
+when that row proves a nested slug (or another explicitly documented source
+shape), the row's canonical source/slug identity agrees with its full ID, and
+the source allowlist and locator verifier accept it. An ordinary three-segment
+GitHub ID therefore retains the original detail failure when its row does not
+prove a nested slug.
+
+Generic `400` responses, malformed error bodies, malformed or internally
+inconsistent detail bodies, redirects, authentication/authorization failures,
+rate limits, timeouts, and `5xx` responses never activate this fallback. The
+invalid-path body classifier has its own bounded body-read timeout, so a
+non-terminating error stream remains a terminal failure. A non-null expected
+snapshot hash also fails closed when detail is unavailable; metadata recovery
+cannot downgrade a previously pinned hash. Recovered imports continue through
+the existing source credential isolation, immutable bundle, scanner, and policy
+admission path, and record the fallback reason in provenance.
+
 ## Discovery and paging design
 
 1. The server-side adapter calls `GET /api/v1/skills` for All, Trending, and

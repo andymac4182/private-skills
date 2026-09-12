@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  classifyNestedDetailFallback,
   SkillsDirectoryClient,
   SkillsDirectoryError,
 } from '../src/index.js';
@@ -622,5 +623,93 @@ describe('SkillsDirectoryClient', () => {
     expect(events).toEqual([]);
     expect(JSON.stringify({ events, stats: client.cacheStats() })).not.toContain('long-query-token');
     expect(JSON.stringify({ events, stats: client.cacheStats() })).not.toContain(longAscii);
+  });
+
+  it('finds a fresh exact nested row without using the shared metadata cache', async () => {
+    const nested = {
+      ...skill,
+      id: 'claude-office-skills/skills/facebook/meta-ads',
+      source: 'claude-office-skills/skills',
+      slug: 'facebook/meta-ads',
+      name: 'meta-ads',
+    };
+    let tokenNumber = 0;
+    const getToken = vi.fn(async () => `fresh-token-${++tokenNumber}`);
+    const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer fresh-token-${tokenNumber}`);
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/api/v1/skills/search');
+      expect(url.searchParams.get('q')).toBe(nested.id);
+      expect(url.searchParams.get('limit')).toBe('200');
+      return response({ data: [nested], query: nested.id, searchType: 'fuzzy', count: 1, durationMs: 1 });
+    });
+    const client = new SkillsDirectoryClient({ fetch, getToken });
+
+    const first = await client.findExact(nested.id);
+    const second = await client.findExact(nested.id);
+
+    expect(first).toMatchObject({ id: nested.id, source: nested.source, slug: nested.slug, feedName: null });
+    expect(second.id).toBe(nested.id);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(getToken).toHaveBeenCalledTimes(2);
+    expect(client.cacheStats()).toMatchObject({ hits: 0, misses: 0, stores: 0, entries: 0 });
+  });
+
+  it('walks bounded list pages when search does not return the exact nested row', async () => {
+    const nested = {
+      ...skill,
+      id: 'catalog-owner/skills/facebook/meta-ads',
+      source: 'catalog-owner/skills',
+      slug: 'facebook/meta-ads',
+      name: 'meta-ads',
+    };
+    const fetch = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/search')) {
+        return response({ data: [], query: url.searchParams.get('q'), searchType: 'fuzzy', count: 0, durationMs: 1 });
+      }
+      const page = Number(url.searchParams.get('page'));
+      return response({
+        data: page === 1 ? [nested] : [],
+        pagination: { page, perPage: 500, total: 1, hasMore: page === 0 },
+      });
+    });
+    const client = new SkillsDirectoryClient({ fetch, cache: false });
+
+    await expect(client.findExact(nested.id)).resolves.toMatchObject({ id: nested.id, source: nested.source, slug: nested.slug });
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      'https://skills.sh/api/v1/skills/search?q=catalog-owner%2Fskills%2Ffacebook%2Fmeta-ads&limit=200',
+      'https://skills.sh/api/v1/skills/search?q=meta-ads&limit=200',
+      'https://skills.sh/api/v1/skills?view=all-time&page=0&per_page=500',
+      'https://skills.sh/api/v1/skills?view=all-time&page=1&per_page=500',
+    ]);
+  });
+
+  it('classifies only nested detail route failures eligible for exact-row recovery', async () => {
+    const nested = 'catalog-owner/skills/facebook/meta-ads';
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('http_error', 'rejected', { status: 400 }), nested)).toBeUndefined();
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('http_error', 'rejected', { status: 400, detailInvalidPath: true }), nested)).toBe('invalid_path');
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('not_found', 'missing', { status: 404 }), nested)).toBe('not_found');
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('invalid_response', 'wrong', { detailIdentityMismatch: true }), nested)).toBe('identity_mismatch');
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('unavailable', 'temporary', { status: 503 }), nested)).toBeUndefined();
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('unauthorized', 'denied', { status: 401 }), nested)).toBeUndefined();
+    expect(classifyNestedDetailFallback(new SkillsDirectoryError('http_error', 'rejected', { status: 400 }), 'owner/repo')).toBeUndefined();
+  });
+
+  it('rejects a list response whose page does not match the requested exact lookup page', async () => {
+    const nested = 'catalog-owner/skills/facebook/meta-ads';
+    const fetch = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/search')) {
+        return response({ data: [], query: url.searchParams.get('q'), searchType: 'fuzzy', count: 0, durationMs: 1 });
+      }
+      return response({
+        data: [],
+        pagination: { page: 9, perPage: 500, total: 0, hasMore: false },
+      });
+    });
+    const client = new SkillsDirectoryClient({ fetch, cache: false });
+
+    await expect(client.findExact(nested)).rejects.toMatchObject({ code: 'invalid_response' });
   });
 });
