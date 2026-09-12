@@ -399,6 +399,14 @@ async function prompt(fixture: Fixture, draft: Record<string, any>, sessionId: s
   });
 }
 
+async function promptWithoutSession(fixture: Fixture, draft: Record<string, any>, requestId: string, promptText = 'Suggest a bounded edit'): Promise<Response> {
+  return await request(fixture, `/v1/drafts/${draft.id}/builder/session/prompt?${bindingQuery(draft)}`, {
+    method: 'POST',
+    token: 'publisher-token',
+    body: { prompt: promptText, requestId, selectedPath: 'SKILL.md' },
+  });
+}
+
 async function internalProposal(
   fixture: Fixture,
   draft: Record<string, any>,
@@ -843,7 +851,16 @@ describe('builder BFF draft contract', () => {
       eveSessionId: 'eve-session-1',
       state: 'completed',
       proposals: [],
+      requests: [expect.objectContaining({ id: 'terminal-first-prompt', state: 'completed' })],
     });
+
+    const replay = await promptWithoutSession(fixture, draft, 'terminal-first-prompt');
+    expect(replay.status).toBe(200);
+    expect(fixture.modelCalls).toBe(1);
+    const changedReplay = await promptWithoutSession(fixture, draft, 'terminal-first-prompt', 'Change the bounded edit');
+    expect(changedReplay.status).toBe(409);
+    expect((await json(changedReplay)).code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(fixture.modelCalls).toBe(1);
 
     const [second, concurrentSecond] = await Promise.all([
       createSession(fixture, draft, 'terminal-second-session'),
