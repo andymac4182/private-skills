@@ -8,10 +8,10 @@ The explicitly requested skills.sh catalog, source pullthrough, and cloud-view
 delivery is tracked separately from the Tessl comparison in
 [`skills-sh.md`](skills-sh.md). That review used the current skills.sh site,
 its documented API, and the official `vercel-labs/skills` repository.
-The current v0.3.0 release baseline and its remaining production gates are
-recorded in [`verification-v0.3.0.md`](verification-v0.3.0.md), with the
-historical v0.2.0 checkpoint retained separately. The measurable exit gates
-for this roadmap are in [`completion-criteria.md`](completion-criteria.md).
+The current delivery baseline and its remaining production gates are recorded in
+[`verification-current.md`](verification-current.md), with the historical v0.3.0
+and v0.2.0 checkpoints retained separately. The measurable exit gates for this
+roadmap are in [`completion-criteria.md`](completion-criteria.md).
 The Private Skills status column is based on [`README.md`](../README.md),
 [`implementation.md`](implementation.md), the CLI and pack contract
 ([`cli-and-packs.md`](cli-and-packs.md)), semantic search
@@ -35,69 +35,50 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close v0.2.0 and the remaining C1 evidence.** Finish the remaining
-  physical-source and source-revision checks. The latest verified deployment
-  checkpoint is PR36's docs-only source commit
-  `c7a0f03a4c482afa219f4c86339163b40161f944`; its [sanitized release
-  evidence](evidence/production-release-checkpoint-c7a0f03.json) records READY
-  registry, builder, and upload-reviewer deployments. PR34 remains the
-  functional release checkpoint; its authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
-  is read-only and records selected-file digest, keyboard focus, responsive
-  overflow, and zero console/page errors. The Neon production integration,
-  storage, secrets, authenticated production flow, released CLI evidence, and
-  bounded hosted logical restore are recorded as complete. Native CI remains
-  provider-blocked before any job step. The latest verification record
-  identifies the remaining gates.
-- **Current follow-up delivery: skills.sh cloud catalog.** Ship the authenticated,
-  on-demand skills.sh catalog adapter, identity-preserving automatic source
-  pullthrough and approved-cache behavior, and the Packs, Topics, Official, and
-  external Audits views described in
-  [`skills-sh.md`](skills-sh.md), including a metadata-only preview/link for
-  user-supplied unlisted Packs. Existing private-pack management remains in
-  scope; external batch migration is a later milestone. This is the explicitly
-  requested next product delivery after G0; it does not retroactively expand
-  the v0.2.0 launch gate or require a bulk mirror of the public catalog. The
-  owner has authorized the Vercel project OIDC destination. Source `0f9da75`
-  implements the directory, Topics parser, bounded cache, enumeration, and
-  security checks; deployment `dpl_E7rSQAa1cbm85fKGTgKbwE9Ats7y` is historical
-  API evidence. The PR36 docs-only checkpoint records the current READY
-  deployment set; PR34 retains the functional hosted read-only viewer evidence
-  while preserving the earlier verified release manifest and selected-file GET
-  evidence; physical source
-  acceptance, selected imports, nested detail, Packs preview, and tenant/secrecy
-  remain open. The required install
-  path supports multiple tenant feeds, with one origin/restriction configuration
-  per feed and feed membership kept separate from the catalog's source identity.
-  A complete skills.sh identity is enough to start a cold pullthrough, which
-  must validate and scan before caching; a warm install reuses only a matching
-  approved artifact after canonical source/revision and ACL checks, concurrent
-  cold requests deduplicate, and an explicit refresh reports source failure
-  instead of presenting an older cache as fresh. Optional source restrictions
-  are an administrator policy, not a prerequisite for a public catalog row.
+- **Now: close the remaining C1 evidence.** The current verified delivery source is merged
+  main `57bce92403af37e8303c654d7a03da634c63445f` and fresh root-coordinated
+  Vercel API evidence maps that exact source to READY registry, builder, and
+  upload-reviewer deployments. PR40, PR39, and PR41 are merged as `8ed18be`,
+  `3e000aa`, and `57bce92`. C1 telemetry/parser work is in progress;
+  physical GitHub/well-known source pullthrough, direct warm-path
+  instrumentation, and tenant/secrecy acceptance remain open. Native CI was
+  waived by explicit repository-owner instruction on 13 September 2026 for this
+  delivery/review scope; workflows remain enabled and no native target pass is
+  claimed. The published v0.2.0 CLI package lacks feed, directory, and current
+  pullthrough support; v0.3 packaging is in progress and no v0.3 publication is
+  claimed. The isolated hosted-edge proof passed separately with its disposable
+  resources cleaned up; it does not close the remaining product gates.
+- **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,
+  on-demand catalog adapter, identity-preserving pullthrough, approved-cache
+  behavior, and Packs, Topics, Official, and external Audits views remain the
+  scoped C1 delivery described in [`skills-sh.md`](skills-sh.md). Telemetry and
+  parser work is in progress. A complete source identity still must pass
+  canonical validation and required scanning before caching; physical source
+  resolution, direct warm-path instrumentation, and tenant/secrecy acceptance
+  remain open. Existing private-pack management is in
+  scope; external batch migration remains future work.
 - **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
-  The PR34 release checkpoint has READY registry, builder, and upload-reviewer
-  services. The [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
-  records authenticated release-file rendering and responsive/keyboard checks,
-  without authoring mutations or publication; `modelCalls` was false for that
-  viewer capture. The [local synthetic editor/browser
+  The current READY service set and historic [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
+  establish the viewer boundary only. The [local synthetic editor/browser
   evidence](evidence/m6-editor-browser-local-29f7.json) passes bounded
-  desktop/mobile draft checks; live upload-review/model execution, durable
-  upload-draft resume, and screenreader/contrast/reduced-motion acceptance
-  remain pending. Complete M6
-  still requires the composed editor, durable drafts, upload/edit reviewer,
-  builder, and their end-to-end evidence. The Diffs integration, persistence,
-  identity, review jobs, UI findings, scanner authority, malicious-content
-  boundary, and accessibility gates are specified in **M6** below and
-  [`completion-criteria.md`](completion-criteria.md). This milestone is active
-  implementation work, but it is not a G0 or C1 release gate until its criteria
-  and evidence pass.
-- **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.** In parallel with M6, add a
-  versioned producer and consumer for the
-  official ClawHub hosted skills-feed contract. The later **M7** milestone
-  below covers the wire schema, exact source/digest mapping, bounded snapshot
-  refresh, tenant-safe publication, local scanner admission, and
-  producer/consumer fixtures. It is an interoperability milestone, not a
-  requirement to mirror the public catalog or a G0, C1, or M6 release gate.
+  desktop/mobile draft checks. Terminal-session restart PR39 (`0f71d4`) shipped in
+  the verified `57bce924` checkpoint with its browser-passed final UI guard;
+  draft-resume and accessibility changes remain pending. A new live Eve proposal
+  is verified, while its apply, review, scan, and publication steps remain
+  pending. Complete M6 still requires the
+  composed editor, durable drafts, upload/edit reviewer, builder, and their
+  end-to-end evidence. This milestone is active implementation work, but it is
+  not a G0 or C1 release gate until its criteria and evidence pass.
+- **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.**
+  Seven reviewed nonsecret production settings are active. Two hosted M7
+  candidates failed closed on artifact digest mismatches. The public-GitHub M7
+  candidate failure was diagnosed as a PAX parser issue; a local fix with the
+  exact NVIDIA digest passed and awaits its PR. No feed import or publication is
+  claimed. The later **M7** milestone below covers the versioned producer/consumer
+  contract, exact source/digest mapping, bounded refresh, tenant-safe
+  publication, local scanner admission, and fixtures. It remains an
+  interoperability milestone, not a requirement to mirror the public catalog or
+  a G0, C1, or M6 release gate.
 - **P1: CLI compatibility after the cloud contract.** Add registry-mediated
   `find`/source selectors, lock check/restore/sync, source-aware lock
   provenance, multi-skill selection, and a data-driven agent registry only

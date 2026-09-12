@@ -12,39 +12,49 @@ their own criteria and evidence pass. They do not silently expand the current
 release checklist.
 
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). The latest verified
-deployment checkpoint is PR36's docs-only source commit
-`c7a0f03a4c482afa219f4c86339163b40161f944`; the sanitized [release
-evidence](evidence/production-release-checkpoint-c7a0f03.json) records READY
-registry, builder, and upload-reviewer deployments with no production
-configuration, environment, registry-data, feed, or authenticated
-application-data change. Native CI stopped before runner execution for account
-payment/spending admission. PR34 remains the functional release checkpoint;
-its authenticated [hosted M6 viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
-records auth 200, genuine Pierre rendering, selected-file digest and 1231-byte
-size, keyboard tree focus, desktop/mobile overflow checks, inner code scrolling,
-and zero console/page errors. This is read-only viewer evidence; it does not
-prove the M6 model/apply/review/scan workflow, durable upload-draft resume,
-screenreader, contrast, or reduced-motion acceptance. The [local Cloudflare
-build record](evidence/edge-build-c7a0f03.json) is source/build evidence only:
-Wrangler was unauthenticated and no hosted Cloudflare deployment was attempted.
-PR35 candidate source `c4cd24a` remains pending approval after 62 tests and
-three Vercel previews passed; native CI remains billing-blocked and two UI fixes
-are pending approval, not shipped. OpenClaw's seven nonsecret production settings
-are staged in the sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
-with names and exit codes only, and await exact activation approval; the current
-c7 runtime remains inactive. Subsequent main production deployments are held
-pending that approval to avoid implicitly activating the staged settings. The
+[`verification-current.md`](verification-current.md). The current verified
+delivery checkpoint is merged main source
+`57bce92403af37e8303c654d7a03da634c63445f`, containing PR40 merge `8ed18be`,
+PR39 merge `3e000aa`, and PR41 merge `57bce92`. Fresh root-coordinated Vercel
+API evidence maps that exact source to READY Git-triggered production
+deployments for the registry (`dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`), builder
+(`dpl_6qo7B4evMTgxDg6Zt76LXQuXZcuy`), and upload-reviewer
+(`dpl_CNTXXWDfppG7D8ZKuYVhVnhzmuhU`). The earlier `878c636` cascade remains a
+historical checkpoint. Historical PR36 and PR34 records retain their original
+source and read-only limits below.
+
+Native CI was waived by explicit repository-owner instruction on 13 September
+2026 for this delivery/review scope. Workflows remain enabled, the captured
+provider billing/payment or spending-limit admission prevented runner steps, and
+no native target pass is claimed. Seven reviewed nonsecret OpenClaw production
+settings are active; the sanitized [settings-stage record](evidence/openclaw-production-settings-staged-20260910.json)
+retains names and exit codes only. Active settings establish runtime
+configuration but do not prove feed import or publication, and M7 remains
+incomplete.
+
+The published v0.2.0 CLI package lacks feed, directory, and current pullthrough
+support. v0.3 packaging is in progress; no v0.3 publication is claimed.
+
+The isolated hosted-edge proof from source `c7a0f03` passed through a temporary
+Cloudflare Worker and Node gateway with required scanning, private storage,
+semantic search, authentication negatives, revocation, and cleanup. Its
+detailed record is maintained by the edge-proof workstream and will be linked
+after that workstream's approved merge; it is a separate acceptance record and
+does not replace release gates. M6 remains incomplete: terminal-session restart
+PR39 (`0f71d4`) shipped in the verified `57bce924` checkpoint with its
+browser-passed final UI guard; draft-resume and accessibility changes remain
+pending. A new live Eve proposal is verified, while its apply, review, scan, and
+publication steps remain pending. C1 telemetry/parser work is in progress;
+physical GitHub/well-known source pullthrough remains open. No publication is
+claimed.
+
+The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
+the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September 2026
+proof window. The short dated probe was inconclusive and the fuller proof is
+being prepared. The earlier run is deployment-scoped temporal correlation until
+an explicit scheduler/session identifier is captured. The
 earlier PR32 activation and PR30 release-file records retain their own
-source/deployment provenance.
-The prior quarantined import, same-root CLI result, local edge/multi-feed tests,
-metadata-only Pack preview, and snapshot-only candidate admission remain
-source-specific evidence. Physical GitHub/well-known resolution, direct
-zero-upstream instrumentation, and complete C1 remain open. A bounded hosted
-Neon/object-storage logical restore is verified for source revision 114 and five
-referenced objects; native CI remains open. M7's public metadata probe is
-interoperability evidence only and does not prove hosted artifact import,
-private publication, or feed activation.
+source/deployment provenance below.
 
 ## G0 — v0.2.0 shipment
 
@@ -78,16 +88,19 @@ Close the remaining gates in [`verification-v0.2.0.md`](verification-v0.2.0.md):
   local PostgreSQL 17.6/Files SDK filesystem stack with SkillsGuard 1.1.1
   required, `allowUnscanned=false`, 2/2 files analyzed, approval, and a
   digest-matched 367-byte authorized transfer. It is loopback HTTP with an
-  HTTPS-shaped local origin and does not close hosted Cloudflare/TLS, provider,
-  semantic-search, or native CI gates; the earlier 62c4a58 record remains
-  historical in the current verification record;
+  HTTPS-shaped local origin and is separate from the isolated hosted-edge
+  acceptance record; it does not close provider, semantic-search, or native CI
+  gates. The earlier 62c4a58 record remains historical in the current
+  verification record;
 - **E7 source review reported green:** source head `0f9da75` has 286 tests
   passed and two environment-dependent skips; TypeScript, five SDK probes,
   Files SDK checks, and the Cloudflare build pass, and two independent reviews
   approve. The private v0.2.0 archives/checksums and clean-consumer verification
   are complete in [`verification-v0.2.0.md`](verification-v0.2.0.md) and the
   retained [release evidence](../work/release-verification-v0.2.0-4E13vA/);
-  no v0.3 archive is claimed published.
+  the published v0.2.0 CLI package lacks feed, directory, and current
+  pullthrough support; v0.3 packaging is in progress, and no v0.3 publication
+  is claimed.
 - **verified for the local rehearsal:** the recovery test resolves the original
   digest and preserves revocation, authorization, and tenant boundaries;
 - **verified for the bounded hosted logical restore:** the sanitized [restore
@@ -109,8 +122,8 @@ health/scanner run and native CI remain outside this proof. The optional
 unfenced mode is not implemented and its mandatory-fence relaxation remains
 separately approval-pending.
 
-The separate Eve route and registered `0 22 * * *` UTC schedule (22:00 UTC,
-subject to the hosting execution window) now have a sanitized production
+The historical Eve run used the default `0 22 * * *` UTC schedule (22:00 UTC,
+subject to the hosting execution window) and has a sanitized production
 [cron evidence record](../work/reviewer-cron-completion-evidence.json) for
 deployment `dpl_4Jnh9PZj3YcXxGb59aRGFTXo3Q3e`. The cron path was observed at
 2026-09-09 22:46:40 UTC; authoritative workflow analytics show the primary
@@ -134,6 +147,11 @@ The criteria below are the acceptance contract for the current follow-up
 delivery; implementation and production verification may proceed independently
 of the completed bounded G0 hosted logical-restore scope.
 
+C1 telemetry/parser work is in progress. Physical GitHub and well-known source
+pullthrough, direct warm-path instrumentation, and tenant/secrecy acceptance
+remain open. The current delivery's native CI waiver and deployment status are
+recorded in [`verification-current.md`](verification-current.md).
+
 Dependencies: an authenticated skills.sh gateway contract that works on the
 selected Nitro deployment, a versioned external identity model, and a
 server-side source resolver that can hand complete bytes to the existing
@@ -151,7 +169,7 @@ enabled feed exists; with multiple enabled feeds the caller must select one
 explicitly. Explicit feed selection still passes tenant, enabled, origin, and
 policy checks before catalog access.
 The owner authorized server-side forwarding of the Vercel project OIDC token to
-skills.sh on 2026-09-10. The current guarded prebuilt rollout is
+skills.sh on 2026-09-10. The earlier guarded prebuilt rollout was
 `dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE`, from merged main
 `fecd6baa1411c2f3c2ad60b13c2c0e37761d2826` with artifact source
 `b1d3b6d77162899491f742e2930abe0b36137d8e`. Its sanitized [rollout evidence](evidence/production-c1-feed-rollout-dpl_8ruEP3uXzmGwqAXpxjQD8d3yZbHE.json)
@@ -186,7 +204,7 @@ and concurrent-deduplication evidence remains pending; a conditionally
 approved isolated CLI folder is not import acceptance evidence. Optional source
 restrictions must not become a prerequisite for the default catalog path.
 
-The current production [snapshot candidate record](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
+The prior production [snapshot candidate record](evidence/production-candidate-web-design-guidelines-pullthrough-dpl_CpAApe78RJs3oXuuk4iPzbtdnczb.json)
 closes the snapshot-admission slice for
 `vercel-labs/agent-skills/web-design-guidelines`: the existing feed and
 fail-closed policy were read back, one cold operation reached approved after
@@ -626,13 +644,16 @@ editing, revocation, scanner bypass, or automatic vendor forwarding.
 ## M6 — full Diffs editor and upload/edit review (active implementation, incomplete; VIEW slice evidence delivered)
 
 M6 is the editor and upload/edit reviewer requested for the Private Skills web
-application. The editor and authoring API/source are shipped in the verified
-source checkpoint,
-and upload-review configuration is enabled in the current deployment. The local
-synthetic editor/browser fixture passes its bounded desktop/mobile checks, while
-hosted UI acceptance, live Eve/model execution, and screenreader, contrast, and
-reduced-motion evidence remain pending. Its read-only release-file VIEW slice
-has delivered production GET evidence for manifest, selected text-file
+application. The editor and authoring API/source are shipped, and upload-review
+configuration is enabled in the current deployment. The local synthetic
+editor/browser fixture passes its bounded desktop/mobile checks, while hosted UI
+acceptance, live Eve/model execution, and screenreader, contrast, and
+reduced-motion evidence remain pending. Terminal-session restart PR39 (`0f71d4`)
+shipped in the verified `57bce924` checkpoint with its browser-passed final UI
+guard; draft-resume and accessibility changes remain pending. A new live Eve
+proposal is verified, while its apply, review, scan, and publication steps
+remain pending. Its read-only release-file VIEW
+slice has delivered production GET evidence for manifest, selected text-file
 retrieval, digest verification, and unauthenticated rejection; the full
 composed editor, durable draft, upload/edit review, and builder evidence
 criteria remain active and incomplete. It is not a G0 or C1 release
@@ -873,6 +894,14 @@ feed contains only explicitly public records. No upstream feed credential,
 private bytes, or scanner report is placed in a feed or browser response.
 
 ### Current composed implementation checkpoint
+
+Seven reviewed nonsecret OpenClaw production settings are active in the current
+deployment; the settings-stage record retains names and exit codes only. This
+activation establishes runtime configuration, not feed import or publication.
+Two hosted M7 candidates failed closed on artifact digest mismatches. The
+public-GitHub M7 candidate failure was diagnosed as a PAX parser issue; a local
+fix with the exact NVIDIA digest passed and awaits its PR. M7 therefore remains
+an active, incomplete implementation milestone.
 
 The current core/runtime composition exposes the following bounded consumer
 surface when an operator configures an OpenClaw feed. `GET
