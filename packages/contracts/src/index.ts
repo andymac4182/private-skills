@@ -2,6 +2,12 @@ export const PROTOCOL_VERSION = 1;
 export type Digest = `sha256:${string}`;
 export type Role = 'owner' | 'admin' | 'publisher' | 'reader' | 'worker';
 export interface Principal { organizationId: string; subject: string; roles: Role[]; namespaces?: string[]; scopes?: string[]; }
+/** A bounded, request-local observation of one external fetch boundary. */
+export type UpstreamRequestKind = 'catalog' | 'source';
+export interface UpstreamRequestObserver {
+  /** Record only the category of a fetch; URLs, headers, and response data stay out of telemetry. */
+  record(kind: UpstreamRequestKind): void;
+}
 /** content is strict RFC 4648 padded base64. Never raw UTF-8 text. */
 export interface BundleFile { path: string; content: string; executable?: boolean; }
 export interface SkillBundle { format: 'pskills-bundle-v1'; files: BundleFile[]; }

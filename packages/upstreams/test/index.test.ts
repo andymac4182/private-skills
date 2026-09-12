@@ -98,6 +98,7 @@ describe('upstream acquisition', () => {
   afterAll(() => server.close());
 
   it('fetches a complete pinned GitHub directory and preserves support files', async () => {
+    const observed: Array<'catalog' | 'source'> = [];
     const result = await acquireSkill({
       upstream: {
         id: 'github-fixture',
@@ -118,11 +119,14 @@ describe('upstream acquisition', () => {
         version: '1.0.0',
       },
       allowLoopbackForTests: true,
+      upstreamObserver: { record: (kind) => observed.push(kind) },
     });
     assert.deepEqual(result.bundle.files.map((file) => file.path), ['LICENSE', 'SKILL.md']);
     assert.equal(result.provenance.revision, COMMIT);
     assert.match(result.provenance.fetchedAt ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     assert.equal(lastHeaders.authorization, undefined);
+    assert.equal(observed.length, 4);
+    assert.ok(observed.every((kind) => kind === 'source'));
   });
 
   it('uses named environment credentials only for registry control-plane calls', async () => {

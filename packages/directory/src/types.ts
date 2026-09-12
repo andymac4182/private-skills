@@ -1,4 +1,7 @@
 import type { DirectoryCacheOptions } from './cache.js';
+import type { UpstreamRequestObserver } from '../../contracts/src/index.js';
+
+export type { UpstreamRequestObserver } from '../../contracts/src/index.js';
 
 /**
  * Host-neutral contracts for the public skills.sh directory API.
@@ -193,6 +196,8 @@ export interface SkillAuditResponse {
 export interface RequestOptions {
   /** Optional caller cancellation signal for this one request. */
   signal?: AbortSignal;
+  /** Optional request-local observer invoked immediately before each fetch attempt. */
+  upstreamObserver?: UpstreamRequestObserver;
 }
 
 export interface DirectoryLimits {

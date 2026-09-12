@@ -30,6 +30,7 @@ import {
   type SkillsTokenProvider,
   type V1Skill,
   type RequestOptions,
+  type UpstreamRequestObserver,
 } from './types.js';
 import {
   SKILLS_TOPIC_PARSER_REVISION,
@@ -126,6 +127,8 @@ export class SkillsDirectoryClient {
       options.signal,
       (body, fetchedAt) => normalizeSkillListResponse(body, this.limits, this.baseURL, fetchedAt),
       'list',
+      false,
+      options.upstreamObserver,
     );
   }
 
@@ -156,6 +159,8 @@ export class SkillsDirectoryClient {
       searchOptions.signal,
       (body, fetchedAt) => normalizeSkillSearchResponse(body, this.limits, this.baseURL, fetchedAt),
       'search',
+      false,
+      searchOptions.upstreamObserver,
     );
   }
 
@@ -167,6 +172,8 @@ export class SkillsDirectoryClient {
       options.signal,
       (body, fetchedAt) => normalizeCuratedSkillsResponse(body, this.limits, this.baseURL, fetchedAt),
       'curated',
+      false,
+      options.upstreamObserver,
     );
   }
 
@@ -187,6 +194,7 @@ export class SkillsDirectoryClient {
       },
       undefined,
       true,
+      options.upstreamObserver,
     );
   }
 
@@ -221,6 +229,9 @@ export class SkillsDirectoryClient {
           query,
           deadline.signal,
           (body, fetchedAt) => normalizeSkillSearchResponse(body, this.limits, this.baseURL, fetchedAt),
+          undefined,
+          false,
+          options.upstreamObserver,
         );
         const match = exactMetadataMatch(response.data, normalizedId);
         if (match) return match;
@@ -238,6 +249,9 @@ export class SkillsDirectoryClient {
           query,
           deadline.signal,
           (body, fetchedAt) => normalizeSkillListResponse(body, this.limits, this.baseURL, fetchedAt),
+          undefined,
+          false,
+          options.upstreamObserver,
         );
         if (response.pagination.page !== page) {
           throw invalidResponseError('exact metadata pagination page');
@@ -271,6 +285,8 @@ export class SkillsDirectoryClient {
         return audit;
       },
       'audit',
+      false,
+      options.upstreamObserver,
     );
   }
 
@@ -280,7 +296,7 @@ export class SkillsDirectoryClient {
     const sourceUrl = this.topicURL(normalizedSlug);
     let html: string;
     try {
-      html = await this.requestTopicDocument(sourceUrl, options.signal);
+      html = await this.requestTopicDocument(sourceUrl, options.signal, options.upstreamObserver);
     } catch (error) {
       if (error instanceof SkillsDirectoryError && error.code === 'not_found') {
         return topicUnavailable({
@@ -328,6 +344,7 @@ export class SkillsDirectoryClient {
     normalize: (body: unknown, fetchedAt: string) => T,
     cacheEndpoint?: DirectoryCacheEndpoint,
     detailRoute = false,
+    upstreamObserver?: UpstreamRequestObserver,
   ): Promise<T> {
     if (signal?.aborted) throw requestTimeoutError();
 
@@ -336,7 +353,7 @@ export class SkillsDirectoryClient {
       // to this invocation and is never saved on the client or shared
       // globally.
       const token = await this.resolveToken(signal);
-      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute, upstreamObserver);
       return result.value;
     }
 
@@ -351,7 +368,7 @@ export class SkillsDirectoryClient {
       // or otherwise weaken the identity by caching it under a collision-prone
       // key.
       const token = await this.resolveToken(signal);
-      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute);
+      const result = await this.requestUncached(endpoint, query, signal, normalize, token, detailRoute, upstreamObserver);
       return result.value;
     }
     try {
@@ -367,6 +384,7 @@ export class SkillsDirectoryClient {
           normalize,
           credential as string | undefined,
           detailRoute,
+          upstreamObserver,
         ),
       });
     } catch (error) {
@@ -385,6 +403,7 @@ export class SkillsDirectoryClient {
     normalize: (body: unknown, fetchedAt: string) => T,
     token: string | undefined,
     detailRoute: boolean,
+    upstreamObserver?: UpstreamRequestObserver,
   ): Promise<DirectoryCacheLoadResult<T>> {
     if (signal?.aborted) throw requestTimeoutError();
     const url = this.urlFor(endpoint, query);
@@ -394,7 +413,7 @@ export class SkillsDirectoryClient {
     for (let attempt = 1; attempt <= this.limits.maxAttempts; attempt += 1) {
       let attemptResult: FetchAttempt;
       try {
-        attemptResult = await this.fetchOnce(url, headers, signal);
+        attemptResult = await this.fetchOnce(url, headers, signal, upstreamObserver);
       } catch (error) {
         if (error instanceof SkillsDirectoryError) throw error;
         if (isAbortError(error)) throw requestTimeoutError();
@@ -501,14 +520,18 @@ export class SkillsDirectoryClient {
     throw unavailableError();
   }
 
-  private async requestTopicDocument(url: URL, signal: AbortSignal | undefined): Promise<string> {
+  private async requestTopicDocument(
+    url: URL,
+    signal: AbortSignal | undefined,
+    upstreamObserver?: UpstreamRequestObserver,
+  ): Promise<string> {
     const headers: Record<string, string> = { accept: 'text/html, application/xhtml+xml' };
     for (let attempt = 1; attempt <= this.limits.maxAttempts; attempt += 1) {
       let attemptResult: FetchAttempt;
       try {
         // Topic pages are public HTML.  Do not resolve or forward the API
         // bearer token for this request; credentials stay inside API calls.
-        attemptResult = await this.fetchOnce(url, headers, signal);
+        attemptResult = await this.fetchOnce(url, headers, signal, upstreamObserver);
       } catch (error) {
         if (error instanceof SkillsDirectoryError) throw error;
         if (isAbortError(error)) throw requestTimeoutError();
@@ -626,6 +649,7 @@ export class SkillsDirectoryClient {
     url: URL,
     headers: Record<string, string>,
     callerSignal: AbortSignal | undefined,
+    upstreamObserver?: UpstreamRequestObserver,
   ): Promise<FetchAttempt> {
     const controller = new AbortController();
     const abortCaller = () => controller.abort();
@@ -635,6 +659,7 @@ export class SkillsDirectoryClient {
     }
     const timer = setTimeout(() => controller.abort(), this.limits.requestTimeoutMs);
     try {
+      upstreamObserver?.record('catalog');
       const response = await this.fetchImpl(url.toString(), {
         method: 'GET',
         headers,

@@ -48,6 +48,24 @@ describe('SkillsDirectoryClient', () => {
     expect((calls[0]?.init?.headers as Record<string, string>).authorization).toBe('Bearer request-token');
   });
 
+  it('records each catalog fetch attempt while cache hits remain at zero', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response({ error: 'retry' }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(response({
+        data: [skill],
+        pagination: { page: 0, perPage: 1, total: 1, hasMore: false },
+      }));
+    const events: string[] = [];
+    const observer = { record: (kind: 'catalog' | 'source') => events.push(kind) };
+    const client = new SkillsDirectoryClient({ fetch, maxAttempts: 2, sleep: async () => undefined });
+
+    await client.list({ perPage: 1, upstreamObserver: observer });
+    expect(events).toEqual(['catalog', 'catalog']);
+    await client.list({ perPage: 1, upstreamObserver: observer });
+    expect(events).toEqual(['catalog', 'catalog']);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('supports search filters and rejects unbounded input before fetching', async () => {
     const fetch = vi.fn(async (_input: string | URL) => response({
       data: [skill],

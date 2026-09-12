@@ -183,6 +183,7 @@ export async function acquireImportJob(
       ...(importRequest.externalSnapshotHash === undefined ? {} : { externalSnapshotHash: importRequest.externalSnapshotHash }),
       signal: options.signal,
       limits: options.limits,
+      upstreamObserver: options.upstreamObserver,
     });
     const openClawProof = openClawJob.entry === undefined
       ? undefined

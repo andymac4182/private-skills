@@ -88,6 +88,19 @@ older cache. The original skills.sh identity remains the stable external key
 through every lifecycle operation; internal IDs and local digests are
 provenance fields, not replacements for it.
 
+For an owner or administrator with the `registry:admin` scope, a transparent
+resolve response also includes request-local `diagnostics` with schema version
+`1`, actual catalog/source fetch-attempt counts, a committed
+`queuedJobsCreated` count, and an `overflow` flag. Counts are recorded at the
+adapter fetch boundary, so retries count as attempts while a cache hit remains
+zero. The queue count is added only after the repository transaction commits;
+readers do not receive this diagnostic object. A cold `202` response only
+queues the durable job: its later worker invocation performs source fetches
+with its own execution context, so those calls are not included in the
+original resolve diagnostics. A cold response with `source: 0` therefore does
+not claim that the worker fetched no physical source; use worker completion
+evidence for that separate invocation.
+
 ## Cache-miss transaction
 
 1. Authenticate the caller, authorize the namespace/source, enforce quotas, and resolve the source to immutable revision metadata.
