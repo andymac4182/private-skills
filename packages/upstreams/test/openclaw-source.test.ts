@@ -56,6 +56,47 @@ function tar(entries: readonly TarEntry[]): Uint8Array {
   return Uint8Array.from(Buffer.concat(chunks));
 }
 
+function paxRecord(key: string, value: string): Buffer {
+  const body = Buffer.from(`${key}=${value}\n`, 'utf8');
+  let length = body.length + 2;
+  while (length !== body.length + String(length).length + 1) {
+    length = body.length + String(length).length + 1;
+  }
+  return Buffer.concat([Buffer.from(`${length} `, 'ascii'), body]);
+}
+
+function paxRecordBytes(key: string, value: Uint8Array): Buffer {
+  const body = Buffer.concat([Buffer.from(`${key}=`, 'ascii'), Buffer.from(value), Buffer.from('\n', 'ascii')]);
+  let length = body.length + 2;
+  while (length !== body.length + String(length).length + 1) {
+    length = body.length + String(length).length + 1;
+  }
+  return Buffer.concat([Buffer.from(`${length} `, 'ascii'), body]);
+}
+
+function tarWithPaxGlobalHeader(
+  entries: readonly TarEntry[],
+  payload = paxRecord('comment', COMMIT),
+): Uint8Array {
+  const header = Buffer.alloc(512);
+  Buffer.from('pax_global_header', 'ascii').copy(header, 0);
+  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, payload.length);
+  writeTarOctal(header, 136, 12, 0);
+  header[156] = 0x67;
+  Buffer.from('ustar\0', 'ascii').copy(header, 257);
+  Buffer.from('00', 'ascii').copy(header, 263);
+  header.fill(0x20, 148, 156);
+  let checksum = 0;
+  for (const value of header) checksum += value;
+  Buffer.from(`${checksum.toString(8).padStart(6, '0')} \0`, 'ascii').copy(header, 148);
+  const padded = Buffer.alloc(Math.ceil(payload.length / 512) * 512);
+  payload.copy(padded);
+  return Uint8Array.from(Buffer.concat([header, padded, Buffer.from(tar(entries))]));
+}
+
 function githubArchive(commit = COMMIT): Uint8Array {
   const root = `skills-${commit}`;
   return Uint8Array.from(gzipSync(Buffer.from(tar([
@@ -70,6 +111,25 @@ function githubArchive(commit = COMMIT): Uint8Array {
     { path: `${root}/skills/demo/.clawhub/`, directory: true },
     { path: `${root}/skills/demo/.clawhub/state.json`, bytes: Buffer.from('metadata\n') },
   ]))));
+}
+
+function githubArchiveWithPaxGlobalHeader(
+  commit = COMMIT,
+  payload = paxRecord('comment', commit),
+): Uint8Array {
+  const root = `skills-${commit}`;
+  return Uint8Array.from(gzipSync(Buffer.from(tarWithPaxGlobalHeader([
+    { path: `${root}/`, directory: true },
+    { path: `${root}/README.md`, bytes: Buffer.from('repository readme\n') },
+    { path: `${root}/skills/`, directory: true },
+    { path: `${root}/skills/demo/`, directory: true },
+    { path: `${root}/skills/demo/SKILL.md`, bytes: SKILL },
+    { path: `${root}/skills/demo/assets/`, directory: true },
+    { path: `${root}/skills/demo/assets/logo.txt`, bytes: Buffer.from('logo\n') },
+    { path: `${root}/skills/demo/empty/`, directory: true },
+    { path: `${root}/skills/demo/.clawhub/`, directory: true },
+    { path: `${root}/skills/demo/.clawhub/state.json`, bytes: Buffer.from('metadata\n') },
+  ], payload))));
 }
 
 function fetched(bytes: Uint8Array, overrides: Partial<OpenClawFetchedSource> = {}): OpenClawFetchedSource {
@@ -204,6 +264,50 @@ describe('OpenClaw source verification', () => {
       sourceProviderOrigin: 'https://github.com',
       sourceResolutionKind: 'github',
     });
+  });
+
+  it('accepts a POSIX PAX global metadata header in a pinned GitHub archive', async () => {
+    const source: OpenClawNormalizedSource = {
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'acme/skills',
+      path: 'skills/demo',
+      commit: COMMIT,
+      contentHash: CONTENT_HASH,
+    };
+    const result = await resolve(source, fetched(githubArchiveWithPaxGlobalHeader()));
+    expect(result.bundle.files.map((file) => file.path)).toEqual(['SKILL.md', 'assets/logo.txt']);
+    expect(result.externalDigest).toBe(`sha256:${CONTENT_HASH}`);
+  });
+
+  it('accepts only inert PAX global metadata and rejects malformed or path-affecting records', async () => {
+    const source: OpenClawNormalizedSource = {
+      kind: 'public-github',
+      sourceRef: 'public-github',
+      repo: 'acme/skills',
+      path: 'skills/demo',
+      commit: COMMIT,
+      contentHash: CONTENT_HASH,
+    };
+    const inert = Buffer.concat([
+      paxRecord('comment', COMMIT),
+      paxRecord('mtime', '1700000000.25'),
+      paxRecord('atime', '1700000000'),
+      paxRecord('ctime', '1700000000'),
+      paxRecord('uid', '1000'),
+      paxRecord('gid', '1000'),
+    ]);
+    const accepted = await resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, inert)));
+    expect(accepted.externalDigest).toBe(`sha256:${CONTENT_HASH}`);
+
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, paxRecord('path', '../../escape'))))).rejects.toMatchObject({ code: 'unsupported_archive' });
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, paxRecord('linkpath', 'SKILL.md'))))).rejects.toMatchObject({ code: 'unsupported_archive' });
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, paxRecord('size', '1'))))).rejects.toMatchObject({ code: 'unsupported_archive' });
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, Buffer.from(`999 comment=${COMMIT}\n`, 'ascii'))))).rejects.toMatchObject({ code: 'invalid_archive' });
+    const missingNewline = paxRecord('comment', COMMIT).subarray(0, -1);
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, missingNewline)))).rejects.toMatchObject({ code: 'invalid_archive' });
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, paxRecordBytes('comment', Uint8Array.from([0xc3, 0x28])))))).rejects.toMatchObject({ code: 'invalid_archive' });
+    await expect(resolve(source, fetched(githubArchiveWithPaxGlobalHeader(COMMIT, paxRecord('comment', 'not-a-commit'))))).rejects.toMatchObject({ code: 'unsupported_archive' });
   });
 
   it('resolves a verified hosted artifact while retaining its external digest separately', async () => {

@@ -2654,6 +2654,7 @@ function clientAllowsLoopback(client: HttpClient): boolean {
 
 const WELL_KNOWN_MAX_ARCHIVE_FILES = 1_000;
 const WELL_KNOWN_MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
+const MAX_TAR_PAX_HEADER_BYTES = 64 * 1024;
 
 interface ArchiveDirectoryEntry {
   path: string;
@@ -3350,12 +3351,85 @@ function extractTarArchive(
         seen.add(path);
         if (includeDirectories) files.push({ path, kind: 'directory' });
       }
+    } else if (type === 0x67) {
+      if (size > Math.min(limits.maxFileBytes, MAX_TAR_PAX_HEADER_BYTES)) {
+        throw new UpstreamAcquisitionError('archive_limit', 'tar PAX global header exceeds its size limit');
+      }
+      validateTarPaxGlobalHeader(bytes.subarray(offset, offset + size));
     } else {
       throw new UpstreamAcquisitionError('unsupported_archive', 'tar archive contains a link or unsupported entry');
     }
     offset = end;
   }
   throw new UpstreamAcquisitionError('invalid_archive', 'tar archive is missing its end-of-archive marker');
+}
+
+function validateTarPaxGlobalHeader(bytes: Uint8Array): void {
+  if (bytes.length === 0 || bytes.length > MAX_TAR_PAX_HEADER_BYTES) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header is empty or too large');
+  }
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const keys = new Set<string>();
+  let offset = 0;
+  while (offset < bytes.length) {
+    const space = bytes.indexOf(0x20, offset);
+    if (space <= offset || space - offset > 20) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header has an invalid record length');
+    }
+    let length = 0;
+    for (let index = offset; index < space; index += 1) {
+      const digit = bytes[index]! - 0x30;
+      if (digit < 0 || digit > 9) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header has an invalid record length');
+      }
+      length = length * 10 + digit;
+      if (!Number.isSafeInteger(length)) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header record length is too large');
+      }
+    }
+    const minimumLength = (space - offset) + 5;
+    if (length < minimumLength || length > bytes.length - offset) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header record is truncated');
+    }
+    const recordEnd = offset + length;
+    if (bytes[recordEnd - 1] !== 0x0a) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header record is missing its newline');
+    }
+    const record = bytes.subarray(space + 1, recordEnd - 1);
+    const equals = record.indexOf(0x3d);
+    if (equals <= 0) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header record is missing its key');
+    }
+    let key: string;
+    let value: string;
+    try {
+      key = decoder.decode(record.subarray(0, equals));
+      value = decoder.decode(record.subarray(equals + 1));
+    } catch {
+      throw new UpstreamAcquisitionError('invalid_archive', 'tar PAX global header is not valid UTF-8');
+    }
+    if (key.includes('\0') || value.includes('\0') || keys.has(key)) {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'tar PAX global header contains unsupported metadata');
+    }
+    keys.add(key);
+    if (key === 'comment') {
+      if (!/^[0-9a-f]{40}$/.test(value)) {
+        throw new UpstreamAcquisitionError('unsupported_archive', 'tar PAX global header comment is not an immutable commit');
+      }
+    } else if (key === 'mtime' || key === 'atime' || key === 'ctime') {
+      if (!/^-?[0-9]+(?:\.[0-9]+)?$/.test(value) || !Number.isFinite(Number(value))) {
+        throw new UpstreamAcquisitionError('unsupported_archive', 'tar PAX global header contains an invalid timestamp');
+      }
+    } else if (key === 'uid' || key === 'gid') {
+      const numeric = Number(value);
+      if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(numeric)) {
+        throw new UpstreamAcquisitionError('unsupported_archive', 'tar PAX global header contains an invalid owner id');
+      }
+    } else {
+      throw new UpstreamAcquisitionError('unsupported_archive', 'tar PAX global header contains unsupported metadata');
+    }
+    offset = recordEnd;
+  }
 }
 
 function isTarHeaderMagic(header: Uint8Array): boolean {
