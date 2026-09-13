@@ -1,7 +1,7 @@
 # Current verification checkpoint
 
 **Local continuation:** work is on local `main`, with pushes and deployments
-paused at the owner's request. The latest full local product suite passed 783
+paused at the owner's request. The latest full local product suite passed 791
 tests with seven opt-in skips; TypeScript and the isolated production build
 passed. The [local evidence](evidence/local-refinement-20260913.md) records
 scanner, editor/review, CLI, pgvector, browser, and fixture checks with their

@@ -371,3 +371,55 @@ proof, prior large-tree highlighting/scroll and 390/1280 reflow results remain
 source-attributed above. It does not close hosted M6, full assistive-technology,
 C1/M7 provider, or production shipment requirements. Pushes and deployments remain
 paused by the owner.
+
+
+## Shipment audit and review-location integration
+
+A bounded source audit at `9412769` found no new local C1 pull-through defect.
+Daily Eve scheduling/configuration, installation analytics, and portable search
+are implemented; hosted C1 and M7 provider composition remain separate acceptance
+work during the deployment pause. Stale roadmap language about the PAX work
+awaiting a PR was corrected to distinguish its integration on local `main`
+from unverified hosted import/publication.
+
+The audit found inconsistent embedding configuration limits: the provider
+accepted up to 16,384 dimensions while the index accepted only 2,000. Commit
+`2764c9f` reuses the search contract's limit and aligns Gateway URL validation
+with the loopback-development/production HTTPS boundary. Tests cover the limit,
+production environment markers, remote HTTP rejection, IPv6 loopback, and HTTPS;
+rejected endpoints never construct the Gateway client. No model request occurred.
+
+Commit `193199c` connects current review findings to read-only file locations.
+The action requires an attached completed review for the current draft binding,
+an existing path, a valid line, and no unsaved changes. A full-file Pierre view
+keeps the annotation visible even outside diff context; an explicit Return to
+diff control restores the normal renderer. Finding text is escaped and bounded,
+and local edits clear the annotation without saving. Line validation follows the
+installed renderer's newline semantics. If Pierre fails, the existing native
+fallback remains read-only but does not provide the line annotation/scroll target.
+
+The three focused editor files passed 36 tests. The full product suite passed
+791 tests with seven opt-in skips; TypeScript and diff checks passed. The
+production build and disposable two-file fixture launched from exact source
+`193199cf70f051658e38f940b5ff2e85b81d8cf5`. Real browser observations follow
+separately; these source/test results do not close hosted or full accessibility
+criteria. No push or deployment occurred.
+
+
+## Review-location browser proof
+
+The [source-193199c browser proof](local-review-location-193199c-20260913.json)
+passed against the disposable two-file fixture. Keyboard activation opened the
+current `README.md:1` finding in a labeled read-only view with visible annotation.
+Focus landed on the location region; Tab and Enter reached Return to diff and
+restored the normal split diff. The location view had no active contenteditable,
+and Save remained disabled. A harmless unsaved edit then disabled finding
+navigation with the stated save/discard explanation; reload discarded that local
+edit, and independent fixture status retained revision 1 and the original digest.
+No draft save, release scan, model prompt, or publication occurred.
+
+The screenshot was emitted inline only. This is a line-one browser proof, not a
+separate deep-line scroll or full screen-reader assessment. The browser tab was
+closed; the launcher acknowledged its stop request and exited successfully, and
+all three local listener ports were confirmed closed. Local main has the verified
+source; nothing was pushed or deployed.

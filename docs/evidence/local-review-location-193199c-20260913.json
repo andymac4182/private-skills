@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-13",
+  "sourceCommit": "193199cf70f051658e38f940b5ff2e85b81d8cf5",
+  "boundary": "Disposable local Nitro application with deterministic local reviewer; no hosted Eve or production calls.",
+  "origin": "http://127.0.0.1:5197",
+  "draft": {
+    "id": "draft_9ea2ba1e-1fee-4ccc-b72b-794dcacc81ac",
+    "revision": 1,
+    "digest": "sha256:f5e9f7a85f8f0a6371be30284c667956e1e0bd284d5a03611015d0b906789252",
+    "fileCount": 2
+  },
+  "review": {
+    "jobId": "upload-review-job_7ffd0417-22ac-4274-b036-e92b4ed103bb",
+    "resultId": "upload-review-result_305d7024-13ce-4364-9ee2-44b2aaca4e1d",
+    "state": "passed",
+    "findingCount": 1,
+    "path": "README.md",
+    "line": 1
+  },
+  "browser": {
+    "keyboardOpen": true,
+    "readOnlyLocationBanner": true,
+    "annotationVisible": true,
+    "contenteditableNodesInLocation": 0,
+    "focusObserved": "location region",
+    "keyboardReturnToDiff": true,
+    "normalDiffRestored": true,
+    "unsavedEditDisablesNavigation": true,
+    "disabledReason": "Save or discard local changes before opening a review finding.",
+    "reloadDiscardedLocalEdit": true,
+    "savedRevisionAndDigestUnchanged": true,
+    "ownedTabClosed": true,
+    "screenshot": "One sanitized inline image; no persisted screenshot file."
+  },
+  "mutations": {
+    "disposableReviewRequestedAndCompleted": true,
+    "draftSaves": 0,
+    "releaseScans": 0,
+    "publications": 0,
+    "modelPrompts": 0,
+    "productionCalls": 0
+  },
+  "cleanup": {
+    "launcherAcknowledgedStop": true,
+    "launcherExitCode": 0,
+    "listenerPortsClosed": [
+      5195,
+      5196,
+      5197
+    ]
+  },
+  "limits": [
+    "Line-one location proof only; no separate deep-line browser scroll proof.",
+    "Renderer-error fallback remains read-only without the Pierre annotation target.",
+    "No full screen-reader or hosted acceptance claim."
+  ]
+}
