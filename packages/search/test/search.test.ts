@@ -62,6 +62,34 @@ function query(organizationId: string, allowedResourceIds: string[], vector: num
 }
 
 describe('StateSemanticIndex', () => {
+  it('checks the durable repository for a scoped health result', async () => {
+    const repository = new MemoryStateRepository();
+    const index = new StateSemanticIndex({ repository, profile });
+
+    await expect(index.health()).resolves.toEqual({
+      status: 'degraded',
+      provider: 'state-exact-cosine',
+      error: 'organization scope unavailable',
+    });
+    await expect(index.health('org-a')).resolves.toEqual({
+      status: 'ok',
+      provider: 'state-exact-cosine',
+    });
+
+    const unavailable = new StateSemanticIndex({
+      repository: {
+        read: async () => { throw new Error('database unavailable'); },
+        transaction: async <T>() => undefined as T,
+      } as unknown as StateRepository,
+      profile,
+    });
+    await expect(unavailable.health('org-a')).resolves.toEqual({
+      status: 'degraded',
+      provider: 'state-exact-cosine',
+      error: 'state repository unavailable',
+    });
+  });
+
   it('ranks exact cosine distance and enforces tenant/resource scopes', async () => {
     const repository = new MemoryStateRepository();
     const index = new StateSemanticIndex({ repository, profile });

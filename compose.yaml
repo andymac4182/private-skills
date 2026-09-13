@@ -25,6 +25,10 @@ x-runtime-environment: &runtime-environment
   PSKILLS_STORAGE_ACCESS_KEY_ID: ${PSKILLS_STORAGE_ACCESS_KEY_ID:-private-skills-local}
   PSKILLS_STORAGE_SECRET_ACCESS_KEY: ${PSKILLS_STORAGE_SECRET_ACCESS_KEY:-local-development-only-change-me}
   PSKILLS_STATE_PROVIDER: ${PSKILLS_STATE_PROVIDER:-postgres}
+  # The pinned local Postgres image carries registry state but not pgvector.
+  # Use the durable StateRepository search adapter by default; deployments
+  # with a pgvector-capable database can opt in explicitly.
+  PSKILLS_SEARCH_PROVIDER: ${PSKILLS_SEARCH_PROVIDER:-state}
   PSKILLS_STATE_PATH: /var/lib/private-skills/state/state.json
   PSKILLS_STATE_ENDPOINT: ${PSKILLS_STATE_ENDPOINT:-}
   PSKILLS_STATE_TOKEN: ${PSKILLS_STATE_TOKEN:-}

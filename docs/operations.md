@@ -104,7 +104,11 @@ enabled, configure `PSKILLS_EMBEDDING_MODEL` and
 `AI_GATEWAY_API_KEY` or the deployment's Vercel OIDC credential. The default
 profile is `openai/text-embedding-3-small` with 1,536 dimensions. PostgreSQL
 uses pgvector; deployments without PostgreSQL use the exact StateRepository
-fallback. There is no libSQL/Turso implementation in this release. The
+fallback. The pinned self-hosted `compose.yaml` Postgres image does not ship
+the pgvector extension, so compose explicitly selects `PSKILLS_SEARCH_PROVIDER=state`
+for a durable local search index; set `PSKILLS_SEARCH_PROVIDER=pgvector` only
+with a database image or managed service that provides the extension. There is
+no libSQL/Turso implementation in this release. The
 embedding request and reindex bounds are documented in
 [`docs/semantic-search.md`](semantic-search.md).
 

@@ -105,8 +105,29 @@ export class StateSemanticIndex implements SemanticIndex {
     });
   }
 
-  async health(): Promise<SearchHealth> {
-    return { status: 'ok', provider: 'state-exact-cosine' };
+  async health(organizationId?: string): Promise<SearchHealth> {
+    if (organizationId === undefined) {
+      return {
+        status: 'degraded',
+        provider: 'state-exact-cosine',
+        error: 'organization scope unavailable',
+      };
+    }
+    try {
+      validateOrganizationId(organizationId);
+      const state = await this.repository.read(organizationId) as SearchRegistryState;
+      // Reading the extension validates both the persistence transport and
+      // the stored vectors/profile boundary. Do not report a healthy index
+      // when the state row is unreachable or corrupted.
+      readPersistedDocuments(state, this.profiles);
+      return { status: 'ok', provider: 'state-exact-cosine' };
+    } catch {
+      return {
+        status: 'degraded',
+        provider: 'state-exact-cosine',
+        error: 'state repository unavailable',
+      };
+    }
   }
 }
 

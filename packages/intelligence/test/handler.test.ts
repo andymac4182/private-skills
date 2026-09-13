@@ -60,6 +60,7 @@ class FakeIndex implements SemanticIndex {
   queries: Array<{ allowedResourceIds: string[]; profileId: string; limit: number }> = [];
   upserts: SearchDocument[][] = [];
   removals: Array<{ organizationId: string; resourceIds: string[] }> = [];
+  healthOrganizations: Array<string | undefined> = [];
 
   async upsert(documents: readonly SearchDocument[]): Promise<void> {
     this.upserts.push([...documents]);
@@ -78,7 +79,8 @@ class FakeIndex implements SemanticIndex {
     this.removals.push({ organizationId, resourceIds: [...resourceIds] });
   }
 
-  async health(): Promise<SearchHealth> {
+  async health(organizationId?: string): Promise<SearchHealth> {
+    this.healthOrganizations.push(organizationId);
     return { status: 'ok', provider: 'fake-index' };
   }
 }
@@ -246,6 +248,10 @@ describe('intelligence HTTP handler', () => {
       contentDigest: harness.team.contentDigest,
       text: harness.team.text,
     })]);
+
+    const status = await harness.handler(request('/v1/search/status', { headers: bearer() }));
+    expect(status?.status).toBe(200);
+    expect(harness.index.healthOrganizations).toEqual([ORGANIZATION]);
   });
 
   it('reindexes only verified approved documents and removes hidden resources', async () => {

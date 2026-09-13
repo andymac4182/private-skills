@@ -298,7 +298,7 @@ async function searchStatusRoute(request: Request, context: Context): Promise<Re
     return jsonResponse({ status: 'degraded', provider: 'disabled', error: 'embedding provider unavailable' });
   }
   try {
-    const health = await context.index.health();
+    const health = await context.index.health(context.config.organizationId);
     const status = health.status === 'ok' ? 'ok' : 'degraded';
     const provider = typeof health.provider === 'string' && /^[A-Za-z0-9._:/-]{1,128}$/u.test(health.provider)
       ? health.provider

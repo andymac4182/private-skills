@@ -59,7 +59,12 @@ export interface SemanticIndex {
   upsert(documents: readonly SearchDocument[]): Promise<void>;
   search(query: SearchQuery): Promise<readonly SearchHit[]>;
   remove(organizationId: string, resourceIds: readonly string[]): Promise<void>;
-  health(): Promise<SearchHealth>;
+  /**
+   * Check the backing index. State-backed adapters use the organization id
+   * to perform a real durable read; providers that do not need a tenant may
+   * ignore it.
+   */
+  health(organizationId?: string): Promise<SearchHealth>;
 }
 
 export interface SearchProfileOptions {
