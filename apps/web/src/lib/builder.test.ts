@@ -85,7 +85,10 @@ describe('same-origin skill builder BFF adapter', () => {
     expect(loaded.id).toBe('session-1')
     expect(loaded.turns).toHaveLength(1)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/v1/drafts/draft-1/builder/availability')
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('/v1/drafts/draft-1/builder/session')
+    const createUrl = new URL(String(fetchMock.mock.calls[1]?.[0]), 'https://registry.test')
+    expect(createUrl.pathname).toBe('/v1/drafts/draft-1/builder/session')
+    expect(createUrl.searchParams.get('revision')).toBe('4')
+    expect(createUrl.searchParams.get('digest')).toBe('sha256:base')
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toMatchObject({ revision: 4, digest: 'sha256:base' })
     const createBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))
     expect(createBody.requestId).toMatch(/^web-builder-session-/u)
@@ -93,6 +96,34 @@ describe('same-origin skill builder BFF adapter', () => {
     expect(sessionUrl.pathname).toBe('/v1/drafts/draft-1/builder/session/session-1')
     expect(sessionUrl.searchParams.get('revision')).toBe('4')
     expect(sessionUrl.searchParams.get('digest')).toBe('sha256:base')
+  })
+
+  it('uses a new session request identity when the draft binding advances', async () => {
+    const nextBinding = { draftId: binding.draftId, revision: 5, digest: 'sha256:next' as const, selectedPath: 'SKILL.md' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response(session()))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+      .mockResolvedValueOnce(response(session({ id: 'session-2', binding: { draftId: nextBinding.draftId, revision: nextBinding.revision, digest: nextBinding.digest } })))
+      .mockResolvedValueOnce(response(session({ id: 'session-2', binding: { draftId: nextBinding.draftId, revision: nextBinding.revision, digest: nextBinding.digest } })))
+      .mockResolvedValueOnce(response({ proposals: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createSkillBuilderAdapter()
+    const first = await adapter.loadSession({ binding, signal: new AbortController().signal })
+    const second = await adapter.loadSession({ binding: nextBinding, signal: new AbortController().signal })
+
+    expect(first.id).toBe('session-1')
+    expect(second.id).toBe('session-2')
+    const firstCreateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), 'https://registry.test')
+    const secondCreateUrl = new URL(String(fetchMock.mock.calls[3]?.[0]), 'https://registry.test')
+    expect(firstCreateUrl.searchParams.get('revision')).toBe('4')
+    expect(firstCreateUrl.searchParams.get('digest')).toBe('sha256:base')
+    expect(secondCreateUrl.searchParams.get('revision')).toBe('5')
+    expect(secondCreateUrl.searchParams.get('digest')).toBe('sha256:next')
+    const firstRequestId = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).requestId
+    const secondRequestId = JSON.parse(String((fetchMock.mock.calls[3]?.[1] as RequestInit).body)).requestId
+    expect(secondRequestId).not.toBe(firstRequestId)
   })
 
   it('sends a bound prompt and reaches the real stop route without a service bearer', async () => {

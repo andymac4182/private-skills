@@ -34,4 +34,20 @@ describe('lazy draft file API', () => {
     expect(init.credentials).toBe('include')
     expect(result.file.path).toBe('docs/hello world.md')
   })
+
+  it('sends builder session creation binding in both query and body', async () => {
+    const digest = 'sha256:' + 'b'.repeat(64) as `sha256:${string}`
+    const fetchMock = vi.fn().mockResolvedValue(response({ session: {} }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.builderCreateSession('draft/1', { revision: 7, digest, requestId: 'session-1' })
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const url = new URL(path, 'https://registry.test')
+    expect(url.pathname).toBe('/v1/drafts/draft%2F1/builder/session')
+    expect(url.searchParams.get('revision')).toBe('7')
+    expect(url.searchParams.get('digest')).toBe(digest)
+    expect(JSON.parse(String(init.body))).toEqual({ revision: 7, digest, requestId: 'session-1' })
+    expect(init.credentials).toBe('include')
+  })
 })

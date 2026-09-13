@@ -617,6 +617,14 @@ describe('builder BFF draft contract', () => {
     const otherNamespace = await request(fixture, `/v1/drafts/${draft.id}/builder/availability`, { token: 'other-token' });
     expect(otherNamespace.status).toBe(404);
 
+    const missingBindingQuery = await request(fixture, `/v1/drafts/${draft.id}/builder/session`, {
+      method: 'POST',
+      token: 'publisher-token',
+      body: { revision: draft.revision, digest: draft.digest, requestId: 'missing-binding-query' },
+    });
+    expect(missingBindingQuery.status).toBe(400);
+    expect(errorCode(await json(missingBindingQuery))).toBe('INVALID_REQUEST');
+
     const stale = await request(fixture, `/v1/drafts/${draft.id}/builder/session?revision=99&digest=${encodeURIComponent(draft.digest)}`, {
       method: 'POST',
       token: 'publisher-token',

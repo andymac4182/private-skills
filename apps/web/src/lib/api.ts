@@ -117,7 +117,12 @@ export const api = {
     return request<BuilderAvailabilityResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/availability`, { signal }).then(unwrap)
   },
   builderCreateSession(draftId: string, input: { revision: number; digest: `sha256:${string}`; requestId: string }, signal?: AbortSignal) {
-    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session`, { method: 'POST', body: input, signal }).then(unwrap)
+    return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session`, {
+      method: 'POST',
+      query: { revision: String(input.revision), digest: input.digest },
+      body: input,
+      signal,
+    }).then(unwrap)
   },
   builderSession(draftId: string, sessionId: string, input: { revision: number; digest: `sha256:${string}` }, signal?: AbortSignal) {
     return request<BuilderSessionResponse>(`/v1/drafts/${encodeURIComponent(draftId)}/builder/session/${encodeURIComponent(sessionId)}`, { query: { revision: String(input.revision), digest: input.digest }, signal }).then(unwrap)
