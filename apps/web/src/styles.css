@@ -277,6 +277,7 @@ tr.row-selected td { background: #f4f8f3; }
 .draft-workspace-tabs button:hover { color: var(--ink-soft); }
 .draft-workspace-tabs .draft-workspace-tab-active { border-bottom-color: var(--sage); color: var(--sage-dark); }
 .draft-review-panel { margin: 16px 20px 20px; }
+.draft-review-live-region { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .draft-review-message { padding: 0 20px 14px; }
 .draft-review-body { display: grid; gap: 14px; padding: 0 20px 20px; }
 .draft-review-status, .draft-review-result-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }

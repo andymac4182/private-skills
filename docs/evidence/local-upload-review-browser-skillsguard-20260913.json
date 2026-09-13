@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 3,
+  "mode": "local-disposable-worker-runner",
+  "origin": "http://127.0.0.1:5197",
+  "executor": "DockerExecutor",
+  "startedAt": "2026-09-13T05:50:18.978Z",
+  "completedAt": "2026-09-13T05:50:20.343Z",
+  "image": {
+    "immutableId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+    "available": true,
+    "inspectedId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0"
+  },
+  "result": {
+    "claimed": true,
+    "jobId": "job_db719687-598d-43b6-88ef-0d6509a1daf5",
+    "allow": true,
+    "error": null,
+    "scanners": [
+      {
+        "scannerId": "skillsguard",
+        "artifactDigest": "sha256:836fba91d4485d14dfa916a35b5346d060496e33221ebe404f9ee7f39af6d8e1",
+        "status": "completed",
+        "policyRevision": "policy_2b233742-154a-49a4-aebf-6299c3a7a5e5",
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 2,
+          "filesAnalyzed": 2,
+          "filesSkipped": 0,
+          "filesUnsupported": 0,
+          "limitationCount": 2,
+          "externalDestinationCount": 0
+        },
+        "findingCount": 0
+      }
+    ]
+  },
+  "source": {
+    "baseCommit": "90859c92f18110a13dcb0899d2a0e04911d6f7ee",
+    "browserBuild": "base plus live announcements; before explicit rerun fix",
+    "finalCodeChecks": "768 passed, 7 skipped; typecheck and production build passed",
+    "workingTreeSha256": {
+      "apps/web/src/components/DraftReviewPanel.tsx": "4c59aa872badb342286458e8acafd5986315f18fb63f0b67fb871faac340ba8f",
+      "packages/upload-reviews/src/index.ts": "57e6429a2171f8f1c8d951192e9cc8329d9cc9061d6e956f43e6042160e78124"
+    }
+  },
+  "browser": {
+    "mode": "authenticated disposable local Nitro with deterministic reviewer",
+    "draftId": "draft_047ae008-aca7-4dc9-89fb-a7cda9842816",
+    "revision": 2,
+    "version": "0.0.1-review-flow",
+    "dismissalKeyboardFlow": "reason focus, whitespace refusal, cancel focus restoration, keyboard submit and persisted reason verified",
+    "editReview": "revision 1 stale; revision 2 current review passed",
+    "reflow": {
+      "viewportWidth": 390,
+      "documentScrollWidth": 390,
+      "bodyScrollWidth": 390
+    },
+    "liveStatus": {
+      "role": "status",
+      "ariaLive": "polite",
+      "ariaBusy": false,
+      "text": "Review job complete."
+    },
+    "limitations": [
+      "reviewer is deterministic; no hosted Eve or AI Gateway call",
+      "pending manual-refresh browser state not observed because reviewer completes after 25 ms; rendered test covers it",
+      "explicit rerun defect observed in browser; final fix verified by rendered, service and HTTP tests only",
+      "no screenshot or trace saved"
+    ]
+  },
+  "readback": {
+    "operationState": "completed",
+    "releaseId": "skill_2604780c-4cb2-43bd-8b56-0a9e932b984b",
+    "name": "@local/m6-local-upload-review-fixture",
+    "version": "0.0.1-review-flow",
+    "releaseState": "approved",
+    "artifactDigest": "sha256:836fba91d4485d14dfa916a35b5346d060496e33221ebe404f9ee7f39af6d8e1",
+    "artifactSize": 395,
+    "fileCount": 2,
+    "approvedAt": "2026-09-13T05:50:20.334Z",
+    "manifestPaths": [
+      "README.md",
+      "SKILL.md"
+    ],
+    "readmeHttpStatus": 200,
+    "editedReadmeMatched": true,
+    "browserCatalogAndFileViewerVerified": true
+  }
+}

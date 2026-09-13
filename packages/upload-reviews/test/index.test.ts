@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryStateRepository } from '../../database/src/index.js';
+import type { RegistryState } from '../../contracts/src/index.js';
 import {
   UploadReviewBindingStaleError,
   UploadReviewConflictError,
@@ -421,6 +422,101 @@ describe('upload/edit review persistence', () => {
       now: '2026-01-02T03:09:09.000Z',
     });
     expect(stale[0]?.state).toBe('stale');
+  });
+
+  it('reruns a passed review in place while retaining the prior result and automatic enqueue idempotency', async () => {
+    const { repository, service } = await fixture();
+    const input = {
+      idempotencyKey: 'draft-1:explicit-rerun',
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    };
+    const job = await service.enqueue('org-a', input);
+    const firstClaim = await service.claim('org-a', job.id, { eveSessionId: 'first-session', now: BASE_TIME });
+    const firstResult = await service.complete('org-a', job.id, firstClaim.leaseToken!, {
+      findings: [{
+        severity: 'low',
+        category: 'style',
+        title: 'First pass',
+        summary: 'Retained historical finding',
+        path: 'SKILL.md',
+        line: 1,
+      }],
+      now: BASE_TIME,
+    });
+
+    const rerun = await service.requeue('org-a', job.id, '2026-01-02T03:10:10.000Z', 'publisher-1');
+    expect(rerun).toMatchObject({ id: job.id, state: 'pending', binding: input.binding, model: input.model, reviewerRevision: input.reviewerRevision });
+    expect(rerun.resultId).toBeUndefined();
+    expect(rerun.eveSessionId).toBeUndefined();
+    expect(rerun.leaseToken).toBeUndefined();
+    expect((await service.listResults('org-a'))).toEqual([expect.objectContaining({
+      id: firstResult.id,
+      jobId: job.id,
+      state: 'passed',
+      findings: [expect.objectContaining({ title: 'First pass', summary: 'Retained historical finding' })],
+    })]);
+
+    // Automatic save/enqueue keeps its original idempotency identity and does
+    // not create or reset another attempt after an explicit rerun.
+    await expect(service.enqueue('org-a', input)).resolves.toMatchObject({ id: job.id, state: 'pending' });
+
+    const secondClaim = await service.claim('org-a', job.id, { eveSessionId: 'second-session', now: '2026-01-02T03:11:11.000Z' });
+    const secondResult = await service.complete('org-a', job.id, secondClaim.leaseToken!, {
+      findings: [],
+      now: '2026-01-02T03:11:12.000Z',
+    });
+    expect(secondResult.id).not.toBe(firstResult.id);
+    expect((await service.listResults('org-a')).map((result) => result.id)).toEqual([secondResult.id, firstResult.id]);
+    expect((await repository.read('org-a')).audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'upload-review.rerun.requested', resourceId: job.id, subject: 'publisher-1' }),
+    ]));
+  });
+
+  it('rejects explicit rerun when the current binding or reviewer contract is stale', async () => {
+    const repository = new MemoryStateRepository();
+    let current = binding();
+    let contract = { model: 'openai/gpt-5.5', reviewerRevision: 'upload-reviewer-v1' };
+    const service = createUploadReviewPersistenceService(repository, {
+      resolveCurrentBinding: (_state, draftId) => draftId === current.draftId ? current : undefined,
+      resolveCurrentContract: () => contract,
+    });
+    const job = await service.enqueue('org-a', {
+      binding: current,
+      snapshot: snapshot(),
+      model: contract.model,
+      reviewerRevision: contract.reviewerRevision,
+      now: BASE_TIME,
+    });
+    const claim = await service.claim('org-a', job.id, { now: BASE_TIME });
+    await service.complete('org-a', job.id, claim.leaseToken!, { findings: [], now: BASE_TIME });
+
+    current = binding(2, 'e');
+    await expect(service.requeue('org-a', job.id, BASE_TIME)).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
+    current = binding();
+    contract = { model: 'openai/gpt-5.5', reviewerRevision: 'upload-reviewer-v2' };
+    await expect(service.requeue('org-a', job.id, BASE_TIME)).rejects.toBeInstanceOf(UploadReviewBindingStaleError);
+    const durableState = await repository.read('org-a') as RegistryState & { uploadReviewJobs?: UploadReviewJob[] };
+    const durableJobs = durableState.uploadReviewJobs ?? [];
+    expect(durableJobs[0]).toMatchObject({ state: 'passed', resultId: expect.any(String) });
+  });
+
+  it('rejects explicit rerun while a job is pending or has an active lease', async () => {
+    const { service } = await fixture();
+    const pending = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    await expect(service.requeue('org-a', pending.id, BASE_TIME)).rejects.toBeInstanceOf(UploadReviewConflictError);
+    const claim = await service.claim('org-a', pending.id, { eveSessionId: 'active-session', now: BASE_TIME });
+    await expect(service.requeue('org-a', pending.id, BASE_TIME)).rejects.toBeInstanceOf(UploadReviewConflictError);
+    expect((await service.listJobs('org-a'))[0]).toMatchObject({ state: 'running', eveSessionId: 'active-session', leaseToken: claim.leaseToken });
   });
 
   it('rejects hostile paths, duplicate paths, invalid findings, and secret-bearing errors', async () => {

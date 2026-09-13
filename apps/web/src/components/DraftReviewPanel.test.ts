@@ -300,17 +300,104 @@ describe('rendered draft review actions', () => {
     }
   })
 
+  it('reruns a passed review through the retry endpoint and hides its old findings until the new result is attached', async () => {
+    vi.useFakeTimers()
+    const forDraft = draft('draft-passed-rerun')
+    const oldFinding = finding('old-finding', 'Old passed finding')
+    const oldResult = result(forDraft, 'result-old', 'passed', [oldFinding])
+    const passedJob = job(forDraft, 'job-1', 'passed', oldResult.id)
+    const pendingJob = job(forDraft, 'job-1', 'pending')
+    const newFinding = finding('new-finding', 'New rerun finding')
+    const newResult = result(forDraft, 'result-new', 'passed', [newFinding])
+    const completedJob = job(forDraft, 'job-1', 'passed', newResult.id)
+    const responses: DraftReviewsResponse[] = [
+      { reviews: [passedJob], results: [oldResult] },
+      { reviews: [pendingJob], results: [oldResult] },
+      { reviews: [completedJob], results: [oldResult, newResult] },
+    ]
+    const reviewsMock = vi.spyOn(api, 'draftReviews').mockImplementation(async () => responses.shift() ?? { reviews: [completedJob], results: [newResult] })
+    const requestMock = vi.spyOn(api, 'requestDraftReview').mockResolvedValue({ review: passedJob })
+    const retryMock = vi.spyOn(api, 'retryDraftReview').mockResolvedValue({ review: pendingJob })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root: Root | undefined
+
+    try {
+      await act(async () => {
+        root = mount(container, forDraft)
+        await flushMicrotasks()
+      })
+      expect(button(container, 'Run review again')).toBeDefined()
+      expect(container.textContent).toContain('Old passed finding')
+
+      await act(async () => {
+        button(container, 'Run review again').click()
+        await flushMicrotasks()
+      })
+      expect(requestMock).not.toHaveBeenCalled()
+      expect(retryMock).toHaveBeenCalledWith('draft-passed-rerun', 'job-1')
+      expect(reviewsMock).toHaveBeenCalledTimes(2)
+      expect(container.textContent).toContain('pending')
+      expect(container.textContent).not.toContain('Old passed finding')
+      expect(button(container, 'Refresh status')).toBeDefined()
+
+      await act(async () => {
+        vi.advanceTimersByTime(500)
+        await flushMicrotasks()
+      })
+      expect(reviewsMock).toHaveBeenCalledTimes(3)
+      expect(container.textContent).toContain('New rerun finding')
+      expect(container.textContent).not.toContain('Old passed finding')
+    } finally {
+      await act(async () => { root?.unmount(); await flushMicrotasks() })
+    }
+  })
+
+  it('does not report a newly queued review when request returns an existing passed review', async () => {
+    const forDraft = draft('draft-idempotent-pass')
+    const completedFinding = finding('finding-complete', 'Existing completed finding')
+    const completedResult = result(forDraft, 'result-complete', 'passed', [completedFinding])
+    const completedJob = job(forDraft, 'job-1', 'passed', completedResult.id)
+    const responses: DraftReviewsResponse[] = [
+      { reviews: [], results: [] },
+      { reviews: [completedJob], results: [completedResult] },
+    ]
+    const reviewsMock = vi.spyOn(api, 'draftReviews').mockImplementation(async () => responses.shift() ?? { reviews: [completedJob], results: [completedResult] })
+    const requestMock = vi.spyOn(api, 'requestDraftReview').mockResolvedValue({ review: completedJob })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root: Root | undefined
+
+    try {
+      await act(async () => {
+        root = mount(container, forDraft)
+        await flushMicrotasks()
+      })
+      await act(async () => {
+        button(container, 'Request Eve review').click()
+        await flushMicrotasks()
+      })
+      expect(requestMock).toHaveBeenCalledWith('draft-idempotent-pass')
+      expect(reviewsMock).toHaveBeenCalledTimes(2)
+      expect(container.textContent).toContain('A completed review already exists for this saved draft revision.')
+      expect(container.textContent).not.toContain('Review queued for this saved draft revision.')
+      expect(container.textContent).toContain('Existing completed finding')
+    } finally {
+      await act(async () => { root?.unmount(); await flushMicrotasks() })
+    }
+  })
+
   it('offers an explicit refresh for a review that was already pending on mount', async () => {
     const forDraft = draft('draft-pending')
     const pendingJob = job(forDraft, 'job-pending', 'pending')
     const completedFinding = finding('finding-complete', 'Completed review finding')
     const completedResult = result(forDraft, 'result-complete', 'passed', [completedFinding], 'job-pending')
     const completedJob = job(forDraft, 'job-pending', 'passed', completedResult.id)
-    const responses: DraftReviewsResponse[] = [
-      { reviews: [pendingJob], results: [] },
-      { reviews: [completedJob], results: [completedResult] },
-    ]
-    const reviewsMock = vi.spyOn(api, 'draftReviews').mockImplementation(async () => responses.shift() ?? { reviews: [completedJob], results: [completedResult] })
+    const refreshResponse = deferred<DraftReviewsResponse>()
+    const reviewsMock = vi.spyOn(api, 'draftReviews').mockImplementation(async () => {
+      if (reviewsMock.mock.calls.length === 1) return { reviews: [pendingJob], results: [] }
+      return refreshResponse.promise
+    })
     const container = document.createElement('div')
     document.body.appendChild(container)
     let root: Root | undefined
@@ -322,14 +409,24 @@ describe('rendered draft review actions', () => {
       })
       expect(container.textContent).toContain('pending')
       expect(button(container, 'Refresh status')).toBeDefined()
+      const liveStatus = () => container.querySelector('[role="status"][aria-live="polite"]')
+      expect(liveStatus()?.textContent).toBe('Review job pending.')
+      expect(liveStatus()?.getAttribute('aria-busy')).toBe('false')
 
       await act(async () => {
         button(container, 'Refresh status').click()
         await flushMicrotasks()
       })
+      expect(liveStatus()?.textContent).toBe('Loading review status.')
+      expect(liveStatus()?.getAttribute('aria-busy')).toBe('true')
+
+      refreshResponse.resolve({ reviews: [completedJob], results: [completedResult] })
+      await act(async () => { await flushMicrotasks() })
       expect(reviewsMock).toHaveBeenCalledTimes(2)
       expect(container.textContent).toContain('Review complete')
       expect(container.textContent).toContain('Completed review finding')
+      expect(liveStatus()?.textContent).toBe('Review job complete.')
+      expect(liveStatus()?.getAttribute('aria-busy')).toBe('false')
     } finally {
       await act(async () => { root?.unmount(); await flushMicrotasks() })
     }

@@ -1,9 +1,16 @@
 # Current verification checkpoint
 
+**Local continuation:** work is on local `main`, including the verified review-rerun continuation after
+`90859c9` (768 tests passed; TypeScript and build passed), with pushes and deployments paused at the owner's request. The
+[local evidence](evidence/local-refinement-20260913.md) records scanner,
+editor/review, CLI, pgvector, and browser checks with their limits. Remote
+state has not been refreshed during this phase; the quota response and
+production source below are historical observations, not a new quota check.
+
 **As of:** 2026-09-13 (latest root-coordinated provider and schedule readbacks
 captured on 13 September 2026 UTC)
 
-**Current repository and production checkpoint:** merged main is
+**Recorded remote repository and production checkpoint:** merged main was
 `499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48
 (`fa56c21fca3aed568a16237cd06c4707d83e5fcb`), PR49
 (`853f4ae4a4155671114b15442f2ef9490d4b329e`), and PR50

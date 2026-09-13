@@ -123,3 +123,37 @@ builder proposal diff, so these observations do not close full M6-A11Y.
 Root verification passed: 763 tests, seven opt-in tests skipped, the full
 TypeScript command, the production web build, and whitespace checks. No push,
 production call, or deployment was performed.
+
+## Connected review browser flow and explicit rerun
+
+An authenticated disposable Nitro fixture connected the real upload-review HTTP
+handlers and file persistence to a deterministic local reviewer. The browser
+verified dismissal reason focus, whitespace refusal, Cancel focus restoration,
+keyboard submission, and persisted decisions. Editing README.md saved revision
+2, made the old review stale, and produced a current review. At a 390px viewport
+the document and body remained 390px wide; tabs and the persistent polite review
+status region retained their accessibility semantics.
+
+The browser explicitly queued release `0.0.1-review-flow`. The real worker then
+used the immutable cached SkillsGuard image through DockerExecutor: the exact
+revision-2 digest was approved with 2 enumerated / 2 analyzed files and zero
+findings. Read-only browser and API checks then confirmed the approved release,
+completed operation, two-file manifest, and exact edited README content.
+The [sanitized record](local-upload-review-browser-skillsguard-20260913.json)
+contains the job, digest, image identity, coverage, source provenance, and limits.
+The reviewer was a fixture, not a hosted Eve/Gateway model invocation. Its 25ms
+completion prevented observation of manual pending refresh in the browser;
+rendered tests cover that transition. No screenshot or trace was saved.
+
+This browser pass also exposed an idempotent request being described as a newly
+queued review. The final implementation now routes an explicit terminal rerun
+through the retry endpoint, retains historical results, rejects active duplicate
+attempts, and reports the returned state accurately. Current binding and reviewer
+contract checks still fence retries. Rendered, persistence, and HTTP regression
+tests verify the fix; the browser pass preceded this rerun fix and is not proof
+of its final browser behavior.
+
+Final combined checks passed: 768 tests, seven opt-in tests skipped, TypeScript,
+and the production web build. Work remains on local main; no push, production
+connection, or deployment was performed. Hosted acceptance and native
+Windows/Linux evidence remain separate.

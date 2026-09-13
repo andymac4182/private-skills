@@ -971,5 +971,20 @@ describe('durable skill drafts', () => {
     }));
     expect(decision.status).toBe(200);
     expect((await json(decision)).review.findings[0]).toMatchObject({ decision: 'acknowledged' });
+
+    const retry = await test.handler(new Request(`${ORIGIN}/v1/drafts/${created.draft.id}/reviews/${pending.id}/retry`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }));
+    expect(retry.status).toBe(202);
+    const retryBody = await json(retry);
+    expect(retryBody.review).toMatchObject({ id: pending.id, state: 'pending' });
+    expect(retryBody.review).not.toHaveProperty('resultId');
+    state = await test.repository.read(ORGANIZATION) as RegistryState & { uploadReviewJobs?: any[]; uploadReviewResults?: any[] };
+    expect(state.uploadReviewJobs).toHaveLength(2);
+    expect(state.uploadReviewJobs!.find((job) => job.id === pending.id)).toMatchObject({ state: 'pending' });
+    expect(state.uploadReviewResults).toHaveLength(2);
+    expect(state.uploadReviewResults!.find((result) => result.id === completed.id)).toMatchObject({ state: 'passed' });
   });
 });

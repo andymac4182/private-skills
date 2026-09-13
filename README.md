@@ -8,10 +8,12 @@ The private [v0.3.0 release](https://github.com/andymac4182/private-skills/relea
 is published, with independent archive/fresh-download verification for four
 assets, all three target builds, and a Mac two-member inert fixture
 install/verify/warm repeat. The current Git-triggered registry, builder, and
-upload-reviewer production applications are READY; source and deployment IDs
+upload-reviewer production applications were READY at the last recorded remote check; source and deployment IDs
 are recorded in [`docs/verification-current.md`](docs/verification-current.md).
-Newer merged-main fixes are awaiting Vercel's deployment quota reset; the
-existing production source remains available.
+Work now continues directly on local `main`, with pushes and deployments paused
+at the owner's request. The earlier Vercel quota rejection is historical and
+has not been rechecked during this local phase. Current local checks are in
+[`docs/evidence/local-refinement-20260913.md`](docs/evidence/local-refinement-20260913.md).
 
 Native CI was waived by explicit repository-owner instruction on 13 September
 2026 for this delivery/review scope. Workflows remain enabled and no native

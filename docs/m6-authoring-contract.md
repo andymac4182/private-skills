@@ -204,12 +204,15 @@ type UploadReviewFinding = {
 `POST /v1/drafts/:draftId/reviews` binds the job to the exact current
 revision/digest and is idempotent; `GET` lists sanitized jobs/results without
 lease tokens or snapshots. `POST /v1/drafts/:draftId/reviews/:resultId/decisions`
-records a publisher decision, while `POST .../reviews/:jobId/retry` requests a
-new review job. Any byte/revision, base-release, policy, or reviewer-contract
-change makes the old result stale. Findings and human actions are persisted
-and audited but cannot mutate the artifact. The reviewer receives only an
-authorized snapshot and no registry, storage, scanner, or upstream
-credentials.
+records a publisher decision, while `POST .../reviews/:jobId/retry` is an
+explicit retry for a current terminal `passed`, `failed`, or `stale` job. It
+resets that existing job to pending, retains prior result history and audit,
+and starts no duplicate attempt while it is pending or running. A stale draft,
+base release, policy, or reviewer contract blocks the retry. Any byte/revision,
+base-release, policy, or reviewer-contract change makes the old result stale.
+Findings and human actions are persisted and audited but cannot mutate the
+artifact. The reviewer receives only an authorized snapshot and no registry,
+storage, scanner, or upstream credentials.
 
 ## Interactive authoring builder Eve
 

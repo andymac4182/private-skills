@@ -1033,8 +1033,8 @@ export class DefaultUploadReviewPersistenceService implements UploadReviewPersis
       const { jobs, results } = writableCollections(rawState);
       const job = findJob(jobs, organizationId, boundedString(jobId, 'jobId', MAX_ID_LENGTH));
       this.assertBindingCurrent(rawState, job.binding, job.model, job.reviewerRevision);
-      if (job.state !== 'failed' && job.state !== 'stale') {
-        throw new UploadReviewConflictError('only failed or stale upload reviews may be requeued');
+      if (job.state !== 'passed' && job.state !== 'failed' && job.state !== 'stale') {
+        throw new UploadReviewConflictError('only terminal upload reviews may be requeued');
       }
       job.state = 'pending';
       job.updatedAt = clock.iso;

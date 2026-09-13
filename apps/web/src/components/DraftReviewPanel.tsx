@@ -47,6 +47,22 @@ function isReviewPending(job: DraftReviewJob): boolean {
   return job.state === 'pending' || job.state === 'running'
 }
 
+function reviewLiveMessage(loading: boolean, error: string | null, job: DraftReviewJob | undefined, result: DraftReviewResult | undefined): string {
+  if (loading) return 'Loading review status.'
+  if (error) return 'Review status is unavailable.'
+  if (job) return `Review job ${job.state === 'passed' ? 'complete' : job.state}.`
+  if (result) return `Review result ${result.state}.`
+  return 'No review for this draft revision.'
+}
+
+function reviewMutationMessage(review: DraftReviewJob | DraftReviewResult, operation: 'request' | 'retry'): string {
+  if (review.state === 'pending') return operation === 'request' ? 'Review queued for this saved draft revision.' : 'A new review attempt was queued for this revision.'
+  if (review.state === 'running') return 'Review is already running for this saved draft revision.'
+  if (review.state === 'passed') return operation === 'request' ? 'A completed review already exists for this saved draft revision.' : 'Review is complete for this saved draft revision.'
+  if (review.state === 'failed') return operation === 'request' ? 'An existing review attempt failed for this saved draft revision.' : 'The review retry is still marked failed.'
+  return operation === 'request' ? 'An existing review attempt is stale for this saved draft revision.' : 'The review retry is still marked stale.'
+}
+
 function waitForReviewPoll(): Promise<void> {
   return new Promise((resolve) => { window.setTimeout(resolve, REVIEW_POLL_INTERVAL_MS) })
 }
@@ -128,6 +144,7 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
     ? undefined
     : currentResults.find((result) => result.id === latestJob.resultId && result.jobId === latestJob.id)
   const canRetry = latestJob !== undefined && (latestJob.state === 'failed' || latestJob.state === 'stale')
+  const reviewInProgress = latestJob !== undefined && isReviewPending(latestJob)
 
   function mutationIsCurrent(token: MutationToken): boolean {
     return mountedRef.current && activeBindingRef.current === token.binding && mutationGeneration.current === token.generation
@@ -154,6 +171,10 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
 
   async function requestReview(): Promise<void> {
     if (disabled) return
+    if (latestJob && !isReviewPending(latestJob)) {
+      await retryReview()
+      return
+    }
     const binding = draftBindingKey(draft)
     const token = beginMutation('request', binding)
     if (token === null) return
@@ -162,7 +183,7 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
     try {
       const response = await api.requestDraftReview(draft.id)
       if (!mutationIsCurrent(token)) return
-      setMessage('Review queued for this saved draft revision.')
+      setMessage(reviewMutationMessage(response.review, 'request'))
       await refreshUntilSettled(draft, reviewJobId(response.review), token)
     } catch (cause) {
       if (mutationIsCurrent(token)) setError(reviewMessage(cause))
@@ -172,7 +193,7 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
   }
 
   async function retryReview(): Promise<void> {
-    if (disabled || !latestJob) return
+    if (disabled || !latestJob || isReviewPending(latestJob)) return
     const binding = draftBindingKey(draft)
     const token = beginMutation('retry', binding)
     if (token === null) return
@@ -181,7 +202,7 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
     try {
       const response = await api.retryDraftReview(draft.id, latestJob.id)
       if (!mutationIsCurrent(token)) return
-      setMessage('A new review attempt was queued for this revision.')
+      setMessage(reviewMutationMessage(response.review, 'retry'))
       await refreshUntilSettled(draft, reviewJobId(response.review), token)
     } catch (cause) {
       if (mutationIsCurrent(token)) setError(reviewMessage(cause))
@@ -257,7 +278,8 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
     setFocusFindingId(null)
   }, [focusFindingId, loading, reviews])
 
-  return <Panel className="draft-review-panel" title="Review" description="Eve review is advisory. Required security scanners still decide whether a release can be installed." action={<div className="row-actions">{latestJob && isReviewPending(latestJob) && <Button kind="quiet" disabled={disabled || busy !== null || loading} type="button" onClick={refreshStatus}>Refresh status</Button>}<Button kind="secondary" busy={busy === 'request'} disabled={disabled || busy !== null || loading} type="button" onClick={() => void requestReview()}>{latestJob ? 'Run review again' : 'Request Eve review'}</Button>{canRetry && <Button kind="quiet" busy={busy === 'retry'} disabled={disabled || busy !== null} type="button" onClick={() => void retryReview()}>Retry</Button>}</div>}>
+  return <Panel className="draft-review-panel" title="Review" description="Eve review is advisory. Required security scanners still decide whether a release can be installed." action={<div className="row-actions">{latestJob && isReviewPending(latestJob) && <Button kind="quiet" disabled={disabled || busy !== null || loading} type="button" onClick={refreshStatus}>Refresh status</Button>}<Button kind="secondary" busy={busy === 'request' || busy === 'retry'} disabled={disabled || busy !== null || loading || reviewInProgress} type="button" onClick={() => void requestReview()}>{latestJob ? latestJob.state === 'pending' ? 'Review pending' : latestJob.state === 'running' ? 'Review running' : 'Run review again' : 'Request Eve review'}</Button>{canRetry && <Button kind="quiet" busy={busy === 'retry'} disabled={disabled || busy !== null} type="button" onClick={() => void retryReview()}>Retry</Button>}</div>}>
+    <div aria-atomic="true" aria-busy={loading || busy !== null} aria-live="polite" className="draft-review-live-region" role="status">{reviewLiveMessage(loading, error, latestJob, latestResult)}</div>
     {loading && <LoadingState label="Loading review status…" />}
     {!loading && error && <ErrorState message={error} onRetry={busy === null && !disabled ? () => void load(draft) : undefined} />}
     {!loading && !error && message && <div className="draft-review-message"><Notice kind="success">{message}</Notice></div>}
