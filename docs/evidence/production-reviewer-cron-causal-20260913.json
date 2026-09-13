@@ -1,0 +1,122 @@
+{
+  "schema": "private-skills-reviewer-cron-causal-evidence-v1",
+  "version": 4,
+  "observedAt": "2026-09-13T00:10:14.926Z",
+  "deployment": {
+    "id": "dpl_kwwuwvuBVYvdfSv34HkxA5J1xTMZ",
+    "readyState": "READY",
+    "target": "production",
+    "url": "private-skills-reviewer-9lc8cduaw.vercel.app"
+  },
+  "eve": {
+    "mode": "production",
+    "origin": "private-skills-reviewer.vercel.app",
+    "infoStatus": 200,
+    "manualInvocation": false,
+    "modelRunTriggered": false,
+    "registryWriteIssued": false,
+    "hookEventNames": [
+      [
+        "session.started",
+        "action.result",
+        "session.completed",
+        "session.failed"
+      ]
+    ],
+    "stream": {
+      "eventCount": 138,
+      "eventTypeCounts": {
+        "action.input.appended": 38,
+        "action.result": 2,
+        "actions.requested": 2,
+        "message.appended": 18,
+        "message.completed": 1,
+        "message.received": 1,
+        "reasoning.appended": 65,
+        "reasoning.completed": 1,
+        "session.completed": 1,
+        "session.started": 1,
+        "step.completed": 3,
+        "step.started": 3,
+        "turn.completed": 1,
+        "turn.started": 1
+      },
+      "selectedEvents": [
+        {
+          "at": "2026-09-13T00:09:08.919Z",
+          "type": "session.started",
+          "status": null,
+          "toolName": null,
+          "toolStatus": null,
+          "candidateCount": null,
+          "suggestionsRecorded": null
+        },
+        {
+          "at": "2026-09-13T00:09:23.511Z",
+          "type": "action.result",
+          "status": "completed",
+          "toolName": "prepare_review",
+          "toolStatus": "prepared",
+          "candidateCount": 2,
+          "suggestionsRecorded": null
+        },
+        {
+          "at": "2026-09-13T00:09:35.071Z",
+          "type": "action.result",
+          "status": "completed",
+          "toolName": "submit_review",
+          "toolStatus": "completed",
+          "candidateCount": null,
+          "suggestionsRecorded": 0
+        },
+        {
+          "at": "2026-09-13T00:09:36.243Z",
+          "type": "session.completed",
+          "status": null,
+          "toolName": null,
+          "toolStatus": null,
+          "candidateCount": null,
+          "suggestionsRecorded": null
+        }
+      ]
+    },
+    "scheduleProbe": [
+      {
+        "name": "daily-review",
+        "cron": "0 0 13 9 *",
+        "hasRun": false,
+        "logicalPath": "schedules/daily-review.ts"
+      }
+    ]
+  },
+  "outcome": {
+    "classification": "completed",
+    "noCandidates": false,
+    "notClaimed": false,
+    "terminalPhaseObserved": true
+  },
+  "causalCorrelation": {
+    "invocationId": "eve-review-invocation_0f9c6641-f1a9-4569-9249-62ee9fbc7ae6",
+    "runId": "review-run_566af99b-9021-42d6-ac45-4fffe2700530",
+    "eveSessionId": "wrun_41M2C1H75Y0GJ2BNZPXP1FHB17",
+    "source": "eve-schedule",
+    "scheduleId": "daily-review",
+    "matchingRunState": "completed",
+    "snapshotCount": 2,
+    "matchingRunCount": 1,
+    "matchingProvenanceCount": 1
+  },
+  "registry": {
+    "origin": "private-skills-theta.vercel.app",
+    "status": 200,
+    "registryWriteIssued": false,
+    "runCount": 3,
+    "suggestionCount": 2
+  },
+  "restoredSchedule": {
+    "name": "daily-review",
+    "cron": "0 22 * * *",
+    "infoStatus": 200,
+    "routePathOmitted": true
+  }
+}

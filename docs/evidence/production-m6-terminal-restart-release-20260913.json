@@ -1,0 +1,223 @@
+{
+  "schema": "private-skills-m6-terminal-restart-release-evidence-v1",
+  "observedAtUtc": "2026-09-12T23:48:30.300Z",
+  "scope": "One authorized inert builder proposal, review, immutable publication, and required scan",
+  "repository": {
+    "nameWithOwner": "andymac4182/private-skills",
+    "url": "https://github.com/andymac4182/private-skills",
+    "isPrivate": true,
+    "viewerPermission": "ADMIN",
+    "observation": "Read-only gh repo view metadata"
+  },
+  "registry": {
+    "origin": "https://private-skills-theta.vercel.app",
+    "deploymentAttribution": {
+      "scope": "preflight-only",
+      "deploymentId": "dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy",
+      "source": "git/main",
+      "sourceSha": "57bce92403af37e8303c654d7a03da634c63445f",
+      "includedCommit": "3e000aa18e923dce6d3998e79be7290af2c3019d",
+      "stableAliasChangedDuringMutationWindow": true,
+      "requestDeploymentAttribution": "unknown"
+    }
+  },
+  "draft": {
+    "id": "draft_02febd90-2e25-4504-a662-0fad630e0a52",
+    "name": "@acme/m6-inert-builder-fixture",
+    "revision": 2,
+    "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+    "file": {
+      "path": "SKILL.md",
+      "bytes": 187,
+      "digest": "sha256:47089d158f4e3223d6ae3409ffe7b953949cdeef127e6383cf948a0fbd4cfec4"
+    }
+  },
+  "builder": {
+    "sessionId": "builder_94b40119-a643-496d-8ec9-8da6c6a8336a",
+    "proposalId": "proposal_7eb4c9f3-985b-42c3-9cb3-0c0134612c68",
+    "proposalState": "applied",
+    "baseRevision": 1,
+    "proposedRevision": 2,
+    "baseArtifactDigest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+    "proposedArtifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b"
+  },
+  "uploadReview": {
+    "jobId": "upload-review-job_4d0f8f2c-efcd-4315-a088-148c3a64a573",
+    "resultId": "upload-review-result_98affb69-ad91-4f9b-978f-6c41f55b6513",
+    "state": "approved",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0"
+  },
+  "publication": {
+    "operationId": "job_411b364f-bbec-47ed-8453-2a1c8d0ecfba",
+    "resourceId": "skill_49873f1e-37f9-40b3-ae4c-2139e93580a6",
+    "version": "0.0.1-m6-inert",
+    "state": "completed",
+    "createdAt": "2026-09-12T23:42:43.208Z",
+    "updatedAt": "2026-09-12T23:42:59.215Z"
+  },
+  "skill": {
+    "name": "@acme/m6-inert-builder-fixture",
+    "version": "0.0.1-m6-inert",
+    "state": "approved",
+    "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+    "sourceDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "scanIds": [
+      "82e5c6fd-9a19-4c16-a73c-cc056e2813d2"
+    ]
+  },
+  "scanner": {
+    "id": "82e5c6fd-9a19-4c16-a73c-cc056e2813d2",
+    "jobId": "job_411b364f-bbec-47ed-8453-2a1c8d0ecfba",
+    "scannerId": "skillsguard",
+    "status": "completed",
+    "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+    "createdAt": "2026-09-12T23:42:55.932Z",
+    "coverage": {
+      "filesEnumerated": 1,
+      "filesAnalyzed": 1,
+      "filesSkipped": 0,
+      "filesUnsupported": 0
+    },
+    "findingCount": 0
+  },
+  "policy": {
+    "revision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+    "allowUnscanned": false,
+    "requiredScannerIds": [
+      "skillsguard"
+    ],
+    "evidenceMaxAgeSeconds": 86400
+  },
+  "browserConfirmation": {
+    "status": "blocked",
+    "observedAtUtc": "2026-09-13T00:09:18.300Z",
+    "scope": "Read-only production editor revision 2, review-approved state, and released SKILL.md content",
+    "observedUrl": "https://private-skills-theta.vercel.app/login?codex_m6_confirmation=18259010",
+    "reason": "The uniquely addressed isolated login tab returned 401 after the token-entry attempt, so released UI assertions were not read. A bounded API diagnostic at the same origin subsequently succeeded; the UI result is retained as unverified rather than treated as token expiry."
+  },
+  "apiAuthDiagnostic": {
+    "recordedAtUtc": "2026-09-13T00:16:05.589Z",
+    "origin": "https://private-skills-theta.vercel.app",
+    "bearerMe": {
+      "status": 200
+    },
+    "sessionExchange": {
+      "status": 200,
+      "cookiePresent": true
+    },
+    "cookieMe": {
+      "status": 200
+    },
+    "scope": "One bounded in-memory bearer GET, same-origin session exchange, and cookie-backed GET; response bodies and credentials excluded."
+  },
+  "browserReadback": {
+    "status": "release_and_review_verified_editor_unverified",
+    "observedAtUtc": "2026-09-13T00:29:50.096Z",
+    "origin": "https://private-skills-theta.vercel.app",
+    "session": {
+      "mode": "isolated_agent_browser",
+      "authenticated": true,
+      "persistedState": false,
+      "allowedDomain": "private-skills-theta.vercel.app"
+    },
+    "catalog": {
+      "resourceId": "skill_49873f1e-37f9-40b3-ae4c-2139e93580a6",
+      "name": "@acme/m6-inert-builder-fixture",
+      "version": "0.0.1-m6-inert",
+      "state": "approved",
+      "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+      "scan": {
+        "status": "completed",
+        "scannerId": "skillsguard",
+        "findingCount": 0,
+        "filesAnalyzed": 1,
+        "filesEnumerated": 1
+      }
+    },
+    "releasedFile": {
+      "path": "SKILL.md",
+      "bytes": 187,
+      "digest": "sha256:47089d158f4e3223d6ae3409ffe7b953949cdeef127e6383cf948a0fbd4cfec4"
+    },
+    "draftReview": {
+      "draftId": "draft_02febd90-2e25-4504-a662-0fad630e0a52",
+      "revision": 2,
+      "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+      "jobId": "upload-review-job_4d0f8f2c-efcd-4315-a088-148c3a64a573",
+      "resultId": "upload-review-result_98affb69-ad91-4f9b-978f-6c41f55b6513",
+      "state": "passed",
+      "findingCount": 0,
+      "model": "openai/gpt-5.5",
+      "reviewerRevision": "upload-review-v1"
+    },
+    "editor": {
+      "status": "unverified",
+      "reason": "The authenticated catalog route rendered Start a draft because this upload-origin draft has no release base binding. A read-only GET of the exact draft returned revision 2 and its reviewed digest. No new draft was started."
+    },
+    "scope": "One isolated browser login and read-only catalog, released-file, draft, and review readback; no new prompt, save, apply, publish, review, or scan mutation."
+  },
+  "browserReadbackFollowup": {
+    "status": "draft_revision_and_review_verified_eve_panel_unavailable",
+    "observedAtUtc": "2026-09-13T00:38:14.806Z",
+    "origin": "https://private-skills-theta.vercel.app",
+    "route": "/app/publish?draft=draft_02febd90-2e25-4504-a662-0fad630e0a52",
+    "workspace": {
+      "name": "@acme/m6-inert-builder-fixture",
+      "status": "open",
+      "revision": 2,
+      "files": 1,
+      "sizeBytes": 325,
+      "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+      "tree": {
+        "role": "tree",
+        "selectedPath": "SKILL.md",
+        "selectedLevel": 1
+      }
+    },
+    "reviewPanel": {
+      "state": "complete",
+      "reviewerRevision": "upload-review-v1",
+      "model": "openai/gpt-5.5",
+      "findingCount": 0,
+      "snapshotRevision": 2,
+      "message": "No findings were returned for this snapshot."
+    },
+    "evePanel": {
+      "status": "unavailable",
+      "message": "revision and digest are required for the selected draft",
+      "retryAction": "visible_not_clicked"
+    },
+    "scope": "One authenticated exact-origin publish route readback plus tab selection for Files, Review, and Build with Eve; no prompt, save, apply, publish, review, scan, or retry mutation."
+  },
+  "postFixVerification": {
+    "observedAtUtc": "2026-09-13T00:55:43.658Z",
+    "mergedMain": "499b64fd22ab2ab149a6bf51f77949c0ed004934",
+    "fixMerges": [
+      "853f4ae4a4155671114b15442f2ef9490d4b329e",
+      "499b64fd22ab2ab149a6bf51f77949c0ed004934"
+    ],
+    "stableAlias": "https://private-skills-theta.vercel.app",
+    "status": "blocked_by_deployment_rate_limit",
+    "deploymentWithFixObserved": false,
+    "currentProductionSourceObservation": {
+      "sourceCommit": "fa56c21",
+      "classification": "coordinator_reported_pre_fix_production"
+    },
+    "evePanelPostFix": {
+      "status": "unverified",
+      "reason": "The hosted alias remained on the pre-fix production source while Vercel rate-limited the post-merge deployment. The prior exact-route readback therefore remains the authoritative UI observation: revision 2 and review state were readable, while Build with Eve reported the binding error. No retry or prompt was issued."
+    },
+    "nextReadbackRequirement": "After a READY deployment containing the merged binding fix, repeat the exact publish route and verify panel initialization with revision 2 and its digest."
+  },
+  "privacy": {
+    "rawPrompt": false,
+    "rawProposal": false,
+    "rawFindings": false,
+    "rawHeaders": false,
+    "credentials": false,
+    "skillExecution": false,
+    "install": false
+  }
+}
