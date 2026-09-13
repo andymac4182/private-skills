@@ -24,10 +24,15 @@ or claims about production milestones. No live registry state was changed.
   install, warm repeat, tree verification, and analytics readback.
 - The pinned local PostgreSQL image does not provide pgvector. No pgvector
   result is claimed here.
+- The local Eve builder checkpoint reached Nitro and deterministic-browser
+  login, exact draft URL hydration, Eve initialization, and proposal preview/
+  apply through draft revision 2. The review service was disabled; the
+  required scan was queued, then the local verifier compared the wrong digest
+  field and the runner stopped, so scan/publication completion is not claimed.
 
 ## Deliberate limits
 
-The real Eve browser flow remains pending. This note does not advance or close
+The full Eve review flow remains pending. This note does not advance or close
 any hosted C1, M6, M7, release, scanner, or production milestone. Existing
 quarantine, scanner, authorization, digest, tenant, and no-execution rules
 remain authoritative. The evidence is limited to the local fixtures and
