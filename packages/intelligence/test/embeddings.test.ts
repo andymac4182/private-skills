@@ -7,6 +7,7 @@ import {
   EMBEDDING_PREPROCESS_VERSION,
   type EmbeddingProviderSdk,
 } from '../src/embeddings.js';
+import { MAX_EMBEDDING_DIMENSIONS } from '../../search/src/types.js';
 
 function sdkFor(options: {
   embedMany?: (value: { values: string[]; abortSignal?: AbortSignal }) => Promise<unknown>;
@@ -93,6 +94,73 @@ describe('Gateway embedding provider', () => {
       dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
     });
     expect(settings).toEqual({});
+  });
+
+  it('rejects dimensions outside the search adapter profile limit', () => {
+    const supported = createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_EMBEDDING_DIMENSIONS: String(MAX_EMBEDDING_DIMENSIONS),
+    }, { sdk: sdkFor() });
+    expect(supported?.profile.dimensions).toBe(MAX_EMBEDDING_DIMENSIONS);
+
+    expect(() => createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_EMBEDDING_DIMENSIONS: String(MAX_EMBEDDING_DIMENSIONS + 1),
+    }, { sdk: sdkFor() })).toThrowError(/dimensions configuration is invalid/u);
+  });
+
+  it('requires HTTPS for production Gateway endpoints while preserving local loopback HTTP', () => {
+    let rejectedGatewayCalls = 0;
+    const rejectingSdk = sdkFor({ onGateway: () => { rejectedGatewayCalls += 1; } });
+    const rejected = [
+      { env: { PSKILLS_ENVIRONMENT: 'production' }, url: 'http://gateway.example.test/v1' },
+      { env: { PSKILLS_ENVIRONMENT: 'production' }, url: 'http://localhost:4318/v1' },
+      { env: { NODE_ENV: 'production' }, url: 'http://localhost:4318/v1' },
+      { env: { VERCEL_ENV: 'production' }, url: 'http://localhost:4318/v1' },
+      { env: { PSKILLS_ENVIRONMENT: 'development', NODE_ENV: 'production' }, url: 'http://localhost:4318/v1' },
+      { env: { PSKILLS_ENVIRONMENT: 'development', VERCEL_ENV: 'production' }, url: 'http://localhost:4318/v1' },
+      { env: { PSKILLS_ENVIRONMENT: 'development' }, url: 'http://gateway.example.test/v1' },
+    ] as const;
+
+    for (const entry of rejected) {
+      expect(() => createEmbeddingProvider({
+        PSKILLS_AI_ENABLED: 'true',
+        ...entry.env,
+        PSKILLS_AI_GATEWAY_BASE_URL: entry.url,
+      }, { sdk: rejectingSdk })).toThrowError(/endpoint configuration is invalid/u);
+    }
+    expect(rejectedGatewayCalls).toBe(0);
+
+    const local = createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_ENVIRONMENT: 'development',
+      PSKILLS_AI_GATEWAY_BASE_URL: 'http://localhost:4318/v1',
+      PSKILLS_EMBEDDING_DIMENSIONS: '3',
+    }, { sdk: sdkFor() });
+    expect(local).toBeDefined();
+
+    const ipv6Local = createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_AI_GATEWAY_BASE_URL: 'http://[::1]:4318/v1',
+      PSKILLS_EMBEDDING_DIMENSIONS: '3',
+    }, { sdk: sdkFor() });
+    expect(ipv6Local).toBeDefined();
+
+    const defaultLocal = createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_AI_GATEWAY_BASE_URL: 'http://localhost:4318/v1',
+      PSKILLS_EMBEDDING_DIMENSIONS: '3',
+    }, { sdk: sdkFor() });
+    expect(defaultLocal).toBeDefined();
+
+    const httpsProduction = createEmbeddingProvider({
+      PSKILLS_AI_ENABLED: 'true',
+      PSKILLS_ENVIRONMENT: 'production',
+      PSKILLS_AI_GATEWAY_BASE_URL: 'https://gateway.example.test/v1',
+      PSKILLS_EMBEDDING_DIMENSIONS: '3',
+    }, { sdk: sdkFor() });
+    expect(httpsProduction).toBeDefined();
   });
 
   it('bounds text input before invoking the SDK', async () => {

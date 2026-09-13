@@ -4,12 +4,15 @@ import {
   embedMany,
   type EmbeddingModel,
 } from 'ai';
+import { MAX_EMBEDDING_DIMENSIONS } from '../../search/src/types.js';
 
 /** Stable preprocessing identity included in every profile id. */
 export const EMBEDDING_PREPROCESS_VERSION = 'raw-text-v1';
 
 export const DEFAULT_EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1_536;
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 /** Bounds applied before text is sent to the configured embedding service. */
 export const EMBEDDING_LIMITS = Object.freeze({
@@ -132,7 +135,7 @@ export function createEmbeddingProvider(
     ...(configuredApiKey === undefined ? {} : { apiKey: configuredApiKey }),
     ...(env.PSKILLS_AI_GATEWAY_BASE_URL === undefined
       ? {}
-      : { baseURL: readBaseUrl(env.PSKILLS_AI_GATEWAY_BASE_URL) }),
+      : { baseURL: readBaseUrl(env.PSKILLS_AI_GATEWAY_BASE_URL, env) }),
   };
 
   let gateway: GatewayProviderLike;
@@ -193,7 +196,7 @@ function readDimensions(value: string | undefined): number {
   const dimensions = value === undefined || value.trim() === ''
     ? DEFAULT_EMBEDDING_DIMENSIONS
     : Number(value);
-  if (!Number.isSafeInteger(dimensions) || dimensions < 1 || dimensions > 16_384) {
+  if (!Number.isSafeInteger(dimensions) || dimensions < 1 || dimensions > MAX_EMBEDDING_DIMENSIONS) {
     throw new EmbeddingProviderError('EMBEDDING_CONFIG', 'Embedding dimensions configuration is invalid');
   }
   return dimensions;
@@ -207,7 +210,7 @@ function readApiKey(value: string | undefined): string | undefined {
   return value;
 }
 
-function readBaseUrl(value: string): string {
+function readBaseUrl(value: string, env: Record<string, string | undefined>): string {
   if (value.length === 0 || value.length > 2_048 || /[\u0000-\u0020\u007f]/u.test(value)) {
     throw new EmbeddingProviderError('EMBEDDING_CONFIG', 'Embedding Gateway endpoint configuration is invalid');
   }
@@ -217,10 +220,23 @@ function readBaseUrl(value: string): string {
   } catch {
     throw new EmbeddingProviderError('EMBEDDING_CONFIG', 'Embedding Gateway endpoint configuration is invalid');
   }
-  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.search || url.hash) {
+  if (
+    (url.protocol !== 'https:' && url.protocol !== 'http:') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.protocol === 'http:' && (!isDevelopmentEnvironment(env) || !LOOPBACK_HOSTS.has(url.hostname)))
+  ) {
     throw new EmbeddingProviderError('EMBEDDING_CONFIG', 'Embedding Gateway endpoint configuration is invalid');
   }
   return value.replace(/\/+$/u, '');
+}
+
+function isDevelopmentEnvironment(env: Record<string, string | undefined>): boolean {
+  if (env.PSKILLS_ENVIRONMENT === 'production' || env.NODE_ENV === 'production' || env.VERCEL_ENV === 'production') return false;
+  if (env.PSKILLS_ENVIRONMENT !== undefined) return env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test';
+  return env.NODE_ENV !== 'production' && env.VERCEL_ENV !== 'production';
 }
 
 function profileId(model: string, dimensions: number): string {
