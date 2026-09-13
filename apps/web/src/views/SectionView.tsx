@@ -25,7 +25,7 @@ export function SectionView({ section, draftSearch }: { section: string; draftSe
     case 'cloud-audits': return <DirectoryAuditsView />
     case 'analytics': return <AnalyticsView />
     case 'reviews': return <ReviewsView />
-    case 'publish': return <PublishView />
+    case 'publish': return <PublishView draftSearch={draftSearch} />
     case 'operations': return <OperationsView />
     case 'policy': return <PolicyView />
     case 'upstreams': return <UpstreamsView />
