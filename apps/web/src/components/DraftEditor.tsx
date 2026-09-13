@@ -3,10 +3,10 @@ import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
-import type { DraftFileMetadata, DraftFileReference, DraftFileResponseEntry, DraftFileUpdate, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
+import type { DraftFileMetadata, DraftFileReference, DraftFileResponseEntry, DraftFileUpdate, DraftReviewFinding, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
-import type { DraftDiffStyle, DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
-import { DraftReviewPanel } from './DraftReviewPanel'
+import type { DraftDiffStyle, DraftFindingAnnotation, DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
+import { DraftReviewPanel, type DraftReviewNavigationState } from './DraftReviewPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 
 const PierreDraftSurface = lazy(() => import('./PierreDraftSurface').then((module) => ({ default: module.PierreDraftSurface })))
@@ -60,6 +60,7 @@ type ReleaseBaselineEntry = Pick<ReleaseFileView, 'path' | 'size' | 'previewStat
 interface ImmutableReleaseBaseline { entries: ReleaseBaselineEntry[]; files: DraftFile[] }
 type DraftOperation = { draftId: string; revision: number; version?: string; payloadFingerprint: string; key: string }
 interface DraftPersistence { draftId?: string; createKey: string }
+interface DraftFindingAnchor extends DraftFindingAnnotation { path: string }
 
 /** Must match the server's bounded release text preview contract. */
 export const MAX_TEXT_PREVIEW_BYTES = 256 * 1024
@@ -67,6 +68,20 @@ const TEXT_EXTENSIONS = new Set(['c', 'cc', 'cfg', 'conf', 'cpp', 'css', 'csv', 
 const BINARY_EXTENSIONS = new Set(['7z', 'avi', 'bin', 'bmp', 'class', 'dll', 'doc', 'docx', 'gif', 'gz', 'ico', 'jar', 'jpeg', 'jpg', 'mp3', 'mp4', 'pdf', 'png', 'so', 'tar', 'wasm', 'webp', 'woff', 'woff2', 'zip'])
 const TEXT_FILENAMES = new Set(['.editorconfig', '.gitignore', '.npmignore', 'dockerfile', 'license', 'makefile', 'readme'])
 const DRAFT_STORAGE_PREFIX = 'private-skills:draft:'
+const MAX_FINDING_ANNOTATION_LENGTH = 280
+
+export function findingAnnotationLabel(finding: DraftReviewFinding): string {
+  const title = finding.title.trim() || 'Review finding'
+  const summary = finding.summary.trim()
+  const label = summary ? `${title}: ${summary}` : title
+  return label.length <= MAX_FINDING_ANNOTATION_LENGTH ? label : `${label.slice(0, MAX_FINDING_ANNOTATION_LENGTH - 1)}…`
+}
+
+export function textLineCount(value: string): number {
+  // Keep the same line model as Pierre's splitFileContents utility: a
+  // newline terminates a line, while the terminator stays with that line.
+  return value === '' ? 0 : value.split(/(?<=\n)/).length
+}
 
 function workspaceElementId(value: string, suffix: string): string {
   const safeValue = value.replace(/[^a-zA-Z0-9_-]/g, '-') || 'editor'
@@ -523,6 +538,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [baseLoadError, setBaseLoadError] = useState<{ path: string; text: string } | null>(null)
   const [currentLoadingPath, setCurrentLoadingPath] = useState<string | null>(null)
   const [currentLoadError, setCurrentLoadError] = useState<{ path: string; text: string } | null>(null)
+  const [findingAnchor, setFindingAnchor] = useState<DraftFindingAnchor | null>(null)
   const requestGeneration = useRef(0)
   const persistence = useRef<DraftPersistence | null>(null)
   const saveOperation = useRef<DraftOperation | null>(null)
@@ -536,6 +552,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const selectedPathRef = useRef<string | null>(selectedPath)
   const editModeButtonRef = useRef<HTMLButtonElement>(null)
   const focusEditModeButtonAfterExit = useRef(false)
+  const focusFindingAfterNavigation = useRef(false)
   selectedPathRef.current = selectedPath
   const workspaceTabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement>>>({})
   const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
@@ -575,6 +592,11 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const storageKey = draftStorageKey(resourceId, baseDigest)
   const hasChangesRef = useRef(false)
   hasChangesRef.current = hasChanges
+  const findingLineAnnotation = useMemo<DraftFindingAnnotation | null>(() => {
+    if (hasChanges || !findingAnchor || findingAnchor.path !== selectedPath || selectedText === null) return null
+    if (findingAnchor.lineNumber < 1 || findingAnchor.lineNumber > textLineCount(selectedText)) return null
+    return { lineNumber: findingAnchor.lineNumber, label: findingAnchor.label }
+  }, [findingAnchor?.label, findingAnchor?.lineNumber, findingAnchor?.path, hasChanges, selectedPath, selectedText])
 
   const shouldBlockNavigation = useCallback(() => {
     return hasChangesRef.current && !window.confirm('Discard unsaved changes and leave the editor? Saved draft revisions are not affected.')
@@ -611,6 +633,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setWorkingFiles(files)
     setRenameOrigins({})
     setSurfaceContent(null)
+    setFindingAnchor(null)
+    focusFindingAfterNavigation.current = false
     setSelectedPath((current) => current && files.some((file) => file.path === current) ? current : firstPath(files))
     setMode('diff')
     setWorkspaceTab('files')
@@ -635,6 +659,18 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     focusEditModeButtonAfterExit.current = false
     editModeButtonRef.current?.focus()
   }, [mode])
+
+  useEffect(() => {
+    if (!focusFindingAfterNavigation.current || workspaceTab !== 'files' || findingLineAnnotation === null || selectedCurrentLoading) return
+    focusFindingAfterNavigation.current = false
+    surfaceRef.current?.focus?.()
+  }, [findingLineAnnotation, mode, selectedCurrentLoading, selectedPath, workspaceTab])
+
+  useEffect(() => {
+    if (!hasChanges || findingAnchor === null) return
+    focusFindingAfterNavigation.current = false
+    setFindingAnchor(null)
+  }, [findingAnchor, hasChanges])
 
   useEffect(() => () => { onDirtyChange?.(false) }, [onDirtyChange])
 
@@ -679,6 +715,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setWorkspaceTab('files')
     setVersion(baseVersion)
     setSurfaceContent(null)
+    setFindingAnchor(null)
+    focusFindingAfterNavigation.current = false
     setCreating(false)
     setReloading(false)
     setSaving(false)
@@ -792,6 +830,31 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   }, [draft, resourceId, selectedPath, workingFiles])
 
   useEffect(() => {
+    if (!findingAnchor || findingAnchor.path !== selectedPath || selectedCurrentLoading || selectedFile === null) return
+    if (selectedCurrentError) {
+      focusFindingAfterNavigation.current = false
+      setFindingAnchor(null)
+      setMessage({ kind: 'warning', text: `Could not open ${findingAnchor.path}: ${selectedCurrentError}` })
+      return
+    }
+    // Metadata-only files have no preview state until their selected bytes are
+    // fetched. Wait for that request before deciding whether the review anchor
+    // can be displayed.
+    if (selectedFile.content === undefined && selectedFile.previewState === undefined) return
+    if (selectedPreview?.state !== 'text' || selectedText === null) {
+      focusFindingAfterNavigation.current = false
+      setFindingAnchor(null)
+      setMessage({ kind: 'warning', text: `${findingAnchor.path} is not available as a text preview.` })
+      return
+    }
+    if (findingAnchor.lineNumber > textLineCount(selectedText)) {
+      focusFindingAfterNavigation.current = false
+      setFindingAnchor(null)
+      setMessage({ kind: 'warning', text: `Line ${findingAnchor.lineNumber} is outside ${findingAnchor.path}.` })
+    }
+  }, [findingAnchor, selectedCurrentError, selectedCurrentLoading, selectedFile, selectedPath, selectedPreview?.state, selectedText])
+
+  useEffect(() => {
     const path = selectedBasePath
     const metadata = selectedBaseEntry
     if (uploadDraft || !path || !metadata || metadata.previewState !== 'text' || (selectedFilePresent && selectedPreview?.state !== 'text') || releaseBaseFiles.some((file) => file.path === path)) {
@@ -873,12 +936,53 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     }
   }
 
-  function selectFile(path: string): void {
+  function getFindingNavigationState(finding: DraftReviewFinding): DraftReviewNavigationState {
+    const path = finding.path
+    const line = finding.line
+    if (!path || path.trim().length === 0) return { enabled: false, reason: 'This finding has no file path anchor.' }
+    if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) return { enabled: false, reason: 'This finding has no valid line anchor.' }
+    if (!draft || !draft.files.some((file) => file.path === path)) return { enabled: false, reason: 'This finding points to a file outside the current draft revision.' }
+    if (hasChanges) return { enabled: false, reason: 'Save or discard local changes before opening a review finding.' }
+    const file = workingFiles.find((candidate) => candidate.path === path) ?? draft.files.find((candidate) => candidate.path === path) ?? null
+    const preview = inspectDraftFile(file)
+    if (preview && preview.state !== 'text') return { enabled: false, reason: `This finding cannot open because ${previewReason(preview.state)}.` }
+    if (busy) return { enabled: false, reason: 'Wait for the current draft operation to finish before opening a review finding.' }
+    return { enabled: true }
+  }
+
+  function navigateToFinding(finding: DraftReviewFinding): void {
+    const navigation = getFindingNavigationState(finding)
+    const line = finding.line
+    if (!navigation.enabled || !finding.path || typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+      setMessage({ kind: 'warning', text: navigation.reason ?? 'This review finding has no usable editor location.' })
+      return
+    }
+    const anchor: DraftFindingAnchor = { path: finding.path, lineNumber: line, label: findingAnnotationLabel(finding) }
+    focusFindingAfterNavigation.current = true
+    setWorkspaceTab('files')
+    if (finding.path === selectedPath) {
+      setMode('diff')
+      setFindingAnchor(anchor)
+    } else {
+      selectFile(finding.path, anchor)
+    }
+    setMessage({ kind: 'success', text: `Opened ${finding.path} at line ${line}.` })
+  }
+
+  function clearFindingAnnotation(): void {
+    focusFindingAfterNavigation.current = false
+    setFindingAnchor(null)
+    setMode('diff')
+    setMessage(null)
+  }
+
+  function selectFile(path: string, reviewAnchor?: DraftFindingAnchor): void {
     if (busy || path === selectedPath) return
     const nextFiles = syncSurfaceFiles()
     setWorkingFiles(nextFiles)
     setSurfaceContent(null)
     setMode('diff')
+    setFindingAnchor(reviewAnchor ?? null)
     setSelectedPath(path)
     setCurrentLoadingPath(null)
     setCurrentLoadError(null)
@@ -914,6 +1018,11 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     if (next === 'edit' && !selectedIsEditable) {
       setMessage({ kind: 'warning', text: 'Only UTF-8 text files can be edited.' })
       return
+    }
+    if (next === 'edit' && findingAnchor !== null) {
+      setFindingAnchor(null)
+      focusFindingAfterNavigation.current = false
+      setMessage(null)
     }
     if (next === 'diff') setWorkingFiles(syncSurfaceFiles())
     setMode(next)
@@ -1116,7 +1225,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
         <div className="draft-editor-layout">
           <div className="draft-editor-main draft-editor-surface-main" onKeyDownCapture={handleEditorKeyDownCapture}>
             <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" aria-pressed={mode === 'diff'} className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button ref={editModeButtonRef} type="button" aria-pressed={mode === 'edit'} className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div><div className="draft-view-switch" role="group" aria-label="Diff layout"><button type="button" aria-pressed={diffStyle === 'split'} className={diffStyle === 'split' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('split')}>Split</button><button type="button" aria-pressed={diffStyle === 'unified'} className={diffStyle === 'unified' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('unified')}>Unified</button></div></div></div>
-            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} keyboardHelpId={editorKeyboardHelpId} onSelect={selectFile} onEditChange={onPierreEditChange} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
+            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} keyboardHelpId={editorKeyboardHelpId} findingAnnotation={findingLineAnnotation} onClearFindingAnnotation={clearFindingAnnotation} onSelect={selectFile} onEditChange={onPierreEditChange} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>
@@ -1134,7 +1243,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
       }} />}
       </div>
       <div id={workspacePanelIds.review} aria-labelledby={workspaceTabIds.review} hidden={workspaceTab !== 'review'} role="tabpanel">
-      {workspaceTab === 'review' && <DraftReviewPanel draft={draft} disabled={busy} />}
+      {workspaceTab === 'review' && <DraftReviewPanel draft={draft} disabled={busy} getFindingNavigationState={getFindingNavigationState} onNavigateToFinding={navigateToFinding} />}
       </div>
       <footer className="draft-editor-footer"><span className="helper">Revision {draft.revision} is saved on the server. Reload before saving if someone else changed it.</span><Button kind="quiet" disabled={busy} type="button" onClick={() => void reloadDraft()}>Reload draft</Button></footer>
     </>}

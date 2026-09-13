@@ -1,7 +1,7 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode } from 'react'
 import { EditProvider, File as PierreFile, FileDiff } from '@pierre/diffs/react'
 import { Editor, type EditorFactory } from '@pierre/diffs/edit'
-import { parseDiffFromFile, type FileContents } from '@pierre/diffs'
+import { parseDiffFromFile, type DiffLineAnnotation, type FileContents, type LineAnnotation } from '@pierre/diffs'
 import { FileTree, useFileTree } from '@pierre/trees/react'
 import type { ReleaseFilePreviewState, SkillBundle } from '../lib/types'
 import { formatBytes } from '../lib/format'
@@ -18,9 +18,17 @@ export interface DraftSurfaceEntry {
 
 export interface DraftSurfaceHandle {
   readCurrent(): string | null
+  focus?(): void
+}
+
+export interface DraftFindingAnnotation {
+  lineNumber: number
+  label: string
 }
 
 export type DraftDiffStyle = 'split' | 'unified'
+
+interface FindingAnnotationMetadata { label: string }
 
 interface PierreDraftSurfaceProps {
   draftId: string
@@ -42,6 +50,8 @@ interface PierreDraftSurfaceProps {
   baseLoading: boolean
   baseError: string | null
   keyboardHelpId: string
+  findingAnnotation?: DraftFindingAnnotation | null
+  onClearFindingAnnotation?: () => void
   onSelect: (path: string) => void
   onEditChange: (contents: string) => void
   onContentChange: (contents: string) => void
@@ -99,11 +109,15 @@ function previewReason(state: ReleaseFilePreviewState | null, maxPreviewBytes: n
 
 const createEditor: EditorFactory<undefined, undefined> = (editorType, options, editStateKey) => new Editor(editorType, options, editStateKey)
 
+function renderFindingAnnotation(annotation: LineAnnotation<FindingAnnotationMetadata> | DiffLineAnnotation<FindingAnnotationMetadata>): ReactNode {
+  return <span className="draft-finding-annotation" data-line-number={annotation.lineNumber} role="note" tabIndex={-1}>{annotation.metadata.label}</span>
+}
+
 export function pierreEditStateKey(draftId: string, revision: number, digest: `sha256:${string}`, path: string): string {
   return `draft:${draftId}:${revision}:${digest}:${path}`
 }
 
-export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, diffStyle, editable, busy, baseLoading, baseError, keyboardHelpId, onSelect, onEditChange, onContentChange }, ref) {
+export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, diffStyle, editable, busy, baseLoading, baseError, keyboardHelpId, findingAnnotation, onClearFindingAnnotation, onSelect, onEditChange, onContentChange }, ref) {
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries])
   const pathsRef = useRef(paths)
   const onSelectRef = useRef(onSelect)
@@ -127,6 +141,23 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
   const current = useMemo(() => toFile(currentFile, maxPreviewBytes), [currentFile?.path, currentFile?.content, maxPreviewBytes])
   const base = useMemo(() => toFile(baseFile, maxPreviewBytes), [baseFile?.path, baseFile?.content, maxPreviewBytes])
   const latestContents = useRef<string | null>(current?.contents ?? null)
+  const codeRegionRef = useRef<HTMLDivElement>(null)
+  const focusFindingAnnotation = useCallback(() => {
+    if (!findingAnnotation) return
+    const annotation = codeRegionRef.current?.querySelector<HTMLElement>('.draft-finding-annotation')
+    if (!annotation) return
+    annotation.scrollIntoView?.({ block: 'center', inline: 'nearest' })
+    annotation.focus()
+  }, [findingAnnotation])
+
+  useEffect(() => {
+    focusFindingAnnotation()
+  }, [current?.cacheKey, findingAnnotation, focusFindingAnnotation, mode])
+
+  const onSurfacePostRender = useCallback((node: HTMLElement) => {
+    onPierrePostRender(node)
+    focusFindingAnnotation()
+  }, [focusFindingAnnotation])
 
   useEffect(() => {
     const previous = previousPaths.current
@@ -159,32 +190,54 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
 
   useImperativeHandle(ref, () => ({
     readCurrent: () => latestContents.current,
+    focus: () => codeRegionRef.current?.focus(),
   }), [])
 
   const diff = useMemo(() => {
     if (!base && !current) return null
     return parseDiffFromFile(base, current, { context: 3 })
   }, [base, current])
+  const findingFileAnnotations = useMemo<LineAnnotation<FindingAnnotationMetadata>[]>(() => {
+    if (!findingAnnotation || !Number.isInteger(findingAnnotation.lineNumber) || findingAnnotation.lineNumber < 1) return []
+    return [{ lineNumber: findingAnnotation.lineNumber, metadata: { label: findingAnnotation.label } }]
+  }, [findingAnnotation?.label, findingAnnotation?.lineNumber])
+  const findingDiffAnnotations = useMemo<DiffLineAnnotation<FindingAnnotationMetadata>[]>(() => {
+    if (!findingAnnotation || !Number.isInteger(findingAnnotation.lineNumber) || findingAnnotation.lineNumber < 1) return []
+    return [{ side: 'additions', lineNumber: findingAnnotation.lineNumber, metadata: { label: findingAnnotation.label } }]
+  }, [findingAnnotation?.label, findingAnnotation?.lineNumber])
   const canShowDiff = (currentFile === null || currentPreviewState === 'text') && (baseFile ? basePreviewState === 'text' : basePreviewState === null)
   const baseUnavailable = baseFile === null && basePreviewState !== null && basePreviewState !== 'text'
   const placeholderState = baseUnavailable ? basePreviewState : currentPreviewState ?? basePreviewState
   const placeholderSize = currentPreviewSize ?? basePreviewSize
   const showEditor = mode === 'edit' && editable && current !== null && !baseLoading && baseError === null
-  const renderedCode = baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : showEditor ? <EditProvider createEditor={createEditor}><PierreFile
+  const showFindingFile = mode === 'diff' && findingFileAnnotations.length > 0 && current !== null && !baseLoading && baseError === null
+  const renderedCode = baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : showEditor ? <EditProvider createEditor={createEditor}><PierreFile<FindingAnnotationMetadata>
     key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
     className="draft-pierre-file"
     file={current}
     edit
     editStateKey={pierreEditStateKey(draftId, draftRevision, draftDigest, current.name)}
-    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
+    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onSurfacePostRender }}
+    lineAnnotations={findingFileAnnotations}
+    renderAnnotation={renderFindingAnnotation}
     disableWorkerPool
     onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}
     onEditComplete={(event) => { onContentChange(event.file.contents); return 'accept' }}
-  /></EditProvider> : canShowDiff && diff ? <FileDiff
+  /></EditProvider> : showFindingFile ? <PierreFile<FindingAnnotationMetadata>
+    key={`finding:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}:${findingFileAnnotations[0]?.lineNumber ?? ''}`}
+    className="draft-pierre-file"
+    file={current}
+    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onSurfacePostRender }}
+    lineAnnotations={findingFileAnnotations}
+    renderAnnotation={renderFindingAnnotation}
+    disableWorkerPool
+  /> : canShowDiff && diff ? <FileDiff<FindingAnnotationMetadata>
     key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}:${diffStyle}`}
     className="draft-pierre-file"
     fileDiff={diff}
-    options={{ diffStyle, overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
+    options={{ diffStyle, overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onSurfacePostRender }}
+    lineAnnotations={findingDiffAnnotations}
+    renderAnnotation={renderFindingAnnotation}
     disableWorkerPool
   /> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState, maxPreviewBytes)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>
 
@@ -193,7 +246,8 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
       <FileTree aria-label="Draft files" header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
       {entries.length > 0 && <div className="draft-surface-tree-status" role="status" aria-live="polite"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
     </div>
-    <div className="draft-surface-code" role="region" aria-describedby={showEditor ? keyboardHelpId : undefined} aria-label={mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
+    <div ref={codeRegionRef} className="draft-surface-code" role="region" tabIndex={-1} aria-describedby={showEditor ? keyboardHelpId : undefined} aria-label={findingAnnotation ? `Review location in ${current?.name ?? 'draft file'}` : mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
+      {findingAnnotation && <div className="draft-surface-location"><span aria-live="polite" role="status">Review location at line {findingAnnotation.lineNumber}. Read-only inspection.</span>{onClearFindingAnnotation && <button type="button" onClick={onClearFindingAnnotation}>Return to diff</button>}</div>}
       {renderedCode}
       {showEditor && <span id={keyboardHelpId} className="helper" style={{ display: 'block', padding: '5px 15px' }}>Press Escape to leave the editor.</span>}
       {mode === 'edit' && busy && <div className="draft-surface-busy"><LoadingState label="Saving revision…" /></div>}

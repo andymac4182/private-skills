@@ -3,9 +3,16 @@ import { api, ApiError } from '../lib/api'
 import type { DraftReviewFinding, DraftReviewJob, DraftReviewResult, DraftReviewsResponse, DraftView } from '../lib/types'
 import { Badge, Button, EmptyState, ErrorState, LoadingState, Notice, Panel } from './Primitives'
 
-interface DraftReviewPanelProps {
+export interface DraftReviewNavigationState {
+  enabled: boolean
+  reason?: string
+}
+
+export interface DraftReviewPanelProps {
   draft: DraftView
   disabled?: boolean
+  getFindingNavigationState?: (finding: DraftReviewFinding) => DraftReviewNavigationState
+  onNavigateToFinding?: (finding: DraftReviewFinding) => void
 }
 
 type ReviewBusy = 'request' | 'retry' | string
@@ -71,7 +78,7 @@ export function newestFirst<T>(items: readonly T[]): T | undefined {
   return items[0]
 }
 
-export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelProps) {
+export function DraftReviewPanel({ draft, disabled = false, getFindingNavigationState, onNavigateToFinding }: DraftReviewPanelProps) {
   const [reviews, setReviews] = useState<DraftReviewsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<ReviewBusy | null>(null)
@@ -288,26 +295,37 @@ export function DraftReviewPanel({ draft, disabled = false }: DraftReviewPanelPr
       {latestJob && <div className="draft-review-status"><div><span className="eyebrow">Review job</span><strong>{latestJob.state === 'passed' ? 'Review complete' : latestJob.state}</strong><span className="helper">Reviewer {latestJob.reviewerRevision} · model {latestJob.model}</span></div><Badge value={latestJob.state === 'passed' ? 'review complete' : latestJob.state} /></div>}
       {latestJob?.error && <Notice kind="warning">{latestJob.error}</Notice>}
       {latestJob?.staleReason && <Notice kind="warning">This result is stale: {latestJob.staleReason}</Notice>}
-      {latestResult && <div className="draft-review-result"><div className="draft-review-result-heading"><div><strong>Findings</strong><span className="helper">{latestResult.findings.length} finding{latestResult.findings.length === 1 ? '' : 's'} · {latestResult.state === 'passed' ? 'Review complete' : latestResult.state}</span></div><Badge tone={latestResult.state === 'failed' ? 'warn' : undefined} value={latestResult.state === 'passed' ? 'review complete' : latestResult.state} /></div>{latestResult.error && <Notice kind="warning">{latestResult.error}</Notice>}{latestResult.findings.length === 0 ? <p className="helper">No findings were returned for this snapshot.</p> : <div className="draft-review-findings">{latestResult.findings.map((finding) => <FindingCard allowDecisions={latestResult.state === 'passed' && latestJob?.state === 'passed'} busy={busy === finding.id} disabled={disabled || busy !== null} dismissOpen={dismissTarget?.resultId === latestResult.id && dismissTarget.findingId === finding.id} dismissReason={dismissTarget?.resultId === latestResult.id && dismissTarget.findingId === finding.id ? dismissReason : ''} finding={finding} key={finding.id} onAcknowledge={() => void decide(finding, 'acknowledged', undefined, latestResult.id)} onDismiss={() => openDismissal(finding)} onDismissCancel={cancelDismissal} onDismissReasonChange={setDismissReason} onDismissSubmit={() => submitDismissal(finding)} />)}</div>}</div>}
+      {latestResult && <div className="draft-review-result"><div className="draft-review-result-heading"><div><strong>Findings</strong><span className="helper">{latestResult.findings.length} finding{latestResult.findings.length === 1 ? '' : 's'} · {latestResult.state === 'passed' ? 'Review complete' : latestResult.state}</span></div><Badge tone={latestResult.state === 'failed' ? 'warn' : undefined} value={latestResult.state === 'passed' ? 'review complete' : latestResult.state} /></div>{latestResult.error && <Notice kind="warning">{latestResult.error}</Notice>}{latestResult.findings.length === 0 ? <p className="helper">No findings were returned for this snapshot.</p> : <div className="draft-review-findings">{latestResult.findings.map((finding) => {
+        const locationAuthority = latestResult.state === 'passed' && latestJob?.state === 'passed'
+        const navigation = onNavigateToFinding === undefined
+          ? undefined
+          : locationAuthority
+            ? getFindingNavigationState?.(finding) ?? { enabled: true }
+            : { enabled: false, reason: 'Location navigation is unavailable for this review result.' }
+        return <FindingCard allowDecisions={locationAuthority} busy={busy === finding.id} disabled={disabled || busy !== null} dismissOpen={dismissTarget?.resultId === latestResult.id && dismissTarget.findingId === finding.id} dismissReason={dismissTarget?.resultId === latestResult.id && dismissTarget.findingId === finding.id ? dismissReason : ''} finding={finding} key={finding.id} navigation={navigation} onAcknowledge={() => void decide(finding, 'acknowledged', undefined, latestResult.id)} onDismiss={() => openDismissal(finding)} onDismissCancel={cancelDismissal} onDismissReasonChange={setDismissReason} onDismissSubmit={() => submitDismissal(finding)} onNavigateToFinding={onNavigateToFinding === undefined ? undefined : () => onNavigateToFinding(finding)} />
+      })}</div>}</div>}
     </div>}
   </Panel>
 }
 
-function FindingCard({ finding, busy, disabled, allowDecisions, dismissOpen, dismissReason, onAcknowledge, onDismiss, onDismissCancel, onDismissReasonChange, onDismissSubmit }: {
+function FindingCard({ finding, busy, disabled, allowDecisions, dismissOpen, dismissReason, navigation, onAcknowledge, onDismiss, onDismissCancel, onDismissReasonChange, onDismissSubmit, onNavigateToFinding }: {
   finding: DraftReviewFinding
   busy: boolean
   disabled: boolean
   allowDecisions: boolean
   dismissOpen: boolean
   dismissReason: string
+  navigation?: DraftReviewNavigationState
   onAcknowledge: () => void
   onDismiss: () => void
   onDismissCancel: () => void
   onDismissReasonChange: (reason: string) => void
   onDismissSubmit: () => void
+  onNavigateToFinding?: () => void
 }) {
   const reasonId = `dismiss-reason-${finding.id}`
   const reasonHintId = `${reasonId}-hint`
+  const locationHintId = `finding-location-${finding.id}-hint`
   const reasonRef = useRef<HTMLTextAreaElement>(null)
   const wasDismissOpen = useRef(false)
 
@@ -317,5 +335,5 @@ function FindingCard({ finding, busy, disabled, allowDecisions, dismissOpen, dis
     wasDismissOpen.current = dismissOpen
   }, [dismissOpen, finding.id])
 
-  return <article className="draft-review-finding" id={`draft-review-finding-${finding.id}`} tabIndex={-1}><div className="draft-review-finding-top"><div><Badge tone={severityTone(finding.severity)} value={finding.severity} /><strong>{finding.title}</strong></div><Badge value={finding.decision} /></div><p>{finding.summary}</p>{(finding.path || finding.line !== undefined) && <code>{finding.path ?? 'Skill'}{finding.line === undefined ? '' : `:${finding.line}`}</code>}{finding.evidence && <details><summary>Evidence</summary><pre>{finding.evidence}</pre></details>}{finding.recommendation && <p className="helper">Suggested next step: {finding.recommendation}</p>}{finding.decisionReason && <p className="helper">Decision reason: {finding.decisionReason}</p>}{finding.decision === 'open' && allowDecisions && <div className="row-actions"><Button kind="quiet" busy={busy} disabled={disabled} type="button" onClick={onAcknowledge}>Acknowledge</Button><Button id={`dismiss-trigger-${finding.id}`} kind="quiet" disabled={disabled || dismissOpen} type="button" onClick={onDismiss}>Dismiss</Button></div>}{finding.decision === 'open' && !allowDecisions && <p className="helper">Actions are unavailable for this review result.</p>}{dismissOpen && finding.decision === 'open' && allowDecisions && <div className="draft-review-dismissal" aria-labelledby={`${reasonId}-label`} role="group"><strong id={`${reasonId}-label`}>Reason for dismissal</strong><label htmlFor={reasonId}>Reason (required)</label><textarea aria-describedby={reasonHintId} aria-required="true" disabled={disabled || busy} id={reasonId} maxLength={MAX_DISMISS_REASON_LENGTH} onChange={(event) => onDismissReasonChange(event.target.value)} ref={reasonRef} value={dismissReason} /><span className="field-hint" id={reasonHintId}>Explain why this finding should be dismissed. This reason is retained in the audit record.</span><div className="row-actions"><Button kind="quiet" disabled={disabled || busy} type="button" onClick={onDismissCancel}>Cancel</Button><Button kind="danger" busy={busy} disabled={disabled || busy || dismissReason.trim().length === 0} type="button" onClick={onDismissSubmit}>Submit dismissal</Button></div></div>}</article>
+  return <article className="draft-review-finding" id={`draft-review-finding-${finding.id}`} tabIndex={-1}><div className="draft-review-finding-top"><div><Badge tone={severityTone(finding.severity)} value={finding.severity} /><strong>{finding.title}</strong></div><Badge value={finding.decision} /></div><p>{finding.summary}</p>{(finding.path || finding.line !== undefined) && <code>{finding.path ?? 'Skill'}{finding.line === undefined ? '' : `:${finding.line}`}</code>}{onNavigateToFinding && navigation && <div className="row-actions draft-review-location"><Button aria-describedby={navigation.reason ? locationHintId : undefined} aria-label={finding.path && finding.line !== undefined ? `Open ${finding.path} at line ${finding.line} in editor` : `Open finding ${finding.title} in editor`} kind="quiet" disabled={disabled || busy || !navigation.enabled} type="button" onClick={onNavigateToFinding}>Open in editor</Button>{navigation.reason && <span className="helper" id={locationHintId}>{navigation.reason}</span>}</div>}{finding.evidence && <details><summary>Evidence</summary><pre>{finding.evidence}</pre></details>}{finding.recommendation && <p className="helper">Suggested next step: {finding.recommendation}</p>}{finding.decisionReason && <p className="helper">Decision reason: {finding.decisionReason}</p>}{finding.decision === 'open' && allowDecisions && <div className="row-actions"><Button kind="quiet" busy={busy} disabled={disabled} type="button" onClick={onAcknowledge}>Acknowledge</Button><Button id={`dismiss-trigger-${finding.id}`} kind="quiet" disabled={disabled || dismissOpen} type="button" onClick={onDismiss}>Dismiss</Button></div>}{finding.decision === 'open' && !allowDecisions && <p className="helper">Actions are unavailable for this review result.</p>}{dismissOpen && finding.decision === 'open' && allowDecisions && <div className="draft-review-dismissal" aria-labelledby={`${reasonId}-label`} role="group"><strong id={`${reasonId}-label`}>Reason for dismissal</strong><label htmlFor={reasonId}>Reason (required)</label><textarea aria-describedby={reasonHintId} aria-required="true" disabled={disabled || busy} id={reasonId} maxLength={MAX_DISMISS_REASON_LENGTH} onChange={(event) => onDismissReasonChange(event.target.value)} ref={reasonRef} value={dismissReason} /><span className="field-hint" id={reasonHintId}>Explain why this finding should be dismissed. This reason is retained in the audit record.</span><div className="row-actions"><Button kind="quiet" disabled={disabled || busy} type="button" onClick={onDismissCancel}>Cancel</Button><Button kind="danger" busy={busy} disabled={disabled || busy || dismissReason.trim().length === 0} type="button" onClick={onDismissSubmit}>Submit dismissal</Button></div></div>}</article>
 }

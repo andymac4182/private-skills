@@ -5,22 +5,23 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { buildDraftDeltaFiles, canonicalDraftFiles, DraftEditor, draftPayloadFingerprint, filterNativeDraftEntries, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, nativeUnifiedDiff, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
+import { buildDraftDeltaFiles, canonicalDraftFiles, DraftEditor, draftPayloadFingerprint, filterNativeDraftEntries, findingAnnotationLabel, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, nativeUnifiedDiff, operationKey, releaseBaselineStatus, renameOriginForPath, textLineCount } from './DraftEditor'
 import type { DraftSurfaceEntry } from './PierreDraftSurface'
-import type { DraftView, ReleaseFilesResponse } from '../lib/types'
+import type { DraftReviewBinding, DraftReviewFinding, DraftReviewJob, DraftReviewResult, DraftReviewsResponse, DraftView, ReleaseFilesResponse } from '../lib/types'
 
 const pierreHarness = vi.hoisted(() => ({ shouldThrow: true, contentsByPath: {} as Record<string, string> }))
 
 vi.mock('@tanstack/react-router', () => ({ useBlocker: () => undefined }))
 vi.mock('./PierreDraftSurface', async () => {
   const React = await import('react')
-  type PierreHandle = { readCurrent: () => string | null }
+  type PierreHandle = { readCurrent: () => string | null; focus?: () => void }
   type PierreCallback = (contents: string) => void
   const PierreDraftSurface = React.forwardRef<PierreHandle, Record<string, unknown>>((props, ref) => {
     const currentFile = props.currentFile as { path?: unknown } | null | undefined
     const path = typeof currentFile?.path === 'string' ? currentFile.path : null
     const mode = props.mode
-    React.useImperativeHandle(ref, () => ({ readCurrent: () => path ? pierreHarness.contentsByPath[path] ?? null : null }), [path])
+    const codeRegionRef = React.useRef<HTMLDivElement>(null)
+    React.useImperativeHandle(ref, () => ({ readCurrent: () => path ? pierreHarness.contentsByPath[path] ?? null : null, focus: () => codeRegionRef.current?.focus() }), [path])
     React.useEffect(() => {
       if (pierreHarness.shouldThrow || mode !== 'edit' || !path) return
       const contents = pierreHarness.contentsByPath[path]
@@ -31,6 +32,8 @@ vi.mock('./PierreDraftSurface', async () => {
     const onContentChange = typeof props.onContentChange === 'function' ? props.onContentChange as PierreCallback : undefined
     const entries = Array.isArray(props.entries) ? props.entries as Array<{ path?: unknown }> : []
     const onSelect = typeof props.onSelect === 'function' ? props.onSelect as (nextPath: string) => void : undefined
+    const annotation = props.findingAnnotation as { lineNumber?: unknown; label?: unknown } | null | undefined
+    const onClearFindingAnnotation = typeof props.onClearFindingAnnotation === 'function' ? props.onClearFindingAnnotation as () => void : undefined
     function changeContents(): void {
       if (!path) return
       const next = 'edited body\n'
@@ -39,7 +42,7 @@ vi.mock('./PierreDraftSurface', async () => {
       onContentChange?.(next)
     }
     const keyboardHelpId = typeof props.keyboardHelpId === 'string' ? props.keyboardHelpId : undefined
-    return React.createElement('div', { 'data-testid': 'mock-pierre' }, React.createElement('div', { className: 'draft-surface-code', 'aria-describedby': mode === 'edit' && keyboardHelpId ? keyboardHelpId : undefined }, mode === 'edit' && keyboardHelpId && React.createElement('span', { id: keyboardHelpId, className: 'helper' }, 'Press Escape to leave the editor.'), mode === 'edit' && React.createElement('input', { 'data-testid': 'mock-pierre-search', type: 'search', placeholder: 'Search' }), mode === 'edit' && React.createElement('div', { 'data-testid': 'mock-pierre-content', contentEditable: true, suppressContentEditableWarning: true, tabIndex: 0 }, React.createElement('span', null, 'editor')), mode === 'edit' && React.createElement('button', { type: 'button', 'data-testid': 'mock-pierre-change', onClick: changeContents }, 'Change contents'), ...entries.flatMap((entry) => typeof entry.path === 'string' ? [React.createElement('button', { key: entry.path, type: 'button', 'data-testid': `mock-pierre-select-${entry.path}`, onClick: () => onSelect?.(entry.path as string) }, entry.path)] : [])))
+    return React.createElement('div', { 'data-testid': 'mock-pierre' }, React.createElement('div', { ref: codeRegionRef, className: 'draft-surface-code', tabIndex: -1, 'aria-describedby': mode === 'edit' && keyboardHelpId ? keyboardHelpId : undefined }, annotation && typeof annotation.lineNumber === 'number' && typeof annotation.label === 'string' && React.createElement('div', { 'data-testid': 'mock-finding-location', role: 'status' }, `Review location at line ${annotation.lineNumber}. Read-only inspection.`, onClearFindingAnnotation && React.createElement('button', { type: 'button', onClick: onClearFindingAnnotation }, 'Return to diff')), mode === 'edit' && keyboardHelpId && React.createElement('span', { id: keyboardHelpId, className: 'helper' }, 'Press Escape to leave the editor.'), annotation && typeof annotation.lineNumber === 'number' && typeof annotation.label === 'string' && React.createElement('span', { 'data-testid': 'mock-finding-annotation', 'data-line': annotation.lineNumber }, annotation.label), mode === 'edit' && React.createElement('input', { 'data-testid': 'mock-pierre-search', type: 'search', placeholder: 'Search' }), mode === 'edit' && React.createElement('div', { 'data-testid': 'mock-pierre-content', contentEditable: true, suppressContentEditableWarning: true, tabIndex: 0 }, React.createElement('span', null, 'editor')), mode === 'edit' && React.createElement('button', { type: 'button', 'data-testid': 'mock-pierre-change', onClick: changeContents }, 'Change contents'), ...entries.flatMap((entry) => typeof entry.path === 'string' ? [React.createElement('button', { key: entry.path, type: 'button', 'data-testid': `mock-pierre-select-${entry.path}`, onClick: () => onSelect?.(entry.path as string) }, entry.path)] : [])))
   })
   return { PierreDraftSurface }
 })
@@ -66,11 +69,39 @@ const firstFiles = [
   { path: 'a.txt', content: 'YQ==' },
 ]
 
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve()
+}
+
 describe('draft editor persistence identities', () => {
   it('renders a bounded unified fallback while preserving additions and removals', () => {
     expect(nativeUnifiedDiff('same\nold', 'same\nnew')).toBe('  same\n- old\n+ new')
     expect(nativeUnifiedDiff(null, 'new')).toBe('+ new')
     expect(nativeUnifiedDiff('old', null)).toBe('- old')
+  })
+
+  it('matches Pierre line boundaries for empty and newline-terminated text', () => {
+    expect(textLineCount('')).toBe(0)
+    expect(textLineCount('one')).toBe(1)
+    expect(textLineCount('one\n')).toBe(1)
+    expect(textLineCount('one\ntwo\n')).toBe(2)
+    expect(textLineCount('one\r\ntwo')).toBe(2)
+    expect(textLineCount('one\rtwo')).toBe(1)
+  })
+
+  it('bounds review annotation labels while retaining literal finding text', () => {
+    const finding: DraftReviewFinding = {
+      id: 'finding-label',
+      severity: 'medium',
+      category: 'quality',
+      title: '<title>',
+      summary: '<summary>' + 'x'.repeat(500),
+      decision: 'open',
+    }
+    const label = findingAnnotationLabel(finding)
+    expect(label).toContain('<title>: <summary>')
+    expect(label.length).toBe(280)
+    expect(label.endsWith('…')).toBe(true)
   })
 
   it('filters native fallback paths case-insensitively without changing path identity', () => {
@@ -329,6 +360,125 @@ describe('draft editor renderer fallback', () => {
       expect(container.querySelector('.draft-dirty')).toBeNull()
       await act(async () => { container.querySelector<HTMLButtonElement>('[data-testid="mock-pierre-change"]')?.click() })
       expect(container.querySelector('.draft-dirty')).not.toBeNull()
+    } finally {
+      await act(async () => { root.unmount() })
+      document.body.replaceChildren()
+      draftFile.mockRestore()
+      pierreHarness.shouldThrow = true
+      pierreHarness.contentsByPath = {}
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('draft editor review finding navigation', () => {
+  it('opens a current finding in read-only location mode without saving and clears it before edits', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    vi.stubGlobal('crypto', webcrypto)
+    pierreHarness.shouldThrow = false
+    const firstPath = 'packs/000/nested/first/SKILL.md'
+    const secondPath = 'packs/100/nested/second/SKILL.md'
+    const firstText = 'first body\n'
+    const secondText = 'second body\n'
+    const firstDigest = 'sha256:51e5f80e60c2bb85ed6b8e48aa61e0d8f5cd126dc3907af60319a810b476bb1c' as `sha256:${string}`
+    const secondDigest = 'sha256:a202941a54600108f5b251c071b96b6a1563d219688ce6a773db459a974487a8' as `sha256:${string}`
+    const cleanDraft: DraftView = {
+      ...draft,
+      origin: 'upload',
+      files: [
+        { path: firstPath, size: firstText.length, digest: firstDigest },
+        { path: secondPath, size: secondText.length, digest: secondDigest },
+      ],
+    }
+    pierreHarness.contentsByPath = { [firstPath]: firstText, [secondPath]: secondText }
+    const draftFile = vi.spyOn(api, 'draftFile').mockImplementation(async (_draftId, path) => {
+      const text = pierreHarness.contentsByPath[path] ?? ''
+      const digest = path === firstPath ? firstDigest : secondDigest
+      return { file: { path, size: text.length, digest, previewState: 'text', content: btoa(text) } }
+    })
+    const reviewFinding: DraftReviewFinding = {
+      id: 'finding-location-editor',
+      severity: 'high',
+      category: 'security',
+      title: '<img src=x>',
+      summary: '<script>literal finding</script>',
+      path: secondPath,
+      line: 1,
+      decision: 'open',
+    }
+    const binding: DraftReviewBinding = {
+      draftId: cleanDraft.id,
+      draftRevision: cleanDraft.revision,
+      contentDigest: cleanDraft.digest,
+      policyRevision: 'policy-1',
+    }
+    const reviewResult: DraftReviewResult = {
+      id: 'result-location-editor',
+      jobId: 'job-location-editor',
+      binding,
+      model: 'test/reviewer',
+      reviewerRevision: 'review-contract-1',
+      state: 'passed',
+      findings: [reviewFinding],
+      createdAt: '2026-09-13T00:00:00.000Z',
+      finishedAt: '2026-09-13T00:00:00.000Z',
+    }
+    const reviewJob: DraftReviewJob = {
+      id: reviewResult.jobId,
+      binding,
+      model: reviewResult.model,
+      reviewerRevision: reviewResult.reviewerRevision,
+      state: 'passed',
+      resultId: reviewResult.id,
+      createdAt: reviewResult.createdAt,
+      updatedAt: reviewResult.finishedAt,
+    }
+    const reviews: DraftReviewsResponse = { reviews: [reviewJob], results: [reviewResult] }
+    vi.spyOn(api, 'draftReviews').mockResolvedValue(reviews)
+    const updateDraft = vi.spyOn(api, 'updateDraft').mockRejectedValue(new Error('unexpected save during navigation'))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+
+    async function settle(): Promise<void> {
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+    }
+
+    try {
+      await settle()
+      const reviewTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === 'Review')
+      expect(reviewTab).toBeDefined()
+      await act(async () => { reviewTab?.click(); await flushMicrotasks() })
+      expect(container.textContent).toContain('<img src=x>')
+      const location = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Open in editor')
+      expect(location).toBeDefined()
+      expect(location?.disabled).toBe(false)
+
+      await act(async () => { location?.click(); await flushMicrotasks() })
+      await settle()
+      expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Files')
+      expect(container.querySelector('.draft-editor-toolbar strong')?.textContent).toBe(secondPath)
+      const annotation = container.querySelector('[data-testid="mock-finding-annotation"]')
+      expect(annotation?.getAttribute('data-line')).toBe('1')
+      expect(annotation?.textContent).toBe('<img src=x>: <script>literal finding</script>')
+      expect(annotation?.querySelector('img, script')).toBeNull()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+      expect(updateDraft).not.toHaveBeenCalled()
+
+      const returnToDiff = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Return to diff')
+      expect(returnToDiff).toBeDefined()
+      await act(async () => { returnToDiff?.click() })
+      expect(container.querySelector('[data-testid="mock-finding-annotation"]')).toBeNull()
+
+      const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
+      expect(editButton?.disabled).toBe(false)
+      await act(async () => { editButton?.click() })
+      await settle()
+      await act(async () => { container.querySelector<HTMLButtonElement>('[data-testid="mock-pierre-change"]')?.click() })
+      expect(container.querySelector('.draft-dirty')).not.toBeNull()
+      expect(updateDraft).not.toHaveBeenCalled()
     } finally {
       await act(async () => { root.unmount() })
       document.body.replaceChildren()

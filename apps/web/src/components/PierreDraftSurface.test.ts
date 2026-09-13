@@ -98,8 +98,8 @@ vi.mock('@pierre/trees/react', async () => {
 
 vi.mock('@pierre/diffs/react', () => ({
   EditProvider: ({ children }: { children: ReactNode }) => children,
-  File: ({ file, editStateKey }: { file: { name: string; contents: string }; editStateKey?: string }) => createElement('output', { 'data-testid': 'file', 'data-file-name': file.name, 'data-file-contents': file.contents, 'data-edit-state-key': editStateKey }),
-  FileDiff: ({ options }: { options?: { diffStyle?: string } }) => createElement('output', { 'data-testid': 'diff', 'data-diff-style': options?.diffStyle }),
+  File: ({ file, editStateKey, lineAnnotations, renderAnnotation }: { file: { name: string; contents: string }; editStateKey?: string; lineAnnotations?: Array<{ lineNumber: number; metadata?: { label: string } }>; renderAnnotation?: (annotation: { lineNumber: number; metadata?: { label: string } }) => ReactNode }) => createElement('output', { 'data-testid': 'file', 'data-file-name': file.name, 'data-file-contents': file.contents, 'data-edit-state-key': editStateKey }, lineAnnotations?.map((annotation) => renderAnnotation?.(annotation))),
+  FileDiff: ({ options, lineAnnotations, renderAnnotation }: { options?: { diffStyle?: string }; lineAnnotations?: Array<{ side: string; lineNumber: number; metadata?: { label: string } }>; renderAnnotation?: (annotation: { side: string; lineNumber: number; metadata?: { label: string } }) => ReactNode }) => createElement('output', { 'data-testid': 'diff', 'data-diff-style': options?.diffStyle }, lineAnnotations?.map((annotation) => renderAnnotation?.(annotation))),
 }))
 vi.mock('@pierre/diffs/edit', () => ({ Editor: class Editor {} }))
 vi.mock('@pierre/diffs', () => ({ parseDiffFromFile: (base: unknown, current: unknown) => base || current ? { name: 'SKILL.md', type: 'change', cacheKey: 'diff' } : null }))
@@ -197,6 +197,31 @@ describe('Pierre draft diff layout', () => {
       const codeRegion = container.querySelector('.draft-surface-code')
       expect(codeRegion?.getAttribute('aria-describedby')).toBe('draft-keyboard-help')
       expect(container.querySelector('#draft-keyboard-help')?.textContent).toBe('Press Escape to leave the editor.')
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
+  it('renders a read-only finding annotation with escaped text and focuses its line', async () => {
+    const currentFile = { path: 'SKILL.md', size: 14, digest, content: btoa('line one\nline two'), previewState: 'text' as const }
+    const onClearFindingAnnotation = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ currentFile, currentPreviewState: 'text', findingAnnotation: { lineNumber: 2, label: '<img src=x onerror=alert(1)>' }, onClearFindingAnnotation }))
+
+    try {
+      await act(async () => {})
+      expect(container.querySelector('[data-testid="diff"]')).toBeNull()
+      expect(container.querySelector('[data-testid="file"]')?.getAttribute('data-file-contents')).toBe('line one\nline two')
+      const annotation = container.querySelector('[data-testid="file"] .draft-finding-annotation')
+      expect(annotation?.textContent).toBe('<img src=x onerror=alert(1)>')
+      expect(annotation?.querySelector('img')).toBeNull()
+      expect(document.activeElement).toBe(annotation)
+      expect(container.textContent).toContain('Review location at line 2. Read-only inspection.')
+      const returnButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Return to diff')
+      expect(returnButton).toBeDefined()
+      await act(async () => { returnButton?.click() })
+      expect(onClearFindingAnnotation).toHaveBeenCalledOnce()
     } finally {
       await act(async () => { root.unmount() })
     }

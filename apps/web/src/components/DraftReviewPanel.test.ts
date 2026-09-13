@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
 import type { DraftReviewBinding, DraftReviewFinding, DraftReviewJob, DraftReviewResult, DraftReviewsResponse, DraftView } from '../lib/types'
-import { DraftReviewPanel, newestFirst } from './DraftReviewPanel'
+import { DraftReviewPanel, newestFirst, type DraftReviewNavigationState } from './DraftReviewPanel'
 
 const digestA = `sha256:${'a'.repeat(64)}` as `sha256:${string}`
 const digestB = `sha256:${'b'.repeat(64)}` as `sha256:${string}`
@@ -100,9 +100,9 @@ function inputValue(element: HTMLTextAreaElement, value: string): void {
   element.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
-function mount(container: HTMLElement, forDraft: DraftView): Root {
+function mount(container: HTMLElement, forDraft: DraftView, options: { getFindingNavigationState?: (finding: DraftReviewFinding) => DraftReviewNavigationState; onNavigateToFinding?: (finding: DraftReviewFinding) => void } = {}): Root {
   const root = createRoot(container)
-  root.render(createElement(DraftReviewPanel, { draft: forDraft }))
+  root.render(createElement(DraftReviewPanel, { draft: forDraft, ...options }))
   return root
 }
 
@@ -127,6 +127,89 @@ describe('draft review ordering', () => {
 })
 
 describe('rendered draft review actions', () => {
+  it('delegates a current passed finding location with an accessible path and line label', async () => {
+    const forDraft = draft('draft-location')
+    const currentFinding = finding('finding-location', '<Unsafe markup>', 'open')
+    const currentResult = result(forDraft, 'result-location', 'passed', [currentFinding], 'job-location')
+    const currentJob = job(forDraft, 'job-location', 'passed', currentResult.id)
+    vi.spyOn(api, 'draftReviews').mockResolvedValue({ reviews: [currentJob], results: [currentResult] })
+    const getFindingNavigationState = vi.fn(() => ({ enabled: true }))
+    const onNavigateToFinding = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root: Root | undefined
+
+    try {
+      await act(async () => {
+        root = mount(container, forDraft, { getFindingNavigationState, onNavigateToFinding })
+        await flushMicrotasks()
+      })
+      const location = button(container, 'Open in editor')
+      expect(location.disabled).toBe(false)
+      expect(location.getAttribute('aria-label')).toBe('Open SKILL.md at line 1 in editor')
+      expect(getFindingNavigationState).toHaveBeenCalledWith(currentFinding)
+
+      await act(async () => {
+        location.click()
+        await flushMicrotasks()
+      })
+      expect(onNavigateToFinding).toHaveBeenCalledWith(currentFinding)
+    } finally {
+      await act(async () => { root?.unmount(); await flushMicrotasks() })
+    }
+  })
+
+  it('keeps missing and stale finding locations unavailable with an explicit reason', async () => {
+    const forDraft = draft('draft-location-unavailable')
+    const missingFinding = { ...finding('finding-missing', 'Missing location'), path: undefined, line: undefined }
+    const missingResult = result(forDraft, 'result-missing', 'passed', [missingFinding], 'job-missing')
+    const missingJob = job(forDraft, 'job-missing', 'passed', missingResult.id)
+    const onNavigateToFinding = vi.fn()
+    vi.spyOn(api, 'draftReviews').mockResolvedValue({ reviews: [missingJob], results: [missingResult] })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root: Root | undefined
+
+    try {
+      await act(async () => {
+        root = mount(container, forDraft, {
+          getFindingNavigationState: () => ({ enabled: false, reason: 'This finding has no file path anchor.' }),
+          onNavigateToFinding,
+        })
+        await flushMicrotasks()
+      })
+      const location = button(container, 'Open in editor')
+      expect(location.disabled).toBe(true)
+      expect(location.getAttribute('aria-describedby')).toBe('finding-location-finding-missing-hint')
+      expect(container.textContent).toContain('This finding has no file path anchor.')
+      location.click()
+      expect(onNavigateToFinding).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => { root?.unmount(); await flushMicrotasks() })
+    }
+
+    const staleFinding = finding('finding-stale', 'Stale location')
+    const staleResult = result(forDraft, 'result-stale', 'stale', [staleFinding], 'job-stale')
+    const staleJob = job(forDraft, 'job-stale', 'stale', staleResult.id)
+    const staleContainer = document.createElement('div')
+    document.body.appendChild(staleContainer)
+    let staleRoot: Root | undefined
+    vi.mocked(api.draftReviews).mockResolvedValue({ reviews: [staleJob], results: [staleResult] })
+    try {
+      await act(async () => {
+        staleRoot = mount(staleContainer, forDraft, { onNavigateToFinding })
+        await flushMicrotasks()
+      })
+      const location = button(staleContainer, 'Open in editor')
+      expect(location.disabled).toBe(true)
+      expect(staleContainer.textContent).toContain('Location navigation is unavailable for this review result.')
+      location.click()
+      expect(onNavigateToFinding).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => { staleRoot?.unmount(); await flushMicrotasks() })
+    }
+  })
+
   it('requires and sends an explicit dismissal reason, then displays the persisted reason', async () => {
     const forDraft = draft('draft-reason')
     const openFinding = finding('finding-1', 'Unsafe shell example')
