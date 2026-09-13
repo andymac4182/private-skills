@@ -103,9 +103,10 @@ new content and execution boundaries.
 - **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.**
   Seven reviewed nonsecret production settings are active. Two hosted M7
   candidates failed closed on artifact digest mismatches. The public-GitHub M7
-  candidate failure was diagnosed as a PAX parser issue; a local fix with the
-  exact NVIDIA digest passed and awaits its PR. No feed import or publication is
-  claimed. The later **M7** milestone below covers the versioned producer/consumer
+  candidate failure was diagnosed as a PAX parser issue. PAX validation and
+  cached-source composition are integrated on local `main` (`485b1d8`,
+  `7b4227f`); they have not been deployed during the pause. No hosted feed import
+  or publication is claimed. The later **M7** milestone below covers the versioned producer/consumer
   contract, exact source/digest mapping, bounded refresh, tenant-safe
   publication, local scanner admission, and fixtures. It remains an
   interoperability milestone, not a requirement to mirror the public catalog or

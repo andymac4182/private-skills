@@ -487,9 +487,10 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   production settings are active. The public metadata probe remains
   interoperability evidence only. Two hosted M7 candidates failed closed on
   artifact digest mismatches. The public-GitHub M7 candidate failure was
-  diagnosed as a PAX parser issue; a local fix with the exact NVIDIA digest
-  passed and awaits its PR. No feed import or publication is claimed, and M7
-  remains incomplete. The isolated hosted-edge proof is a separate
+  diagnosed as a PAX parser issue. Local `main` includes PAX validation and
+  cached-source composition (`485b1d8`, `7b4227f`), recorded in the local
+  evidence above. These changes have not been deployed during the pause. No
+  hosted feed import or publication is claimed, and M7 remains incomplete. The isolated hosted-edge proof is a separate
   source-specific acceptance record with cleaned-up disposable resources.
 
 These records do not establish complete C1 catalog acceptance. SkillsGuard and

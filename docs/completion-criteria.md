@@ -956,9 +956,12 @@ Seven reviewed nonsecret OpenClaw production settings are active in the current
 deployment; the settings-stage record retains names and exit codes only. This
 activation establishes runtime configuration, not feed import or publication.
 Two hosted M7 candidates failed closed on artifact digest mismatches. The
-public-GitHub M7 candidate failure was diagnosed as a PAX parser issue; a local
-fix with the exact NVIDIA digest passed and awaits its PR. M7 therefore remains
-an active, incomplete implementation milestone.
+public-GitHub M7 candidate failure was diagnosed as a PAX parser issue. Local
+`main` now includes the PAX validation and cached-source composition
+(`485b1d8`, `7b4227f`), with evidence in the
+[local checkpoint](evidence/local-refinement-20260913.md). These changes have
+not been deployed during the owner-requested pause; hosted feed import and
+publication remain unverified. M7 remains active and incomplete.
 
 The current core/runtime composition exposes the following bounded consumer
 surface when an operator configures an OpenClaw feed. `GET
