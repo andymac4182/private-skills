@@ -4,7 +4,7 @@ This is local-only evidence from the isolated refinement worktree. It includes
 no production API calls, deployment, remote catalog enumeration, credentials,
 or claims about production milestones. No live registry state was changed.
 
-## Verified local boundaries
+## Initial local checkpoint
 
 - The durable C1 source pull-through proof composes the registry handler,
   worker, deterministic scanner fixture, file-backed state, and Files SDK
@@ -32,8 +32,30 @@ or claims about production milestones. No live registry state was changed.
 
 ## Deliberate limits
 
-The full Eve review flow remains pending. This note does not advance or close
+The full Eve review flow remained pending at that checkpoint. This note does not advance or close
 any hosted C1, M6, M7, release, scanner, or production milestone. Existing
 quarantine, scanner, authorization, digest, tenant, and no-execution rules
 remain authoritative. The evidence is limited to the local fixtures and
 checks listed above; no sweeping roadmap or status-document edits were made.
+
+## Subsequent verification on local main
+
+- Real pgvector persistence and fresh-connection checks passed against
+  `docker.io/pgvector/pgvector@sha256:ced026f3d5bc5d6b46663fc6fb0b213b174fe15278cac4e4c7a80798ffed843c`.
+  This separate test image does not change the default Compose image.
+- The configured Rust CLI regression now verifies real loopback installation,
+  an unchanged reinstall, exact file bytes, list/verify output, and analytics
+  against disposable PostgreSQL tables and Files SDK storage. Its fixture
+  explicitly permits unscanned publication; it is not scanner evidence.
+  The combined pgvector and CLI/persistence run passed all four tests.
+- The [real SkillsGuard OpenClaw check](local-m7-real-skillsguard-rejection.json)
+  verified rejection: 237 findings, six reported analyzed files in a seven-file
+  source bundle, quarantine, and no private feed entry or distribution.
+  The deterministic positive OpenClaw flow remains separate evidence.
+- The [local Eve browser and worker flow](local-eve-builder-required-scan-20260913.json)
+  reached proposal apply, required SkillsGuard scanning (2/2 files, no findings),
+  and an approved release. Its builder service was deterministic and its upload
+  reviewer was disconnected; it does not prove hosted AI Gateway or M6 acceptance.
+- Root TypeScript and diff checks passed. The local app, builder, and disposable
+  pgvector database were stopped after verification. All changes stay on local
+  `main`; no push or Vercel deployment occurred during this continuation.

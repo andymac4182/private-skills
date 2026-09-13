@@ -1,0 +1,107 @@
+{
+  "kind": "private-skills.local-eve-builder-required-scan",
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-13T04:21:54.345Z",
+  "source": {
+    "checkout": "/private/tmp/private-skills-01a08524",
+    "commit": "bb08e18734ad9cb5a5232052637af658d68a41f3"
+  },
+  "runtime": {
+    "registryOrigin": "http://127.0.0.1:5197",
+    "builderOrigin": "https://127.0.0.1:5196",
+    "processes": "stopped after verification",
+    "browser": {
+      "tabId": "18259038",
+      "savedTrace": false
+    }
+  },
+  "draft": {
+    "id": "draft_fa3aec32-2d36-4b99-98cd-644d3f9ae5b4",
+    "name": "@local/m6-local-eve-fixture",
+    "revision": 2,
+    "digest": "sha256:debbfe1a4089c4890f4b34a8759753206238312e35b6e633d0e04a593ff88ee4",
+    "status": "open"
+  },
+  "eve": {
+    "initialization": "ready",
+    "proposal": {
+      "id": "proposal_361ad547-6d60-465a-86a7-efde4215753b",
+      "baseRevision": 1,
+      "changedFileCount": 1,
+      "appliedRevision": 2,
+      "appliedDigest": "sha256:debbfe1a4089c4890f4b34a8759753206238312e35b6e633d0e04a593ff88ee4"
+    },
+    "serviceBoundary": "deterministic local HTTPS fixture; no hosted model invocation"
+  },
+  "operation": {
+    "id": "job_3e263244-4117-4978-81ce-4c89449fb221",
+    "state": "completed",
+    "resourceId": "skill_05bc992b-c8a3-4424-97d7-38742ed2c2e4",
+    "version": "0.0.1-local-eve",
+    "artifactDigest": "sha256:debbfe1a4089c4890f4b34a8759753206238312e35b6e633d0e04a593ff88ee4",
+    "policyRevision": "policy_8800c037-e820-4ed7-9d67-0542d3bcaa3b",
+    "attempts": 1
+  },
+  "skill": {
+    "id": "skill_05bc992b-c8a3-4424-97d7-38742ed2c2e4",
+    "state": "approved",
+    "artifactDigest": "sha256:debbfe1a4089c4890f4b34a8759753206238312e35b6e633d0e04a593ff88ee4",
+    "policyRevision": "policy_8800c037-e820-4ed7-9d67-0542d3bcaa3b",
+    "scanCount": 1
+  },
+  "scanner": {
+    "id": "skillsguard",
+    "status": "completed",
+    "engineVersion": "1.1.1",
+    "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+    "scanId": "89016360-953b-4c28-b48d-e629261bebcd",
+    "filesEnumerated": 2,
+    "filesAnalyzed": 2,
+    "findingsCount": 0,
+    "artifactDigest": "sha256:debbfe1a4089c4890f4b34a8759753206238312e35b6e633d0e04a593ff88ee4",
+    "policyRevision": "policy_8800c037-e820-4ed7-9d67-0542d3bcaa3b"
+  },
+  "policy": {
+    "allowUnscanned": false,
+    "scanners": [
+      { "id": "cisco-skill-scanner", "mode": "disabled" },
+      { "id": "nvidia-skillspector", "mode": "disabled" },
+      { "id": "skillsguard", "mode": "required" }
+    ]
+  },
+  "publication": {
+    "catalogRoute": "/app/catalog?skill=skill_05bc992b-c8a3-4424-97d7-38742ed2c2e4",
+    "catalogStatus": "APPROVED",
+    "releaseVersion": "0.0.1-local-eve"
+  },
+  "review": {
+    "state": "disconnected",
+    "status": "review service not connected; required scanners remain release authority"
+  },
+  "image": {
+    "reference": "private-skills/skillsguard:1.1.1",
+    "verifiedImageId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+    "executionBinding": "tag",
+    "immutableIdBinding": false
+  },
+  "checks": {
+    "appHealthStatus": 200,
+    "builderHealthStatus": 200,
+    "browserFlow": "passed",
+    "worker": "real WorkerRunner with DockerExecutor and persisted completion",
+    "verifierSyntax": "passed"
+  },
+  "redaction": {
+    "containsCredentials": false,
+    "containsRawPrompts": false,
+    "containsRawArtifactBytes": false,
+    "containsScannerReportContent": false
+  },
+  "limitations": [
+    "The local builder used a deterministic fixture boundary; this does not prove a hosted Eve model invocation or Gateway routing.",
+    "The upload reviewer was disconnected; no reviewer result is claimed.",
+    "Browser observations came from live CUA state without a saved trace or screenshot artifact.",
+    "This is local-only M6 evidence and does not prove hosted production behavior.",
+    "The image tag was verified against the pinned image ID before execution, but the WorkerRunner invocation used the tag and did not bind Docker execution to an immutable @sha256 reference."
+  ]
+}
