@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { PgClientLike, PgPoolLike, PgQueryResult } from '../../database/src/postgres';
@@ -9,6 +10,7 @@ const integration = connectionString ? describe : describe.skip;
 const profile = { id: 'integration-v1', model: 'integration-model', dimensions: 3 } as const;
 const alternateProfile = { id: 'integration-v2', model: 'integration-model-v2', dimensions: 2 } as const;
 const timestamp = '2026-09-09T00:00:00.000Z';
+const tableName = `private_skills_semantic_index_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 
 function digest(letter: string): `sha256:${string}` {
   return `sha256:${letter.repeat(64).slice(0, 64)}`;
@@ -59,13 +61,13 @@ integration('PostgresSemanticIndex with real pgvector', () => {
   const index = new PostgresSemanticIndex({
     pool: poolFor(sql),
     profiles: [profile, alternateProfile],
-    tableName: 'private_skills_semantic_index_it',
+    tableName,
     autoMigrate: true,
   });
 
   afterAll(async () => {
     try {
-      await sql.unsafe('DROP TABLE IF EXISTS "private_skills_semantic_index_it"');
+      await sql.unsafe(`DROP TABLE IF EXISTS "${tableName}"`);
     }
     finally {
       await sql.end({ timeout: 5 });
@@ -119,5 +121,58 @@ integration('PostgresSemanticIndex with real pgvector', () => {
       vector: [1, 0],
       limit: 10,
     })).resolves.toEqual([]);
+  });
+
+  it('reads persisted rows through a fresh PostgreSQL client', async () => {
+    const writerSql = postgres(connectionString, { max: 2, connect_timeout: 5, onnotice: () => undefined });
+    try {
+      const writerIndex = new PostgresSemanticIndex({
+        pool: poolFor(writerSql),
+        profiles: [profile, alternateProfile],
+        tableName,
+        autoMigrate: true,
+      });
+
+      await writerIndex.upsert([
+        makeDocument('org-reconnect', 'reconnect-r1', profile.id, [1, 0, 0], '3', '4'),
+      ]);
+    }
+    finally {
+      await writerSql.end({ timeout: 5 });
+    }
+
+    const readerSql = postgres(connectionString, { max: 2, connect_timeout: 5, onnotice: () => undefined });
+    try {
+      const readerIndex = new PostgresSemanticIndex({
+        pool: poolFor(readerSql),
+        profiles: [profile, alternateProfile],
+        tableName,
+        autoMigrate: false,
+      });
+
+      await expect(readerIndex.health()).resolves.toMatchObject({
+        status: 'ok',
+        provider: 'postgres-pgvector',
+      });
+      await expect(readerIndex.search({
+        organizationId: 'org-reconnect',
+        allowedResourceIds: ['reconnect-r1'],
+        profileId: profile.id,
+        vector: [1, 0, 0],
+        limit: 10,
+      })).resolves.toEqual([
+        { resourceId: 'reconnect-r1', artifactDigest: digest('3'), contentDigest: digest('4'), score: 1 },
+      ]);
+      await expect(readerIndex.search({
+        organizationId: 'org-reconnect',
+        allowedResourceIds: ['reconnect-r1'],
+        profileId: alternateProfile.id,
+        vector: [1, 0],
+        limit: 10,
+      })).resolves.toEqual([]);
+    }
+    finally {
+      await readerSql.end({ timeout: 5 });
+    }
   });
 });
