@@ -129,6 +129,10 @@ function githubBlobSha(value: string): string {
   return createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${bytes.byteLength}\0`), bytes])).digest('hex');
 }
 
+function sha256Digest(value: string): `sha256:${string}` {
+  return `sha256:${createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')}`;
+}
+
 function githubTree(fixture: Pick<SourceFixture, 'kind' | 'slug'>): {
   commit: string;
   entries: Array<Record<string, unknown>>;
@@ -162,7 +166,8 @@ function makeFixture(kind: SourceKind, slug: string): SourceFixture {
   const externalId = `${source}/${slug}`;
   const installUrl = kind === 'github'
     ? `https://github.com/${source}`
-    : 'http://127.0.0.1:55101/published';
+    : 'https://docs.example/published';
+  const sourceOrigin = new URL(installUrl).origin;
   const files = kind === 'github'
     ? new Map<string, string>([
       ['SKILL.md', `---\nname: ${slug}\ndescription: A deterministic source fixture.\n---\n\nNever execute this fixture.\n`],
@@ -170,7 +175,6 @@ function makeFixture(kind: SourceKind, slug: string): SourceFixture {
     ])
     : new Map<string, string>([
       ['SKILL.md', `---\nname: ${slug}\ndescription: A deterministic well-known fixture.\n---\n\nNever execute this fixture.\n`],
-      ['README.md', `# ${slug}\n`],
     ]);
   const detail: SkillDetailResponse = {
     id: externalId,
@@ -222,14 +226,20 @@ function makeFixture(kind: SourceKind, slug: string): SourceFixture {
     }
 
     if (kind === 'well-known') {
-      if (url.origin === CATALOG_ORIGIN && url.pathname === '/published/.well-known/agent-skills/index.json') {
-        return responseJson({ skills: [{ name: slug, description: 'A deterministic well-known fixture.', files: ['SKILL.md', 'README.md'] }] });
+      if (url.origin === sourceOrigin && url.pathname === '/published/.well-known/agent-skills/index.json') {
+        return responseJson({
+          $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
+          skills: [{
+            name: slug,
+            type: 'skill-md',
+            description: 'A deterministic well-known fixture.',
+            url: `/published/${slug}/SKILL.md`,
+            digest: sha256Digest(files.get('SKILL.md')!),
+          }],
+        });
       }
-      const prefix = `/published/.well-known/agent-skills/${slug}/`;
-      if (url.origin === CATALOG_ORIGIN && url.pathname.startsWith(prefix)) {
-        const path = url.pathname.slice(prefix.length);
-        const contents = files.get(path);
-        if (contents !== undefined) return textResponse(contents);
+      if (url.origin === sourceOrigin && url.pathname === `/published/${slug}/SKILL.md`) {
+        return textResponse(files.get('SKILL.md')!);
       }
     }
 
@@ -462,21 +472,39 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
     const run = await runner.runOnce();
     expect(run.error).toBeUndefined();
     expect(run.allow).toBe(true);
+    expect(run.scannerResults).toEqual([expect.objectContaining({
+      scannerId: 'skillsguard',
+      status: 'completed',
+      coverage: expect.objectContaining({
+        filesEnumerated: 1,
+        filesAnalyzed: 1,
+        filesSkipped: 0,
+        filesUnsupported: 0,
+      }),
+    })]);
+    const sourceFetchesAfterApproval = fixture.sourceFetch.mock.calls.length;
     const directoryCallsAfterApproval = { ...directoryCalls };
+    const expectedDigest = sha256Digest(fixture.files.get('SKILL.md')!);
 
     const warm = await resolveRequest(harness, feed, fixture.externalId);
     expect(warm.status, await warm.clone().text()).toBe(200);
-    const { resolution } = await jsonResponse<{ resolution: Resolution }>(warm);
+    const warmBody = await jsonResponse<{ resolution: Resolution; reference?: string }>(warm);
+    const { resolution } = warmBody;
     const skill = resolution.members[0];
     expect(skill?.provenance).toMatchObject({
       kind: 'skills-sh',
       externalId: fixture.externalId,
       externalSnapshotHash: null,
       sourceResolutionKind: 'well-known',
-      sourceProviderOrigin: CATALOG_ORIGIN,
+      sourceProviderOrigin: 'https://docs.example',
       wellKnownEntryName: fixture.slug,
-      wellKnownIndexUrl: `${CATALOG_BASE.replace('/catalog', '/published')}/.well-known/agent-skills/index.json`,
+      wellKnownIndexUrl: 'https://docs.example/published/.well-known/agent-skills/index.json',
+      artifactUrl: `https://docs.example/published/${fixture.slug}/SKILL.md`,
+      externalDigest: expectedDigest,
+      revision: expectedDigest,
     });
+    expect(warmBody.reference).toBe(`@web/${fixture.source}/published/.well-known/agent-skills/${fixture.slug}`);
+    expect(fixture.sourceFetch.mock.calls.length).toBe(sourceFetchesAfterApproval);
     expect(directoryCalls).toEqual(directoryCallsAfterApproval);
     const transferred = await approveAndTransfer(harness, resolution);
     assertStoredFixtureBytes(fixture, transferred.bytes);
