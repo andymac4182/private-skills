@@ -20,6 +20,8 @@ export interface DraftSurfaceHandle {
   readCurrent(): string | null
 }
 
+export type DraftDiffStyle = 'split' | 'unified'
+
 interface PierreDraftSurfaceProps {
   draftId: string
   draftRevision: number
@@ -34,6 +36,7 @@ interface PierreDraftSurfaceProps {
   basePreviewSize: number | null
   maxPreviewBytes: number
   mode: 'edit' | 'diff'
+  diffStyle: DraftDiffStyle
   editable: boolean
   busy: boolean
   baseLoading: boolean
@@ -99,7 +102,7 @@ export function pierreEditStateKey(draftId: string, revision: number, digest: `s
   return `draft:${draftId}:${revision}:${digest}:${path}`
 }
 
-export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, editable, busy, baseLoading, baseError, onSelect, onEditChange, onContentChange }, ref) {
+export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, diffStyle, editable, busy, baseLoading, baseError, onSelect, onEditChange, onContentChange }, ref) {
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries])
   const pathsRef = useRef(paths)
   const onSelectRef = useRef(onSelect)
@@ -180,10 +183,10 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
         onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}
         onEditComplete={(event) => { onContentChange(event.file.contents); return 'accept' }}
       /></EditProvider> : canShowDiff && diff ? <FileDiff
-        key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}`}
+        key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}:${diffStyle}`}
         className="draft-pierre-file"
         fileDiff={diff}
-        options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
+        options={{ diffStyle, overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
         disableWorkerPool
       /> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState, maxPreviewBytes)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}
       {mode === 'edit' && busy && <div className="draft-surface-busy"><LoadingState label="Saving revision…" /></div>}

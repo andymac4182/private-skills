@@ -5,7 +5,7 @@ import { createSkillBuilderAdapter } from '../lib/builder'
 import { formatBytes, shortDigest } from '../lib/format'
 import type { DraftFileMetadata, DraftFileReference, DraftFileResponseEntry, DraftFileUpdate, DraftView, ReleaseFilePreviewState, ReleaseFileView, SkillBundle } from '../lib/types'
 import { Badge, Button, ErrorState, LoadingState, Notice } from './Primitives'
-import type { DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
+import type { DraftDiffStyle, DraftSurfaceEntry, DraftSurfaceHandle } from './PierreDraftSurface'
 import { DraftReviewPanel } from './DraftReviewPanel'
 import { SkillBuilderPanel } from './SkillBuilderPanel'
 
@@ -25,6 +25,27 @@ interface DraftEditorProps {
 
 type DraftFile = SkillBundle['files'][number]
 export type DraftWorkingFile = DraftFileMetadata & { content?: string; previewState?: ReleaseFilePreviewState; dirty?: boolean }
+export function nativeUnifiedDiff(before: string | null, after: string | null): string {
+  const beforeLines = before === null ? [] : before.split('\n')
+  const afterLines = after === null ? [] : after.split('\n')
+  const lines: string[] = []
+  let beforeIndex = 0
+  let afterIndex = 0
+  while (beforeIndex < beforeLines.length || afterIndex < afterLines.length) {
+    const previous = beforeLines[beforeIndex]
+    const next = afterLines[afterIndex]
+    if (previous !== undefined && next !== undefined && previous === next) {
+      lines.push(`  ${previous}`)
+      beforeIndex += 1
+      afterIndex += 1
+      continue
+    }
+    if (previous !== undefined) { lines.push(`- ${previous}`); beforeIndex += 1 }
+    if (next !== undefined) { lines.push(`+ ${next}`); afterIndex += 1 }
+  }
+  return lines.join('\n')
+}
+
 type WorkspaceTab = 'files' | 'build' | 'review'
 const WORKSPACE_TABS: readonly WorkspaceTab[] = ['files', 'build', 'review']
 type DraftFileLike = { path: string; content?: string; size?: number; previewState?: ReleaseFilePreviewState }
@@ -479,6 +500,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [newPath, setNewPath] = useState('')
   const [addingFile, setAddingFile] = useState(false)
   const [surfaceRevision, setSurfaceRevision] = useState(0)
+  const [diffStyle, setDiffStyle] = useState<DraftDiffStyle>('split')
   const [message, setMessage] = useState<{ kind: 'success' | 'error' | 'warning'; text: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [baseLoadingPath, setBaseLoadingPath] = useState<string | null>(null)
@@ -1003,7 +1025,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     }
   }
 
-  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} currentLoading={selectedCurrentLoading} currentError={selectedCurrentError} onSelect={selectFile} onContentChange={onPierreContentChange} />
+  const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} currentLoading={selectedCurrentLoading} currentError={selectedCurrentError} onSelect={selectFile} onContentChange={onPierreContentChange} />
   const workspaceIdentity = draft?.id ?? initialDraft?.id ?? resourceId
   const workspaceTabIds = {
     files: workspaceElementId(workspaceIdentity, 'tab-files'),
@@ -1039,8 +1061,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
         {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
         <div className="draft-editor-layout">
           <div className="draft-editor-main draft-editor-surface-main">
-            <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div></div>
-            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
+            <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" aria-pressed={mode === 'diff'} className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" aria-pressed={mode === 'edit'} className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div><div className="draft-view-switch" role="group" aria-label="Diff layout"><button type="button" aria-pressed={diffStyle === 'split'} className={diffStyle === 'split' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('split')}>Split</button><button type="button" aria-pressed={diffStyle === 'unified'} className={diffStyle === 'unified' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('unified')}>Unified</button></div></div></div>
+            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={() => setSurfaceRevision((current) => current + 1)} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>
@@ -1065,7 +1087,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   </section>
 }
 
-function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, mode, editable, busy, baseLoading, baseError, currentLoading, currentError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftWorkingFile | null; currentPreviewState: ReleaseFilePreviewState | null; currentPreviewSize: number | null; basePreviewState: ReleaseFilePreviewState | null; basePreviewSize: number | null; mode: 'edit' | 'diff'; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; currentLoading: boolean; currentError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
+function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, mode, diffStyle, editable, busy, baseLoading, baseError, currentLoading, currentError, onSelect, onContentChange }: { entries: DraftSurfaceEntry[]; selectedPath: string | null; baseFile: DraftFile | null; currentFile: DraftWorkingFile | null; currentPreviewState: ReleaseFilePreviewState | null; currentPreviewSize: number | null; basePreviewState: ReleaseFilePreviewState | null; basePreviewSize: number | null; mode: 'edit' | 'diff'; diffStyle: DraftDiffStyle; editable: boolean; busy: boolean; baseLoading: boolean; baseError: string | null; currentLoading: boolean; currentError: string | null; onSelect: (path: string) => void; onContentChange: (contents: string) => void }) {
   const currentPreview = currentFile ? inspectDraftFile(currentFile) : null
   const basePreview = baseFile ? inspectDraftFile(baseFile) : null
   const text = currentPreview?.text ?? null
@@ -1076,6 +1098,6 @@ function NativeDraftSurface({ entries, selectedPath, baseFile, currentFile, curr
   const placeholderSize = currentPreviewSize ?? basePreviewSize
   return <div className="draft-surface draft-surface-native">
     <aside className="draft-surface-tree" aria-label="Draft files"><div className="release-tree-heading"><strong>Files</strong><span>{entries.length}</span></div><div className="release-file-list">{entries.map((entry) => <button className={`release-file-row ${entry.path === selectedPath ? 'release-file-row-selected' : ''}`.trim()} key={entry.path} type="button" disabled={busy} onClick={() => onSelect(entry.path)}><span aria-hidden="true">{entry.status === 'removed' ? '−' : entry.status === 'added' ? '+' : '▤'}</span><code title={entry.path}>{entry.path}</code><small>{entry.status}</small></button>)}</div></aside>
-    <div className="draft-surface-code">{currentLoading ? <LoadingState label="Loading the selected draft file…" /> : currentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{currentError}</p></div> : baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && canShowDiff && (baseText !== null || text !== null) ? <div className="draft-native-diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}</div>
+    <div className="draft-surface-code">{currentLoading ? <LoadingState label="Loading the selected draft file…" /> : currentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{currentError}</p></div> : baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && text !== null ? <textarea aria-label={`Edit ${selectedPath ?? 'file'}`} className="draft-textarea" disabled={busy} spellCheck={false} value={text} onChange={(event) => onContentChange(event.target.value)} /> : mode === 'diff' && canShowDiff && (baseText !== null || text !== null) ? diffStyle === 'unified' ? <div className="draft-native-diff" data-diff-style="unified" role="region" aria-label="Unified diff" style={{ gridTemplateColumns: '1fr' }}><div><span>Unified</span><pre>{nativeUnifiedDiff(baseText, text)}</pre></div></div> : <div className="draft-native-diff" data-diff-style="split" role="region" aria-label="Split diff"><div><span>Before</span><pre>{baseText ?? '(new file)'}</pre></div><div><span>After</span><pre>{text ?? '(removed file)'}</pre></div></div> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}</div>
   </div>
 }

@@ -182,3 +182,27 @@ an explicit runtime guard corrected them, and the focused seven-test authoring
 suite plus full TypeScript check passed. The reusable combined browser fixture
 is still being prepared; no combined live browser or provider result is claimed
 for this checkpoint. No remote push or deployment occurred.
+
+## Diff layouts and reusable local harness
+
+The editor now exposes Split and Unified controls with pressed-state semantics.
+The selected layout reaches the pinned Pierre renderer and its native fallback;
+layout changes preserve editor identity and unsaved content. Focused regressions
+pass, followed by a full 776-test pass with seven opt-in skips and full TypeScript
+checks. The browser proof for these controls is still pending at this checkpoint.
+
+The [reusable local authoring guide](../local-authoring-fixture.md) documents a
+combined builder/reviewer fixture and real scanner verifier. The first launch
+proved isolated build, authentication, draft seed, and held review, but the
+browser exposed a launcher error: the production runtime environment rejected
+the loopback builder through the existing production-origin guard. No proposal
+was created. The launcher now keeps the production build but uses a development
+local runtime, without weakening that guard.
+
+Tracing also found that invoking pnpm in an archive linked to installed
+dependencies rewrote shared pnpm workspace metadata. The launcher now invokes
+Vite directly. The source checkout's metadata was repaired offline from the
+frozen lockfile with lifecycle scripts disabled; normal typechecking passes.
+Three separate script tests cover direct Vite invocation, unchanged metadata,
+and the scanner verifier's precheck/claim guards. No successful combined live
+builder flow is claimed until the corrected fixture is exercised.

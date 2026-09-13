@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
+import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, nativeUnifiedDiff, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
 
 const draft: DraftView = {
@@ -26,6 +26,12 @@ const firstFiles = [
 ]
 
 describe('draft editor persistence identities', () => {
+  it('renders a bounded unified fallback while preserving additions and removals', () => {
+    expect(nativeUnifiedDiff('same\nold', 'same\nnew')).toBe('  same\n- old\n+ new')
+    expect(nativeUnifiedDiff(null, 'new')).toBe('+ new')
+    expect(nativeUnifiedDiff('old', null)).toBe('- old')
+  })
+
   it('canonicalizes the same file payload independent of file order', () => {
     expect(canonicalDraftFiles(firstFiles)).toBe(canonicalDraftFiles([...firstFiles].reverse()))
   })

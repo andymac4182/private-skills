@@ -95,11 +95,11 @@ vi.mock('@pierre/trees/react', async () => {
 
 vi.mock('@pierre/diffs/react', () => ({
   EditProvider: ({ children }: { children: ReactNode }) => children,
-  File: () => null,
-  FileDiff: () => null,
+  File: ({ file, editStateKey }: { file: { name: string; contents: string }; editStateKey?: string }) => createElement('output', { 'data-testid': 'file', 'data-file-name': file.name, 'data-file-contents': file.contents, 'data-edit-state-key': editStateKey }),
+  FileDiff: ({ options }: { options?: { diffStyle?: string } }) => createElement('output', { 'data-testid': 'diff', 'data-diff-style': options?.diffStyle }),
 }))
 vi.mock('@pierre/diffs/edit', () => ({ Editor: class Editor {} }))
-vi.mock('@pierre/diffs', () => ({ parseDiffFromFile: () => null }))
+vi.mock('@pierre/diffs', () => ({ parseDiffFromFile: (base: unknown, current: unknown) => base || current ? { name: 'SKILL.md', type: 'change', cacheKey: 'diff' } : null }))
 vi.mock('./Primitives', () => ({ Badge: () => null, LoadingState: ({ label }: { label: string }) => createElement('span', null, label) }))
 vi.mock('./pierreAccessibility', () => ({ onPierrePostRender: vi.fn(), PIERRE_ACCESSIBLE_CSS: '' }))
 
@@ -127,6 +127,7 @@ function surfaceProps(overrides: Partial<Parameters<typeof PierreDraftSurface>[0
     basePreviewSize: null,
     maxPreviewBytes: 256 * 1024,
     mode: 'diff',
+    diffStyle: 'split',
     editable: false,
     busy: false,
     baseLoading: false,
@@ -162,6 +163,54 @@ describe('Pierre draft editor identity', () => {
     expect(pierreEditStateKey('draft-1', 2, 'sha256:first', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:second', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:first', 'README.md')).not.toBe(first)
+  })
+})
+
+describe('Pierre draft diff layout', () => {
+  it('keeps the editor identity and unsaved contents when the layout preference changes', async () => {
+    const currentFile = { path: 'SKILL.md', size: 6, digest, content: btoa('unsaved\n'), previewState: 'text' as const }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ currentFile, currentPreviewState: 'text', mode: 'edit', editable: true, diffStyle: 'split' }))
+
+    try {
+      await act(async () => {})
+      const before = container.querySelector('[data-testid="file"]')
+      expect(before?.getAttribute('data-file-contents')).toBe('unsaved\n')
+      const editStateKey = before?.getAttribute('data-edit-state-key')
+
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ currentFile, currentPreviewState: 'text', mode: 'edit', editable: true, diffStyle: 'unified' })))
+      })
+
+      const after = container.querySelector('[data-testid="file"]')
+      expect(after?.getAttribute('data-file-contents')).toBe('unsaved\n')
+      expect(after?.getAttribute('data-edit-state-key')).toBe(editStateKey)
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
+  it('updates the Diffs layout without changing the selected file payload', async () => {
+    const baseFile = { path: 'SKILL.md', content: btoa('before\n') }
+    const currentFile = { path: 'SKILL.md', size: 6, digest, content: btoa('after\n'), previewState: 'text' as const }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ baseFile, currentFile, currentPreviewState: 'text', basePreviewState: 'text', diffStyle: 'split' }))
+
+    try {
+      await act(async () => {})
+      expect(container.querySelector('[data-testid="diff"]')?.getAttribute('data-diff-style')).toBe('split')
+
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ baseFile, currentFile, currentPreviewState: 'text', basePreviewState: 'text', diffStyle: 'unified' })))
+      })
+
+      expect(container.querySelector('[data-testid="diff"]')?.getAttribute('data-diff-style')).toBe('unified')
+      expect(treeModels[0]?.resets).toEqual([])
+    } finally {
+      await act(async () => { root.unmount() })
+    }
   })
 })
 
