@@ -135,6 +135,7 @@ function surfaceProps(overrides: Partial<Parameters<typeof PierreDraftSurface>[0
     busy: false,
     baseLoading: false,
     baseError: null,
+    keyboardHelpId: 'draft-keyboard-help',
     onSelect: vi.fn(),
     onEditChange: vi.fn(),
     onContentChange: vi.fn(),
@@ -185,6 +186,22 @@ describe('Pierre draft editor identity', () => {
 })
 
 describe('Pierre draft diff layout', () => {
+  it('describes the Escape shortcut while the editable surface is mounted', async () => {
+    const currentFile = { path: 'SKILL.md', size: 6, digest, content: btoa('draft\n'), previewState: 'text' as const }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ currentFile, currentPreviewState: 'text', mode: 'edit', editable: true }))
+
+    try {
+      await act(async () => {})
+      const codeRegion = container.querySelector('.draft-surface-code')
+      expect(codeRegion?.getAttribute('aria-describedby')).toBe('draft-keyboard-help')
+      expect(container.querySelector('#draft-keyboard-help')?.textContent).toBe('Press Escape to leave the editor.')
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
   it('keeps the editor identity and unsaved contents when the layout preference changes', async () => {
     const currentFile = { path: 'SKILL.md', size: 6, digest, content: btoa('unsaved\n'), previewState: 'text' as const }
     const container = document.createElement('div')

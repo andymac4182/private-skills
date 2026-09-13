@@ -320,3 +320,35 @@ file selection changes, and real edit detection. The full suite passed 782 tests
 with seven opt-in skips; TypeScript and diff checks passed. Browser retesting of
 this correction follows separately; the prior failing browser source is retained
 as evidence rather than being relabeled as a pass.
+
+
+## Corrected large-tree browser retest
+
+The [fresh `9fbd5ce` browser run](local-large-tree-clean-edit-9fbd5ce-20260913.json)
+used the identical 128-file fixture digest. Keyboard-selected TypeScript and JSON
+files now remain clean when entering Edit without input, with Save disabled.
+Split/Unified preserve the selected file identity. At 390px, explicit DOM
+measurement places the four controls within x149.7–355 and Save/Queue within
+x31–359; document and body scroll width both remain 390. The earlier apparently
+clipped screenshot was framing, not a layout defect. The 1280px screenshot showed
+the complete tree/editor layout, and viewport overrides were reset.
+
+Pressing Tab inside the active code editor inserted indentation, matching the
+installed keymap and correctly marking a real local edit. Reload discarded it;
+the saved revision/digest stayed unchanged. This is separate from the corrected
+no-keystroke dirty bug. The installed Escape binding simplifies selection; an
+explicit, discoverable keyboard route back to the toolbar remains to be added.
+The disposable fixture stopped through the private request protocol and all three
+ports were confirmed closed. No save, scan, publication, or remote action occurred.
+
+
+## Keyboard exit integration
+
+Plain Escape from the active editable content now switches to Diff and returns
+focus to the Edit button, keeping real local changes intact. The editor region
+has visible, associated keyboard help. The capture handler uses the composed
+DOM event path and ignores input/search controls, modified keys, IME composition,
+and non-editable targets; it does not intercept Tab indentation. Rendered tests
+verify focus restoration, clean bytes, and the excluded key paths. The full suite
+passed 783 tests with seven opt-in skips; TypeScript and diff checks passed.
+The actual shadow-DOM browser Escape check remains separate from this checkpoint.

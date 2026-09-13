@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-large-tree-clean-edit-retest",
+  "sourceCommit": "9fbd5ce57c28c1214eefb36f2b1bbb8ec7e4ad05",
+  "origin": "http://127.0.0.1:5197",
+  "draft": {
+    "id": "draft_8b2ee54a-b475-4364-8424-3c232378b84a",
+    "revision": 1,
+    "digest": "sha256:238982820f6f5665453c68d283a693dc140efd6caefb24b85be70b182bad3cb6",
+    "fileCount": 128
+  },
+  "verified": {
+    "typeScriptAndJsonKeyboardSelection": true,
+    "diffToEditWithoutInputStaysClean": true,
+    "saveDisabledWithoutChanges": true,
+    "splitUnifiedPreserveSelectedPath": true,
+    "savedRevisionAndDigestUnchanged": true
+  },
+  "viewports": {
+    "narrow": {
+      "width": 390,
+      "height": 844,
+      "documentScrollWidth": 390,
+      "bodyScrollWidth": 390,
+      "diffControlsUnionLeft": 149.7,
+      "diffControlsUnionRight": 355.0,
+      "saveQueueLeft": 31,
+      "saveQueueRight": 359,
+      "noBodyHorizontalOverflow": true
+    },
+    "desktop": {
+      "width": 1280,
+      "height": 900,
+      "treeEditorAndControlsVisible": true
+    },
+    "overrideReset": true
+  },
+  "keyboard": {
+    "tabInsideEditor": "inserts indentation according to the installed keymap; correctly marks a real local edit",
+    "indentSaved": false,
+    "reloadClearedIndent": true,
+    "focusExit": "not yet verified; explicit Escape-to-toolbar integration is being implemented"
+  },
+  "cleanup": {
+    "stopRequestAcknowledged": true,
+    "launcherExitCode": 0,
+    "portsConfirmedClosed": [
+      5195,
+      5196,
+      5197
+    ]
+  },
+  "limits": [
+    "Screenshots were inline-only CUA images; no saved screenshot artifact is claimed.",
+    "Initial mobile screenshot framing appeared clipped; explicit DOM measurements confirmed every control is inside the viewport.",
+    "No save, AI prompt, scan, publication, remote push, or deployment occurred.",
+    "This is local browser evidence, not hosted acceptance or a complete assistive-technology audit."
+  ]
+}

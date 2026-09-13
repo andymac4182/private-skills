@@ -73,6 +73,15 @@ function workspaceElementId(value: string, suffix: string): string {
   return `draft-workspace-${safeValue}-${suffix}`
 }
 
+function isContentEditableKeyTarget(event: KeyboardEvent<HTMLElement>): boolean {
+  const eventPath = event.nativeEvent.composedPath()
+  const target = eventPath[0]
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return false
+  const nearestEditable = eventPath.find((candidate): candidate is HTMLElement => candidate instanceof HTMLElement && candidate.hasAttribute('contenteditable'))
+  if (!nearestEditable) return false
+  return nearestEditable.getAttribute('contenteditable')?.toLowerCase() !== 'false'
+}
+
 function idempotencyKey(prefix: string): string {
   const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`
   return `web-${prefix}-${random}`
@@ -525,6 +534,8 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const currentLoadGeneration = useRef(0)
   const surfaceRef = useRef<DraftSurfaceHandle | null>(null)
   const selectedPathRef = useRef<string | null>(selectedPath)
+  const editModeButtonRef = useRef<HTMLButtonElement>(null)
+  const focusEditModeButtonAfterExit = useRef(false)
   selectedPathRef.current = selectedPath
   const workspaceTabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement>>>({})
   const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
@@ -618,6 +629,12 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   useEffect(() => {
     onDirtyChange?.(hasChanges)
   }, [hasChanges, onDirtyChange])
+
+  useEffect(() => {
+    if (mode !== 'diff' || !focusEditModeButtonAfterExit.current) return
+    focusEditModeButtonAfterExit.current = false
+    editModeButtonRef.current?.focus()
+  }, [mode])
 
   useEffect(() => () => { onDirtyChange?.(false) }, [onDirtyChange])
 
@@ -902,6 +919,16 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setMode(next)
   }
 
+  function handleEditorKeyDownCapture(event: KeyboardEvent<HTMLDivElement>): void {
+    const nativeEvent = event.nativeEvent
+    if (mode !== 'edit' || busy || event.key !== 'Escape' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || nativeEvent.isComposing || nativeEvent.keyCode === 229) return
+    if (!isContentEditableKeyTarget(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    focusEditModeButtonAfterExit.current = true
+    switchMode('diff')
+  }
+
   function onPierreEditChange(contents: string): void {
     const path = selectedPath
     if (!path || selectedPathRef.current !== path) return
@@ -1063,6 +1090,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     build: workspaceElementId(workspaceIdentity, 'panel-build'),
     review: workspaceElementId(workspaceIdentity, 'panel-review'),
   }
+  const editorKeyboardHelpId = workspaceElementId(workspaceIdentity, 'keyboard-help')
 
   return <section className="draft-editor">
     <header className="draft-editor-header">
@@ -1086,9 +1114,9 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
         <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
         {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
         <div className="draft-editor-layout">
-          <div className="draft-editor-main draft-editor-surface-main">
-            <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" aria-pressed={mode === 'diff'} className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button type="button" aria-pressed={mode === 'edit'} className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div><div className="draft-view-switch" role="group" aria-label="Diff layout"><button type="button" aria-pressed={diffStyle === 'split'} className={diffStyle === 'split' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('split')}>Split</button><button type="button" aria-pressed={diffStyle === 'unified'} className={diffStyle === 'unified' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('unified')}>Unified</button></div></div></div>
-            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} onSelect={selectFile} onEditChange={onPierreEditChange} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
+          <div className="draft-editor-main draft-editor-surface-main" onKeyDownCapture={handleEditorKeyDownCapture}>
+            <div className="draft-editor-toolbar"><div><strong>{selectedPath ?? 'No file selected'}</strong>{hasChanges && <span className="draft-dirty">Unsaved changes</span>}</div><div><div className="draft-view-switch" role="group" aria-label="Draft file view"><button type="button" aria-pressed={mode === 'diff'} className={mode === 'diff' ? 'draft-view-active' : ''} disabled={busy} onClick={() => switchMode('diff')}>Diff</button><button ref={editModeButtonRef} type="button" aria-pressed={mode === 'edit'} className={mode === 'edit' ? 'draft-view-active' : ''} disabled={busy || !selectedIsEditable} onClick={() => switchMode('edit')}>Edit</button></div><div className="draft-view-switch" role="group" aria-label="Diff layout"><button type="button" aria-pressed={diffStyle === 'split'} className={diffStyle === 'split' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('split')}>Split</button><button type="button" aria-pressed={diffStyle === 'unified'} className={diffStyle === 'unified' ? 'draft-view-active' : ''} disabled={busy} onClick={() => setDiffStyle('unified')}>Unified</button></div></div></div>
+            {selectedCurrentLoading ? <LoadingState label="Loading the selected draft file…" /> : selectedCurrentError ? <div className="release-file-placeholder"><Badge tone="muted" value="Draft file unavailable" /><p>{selectedCurrentError}</p></div> : <DraftRendererBoundary key={`${draft.id}:${draft.revision}:${draft.digest}:${selectedPath ?? 'none'}:${mode}`} fallback={nativeFallback}><Suspense fallback={<LoadingState label="Loading the file workspace…" />}><PierreDraftSurface ref={surfaceRef} draftId={draft.id} draftRevision={draft.revision} draftDigest={draft.digest} entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} maxPreviewBytes={MAX_TEXT_PREVIEW_BYTES} mode={mode} diffStyle={diffStyle} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} keyboardHelpId={editorKeyboardHelpId} onSelect={selectFile} onEditChange={onPierreEditChange} onContentChange={onPierreContentChange} /></Suspense></DraftRendererBoundary>}
             <div className="draft-editor-actions"><Button kind="secondary" busy={saving} disabled={!hasChanges || busy && !saving} type="button" onClick={() => void saveDraft()}>Save revision</Button><label className="draft-version-field"><span>Next version</span><input aria-label="Next release version" disabled={busy} value={version} onChange={(event) => { publishOperation.current = null; setVersion(event.target.value) }} /></label><Button busy={publishing} disabled={hasChanges || busy && !publishing} type="button" onClick={() => void publishDraft()}>Queue release scan</Button></div>
           </div>
         </div>

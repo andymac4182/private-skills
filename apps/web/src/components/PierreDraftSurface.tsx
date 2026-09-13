@@ -41,6 +41,7 @@ interface PierreDraftSurfaceProps {
   busy: boolean
   baseLoading: boolean
   baseError: string | null
+  keyboardHelpId: string
   onSelect: (path: string) => void
   onEditChange: (contents: string) => void
   onContentChange: (contents: string) => void
@@ -102,7 +103,7 @@ export function pierreEditStateKey(draftId: string, revision: number, digest: `s
   return `draft:${draftId}:${revision}:${digest}:${path}`
 }
 
-export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, diffStyle, editable, busy, baseLoading, baseError, onSelect, onEditChange, onContentChange }, ref) {
+export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, diffStyle, editable, busy, baseLoading, baseError, keyboardHelpId, onSelect, onEditChange, onContentChange }, ref) {
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries])
   const pathsRef = useRef(paths)
   const onSelectRef = useRef(onSelect)
@@ -168,30 +169,33 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
   const baseUnavailable = baseFile === null && basePreviewState !== null && basePreviewState !== 'text'
   const placeholderState = baseUnavailable ? basePreviewState : currentPreviewState ?? basePreviewState
   const placeholderSize = currentPreviewSize ?? basePreviewSize
+  const showEditor = mode === 'edit' && editable && current !== null && !baseLoading && baseError === null
+  const renderedCode = baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : showEditor ? <EditProvider createEditor={createEditor}><PierreFile
+    key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
+    className="draft-pierre-file"
+    file={current}
+    edit
+    editStateKey={pierreEditStateKey(draftId, draftRevision, draftDigest, current.name)}
+    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
+    disableWorkerPool
+    onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}
+    onEditComplete={(event) => { onContentChange(event.file.contents); return 'accept' }}
+  /></EditProvider> : canShowDiff && diff ? <FileDiff
+    key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}:${diffStyle}`}
+    className="draft-pierre-file"
+    fileDiff={diff}
+    options={{ diffStyle, overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
+    disableWorkerPool
+  /> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState, maxPreviewBytes)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>
 
   return <div className="draft-surface">
     <div className="draft-surface-tree" aria-label="Draft files">
       <FileTree aria-label="Draft files" header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
       {entries.length > 0 && <div className="draft-surface-tree-status" role="status" aria-live="polite"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
     </div>
-    <div className="draft-surface-code" role="region" aria-label={mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
-      {baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
-        key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
-        className="draft-pierre-file"
-        file={current}
-        edit
-        editStateKey={pierreEditStateKey(draftId, draftRevision, draftDigest, current.name)}
-        options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
-        disableWorkerPool
-        onEditChange={(event) => { latestContents.current = event.file.contents; onEditChange(event.file.contents) }}
-        onEditComplete={(event) => { onContentChange(event.file.contents); return 'accept' }}
-      /></EditProvider> : canShowDiff && diff ? <FileDiff
-        key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}:${diffStyle}`}
-        className="draft-pierre-file"
-        fileDiff={diff}
-        options={{ diffStyle, overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }}
-        disableWorkerPool
-      /> : <div className="release-file-placeholder"><Badge tone="muted" value={previewLabel(placeholderState)} /><p>{previewReason(placeholderState, maxPreviewBytes)}</p>{placeholderSize !== null && <span className="helper">{formatBytes(placeholderSize)}</span>}</div>}
+    <div className="draft-surface-code" role="region" aria-describedby={showEditor ? keyboardHelpId : undefined} aria-label={mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
+      {renderedCode}
+      {showEditor && <span id={keyboardHelpId} className="helper" style={{ display: 'block', padding: '5px 15px' }}>Press Escape to leave the editor.</span>}
       {mode === 'edit' && busy && <div className="draft-surface-busy"><LoadingState label="Saving revision…" /></div>}
     </div>
   </div>

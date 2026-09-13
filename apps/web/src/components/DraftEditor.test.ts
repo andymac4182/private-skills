@@ -38,7 +38,8 @@ vi.mock('./PierreDraftSurface', async () => {
       onEditChange?.(next)
       onContentChange?.(next)
     }
-    return React.createElement('div', { 'data-testid': 'mock-pierre' }, React.createElement('button', { type: 'button', 'data-testid': 'mock-pierre-change', onClick: changeContents }, 'Change contents'), ...entries.flatMap((entry) => typeof entry.path === 'string' ? [React.createElement('button', { key: entry.path, type: 'button', 'data-testid': `mock-pierre-select-${entry.path}`, onClick: () => onSelect?.(entry.path as string) }, entry.path)] : []))
+    const keyboardHelpId = typeof props.keyboardHelpId === 'string' ? props.keyboardHelpId : undefined
+    return React.createElement('div', { 'data-testid': 'mock-pierre' }, React.createElement('div', { className: 'draft-surface-code', 'aria-describedby': mode === 'edit' && keyboardHelpId ? keyboardHelpId : undefined }, mode === 'edit' && keyboardHelpId && React.createElement('span', { id: keyboardHelpId, className: 'helper' }, 'Press Escape to leave the editor.'), mode === 'edit' && React.createElement('input', { 'data-testid': 'mock-pierre-search', type: 'search', placeholder: 'Search' }), mode === 'edit' && React.createElement('div', { 'data-testid': 'mock-pierre-content', contentEditable: true, suppressContentEditableWarning: true, tabIndex: 0 }, React.createElement('span', null, 'editor')), mode === 'edit' && React.createElement('button', { type: 'button', 'data-testid': 'mock-pierre-change', onClick: changeContents }, 'Change contents'), ...entries.flatMap((entry) => typeof entry.path === 'string' ? [React.createElement('button', { key: entry.path, type: 'button', 'data-testid': `mock-pierre-select-${entry.path}`, onClick: () => onSelect?.(entry.path as string) }, entry.path)] : [])))
   })
   return { PierreDraftSurface }
 })
@@ -268,6 +269,47 @@ describe('draft editor renderer fallback', () => {
       await act(async () => { editButton?.click() })
       await settle()
       expect(container.querySelector('.draft-dirty')).toBeNull()
+      const editorHelp = container.querySelector('.draft-editor-main [id$="-keyboard-help"]')
+      expect(editorHelp?.textContent).toBe('Press Escape to leave the editor.')
+      expect(container.querySelector('.draft-surface-code')?.getAttribute('aria-describedby')).toBe(editorHelp?.id)
+
+      const editable = container.querySelector<HTMLElement>('[data-testid="mock-pierre-content"]')
+      expect(editable).not.toBeNull()
+      editable?.focus()
+      const composingEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, composed: true })
+      Object.defineProperty(composingEscape, 'isComposing', { value: true })
+      await act(async () => { editable?.dispatchEvent(composingEscape) })
+      expect(composingEscape.defaultPrevented).toBe(false)
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const modifiedEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, composed: true, shiftKey: true })
+      await act(async () => { editable?.dispatchEvent(modifiedEscape) })
+      expect(modifiedEscape.defaultPrevented).toBe(false)
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, composed: true })
+      await act(async () => { editable?.dispatchEvent(tab) })
+      expect(tab.defaultPrevented).toBe(false)
+
+      const search = container.querySelector<HTMLInputElement>('[data-testid="mock-pierre-search"]')
+      expect(search).not.toBeNull()
+      search?.focus()
+      const searchEscape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, composed: true })
+      await act(async () => { search?.dispatchEvent(searchEscape) })
+      expect(searchEscape.defaultPrevented).toBe(false)
+      expect(document.activeElement).toBe(search)
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      editable?.focus()
+      const editorText = editable?.querySelector('span')
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, composed: true })
+      await act(async () => { editorText?.dispatchEvent(escape) })
+      expect(escape.defaultPrevented).toBe(true)
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+      expect(container.querySelector('.draft-editor-main [id$="-keyboard-help"]')).toBeNull()
+      const diffButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Diff')
+      expect(diffButton?.getAttribute('aria-pressed')).toBe('true')
+      expect(document.activeElement?.textContent).toBe('Edit')
 
       const selectSecond = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid^="mock-pierre-select-"]')).find((button) => button.textContent === secondPath)
       expect(selectSecond).toBeDefined()
