@@ -89,3 +89,37 @@ applies the same admission check.
 
 These checks are local only and do not advance hosted acceptance or native
 Windows/Linux CI. No remote push or deployment was performed.
+
+## Editor and upload-review continuation
+
+The review panel now collects and submits the required dismissal reason and
+shows the persisted decision reason. Mutation responses are fenced to the
+selected draft revision/digest; retries display only their attached result,
+and pending reviews have a bounded refresh path. Stale findings have no
+decision actions. Rendered React tests exercise the reason payload, delayed
+response after a draft switch, pending-to-complete retry behavior, manual
+refresh of an existing pending review, and dismissal focus handling.
+
+The composed `tests/authoring-e2e.test.ts` fixture now includes the separate
+upload-review prepare/complete HTTP handlers. It proves exact snapshot review,
+an audited dismissal, edit-triggered staleness, denial of a stale decision,
+current-revision review, explicit required-scanner queueing, and approved file
+retrieval. The reviewer completion and scanner are deterministic fixtures;
+this does not claim a model invocation or hosted acceptance.
+
+Snapshot validation uses the builder's deterministic path ordering instead of
+host locale ordering. A regression verifies mixed-case/accented paths and
+idempotent replay of a legacy persisted snapshot without rewriting it.
+
+Editor tabs now have roving keyboard focus and named tab/panel relationships.
+The builder proposal diff reuses the existing Pierre accessibility hook.
+A disposable local browser fixture on port 3001 verified ArrowRight/Home/End,
+one tabbable tab, panel labels, builder-unavailable output, and review error
+announcements. The fixture used source `08987af` plus this working tree and
+isolated file/blob state; its server was stopped afterward. No screenshot or
+trace was saved. The browser did not exercise a live busy mutation or rendered
+builder proposal diff, so these observations do not close full M6-A11Y.
+
+Root verification passed: 763 tests, seven opt-in tests skipped, the full
+TypeScript command, the production web build, and whitespace checks. No push,
+production call, or deployment was performed.

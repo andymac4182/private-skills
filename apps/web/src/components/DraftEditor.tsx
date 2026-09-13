@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react'
 import { useBlocker } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { createSkillBuilderAdapter } from '../lib/builder'
@@ -25,6 +25,8 @@ interface DraftEditorProps {
 
 type DraftFile = SkillBundle['files'][number]
 export type DraftWorkingFile = DraftFileMetadata & { content?: string; previewState?: ReleaseFilePreviewState; dirty?: boolean }
+type WorkspaceTab = 'files' | 'build' | 'review'
+const WORKSPACE_TABS: readonly WorkspaceTab[] = ['files', 'build', 'review']
 type DraftFileLike = { path: string; content?: string; size?: number; previewState?: ReleaseFilePreviewState }
 type ReleaseBaselineEntry = Pick<ReleaseFileView, 'path' | 'size' | 'previewState' | 'executable'> & { contentDigest?: `sha256:${string}`; contents?: string }
 interface ImmutableReleaseBaseline { entries: ReleaseBaselineEntry[]; files: DraftFile[] }
@@ -37,6 +39,11 @@ const TEXT_EXTENSIONS = new Set(['c', 'cc', 'cfg', 'conf', 'cpp', 'css', 'csv', 
 const BINARY_EXTENSIONS = new Set(['7z', 'avi', 'bin', 'bmp', 'class', 'dll', 'doc', 'docx', 'gif', 'gz', 'ico', 'jar', 'jpeg', 'jpg', 'mp3', 'mp4', 'pdf', 'png', 'so', 'tar', 'wasm', 'webp', 'woff', 'woff2', 'zip'])
 const TEXT_FILENAMES = new Set(['.editorconfig', '.gitignore', '.npmignore', 'dockerfile', 'license', 'makefile', 'readme'])
 const DRAFT_STORAGE_PREFIX = 'private-skills:draft:'
+
+function workspaceElementId(value: string, suffix: string): string {
+  const safeValue = value.replace(/[^a-zA-Z0-9_-]/g, '-') || 'editor'
+  return `draft-workspace-${safeValue}-${suffix}`
+}
 
 function idempotencyKey(prefix: string): string {
   const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -462,7 +469,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const [renameOrigins, setRenameOrigins] = useState<Record<string, string>>({})
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mode, setMode] = useState<'edit' | 'diff'>('diff')
-  const [workspaceTab, setWorkspaceTab] = useState<'files' | 'build' | 'review'>('files')
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('files')
   const [creating, setCreating] = useState(false)
   const [resuming, setResuming] = useState(true)
   const [reloading, setReloading] = useState(false)
@@ -488,6 +495,7 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   const baseLoadGeneration = useRef(0)
   const currentLoadGeneration = useRef(0)
   const surfaceRef = useRef<DraftSurfaceHandle | null>(null)
+  const workspaceTabRefs = useRef<Partial<Record<WorkspaceTab, HTMLButtonElement>>>({})
   const builderAdapter = useMemo(() => createSkillBuilderAdapter(), [])
 
   const selectedFile = useMemo(() => workingFiles.find((file) => file.path === selectedPath) ?? null, [selectedPath, workingFiles])
@@ -828,10 +836,27 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     setError(null)
   }
 
-  function switchWorkspaceTab(next: 'files' | 'build' | 'review'): void {
+  function switchWorkspaceTab(next: WorkspaceTab): void {
     if (busy || next === workspaceTab) return
     if (next !== 'files') setWorkingFiles(syncSurfaceFiles())
     setWorkspaceTab(next)
+  }
+
+  function handleWorkspaceTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, current: WorkspaceTab): void {
+    const isNavigationKey = event.key === 'ArrowRight' || event.key === 'ArrowLeft' || event.key === 'Home' || event.key === 'End'
+    if (!isNavigationKey) return
+    event.preventDefault()
+    if (busy) return
+    const currentIndex = WORKSPACE_TABS.indexOf(current)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % WORKSPACE_TABS.length
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + WORKSPACE_TABS.length) % WORKSPACE_TABS.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = WORKSPACE_TABS.length - 1
+    if (nextIndex === currentIndex) return
+    const next = WORKSPACE_TABS[nextIndex]
+    switchWorkspaceTab(next)
+    workspaceTabRefs.current[next]?.focus()
   }
 
   function switchMode(next: 'edit' | 'diff'): void {
@@ -979,6 +1004,17 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
   }
 
   const nativeFallback = <NativeDraftSurface entries={entries} selectedPath={selectedPath} baseFile={selectedBaseFile} currentFile={selectedFile} currentPreviewState={selectedPreview?.state ?? null} currentPreviewSize={selectedPreview?.size ?? null} basePreviewState={selectedBaseEntry?.previewState ?? null} basePreviewSize={selectedBaseEntry?.size ?? null} mode={mode} editable={selectedIsEditable} busy={busy} baseLoading={selectedBaseLoading} baseError={selectedBaseError} currentLoading={selectedCurrentLoading} currentError={selectedCurrentError} onSelect={selectFile} onContentChange={onPierreContentChange} />
+  const workspaceIdentity = draft?.id ?? initialDraft?.id ?? resourceId
+  const workspaceTabIds = {
+    files: workspaceElementId(workspaceIdentity, 'tab-files'),
+    build: workspaceElementId(workspaceIdentity, 'tab-build'),
+    review: workspaceElementId(workspaceIdentity, 'tab-review'),
+  }
+  const workspacePanelIds = {
+    files: workspaceElementId(workspaceIdentity, 'panel-files'),
+    build: workspaceElementId(workspaceIdentity, 'panel-build'),
+    review: workspaceElementId(workspaceIdentity, 'panel-review'),
+  }
 
   return <section className="draft-editor">
     <header className="draft-editor-header">
@@ -992,16 +1028,13 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
     {!resuming && !draft && initialDraft && <div className="draft-start"><p className="helper">This upload draft is no longer available in the registry.</p></div>}
     {!resuming && draft && <>
       <div className="draft-editor-meta"><span>Revision <strong>{draft.revision}</strong></span><span>Files <strong>{workingFiles.length}</strong></span><span>Size <strong>{formatBytes(draft.size)}</strong></span><span title={draft.digest}>Digest <code>{shortDigest(draft.digest)}</code></span>{hasChanges && <span className="draft-dirty">Local changes</span>}</div>
-      <div className="draft-workspace-tabs" role="tablist" aria-label="Draft workspace"><button aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('files')}>Files</button><button aria-selected={workspaceTab === 'build'} className={workspaceTab === 'build' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('build')}>Build with Eve</button><button aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} role="tab" type="button" onClick={() => switchWorkspaceTab('review')}>Review</button></div>
-      {workspaceTab === 'build' ? <SkillBuilderPanel draft={{ draftId: draft.id, revision: draft.revision, digest: draft.digest, ...(selectedPath ? { selectedPath } : {}) }} adapter={builderAdapter} canApply={!hasChanges && !busy} applyDisabledReason={hasChanges ? 'Save or discard local changes before applying an Eve proposal.' : busy ? 'Wait for the current draft operation to finish.' : undefined} onDraftRebound={(next) => {
-        if (next.id !== draft.id || next.revision <= draft.revision) {
-          setError('Eve returned an unexpected draft revision. Reload the draft before continuing.')
-          return
-        }
-        installServerDraft(next)
-      }} onApplied={(result) => {
-        setMessage({ kind: 'success', text: `Eve applied the proposal and saved revision ${result.draft.revision}.` })
-      }} /> : workspaceTab === 'review' ? <DraftReviewPanel draft={draft} disabled={busy} /> : <>
+      <div className="draft-workspace-tabs" aria-label="Draft workspace" aria-orientation="horizontal" role="tablist">
+        <button id={workspaceTabIds.files} aria-controls={workspacePanelIds.files} aria-disabled={busy} aria-selected={workspaceTab === 'files'} className={workspaceTab === 'files' ? 'draft-workspace-tab-active' : ''} ref={(node) => { workspaceTabRefs.current.files = node ?? undefined }} role="tab" tabIndex={workspaceTab === 'files' ? 0 : -1} type="button" onClick={() => switchWorkspaceTab('files')} onKeyDown={(event) => handleWorkspaceTabKeyDown(event, 'files')}>Files</button>
+        <button id={workspaceTabIds.build} aria-controls={workspacePanelIds.build} aria-disabled={busy} aria-selected={workspaceTab === 'build'} className={workspaceTab === 'build' ? 'draft-workspace-tab-active' : ''} ref={(node) => { workspaceTabRefs.current.build = node ?? undefined }} role="tab" tabIndex={workspaceTab === 'build' ? 0 : -1} type="button" onClick={() => switchWorkspaceTab('build')} onKeyDown={(event) => handleWorkspaceTabKeyDown(event, 'build')}>Build with Eve</button>
+        <button id={workspaceTabIds.review} aria-controls={workspacePanelIds.review} aria-disabled={busy} aria-selected={workspaceTab === 'review'} className={workspaceTab === 'review' ? 'draft-workspace-tab-active' : ''} ref={(node) => { workspaceTabRefs.current.review = node ?? undefined }} role="tab" tabIndex={workspaceTab === 'review' ? 0 : -1} type="button" onClick={() => switchWorkspaceTab('review')} onKeyDown={(event) => handleWorkspaceTabKeyDown(event, 'review')}>Review</button>
+      </div>
+      <div id={workspacePanelIds.files} aria-labelledby={workspaceTabIds.files} hidden={workspaceTab !== 'files'} role="tabpanel">
+      {workspaceTab === 'files' && <>
         <div className="draft-file-actions"><Button kind="quiet" type="button" disabled={busy} onClick={() => setAddingFile((current) => !current)}>{addingFile ? 'Cancel add' : 'Add file'}</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={renameFile}>Rename</Button><Button kind="quiet" type="button" disabled={busy || !selectedFile} onClick={removeFile}>Remove</Button>{!selectedFile && selectedBaseFile && <Button kind="quiet" type="button" disabled={busy} onClick={restoreFile}>Restore selected file</Button>}</div>
         {addingFile && <form className="draft-add-file" onSubmit={addFile}><label><span>New relative path</span><input autoFocus value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="docs/notes.md" /></label><Button kind="secondary" disabled={busy}>Add file</Button></form>}
         <div className="draft-editor-layout">
@@ -1012,6 +1045,21 @@ export function DraftEditor({ resourceId, baseDigest, baseVersion, initialDraft,
           </div>
         </div>
       </>}
+      </div>
+      <div id={workspacePanelIds.build} aria-labelledby={workspaceTabIds.build} hidden={workspaceTab !== 'build'} role="tabpanel">
+      {workspaceTab === 'build' && <SkillBuilderPanel draft={{ draftId: draft.id, revision: draft.revision, digest: draft.digest, ...(selectedPath ? { selectedPath } : {}) }} adapter={builderAdapter} canApply={!hasChanges && !busy} applyDisabledReason={hasChanges ? 'Save or discard local changes before applying an Eve proposal.' : busy ? 'Wait for the current draft operation to finish.' : undefined} onDraftRebound={(next) => {
+        if (next.id !== draft.id || next.revision <= draft.revision) {
+          setError('Eve returned an unexpected draft revision. Reload the draft before continuing.')
+          return
+        }
+        installServerDraft(next)
+      }} onApplied={(result) => {
+        setMessage({ kind: 'success', text: `Eve applied the proposal and saved revision ${result.draft.revision}.` })
+      }} />}
+      </div>
+      <div id={workspacePanelIds.review} aria-labelledby={workspaceTabIds.review} hidden={workspaceTab !== 'review'} role="tabpanel">
+      {workspaceTab === 'review' && <DraftReviewPanel draft={draft} disabled={busy} />}
+      </div>
       <footer className="draft-editor-footer"><span className="helper">Revision {draft.revision} is saved on the server. Reload before saving if someone else changed it.</span><Button kind="quiet" disabled={busy} type="button" onClick={() => void reloadDraft()}>Reload draft</Button></footer>
     </>}
   </section>

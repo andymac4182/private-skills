@@ -423,8 +423,18 @@ function validateSnapshot(value: unknown): UploadReviewSnapshot {
     throw new UploadReviewValidationError('snapshot text exceeds the review limit');
   }
   return {
-    files: files.sort((left, right) => left.path.localeCompare(right.path)),
+    files: files.sort(compareSnapshotFiles),
   };
+}
+
+// Keep this ordering byte/code-unit deterministic across runtimes.  The
+// snapshot builder uses the same ordering; localeCompare() can vary with the
+// host ICU locale and would change the serialized idempotency input.
+function compareSnapshotFiles(
+  left: Pick<UploadReviewSnapshotFile, 'path'>,
+  right: Pick<UploadReviewSnapshotFile, 'path'>,
+): number {
+  return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 
 function sameBinding(left: UploadReviewBinding, right: UploadReviewBinding): boolean {
@@ -432,7 +442,13 @@ function sameBinding(left: UploadReviewBinding, right: UploadReviewBinding): boo
 }
 
 function sameSnapshot(left: UploadReviewSnapshot, right: UploadReviewSnapshot): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  // Existing jobs may have been persisted in the former locale-dependent
+  // order.  Compare canonical copies so replay remains idempotent without
+  // mutating the stored snapshot's order or integrity-bound contents.
+  const canonical = (snapshot: UploadReviewSnapshot): UploadReviewSnapshot => ({
+    files: [...snapshot.files].sort(compareSnapshotFiles),
+  });
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function normalizeEnqueueInput(input: EnqueueUploadReviewInput): {

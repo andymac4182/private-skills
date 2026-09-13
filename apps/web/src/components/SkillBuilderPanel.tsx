@@ -3,6 +3,7 @@ import { FileDiff } from '@pierre/diffs/react'
 import { parseDiffFromFile, type FileContents, type FileDiffMetadata } from '@pierre/diffs'
 import type { DraftView } from '../lib/types'
 import styles from './SkillBuilderPanel.module.css'
+import { onPierrePostRender, PIERRE_ACCESSIBLE_CSS } from './pierreAccessibility'
 
 /**
  * The editor owns the selected draft and this panel only receives its binding.
@@ -576,7 +577,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   if (availability === null || (loading && !session)) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
   if (!session) return <section className={styles.panel} aria-label="Skill builder"><div className={styles.errorBlock}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
 
-  return <section className={styles.panel} aria-label="Skill builder">
+  return <section className={styles.panel} aria-busy={busy} aria-label="Skill builder">
     <header className={styles.header}>
       <div>
         <span className={styles.eyebrow}>Eve builder</span>
@@ -619,7 +620,7 @@ function ProposalCard({ proposal, busy, canApply, applyDisabledReason, onApply, 
 
 function ProposalOperation({ operation }: { operation: SkillBuilderProposalOperation }) {
   const diff = useMemo(() => proposalDiff(operation), [operation])
-  return <article className={styles.operation}><div className={styles.operationHeading}><span className={`${styles.operationKind} ${styles[`operation${operation.op[0].toUpperCase()}${operation.op.slice(1)}`]}`}>{operation.op}</span><code>{proposalSummary(operation)}</code>{operation.contentBytes !== undefined && <span className={styles.operationBytes}>{operation.contentBytes.toLocaleString()} bytes</span>}</div>{diff ? <div className={styles.diffSurface}><FileDiff fileDiff={diff} disableWorkerPool options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true }} /></div> : <p className={styles.noPreview}>The server returned a bounded summary for this operation. Open the draft file to inspect the resulting bytes before applying.</p>}</article>
+  return <article className={styles.operation}><div className={styles.operationHeading}><span className={`${styles.operationKind} ${styles[`operation${operation.op[0].toUpperCase()}${operation.op.slice(1)}`]}`}>{operation.op}</span><code>{proposalSummary(operation)}</code>{operation.contentBytes !== undefined && <span className={styles.operationBytes}>{operation.contentBytes.toLocaleString()} bytes</span>}</div>{diff ? <div className={styles.diffSurface}><FileDiff fileDiff={diff} disableWorkerPool options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }} /></div> : <p className={styles.noPreview}>The server returned a bounded summary for this operation. Open the draft file to inspect the resulting bytes before applying.</p>}</article>
 }
 
 function DisabledState({ title, message }: { title: string; message: string }) {

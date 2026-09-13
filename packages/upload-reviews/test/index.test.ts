@@ -8,6 +8,7 @@ import {
   createUploadReviewPersistenceService,
   createUploadReviewSnapshot,
   type UploadReviewBinding,
+  type UploadReviewJob,
   type UploadReviewSnapshot,
 } from '../src/index.js';
 import { createUploadReviewHttpHandler } from '../src/http.js';
@@ -86,6 +87,79 @@ describe('upload/edit review persistence', () => {
     });
     expect(second.id).not.toBe(first.id);
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  it('uses deterministic mixed-case and non-ASCII snapshot paths while replaying legacy locale order', async () => {
+    const encode = (value: string) => {
+      const bytes = new TextEncoder().encode(value);
+      let encoded = '';
+      for (const byte of bytes) encoded += String.fromCharCode(byte);
+      return btoa(encoded);
+    };
+    const files = [
+      { path: 'zeta.md', content: encode('zeta') },
+      { path: 'éclair.md', content: encode('accent') },
+      { path: 'Alpha.md', content: encode('upper') },
+      { path: 'Beta.md', content: encode('mixed') },
+    ];
+    const snapshot = await createUploadReviewSnapshot(files);
+    const rebuilt = await createUploadReviewSnapshot([...files].reverse());
+
+    expect(snapshot.files.map((file) => file.path)).toEqual([
+      'Alpha.md',
+      'Beta.md',
+      'zeta.md',
+      'éclair.md',
+    ]);
+    expect(rebuilt).toEqual(snapshot);
+    expect(rebuilt.files.map((file) => file.digest)).toEqual(snapshot.files.map((file) => file.digest));
+
+    // This is the order produced by the old default-locale comparator in the
+    // test runtime. Keep it explicit so the compatibility fixture itself does
+    // not vary with the host ICU locale.
+    const filesByPath = new Map(snapshot.files.map((file) => [file.path, file]));
+    const legacyPaths = ['Alpha.md', 'Beta.md', 'éclair.md', 'zeta.md'] as const;
+    const legacySnapshot: UploadReviewSnapshot = {
+      files: legacyPaths.map((path) => {
+        const file = filesByPath.get(path);
+        if (!file) throw new Error(`snapshot fixture is missing ${path}`);
+        return file;
+      }),
+    };
+
+    const { repository, service } = await fixture();
+    const input = {
+      idempotencyKey: 'mixed-paths:revision-1',
+      binding: binding(),
+      snapshot: legacySnapshot,
+      model: 'openai/gpt-5.5',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    };
+    const original = await service.enqueue('org-a', input);
+    expect(original.snapshot.files.map((file) => file.path)).toEqual([
+      'Alpha.md',
+      'Beta.md',
+      'zeta.md',
+      'éclair.md',
+    ]);
+
+    // Simulate a pre-migration persisted job.  The replay must compare a
+    // canonical copy but return the unchanged stored snapshot ordering.
+    await repository.transaction('org-a', (state) => {
+      const jobs = (state as typeof state & { uploadReviewJobs?: UploadReviewJob[] }).uploadReviewJobs;
+      if (!jobs?.[0]) throw new Error('upload review fixture did not create a job');
+      jobs[0].snapshot = legacySnapshot;
+    });
+    const replay = await service.enqueue('org-a', { ...input, snapshot });
+
+    expect(replay.id).toBe(original.id);
+    expect(replay.snapshot.files.map((file) => file.path)).toEqual([
+      'Alpha.md',
+      'Beta.md',
+      'éclair.md',
+      'zeta.md',
+    ]);
   });
 
   it('rejects stale enqueue/requeue and fences active claims through the transaction binding resolver', async () => {
