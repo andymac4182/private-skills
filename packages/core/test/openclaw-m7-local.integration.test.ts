@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -30,6 +32,7 @@ import {
 } from '../../openclaw/src/index.ts';
 import { TokenAuthenticator, type BootstrapTokenConfig } from '../../auth/src/index.js';
 import { createMemoryStateRepository } from '../../database/src/index.js';
+import { DockerExecutor, SKILLSGUARD_PIN, createSkillsGuardAdapter } from '../../scanners/src/index.js';
 import type {
   Authenticator,
   BlobStore,
@@ -52,10 +55,22 @@ import { WorkerRunner } from '../../../workers/runner/src/index.js';
  * when PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE explicitly points to the operator's
  * cached copy; the archive is never checked into this repository. CI or
  * another checkout without that opt-in records the boundary as skipped; the
- * ordinary synthetic source and worker tests remain portable there.
+ * ordinary synthetic source and worker tests remain portable there. Set
+ * PRIVATE_SKILLS_M7_SCANNER=docker-skillsguard to run the same flow through
+ * the pinned container; provider findings fail the test and never fall back
+ * to the deterministic fixture.
  */
 const NVIDIA_ARCHIVE_PATH = process.env.PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE;
 const HAS_CACHED_NVIDIA_ARCHIVE = NVIDIA_ARCHIVE_PATH !== undefined && existsSync(NVIDIA_ARCHIVE_PATH);
+const SCANNER_MODE = process.env.PRIVATE_SKILLS_M7_SCANNER;
+if (SCANNER_MODE !== undefined && SCANNER_MODE !== 'deterministic' && SCANNER_MODE !== 'docker-skillsguard') {
+  throw new Error('PRIVATE_SKILLS_M7_SCANNER must be deterministic or docker-skillsguard');
+}
+const RUN_REAL_SKILLSGUARD = SCANNER_MODE === 'docker-skillsguard';
+const SKILLSGUARD_IMAGE = 'private-skills/skillsguard:1.1.1';
+const SKILLSGUARD_IMAGE_ID = 'sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0';
+const EXPECTED_ARCHIVE_FILE_COUNT = 7;
+const execFileAsync = promisify(execFile);
 
 const ORIGIN = 'https://m7-registry.test';
 const ORGANIZATION_ID = 'org-m7-local';
@@ -150,6 +165,17 @@ function localScanner(): ScannerAdapter {
   };
 }
 
+async function assertPinnedSkillsGuardImage(): Promise<void> {
+  const { stdout } = await execFileAsync('docker', [
+    'image',
+    'inspect',
+    SKILLSGUARD_IMAGE,
+    '--format',
+    '{{.Id}}',
+  ], { encoding: 'utf8', maxBuffer: 16 * 1024 });
+  expect(stdout.trim()).toBe(SKILLSGUARD_IMAGE_ID);
+}
+
 function metadataFromRefresh(result: {
   kind: string;
   snapshot?: {
@@ -204,8 +230,15 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
     }
   });
 
-  it.skipIf(!HAS_CACHED_NVIDIA_ARCHIVE)('acquires the real PAX GitHub archive, scans and seals it, then serves a private feed to the reference consumer', async () => {
-    if (NVIDIA_ARCHIVE_PATH === undefined) return;
+  const archiveTest = RUN_REAL_SKILLSGUARD ? it : it.skipIf(!HAS_CACHED_NVIDIA_ARCHIVE);
+  const archiveTestTitle = RUN_REAL_SKILLSGUARD
+    ? 'runs pinned SkillsGuard against the real PAX archive and rejects flagged distribution'
+    : 'acquires the real PAX GitHub archive, scans and seals it, then serves a private feed to the reference consumer';
+
+  archiveTest(archiveTestTitle, async () => {
+    if (!HAS_CACHED_NVIDIA_ARCHIVE || NVIDIA_ARCHIVE_PATH === undefined) {
+      throw new Error('PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE must point to the cached NVIDIA archive for this run');
+    }
     const archiveBytes = new Uint8Array(await readFile(NVIDIA_ARCHIVE_PATH));
     expect(await sha256(archiveBytes)).toBe(ARCHIVE_DIGEST);
     root = await mkdtemp(join(tmpdir(), 'private-skills-m7-files-'));
@@ -422,15 +455,21 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
         };
       },
     };
+    if (RUN_REAL_SKILLSGUARD) await assertPinnedSkillsGuardImage();
+    const scanner = RUN_REAL_SKILLSGUARD ? createSkillsGuardAdapter() : localScanner();
     const worker = new WorkerRunner({
       baseUrl: ORIGIN,
       workerToken: WORKER_TOKEN,
       workerId: 'm7-worker',
       fetch: async (input, init) => handler(new Request(String(input), init)),
-      adapters: [localScanner()],
+      adapters: [scanner],
       // The scanner fixture returns a bounded result directly and this
-      // executor throws if any test path attempts to run uploaded content.
-      executor: { run: async () => { throw new Error('M7 fixture must not execute bundle content'); } },
+      // executor throws if any deterministic test path attempts to run
+      // uploaded content. Real mode uses only the pinned Docker executor.
+      executor: RUN_REAL_SKILLSGUARD
+        ? new DockerExecutor()
+        : { run: async () => { throw new Error('M7 fixture must not execute bundle content'); } },
+      ...(RUN_REAL_SKILLSGUARD ? { scannerImages: { skillsguard: SKILLSGUARD_IMAGE_ID } } : {}),
       acquisition: {
         openClaw: {
           allowedArtifactOrigins: [ARTIFACT_ORIGIN],
@@ -444,12 +483,108 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
     });
 
     const run = await worker.runOnce();
-    expect(run).toMatchObject({ claimed: true, jobId: operationId, allow: true });
+    expect(run).toMatchObject({ claimed: true, jobId: operationId });
+    const scannerResult = run.scannerResults?.[0];
+    expect(scannerResult).toMatchObject({
+      scannerId: 'skillsguard',
+      status: 'completed',
+      policyRevision: POLICY.revision,
+      rulesRevision: RUN_REAL_SKILLSGUARD ? SKILLSGUARD_PIN.sourceRevision : 'm7-fixture-rules-1',
+    });
+    expect(scannerResult?.coverage.filesSkipped).toBe(0);
+    expect(scannerResult?.coverage.filesUnsupported).toBe(0);
+    if (RUN_REAL_SKILLSGUARD) {
+      // This pinned public source is intentionally a flagged negative fixture
+      // for the provider-backed mode. SkillsGuard reports six analyzable text
+      // files from the seven-file canonical bundle (the signature is not
+      // counted by its report), so the coverage difference is retained as
+      // evidence instead of being treated as a clean approval.
+      expect(scannerResult?.engineVersion).toBe('1.1.1');
+      expect(scannerResult?.rulesRevision).toBe(SKILLSGUARD_PIN.sourceRevision);
+      expect(scannerResult?.coverage.filesEnumerated).toBe(6);
+      expect(scannerResult?.coverage.filesAnalyzed).toBe(6);
+      expect(scannerResult?.coverage.limitations).toContain('SkillsGuard is pattern/decode-based static analysis and does not observe runtime behavior');
+      expect(scannerResult?.findings.some((finding) => finding.severity === 'high' || finding.severity === 'critical')).toBe(true);
+      expect(run.allow).toBe(false);
+
+      const deniedState = await repository.read(ORGANIZATION_ID);
+      const deniedJob = deniedState.jobs.find((job) => job.id === operationId);
+      expect(deniedJob).toMatchObject({
+        state: 'completed',
+        resourceId: expect.any(String),
+        error: expect.stringContaining('Required scanner skillsguard reported a blocking finding'),
+      });
+      const deniedSkill = deniedState.skills.find((value) => value.id === deniedJob?.resourceId);
+      expect(deniedSkill).toMatchObject({
+        state: 'quarantined',
+        fileCount: EXPECTED_ARCHIVE_FILE_COUNT,
+      });
+      expect(deniedSkill?.state).not.toBe('approved');
+      expect(deniedState.scans).toEqual([expect.objectContaining({
+        scannerId: 'skillsguard',
+        status: 'completed',
+        artifactDigest: deniedSkill?.artifact.digest,
+        policyRevision: POLICY.revision,
+      })]);
+      expect(await proofStore.list(ORGANIZATION_ID)).toHaveLength(0);
+
+      const deniedArtifact = deniedSkill === undefined ? undefined : await blobs.get(deniedSkill.artifact.key);
+      expect(deniedArtifact).toBeInstanceOf(Uint8Array);
+      expect(deniedArtifact && await digestBytes(deniedArtifact)).toBe(deniedSkill?.artifact.digest);
+      const deniedBundle = deniedArtifact === undefined
+        ? undefined
+        : JSON.parse(new TextDecoder().decode(deniedArtifact)) as SkillBundle;
+      expect(deniedBundle).toMatchObject({ format: 'pskills-bundle-v1' });
+      expect(deniedBundle?.files).toHaveLength(EXPECTED_ARCHIVE_FILE_COUNT);
+
+      const rejectedPublication = await request(handler, '/v1/feeds/skills/refresh', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${USER_TOKEN}` },
+      });
+      expect(rejectedPublication.status).toBe(200);
+      await expect(json(rejectedPublication)).resolves.toMatchObject({ feed: { id: 'private/openclaw', entryCount: 0 } });
+      const rejectedPrivateFeed = await request(handler, '/v1/feeds/skills', {
+        headers: { authorization: `Bearer ${USER_TOKEN}` },
+      });
+      expect(rejectedPrivateFeed.status).toBe(200);
+      await expect(json(rejectedPrivateFeed)).resolves.toMatchObject({ id: 'private/openclaw', entries: [] });
+
+      const rejectedSkillView = await request(handler, `/v1/skills/${encodeURIComponent(deniedSkill!.id)}`, {
+        headers: { authorization: `Bearer ${USER_TOKEN}` },
+      });
+      expect(rejectedSkillView.status).toBe(200);
+      await expect(json(rejectedSkillView)).resolves.toMatchObject({ skill: { state: 'quarantined' } });
+      const rejectedResolution = await request(handler, '/v1/resolve', {
+        method: 'POST',
+        headers: jsonHeaders(USER_TOKEN),
+        body: JSON.stringify({ kind: 'skill', ref: deniedSkill!.name, version: deniedSkill!.version }),
+      });
+      expect(rejectedResolution.status).toBe(404);
+      const blobReadsBeforeRejectedTransfer = blobs.reads.length;
+      const rejectedTransfer = await request(handler, `/v1/artifacts/${encodeURIComponent(deniedSkill!.artifact.digest)}/download`, {
+        method: 'POST',
+        headers: jsonHeaders(USER_TOKEN),
+        body: JSON.stringify({ resourceId: deniedSkill!.id, authorizationId: 'm7-no-authorization' }),
+      });
+      expect(rejectedTransfer.status).toBe(404);
+      expect(blobs.reads.length).toBe(blobReadsBeforeRejectedTransfer);
+
+      const stateAfterRejection = await repository.read(ORGANIZATION_ID);
+      expect(stateAfterRejection.authorizations).toHaveLength(0);
+      expect(stateAfterRejection.grants).toHaveLength(0);
+      expect(archiveFetches).toBe(1);
+      return;
+    }
+    expect(run.allow).toBe(true);
     expect(run.scannerResults).toEqual([expect.objectContaining({
       scannerId: 'skillsguard',
       status: 'completed',
       policyRevision: POLICY.revision,
     })]);
+    expect(run.scannerResults?.[0]?.coverage.filesEnumerated).toBeGreaterThan(0);
+    expect(run.scannerResults?.[0]?.coverage.filesAnalyzed).toBe(run.scannerResults?.[0]?.coverage.filesEnumerated);
+    expect(run.scannerResults?.[0]?.findings).toHaveLength(0);
+    expect(run.scannerResults?.[0]?.coverage.limitations).toContain('deterministic local scanner fixture; no provider analysis');
     expect(archiveFetches).toBe(1);
 
     const completedState = await repository.read(ORGANIZATION_ID);
@@ -499,6 +634,7 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
       ? undefined
       : JSON.parse(new TextDecoder().decode(artifactBytes)) as SkillBundle;
     expect(canonicalBundle).toMatchObject({ format: 'pskills-bundle-v1' });
+    expect(canonicalBundle?.files).toHaveLength(EXPECTED_ARCHIVE_FILE_COUNT);
     expect(canonicalBundle?.files.some((file) => file.path === 'SKILL.md')).toBe(true);
     expect(canonicalBundle?.files.every((file) => typeof file.content === 'string' && file.content.length > 0)).toBe(true);
 
@@ -586,9 +722,9 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
     expect(feedRequests).toBeGreaterThanOrEqual(3);
     expect(blobs.reads.length).toBeGreaterThanOrEqual(2);
 
-    // The separate scanner boundary is an explicit deterministic fixture; this
-    // test does not claim Cisco/NVIDIA/SkillsGuard provider execution.
     expect(POLICY.allowUnscanned).toBe(false);
+    // The default scanner boundary is an explicit deterministic fixture; it
+    // does not claim Cisco/NVIDIA/SkillsGuard provider execution.
     expect(run.scannerResults?.[0]?.coverage.limitations).toContain('deterministic local scanner fixture; no provider analysis');
   });
 });
