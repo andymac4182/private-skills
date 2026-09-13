@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { createElement } from 'react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SkillBuilderPanel, isStaleBuilderError, proposalDiff, type SkillBuilderPanelAdapter, type SkillBuilderProposal, type SkillBuilderSession } from './SkillBuilderPanel'
 import type { DraftView } from '../lib/types'
 
@@ -58,6 +61,25 @@ function adapter(): SkillBuilderPanelAdapter {
   }
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((nextResolve) => { resolve = nextResolve })
+  return { promise, resolve }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) await Promise.resolve()
+}
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+})
+
+afterEach(() => {
+  document.body.replaceChildren()
+  vi.unstubAllGlobals()
+})
+
 describe('SkillBuilderPanel helpers', () => {
   it('recognizes stale binding responses from the BFF', () => {
     expect(isStaleBuilderError({ code: 'STALE_BINDING' })).toBe(true)
@@ -95,5 +117,43 @@ describe('SkillBuilderPanel rendering boundary', () => {
     expect(markup).toContain('Skill builder unavailable')
     expect(markup).toContain('availability is not configured')
     expect(markup).not.toContain('Send prompt')
+  })
+
+  it('announces loading and proposal lifecycle states through a dedicated live region', async () => {
+    const loaded = deferred<SkillBuilderSession>()
+    const pendingProposal = { ...proposal, operations: [{ op: 'edit' as const, path: 'SKILL.md' }] }
+    const builderAdapter: SkillBuilderPanelAdapter = {
+      ...adapter(),
+      loadSession: async () => loaded.promise,
+      applyProposal: async () => ({ session, proposal: { ...pendingProposal, state: 'applied' as const } }),
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root: Root | undefined
+
+    try {
+      await act(async () => {
+        root = createRoot(container)
+        root.render(createElement(SkillBuilderPanel, { draft, adapter: builderAdapter, enabled: true, onDraftRebound: () => undefined }))
+        await flushMicrotasks()
+      })
+      const liveStatus = () => container.querySelector('[role="status"][aria-live="polite"]')
+      expect(liveStatus()?.textContent).toBe('Loading the builder conversation.')
+
+      loaded.resolve({ ...session, state: 'completed', proposal: pendingProposal })
+      await act(async () => { await flushMicrotasks() })
+      expect(liveStatus()?.textContent).toBe('Eve has prepared a proposal for review.')
+      expect(liveStatus()?.getAttribute('aria-atomic')).toBe('true')
+
+      await act(async () => {
+        const apply = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent === 'Apply proposal')
+        if (!(apply instanceof HTMLButtonElement)) throw new Error('Apply proposal button was not found')
+        apply.click()
+        await flushMicrotasks()
+      })
+      expect(liveStatus()?.textContent).toBe('The proposal was applied and the draft was reloaded.')
+    } finally {
+      await act(async () => { root?.unmount(); await flushMicrotasks() })
+    }
   })
 })

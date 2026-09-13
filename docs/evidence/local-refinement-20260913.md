@@ -157,3 +157,28 @@ Final combined checks passed: 768 tests, seven opt-in tests skipped, TypeScript,
 and the production web build. Work remains on local main; no push, production
 connection, or deployment was performed. Hosted acceptance and native
 Windows/Linux evidence remain separate.
+
+## Combined authoring regression and file-tree synchronization
+
+The composed HTTP regression now connects the builder session/prompt/proposal
+contract to explicit apply, upload review, required scanner admission, and
+approved manifest/file retrieval. The builder callback uses a separate scoped
+principal. The test rejects stale apply and checks that a proposal leaves draft
+bytes unchanged until an author applies it. Both the model and scanner are
+deterministic fixtures in this test; it is not real scanner or hosted evidence.
+
+The Pierre tree hook initializes its model once, so the editor now explicitly
+resets changed paths and synchronizes controlled selection. The installed tree
+model test verifies retained selection during reset; a rendered boundary fixture
+verifies selecting an added path among 100 nested paths, current callbacks, and
+null selection. These tests do not prove large-tree browser scrolling or syntax
+highlighting. Builder lifecycle and proposal transitions now have polite status
+announcements, including pending-to-applied rendered coverage. Existing shared
+styles already handle reduced motion and visible focus.
+
+Combined validation: 773 tests passed and seven opt-in tests skipped. The new
+composition initially exposed nullable test assertions during TypeScript checks;
+an explicit runtime guard corrected them, and the focused seven-test authoring
+suite plus full TypeScript check passed. The reusable combined browser fixture
+is still being prepared; no combined live browser or provider result is claimed
+for this checkpoint. No remote push or deployment occurred.

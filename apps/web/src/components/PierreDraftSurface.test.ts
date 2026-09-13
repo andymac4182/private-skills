@@ -1,5 +1,159 @@
-import { describe, expect, it } from 'vitest'
-import { pierreEditStateKey } from './PierreDraftSurface'
+// @vitest-environment jsdom
+
+import { act, createElement, type ReactNode } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { FileTree as PierreFileTreeModel } from '@pierre/trees'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { DraftSurfaceEntry } from './PierreDraftSurface'
+
+interface FakeTreeOptions {
+  paths: readonly string[]
+  initialSelectedPaths?: readonly string[]
+  onSelectionChange?: (selected: readonly string[]) => void
+}
+
+class FakeTreeModel {
+  paths: string[]
+  selected: string[]
+  resets: string[][] = []
+  private readonly onSelectionChange?: (selected: readonly string[]) => void
+  private readonly listeners = new Set<() => void>()
+
+  constructor(options: FakeTreeOptions) {
+    this.paths = [...options.paths]
+    this.selected = [...(options.initialSelectedPaths ?? [])].filter((path) => this.paths.includes(path))
+    this.onSelectionChange = options.onSelectionChange
+  }
+
+  resetPaths(paths: readonly string[]): void {
+    this.paths = [...paths]
+    this.selected = this.selected.filter((path) => this.paths.includes(path))
+    this.resets.push([...paths])
+    this.notify()
+  }
+
+  getSelectedPaths(): readonly string[] {
+    return this.selected
+  }
+
+  getItem(path: string): { select: () => void; deselect: () => void } | null {
+    if (!this.paths.includes(path)) return null
+    return { select: () => this.select(path), deselect: () => this.deselect(path) }
+  }
+
+  select(path: string): void {
+    if (!this.paths.includes(path)) return
+    if (this.selected.includes(path)) return
+    this.selected = [...this.selected, path]
+    this.onSelectionChange?.(this.selected)
+    this.notify()
+  }
+
+  selectOnly(path: string): void {
+    if (!this.paths.includes(path) || (this.selected.length === 1 && this.selected[0] === path)) return
+    this.selected = [path]
+    this.onSelectionChange?.(this.selected)
+    this.notify()
+  }
+
+  deselect(path: string): void {
+    if (!this.selected.includes(path)) return
+    this.selected = this.selected.filter((selectedPath) => selectedPath !== path)
+    this.onSelectionChange?.(this.selected)
+    this.notify()
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener()
+  }
+}
+
+const treeModels: FakeTreeModel[] = []
+
+vi.mock('@pierre/trees/react', async () => {
+  const React = await import('react')
+  function useFileTree(options: FakeTreeOptions): { model: FakeTreeModel } {
+    const [model] = React.useState(() => {
+      const next = new FakeTreeModel(options)
+      treeModels.push(next)
+      return next
+    })
+    return { model }
+  }
+  function FileTree({ model }: { model: FakeTreeModel }): ReactNode {
+    const [, rerender] = React.useState(0)
+    React.useEffect(() => model.subscribe(() => rerender((value) => value + 1)), [model])
+    return React.createElement('ul', { 'data-testid': 'tree' }, model.paths.map((path) => React.createElement('li', { key: path }, React.createElement('button', { type: 'button', onClick: () => model.selectOnly(path) }, path))))
+  }
+  return { FileTree, useFileTree }
+})
+
+vi.mock('@pierre/diffs/react', () => ({
+  EditProvider: ({ children }: { children: ReactNode }) => children,
+  File: () => null,
+  FileDiff: () => null,
+}))
+vi.mock('@pierre/diffs/edit', () => ({ Editor: class Editor {} }))
+vi.mock('@pierre/diffs', () => ({ parseDiffFromFile: () => null }))
+vi.mock('./Primitives', () => ({ Badge: () => null, LoadingState: ({ label }: { label: string }) => createElement('span', null, label) }))
+vi.mock('./pierreAccessibility', () => ({ onPierrePostRender: vi.fn(), PIERRE_ACCESSIBLE_CSS: '' }))
+
+const { PierreDraftSurface, pierreEditStateKey } = await import('./PierreDraftSurface')
+
+const digest = `sha256:${'a'.repeat(64)}` as `sha256:${string}`
+
+function entries(paths: readonly string[]): DraftSurfaceEntry[] {
+  return paths.map((path) => ({ path, status: 'unchanged' }))
+}
+
+function surfaceProps(overrides: Partial<Parameters<typeof PierreDraftSurface>[0]> = {}): Parameters<typeof PierreDraftSurface>[0] {
+  const paths = ['SKILL.md']
+  return {
+    draftId: 'draft-1',
+    draftRevision: 1,
+    draftDigest: digest,
+    entries: entries(paths),
+    selectedPath: paths[0]!,
+    baseFile: null,
+    currentFile: null,
+    currentPreviewState: null,
+    currentPreviewSize: null,
+    basePreviewState: null,
+    basePreviewSize: null,
+    maxPreviewBytes: 256 * 1024,
+    mode: 'diff',
+    editable: false,
+    busy: false,
+    baseLoading: false,
+    baseError: null,
+    onSelect: vi.fn(),
+    onEditChange: vi.fn(),
+    onContentChange: vi.fn(),
+    ...overrides,
+  }
+}
+
+function mountSurface(container: HTMLElement, props: Parameters<typeof PierreDraftSurface>[0]): Root {
+  const root = createRoot(container)
+  root.render(createElement(PierreDraftSurface, props))
+  return root
+}
+
+beforeEach(() => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  treeModels.length = 0
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  document.body.replaceChildren()
+})
 
 describe('Pierre draft editor identity', () => {
   it('isolates edit state across drafts, revisions, and content digests', () => {
@@ -8,5 +162,77 @@ describe('Pierre draft editor identity', () => {
     expect(pierreEditStateKey('draft-1', 2, 'sha256:first', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:second', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:first', 'README.md')).not.toBe(first)
+  })
+})
+
+describe('Pierre draft file tree updates', () => {
+  it('uses the tree model reset contract to retain selection while adding paths', () => {
+    const model = new PierreFileTreeModel({ paths: ['packs/000/SKILL.md'], initialExpansion: 'open', initialSelectedPaths: ['packs/000/SKILL.md'] })
+    try {
+      expect(model.getItem('packs/100/nested/SKILL.md')).toBeNull()
+      model.resetPaths(['packs/000/SKILL.md', 'packs/100/nested/SKILL.md'])
+      expect(model.getItem('packs/100/nested/SKILL.md')).not.toBeNull()
+      expect(model.getSelectedPaths()).toEqual(['packs/000/SKILL.md'])
+    } finally {
+      model.cleanUp()
+    }
+  })
+
+  it('keeps a newly added deeply nested path selectable after the draft changes', async () => {
+    const initialPaths = Array.from({ length: 100 }, (_, index) => `packs/${String(index).padStart(3, '0')}/nested/skill/SKILL.md`)
+    const addedPath = 'packs/100/nested/skill/deeper/SKILL.md'
+    const initialSelect = vi.fn()
+    const resumedSelect = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ entries: entries(initialPaths), selectedPath: initialPaths[0], onSelect: initialSelect }))
+
+    try {
+      await act(async () => {})
+      expect(container.querySelectorAll('[data-testid="tree"] li')).toHaveLength(100)
+
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ entries: entries([...initialPaths, addedPath]), selectedPath: initialPaths[0], onSelect: resumedSelect })))
+      })
+
+      expect(treeModels[0]?.resets).toEqual([[...initialPaths, addedPath]])
+      expect(treeModels[0]?.selected).toEqual([initialPaths[0]])
+      expect(container.querySelectorAll('[data-testid="tree"] li')).toHaveLength(101)
+      const addedButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === addedPath)
+      expect(addedButton).toBeDefined()
+      await act(async () => { (addedButton as HTMLButtonElement).click() })
+      expect(resumedSelect).toHaveBeenLastCalledWith(addedPath)
+      expect(initialSelect).not.toHaveBeenCalledWith(addedPath)
+
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ entries: entries([...initialPaths, addedPath]), selectedPath: addedPath, onSelect: resumedSelect })))
+      })
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ entries: entries([...initialPaths, addedPath]), selectedPath: initialPaths[0], onSelect: resumedSelect })))
+      })
+      expect(treeModels[0]?.selected).toEqual([initialPaths[0]])
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
+  it('clears the tree selection when the parent has no selected path', async () => {
+    const onSelect = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ entries: entries(['SKILL.md', 'README.md']), selectedPath: 'SKILL.md', onSelect }))
+
+    try {
+      await act(async () => {})
+      expect(treeModels[0]?.selected).toEqual(['SKILL.md'])
+
+      await act(async () => {
+        root.render(createElement(PierreDraftSurface, surfaceProps({ entries: entries(['SKILL.md', 'README.md']), selectedPath: null, onSelect })))
+      })
+
+      expect(treeModels[0]?.selected).toEqual([])
+    } finally {
+      await act(async () => { root.unmount() })
+    }
   })
 })

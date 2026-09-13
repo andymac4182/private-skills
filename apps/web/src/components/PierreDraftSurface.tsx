@@ -100,27 +100,54 @@ export function pierreEditStateKey(draftId: string, revision: number, digest: `s
 }
 
 export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurfaceProps>(function PierreDraftSurface({ draftId, draftRevision, draftDigest, entries, selectedPath, baseFile, currentFile, currentPreviewState, currentPreviewSize, basePreviewState, basePreviewSize, maxPreviewBytes, mode, editable, busy, baseLoading, baseError, onSelect, onEditChange, onContentChange }, ref) {
-  const paths = entries.map((entry) => entry.path)
+  const paths = useMemo(() => entries.map((entry) => entry.path), [entries])
+  const pathsRef = useRef(paths)
+  const onSelectRef = useRef(onSelect)
+  const syncingSelection = useRef(false)
+  pathsRef.current = paths
+  onSelectRef.current = onSelect
   const { model } = useFileTree({
     paths,
     initialExpansion: 'open',
     initialSelectedPaths: selectedPath ? [selectedPath] : [],
     onSelectionChange: (selected: readonly string[]) => {
+      if (syncingSelection.current) return
       const candidate = selected[selected.length - 1]
-      if (candidate && paths.includes(candidate)) onSelect(candidate)
+      if (candidate && pathsRef.current.includes(candidate)) onSelectRef.current(candidate)
     },
   })
+  const previousPaths = useRef<readonly string[] | null>(null)
   const current = useMemo(() => toFile(currentFile, maxPreviewBytes), [currentFile?.path, currentFile?.content, maxPreviewBytes])
   const base = useMemo(() => toFile(baseFile, maxPreviewBytes), [baseFile?.path, baseFile?.content, maxPreviewBytes])
   const latestContents = useRef<string | null>(current?.contents ?? null)
+
+  useEffect(() => {
+    const previous = previousPaths.current
+    if (previous === null) {
+      previousPaths.current = paths
+      return
+    }
+    const unchanged = previous.length === paths.length && previous.every((path, index) => path === paths[index])
+    if (unchanged) return
+    model.resetPaths(paths)
+    previousPaths.current = paths
+  }, [model, paths])
 
   useEffect(() => {
     latestContents.current = current?.contents ?? null
   }, [current?.name, current?.cacheKey])
 
   useEffect(() => {
-    if (!selectedPath) return
-    model.getItem(selectedPath)?.select()
+    const selected = model.getSelectedPaths()
+    const stale = selected.filter((path) => path !== selectedPath)
+    if (stale.length === 0 && (!selectedPath || selected.includes(selectedPath))) return
+    syncingSelection.current = true
+    try {
+      for (const path of stale) model.getItem(path)?.deselect()
+      if (selectedPath) model.getItem(selectedPath)?.select()
+    } finally {
+      syncingSelection.current = false
+    }
   }, [model, selectedPath])
 
   useImperativeHandle(ref, () => ({

@@ -35,7 +35,10 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close the remaining C1 evidence.** Merged main is
+- **Now: refine locally and prepare the remaining C1/M6/M7 evidence.**
+  Work is directly on local `main`; pushes and deployments are paused at the
+  owner's request. Subsequent [local checks](evidence/local-refinement-20260913.md)
+  remain separate from hosted acceptance. At the last remote checkpoint, main was
   `499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48 (`fa56c21`),
   PR49, and PR50. The latest production READY source is PR48 `fa56c21`; Vercel
   rate limiting delayed deployments containing PR49 and PR50. C1

@@ -45,6 +45,11 @@ const OTHER_NAMESPACE_TOKEN = 'authoring-other-namespace-token';
 const OTHER_TENANT_TOKEN = 'authoring-other-tenant-token';
 const WORKER_TOKEN = 'authoring-worker-token';
 const REVIEW_TOKEN = 'authoring-upload-review-token';
+const BUILDER_ORIGIN = 'http://authoring-builder-e2e.test';
+const BUILDER_SERVICE_TOKEN = 'authoring-builder-service-token';
+const BUILDER_EVE_TOKEN = 'authoring-builder-eve-token';
+const BUILDER_CALLBACK_TOKEN = 'authoring-builder-callback-token';
+const BUILDER_PROPOSAL_CONTENT = '---\nname: base-skill\ndescription: Builder proposal\n---\n\nNever execute this fixture.\n';
 const POLICY: Policy = {
   revision: 'authoring-required-scanner',
   scanners: [{
@@ -67,6 +72,7 @@ interface AuthoringFixture {
   root: string;
   baseRelease: SkillVersion;
   baseBundle: SkillBundle;
+  builderCalls: Array<{ url: string; method: string; authorization: string | null }>;
   close: () => Promise<void>;
 }
 
@@ -180,7 +186,7 @@ async function json<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
-async function makeFixture(options: { uploadReview?: boolean } = {}): Promise<AuthoringFixture> {
+async function makeFixture(options: { uploadReview?: boolean; builder?: boolean } = {}): Promise<AuthoringFixture> {
   const root = await mkdtemp(join(tmpdir(), 'private-skills-authoring-e2e-'));
   const baseBundle = bundleWith('Base release', 'Base guide', true);
   const baseBytes = encodeBundle(baseBundle);
@@ -248,11 +254,15 @@ async function makeFixture(options: { uploadReview?: boolean } = {}): Promise<Au
     {
       id: 'publisher', token: PUBLISHER_TOKEN, organizationId: ORGANIZATION, subject: 'publisher',
       roles: ['owner', 'admin', 'publisher', 'reader'], namespaces: ['@acme'],
-      scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish'],
+      scopes: ['registry:*', 'skills:read', 'skills:write', 'skills:publish', 'skills:builder'],
     },
     {
       id: 'reader', token: READER_TOKEN, organizationId: ORGANIZATION, subject: 'reader',
       roles: ['reader'], namespaces: ['@acme'], scopes: ['registry:*', 'skills:read'],
+    },
+    {
+      id: 'builder-callback', token: BUILDER_CALLBACK_TOKEN, organizationId: ORGANIZATION, subject: 'builder-callback',
+      roles: ['publisher'], namespaces: ['@acme'], scopes: ['skills:builder'],
     },
     {
       id: 'other-namespace', token: OTHER_NAMESPACE_TOKEN, organizationId: ORGANIZATION, subject: 'other-namespace',
@@ -306,12 +316,116 @@ async function makeFixture(options: { uploadReview?: boolean } = {}): Promise<Au
         return { sessionId, status: 'started' };
       },
     };
-  const registryHandler = createRegistryHandler({
+  const builderCalls: AuthoringFixture['builderCalls'] = [];
+  let registryHandler: RegistryHandler;
+  const builder = options.builder === true
+    ? {
+      appOrigin: BUILDER_ORIGIN,
+      serviceToken: BUILDER_SERVICE_TOKEN,
+      eveToken: BUILDER_EVE_TOKEN,
+      fetch: async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        const upstreamRequest = new Request(url, init);
+        builderCalls.push({
+          url,
+          method: upstreamRequest.method,
+          authorization: upstreamRequest.headers.get('authorization'),
+        });
+        const body = init?.body === undefined || init.body === null
+          ? undefined
+          : await new Response(init.body).text();
+
+        if (url === `${BUILDER_ORIGIN}/internal/builder/status`) {
+          return Response.json({ enabled: true, model: 'fixture/model' });
+        }
+
+        if (url === `${BUILDER_ORIGIN}/internal/builder/sessions`) {
+          const payload = JSON.parse(body ?? '{}') as {
+            sessionKey?: string;
+            registrySessionId?: string;
+            draftId?: string;
+            revision?: number;
+            digest?: string;
+            requestId?: string;
+            requestDigest?: string;
+            selectedPath?: string;
+          };
+          const current = await repository.read(ORGANIZATION);
+          const session = current.builderSessions?.find((candidate) =>
+            candidate.sessionKey === payload.sessionKey &&
+            candidate.id === payload.registrySessionId &&
+            candidate.draftId === payload.draftId &&
+            candidate.draftRevision === payload.revision &&
+            candidate.draftDigest === payload.digest,
+          );
+          if (!session || payload.requestId === undefined || payload.requestDigest === undefined) {
+            return Response.json({ error: 'invalid-session-binding' }, { status: 409 });
+          }
+
+          const proposalResponse = await registryHandler(new Request(`${ORIGIN}/v1/drafts/${session.draftId}/proposals`, {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${BUILDER_CALLBACK_TOKEN}`,
+              'content-type': 'application/json',
+              'idempotency-key': `builder-proposal-${session.id}`,
+              'x-pskills-tool-identity': 'skill-builder',
+            },
+            body: JSON.stringify({
+              draftId: session.draftId,
+              revision: session.draftRevision,
+              digest: session.draftDigest,
+              sessionId: session.id,
+              operations: [{ op: 'edit', path: 'SKILL.md', content: BUILDER_PROPOSAL_CONTENT }],
+            }),
+          }));
+          if (proposalResponse.status !== 201 && proposalResponse.status !== 200) {
+            return Response.json({ error: 'proposal-create-failed' }, { status: 502 });
+          }
+
+          return Response.json({
+            status: 'accepted',
+            sessionKey: payload.sessionKey,
+            registrySessionId: payload.registrySessionId,
+            draftId: payload.draftId,
+            revision: payload.revision,
+            digest: payload.digest,
+            requestId: payload.requestId,
+            requestDigest: payload.requestDigest,
+            selectedPath: payload.selectedPath,
+            sessionId: 'authoring-eve-session',
+          });
+        }
+
+        if (url.startsWith(`${BUILDER_ORIGIN}/eve/v1/session/authoring-eve-session/stream`)) {
+          const stream = [
+            JSON.stringify({
+              type: 'message.received',
+              meta: { id: 'authoring-turn-user', at: '2026-09-10T00:01:00.000Z' },
+              data: { message: 'Suggest a bounded edit', turnId: 'authoring-turn-1' },
+            }),
+            JSON.stringify({
+              type: 'message.completed',
+              meta: { id: 'authoring-turn-assistant', at: '2026-09-10T00:01:01.000Z' },
+              data: { message: 'I prepared a bounded proposal.' },
+            }),
+          ].join('\n') + '\n';
+          return new Response(stream, {
+            status: 200,
+            headers: { 'content-type': 'application/x-ndjson' },
+          });
+        }
+
+        return Response.json({ error: 'unexpected-builder-request' }, { status: 404 });
+      },
+    }
+    : undefined;
+  registryHandler = createRegistryHandler({
     repository,
     blobs,
     auth,
     config,
     ...(uploadReviewIntegration === undefined ? {} : { uploadReview: uploadReviewIntegration }),
+    ...(builder === undefined ? {} : { builder }),
   });
   const internalReviewHandler = uploadReview === undefined
     ? undefined
@@ -336,6 +450,7 @@ async function makeFixture(options: { uploadReview?: boolean } = {}): Promise<Au
     root,
     baseRelease,
     baseBundle,
+    builderCalls,
     close: async () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -955,6 +1070,352 @@ describe('authoring draft to scanner-gated release over HTTP', () => {
     expect(selected.files).toHaveLength(1);
     expect(selected.files[0]).toMatchObject({ path: 'docs/guide.md', contents: 'Edited guide\n' });
     expect(selected.files[0]?.contentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  });
+
+  it('keeps a builder proposal detached until apply, then reviews and scans the exact applied revision before release', async () => {
+    const fixture = await makeFixture({ uploadReview: true, builder: true });
+    fixtures.push(fixture);
+    const initialBundle = bundleWith('Builder-backed upload', 'Initial builder guide', true);
+    const createdResponse = await call(
+      fixture.handler,
+      '/v1/drafts',
+      PUBLISHER_TOKEN,
+      {
+        method: 'POST',
+        headers: { 'idempotency-key': 'builder-composition-create' },
+        json: { name: '@acme/builder-composition', files: initialBundle.files },
+      },
+    );
+    expect(createdResponse.status, await createdResponse.clone().text()).toBe(201);
+    const created = await json<{
+      draft: { id: string; origin: string; revision: number; digest: string; files: SkillDraftFileManifestEntry[] };
+    }>(createdResponse);
+    expect(created.draft).toMatchObject({ origin: 'upload', revision: 1, status: 'open' });
+
+    const availabilityResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/builder/availability`,
+      PUBLISHER_TOKEN,
+    );
+    expect(availabilityResponse.status, await availabilityResponse.clone().text()).toBe(200);
+    expect(await json<{ enabled: boolean; model?: string }>(availabilityResponse)).toEqual({ enabled: true, model: 'fixture/model' });
+
+    const binding = (draft: { id: string; revision: number; digest: string }): string =>
+      `revision=${encodeURIComponent(String(draft.revision))}&digest=${encodeURIComponent(draft.digest)}`;
+    const contextResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/builder-context?${binding(created.draft)}`,
+      PUBLISHER_TOKEN,
+    );
+    expect(contextResponse.status, await contextResponse.clone().text()).toBe(200);
+    const context = await json<{
+      draftId: string;
+      revision: number;
+      digest: string;
+      files: Array<{ path: string; sizeBytes: number; digest: string; contentAvailable: boolean }>;
+    }>(contextResponse);
+    expect(context).toMatchObject({ draftId: created.draft.id, revision: 1, digest: created.draft.digest });
+    expect(context.files.map((file) => file.path)).toEqual(['SKILL.md', 'docs/guide.md', 'rules.json']);
+    expect(context.files.every((file) => file.contentAvailable)).toBe(true);
+
+    const initialSkill = initialBundle.files.find((file) => file.path === 'SKILL.md')!;
+    const builderFileResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/builder-file?path=SKILL.md&${binding(created.draft)}`,
+      PUBLISHER_TOKEN,
+    );
+    expect(builderFileResponse.status, await builderFileResponse.clone().text()).toBe(200);
+    expect(await json<{ path: string; contentDigest: string; content: string }>(builderFileResponse)).toMatchObject({
+      path: 'SKILL.md',
+      contentDigest: await digestBytes(Uint8Array.from(Buffer.from(initialSkill.content, 'base64'))),
+      content: Buffer.from(initialSkill.content, 'base64').toString('utf8'),
+    });
+
+    const sessionResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/builder/session?${binding(created.draft)}`,
+      PUBLISHER_TOKEN,
+      {
+        method: 'POST',
+        json: { revision: created.draft.revision, digest: created.draft.digest, requestId: 'builder-composition-session' },
+      },
+    );
+    expect(sessionResponse.status, await sessionResponse.clone().text()).toBe(200);
+    const session = await json<{
+      session: { id: string; state: string; binding: { draftId: string; revision: number; digest: string }; proposal: unknown };
+    }>(sessionResponse);
+    expect(session.session).toMatchObject({
+      state: 'ready',
+      binding: { draftId: created.draft.id, revision: 1, digest: created.draft.digest },
+      proposal: null,
+    });
+
+    const promptResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/builder/session/${encodeURIComponent(session.session.id)}/prompt?${binding(created.draft)}`,
+      PUBLISHER_TOKEN,
+      {
+        method: 'POST',
+        json: {
+          revision: created.draft.revision,
+          digest: created.draft.digest,
+          requestId: 'builder-composition-prompt',
+          prompt: 'Suggest a bounded edit',
+          selectedPath: 'SKILL.md',
+        },
+      },
+    );
+    expect(promptResponse.status, await promptResponse.clone().text()).toBe(202);
+    const prompted = await json<{
+      session: {
+        id: string;
+        state: string;
+        binding: { draftId: string; revision: number; digest: string };
+        proposal: {
+          id: string;
+          draftId: string;
+          baseRevision: number;
+          baseDigest: string;
+          proposedDigest: string;
+          state: string;
+          sessionId: string;
+          operations: Array<{ op: string; path: string; contentBytes?: number }>;
+        } | null;
+      };
+    }>(promptResponse);
+    const proposal = prompted.session.proposal;
+    expect(proposal).toMatchObject({
+      id: expect.any(String),
+      draftId: created.draft.id,
+      baseRevision: 1,
+      baseDigest: created.draft.digest,
+      state: 'pending',
+      sessionId: session.session.id,
+      operations: [{ op: 'edit', path: 'SKILL.md', contentBytes: new TextEncoder().encode(BUILDER_PROPOSAL_CONTENT).byteLength }],
+    });
+    if (proposal === null) throw new Error('Builder prompt did not return a proposal');
+    expect(proposal.proposedDigest).not.toBe(created.draft.digest);
+    expect(fixture.builderCalls.filter((entry) => entry.url === `${BUILDER_ORIGIN}/internal/builder/status`)).toHaveLength(1);
+    expect(fixture.builderCalls.filter((entry) => entry.url === `${BUILDER_ORIGIN}/internal/builder/sessions`)).toHaveLength(1);
+    expect(fixture.builderCalls.filter((entry) => entry.url.startsWith(`${BUILDER_ORIGIN}/eve/`))).toHaveLength(1);
+    expect(fixture.builderCalls.find((entry) => entry.url === `${BUILDER_ORIGIN}/internal/builder/sessions`)?.authorization).toBe(`Bearer ${BUILDER_SERVICE_TOKEN}`);
+    expect(fixture.builderCalls.find((entry) => entry.url.startsWith(`${BUILDER_ORIGIN}/eve/`))?.authorization).toBe(`Bearer ${BUILDER_EVE_TOKEN}`);
+
+    const beforeApplyResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}`,
+      PUBLISHER_TOKEN,
+    );
+    expect(beforeApplyResponse.status).toBe(200);
+    const beforeApply = await json<{ draft: { revision: number; digest: string; files: SkillDraftFileManifestEntry[] } }>(beforeApplyResponse);
+    expect(beforeApply.draft).toMatchObject({ revision: 1, digest: created.draft.digest, files: created.draft.files });
+    const beforeApplyState = await fixture.repository.read(ORGANIZATION) as ReviewState;
+    expect(beforeApplyState.skills).toHaveLength(1);
+    expect(beforeApplyState.jobs).toHaveLength(0);
+    expect(beforeApplyState.drafts?.find((draft) => draft.id === created.draft.id)).toMatchObject({ revision: 1, digest: created.draft.digest });
+
+    const staleApplyResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/proposals/${encodeURIComponent(proposal.id)}/apply`,
+      PUBLISHER_TOKEN,
+      {
+        method: 'POST',
+        headers: { 'idempotency-key': 'builder-composition-stale-apply' },
+        json: { revision: 1, digest: `sha256:${'0'.repeat(64)}`, sessionId: session.session.id },
+      },
+    );
+    expect(staleApplyResponse.status, await staleApplyResponse.clone().text()).toBe(409);
+    expect((await fixture.repository.read(ORGANIZATION) as ReviewState).drafts?.find((draft) => draft.id === created.draft.id)).toMatchObject({ revision: 1, digest: created.draft.digest });
+
+    const applyResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/proposals/${encodeURIComponent(proposal.id)}/apply`,
+      PUBLISHER_TOKEN,
+      {
+        method: 'POST',
+        headers: { 'idempotency-key': 'builder-composition-apply' },
+        json: { revision: 1, digest: created.draft.digest, sessionId: session.session.id },
+      },
+    );
+    expect(applyResponse.status, await applyResponse.clone().text()).toBe(200);
+    const applied = await json<{
+      proposal: { id: string; state: string; baseRevision: number; baseDigest: string; proposedDigest: string };
+      draft: { id: string; revision: number; digest: string; files: SkillDraftFileManifestEntry[] };
+    }>(applyResponse);
+    expect(applied.proposal).toMatchObject({ id: proposal.id, state: 'applied', baseRevision: 1, baseDigest: created.draft.digest });
+    expect(applied.draft).toMatchObject({ id: created.draft.id, revision: 2, digest: proposal.proposedDigest });
+
+    const appliedDraftResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}`,
+      PUBLISHER_TOKEN,
+    );
+    expect(appliedDraftResponse.status).toBe(200);
+    const appliedDraft = await json<{ draft: { revision: number; digest: string; files: SkillDraftFileManifestEntry[] } }>(appliedDraftResponse);
+    expect(appliedDraft.draft).toMatchObject({ revision: 2, digest: proposal.proposedDigest, files: applied.draft.files });
+    const appliedFileResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/files?path=SKILL.md&revision=2&digest=${encodeURIComponent(proposal.proposedDigest)}`,
+      PUBLISHER_TOKEN,
+    );
+    expect(appliedFileResponse.status, await appliedFileResponse.clone().text()).toBe(200);
+    const appliedFile = (await json<{ file: { path: string; content: string } }>(appliedFileResponse)).file;
+    expect(appliedFile).toMatchObject({
+      path: 'SKILL.md',
+      content: base64(BUILDER_PROPOSAL_CONTENT),
+    });
+    expect(applied.draft.files.find((file) => file.path === 'SKILL.md')?.digest)
+      .toBe(await digestBytes(new TextEncoder().encode(BUILDER_PROPOSAL_CONTENT)));
+
+    const afterApplyState = await fixture.repository.read(ORGANIZATION) as ReviewState;
+    const reviewJob = afterApplyState.uploadReviewJobs?.find((job) => job.binding.draftId === created.draft.id && job.binding.draftRevision === 2);
+    expect(reviewJob).toMatchObject({
+      state: 'pending',
+      binding: { draftId: created.draft.id, draftRevision: 2, contentDigest: proposal.proposedDigest, policyRevision: POLICY.revision },
+    });
+    expect(reviewJob?.eveSessionId).toBe('authoring-e2e-review-2');
+
+    const preparedResponse = await call(
+      fixture.handler,
+      '/internal/upload-review/prepare',
+      REVIEW_TOKEN,
+      { method: 'POST', json: { sessionId: reviewJob?.eveSessionId } },
+    );
+    expect(preparedResponse.status, await preparedResponse.clone().text()).toBe(200);
+    const prepared = await json<{
+      status: string;
+      jobId: string;
+      draftId: string;
+      draftRevision: number;
+      contentDigest: string;
+      policyRevision: string;
+      leaseToken?: string;
+      files?: Array<{ path: string; kind: string; size: number; digest: string; text?: string }>;
+    }>(preparedResponse);
+    expect(prepared).toMatchObject({
+      status: 'prepared',
+      jobId: reviewJob!.id,
+      draftId: created.draft.id,
+      draftRevision: 2,
+      contentDigest: proposal.proposedDigest,
+      policyRevision: POLICY.revision,
+    });
+    const preparedSkill = prepared.files?.find((file) => file.path === 'SKILL.md');
+    expect(preparedSkill).toMatchObject({
+      path: 'SKILL.md',
+      kind: 'text',
+      size: new TextEncoder().encode(BUILDER_PROPOSAL_CONTENT).byteLength,
+      digest: await digestBytes(new TextEncoder().encode(BUILDER_PROPOSAL_CONTENT)),
+      text: BUILDER_PROPOSAL_CONTENT,
+    });
+    expect(prepared.leaseToken).toEqual(expect.any(String));
+
+    const completedResponse = await call(
+      fixture.handler,
+      '/internal/upload-review/complete',
+      REVIEW_TOKEN,
+      {
+        method: 'POST',
+        json: {
+          sessionId: reviewJob?.eveSessionId,
+          jobId: reviewJob!.id,
+          leaseToken: prepared.leaseToken,
+          findings: [],
+        },
+      },
+    );
+    expect(completedResponse.status, await completedResponse.clone().text()).toBe(200);
+    const completed = await json<{ status: string; resultId: string; findingCount: number }>(completedResponse);
+    expect(completed).toMatchObject({ status: 'passed', findingCount: 0 });
+
+    const reviewsResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/reviews`,
+      PUBLISHER_TOKEN,
+    );
+    expect(reviewsResponse.status).toBe(200);
+    const reviews = await json<{ results: UploadReviewResult[] }>(reviewsResponse);
+    expect(reviews.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: completed.resultId,
+        state: 'passed',
+        binding: { draftId: created.draft.id, draftRevision: 2, contentDigest: proposal.proposedDigest, policyRevision: POLICY.revision },
+      }),
+    ]));
+
+    const publishResponse = await call(
+      fixture.handler,
+      `/v1/drafts/${encodeURIComponent(created.draft.id)}/publish`,
+      PUBLISHER_TOKEN,
+      draftPublishRequest(2, 'builder-composition-publish', '1.1.0'),
+    );
+    expect(publishResponse.status, await publishResponse.clone().text()).toBe(202);
+    const publication = await json<{ operation: { id: string; resourceId: string; revision: number; digest: string; state: string; scanRequired: boolean } }>(publishResponse);
+    expect(publication.operation).toMatchObject({
+      revision: 2,
+      digest: proposal.proposedDigest,
+      state: 'queued',
+      scanRequired: true,
+    });
+
+    const scannerInputs: Array<Pick<ScanRequest, 'jobId' | 'artifactDigest' | 'policyRevision'>> = [];
+    const scanRun = await runner(fixture, [deterministicScanner((input) => {
+      scannerInputs.push({ jobId: input.jobId, artifactDigest: input.artifactDigest, policyRevision: input.policyRevision });
+    })]).runOnce();
+    expect(scanRun.error).toBeUndefined();
+    expect(scanRun.allow).toBe(true);
+    expect(scannerInputs).toEqual([{
+      jobId: publication.operation.id,
+      artifactDigest: proposal.proposedDigest,
+      policyRevision: POLICY.revision,
+    }]);
+    expect(scanRun.scannerResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scannerId: 'skillsguard',
+        status: 'completed',
+        artifactDigest: proposal.proposedDigest,
+        coverage: expect.objectContaining({
+          filesEnumerated: initialBundle.files.length,
+          filesAnalyzed: initialBundle.files.length,
+          filesSkipped: 0,
+          filesUnsupported: 0,
+        }),
+      }),
+    ]));
+
+    const finalState = await fixture.repository.read(ORGANIZATION) as ReviewState;
+    const approved = finalState.skills.find((skill) => skill.id === publication.operation.resourceId);
+    expect(approved).toMatchObject({
+      state: 'approved',
+      version: '1.1.0',
+      artifact: { digest: proposal.proposedDigest },
+      scanIds: [expect.any(String)],
+    });
+    expect(finalState.jobs.find((job) => job.id === publication.operation.id)).toMatchObject({ state: 'completed' });
+
+    const manifestResponse = await call(
+      fixture.handler,
+      `/v1/skills/${encodeURIComponent(publication.operation.resourceId)}/files`,
+      READER_TOKEN,
+    );
+    expect(manifestResponse.status, await manifestResponse.clone().text()).toBe(200);
+    const manifest = await json<{ release: { digest: string; version: string; fileCount: number }; files: Array<{ path: string }> }>(manifestResponse);
+    expect(manifest.release).toMatchObject({ digest: proposal.proposedDigest, version: '1.1.0', fileCount: initialBundle.files.length });
+    expect(manifest.files.map((file) => file.path)).toEqual(['SKILL.md', 'docs/guide.md', 'rules.json']);
+
+    const selectedResponse = await call(
+      fixture.handler,
+      `/v1/skills/${encodeURIComponent(publication.operation.resourceId)}/file?path=SKILL.md`,
+      READER_TOKEN,
+    );
+    expect(selectedResponse.status, await selectedResponse.clone().text()).toBe(200);
+    const selected = await json<{ files: Array<{ path: string; contents?: string; contentDigest: string }> }>(selectedResponse);
+    expect(selected.files).toHaveLength(1);
+    expect(selected.files[0]).toMatchObject({
+      path: 'SKILL.md',
+      contents: BUILDER_PROPOSAL_CONTENT,
+      contentDigest: await digestBytes(new TextEncoder().encode(BUILDER_PROPOSAL_CONTENT)),
+    });
   });
 
   it('reloads a draft after a valid reversed file-list PUT without changing its sealed digest', async () => {

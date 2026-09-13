@@ -11,8 +11,13 @@ product work, but they remain separate from the G0/C1 release gates until
 their own criteria and evidence pass. They do not silently expand the current
 release checklist.
 
+Local work continues directly on `main`, with pushes and deployments paused
+by the owner. The [local evidence](evidence/local-refinement-20260913.md) records
+subsequent checks; historical remote observations below have not been refreshed
+during this pause. Local evidence does not close hosted criteria.
+
 The latest source, portability, and deployment status is recorded in
-[`verification-current.md`](verification-current.md). Current merged main is
+[`verification-current.md`](verification-current.md). At the last recorded remote checkpoint, merged main was
 `499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48
 (`fa56c21fca3aed568a16237cd06c4707d83e5fcb`), PR49
 (`853f4ae4a4155671114b15442f2ef9490d4b329e`), and PR50

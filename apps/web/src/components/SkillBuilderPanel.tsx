@@ -233,6 +233,20 @@ function proposalSummary(operation: SkillBuilderProposalOperation): string {
   return operation.path
 }
 
+function builderLiveMessage(session: SkillBuilderSession | null, proposal: SkillBuilderProposal | null, stopped: boolean): string {
+  if (stopped) return 'The builder request was cancelled.'
+  if (proposal?.state === 'pending') return 'Eve has prepared a proposal for review.'
+  if (proposal?.state === 'applied') return 'The proposal was applied and the draft was reloaded.'
+  if (proposal?.state === 'rejected') return 'The Eve proposal was rejected.'
+  if (proposal?.state === 'stale') return 'The Eve proposal is stale. Reload the draft before applying it.'
+  if (!session) return 'Loading the builder conversation.'
+  if (session.state === 'running') return 'Eve is working on the draft.'
+  if (session.state === 'completed') return 'The Eve builder session is complete.'
+  if (session.state === 'failed') return 'The Eve builder session failed.'
+  if (session.state === 'stopped') return 'The Eve builder session stopped.'
+  return 'The Eve builder is ready.'
+}
+
 function initialAvailability(enabled: boolean | undefined, disabledReason: string | undefined, hasAvailabilityResolver: boolean): SkillBuilderAvailability | null {
   if (enabled === false) return { enabled: false, reason: disabledReason ?? 'The skill builder is disabled for this registry.' }
   if (enabled === true) return { enabled: true }
@@ -574,10 +588,11 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 
   if (!draft) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Choose a draft to build with Eve" message="Open a saved draft to give the builder a revision and digest to work against." /></section>
   if (availability?.enabled === false) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Skill builder unavailable" message={availability.reason ?? 'The skill builder is disabled for this registry.'} /></section>
-  if (availability === null || (loading && !session)) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
-  if (!session) return <section className={styles.panel} aria-label="Skill builder"><div className={styles.errorBlock}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
+  if (availability === null || (loading && !session)) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div aria-atomic="true" aria-live="polite" className={styles.liveRegion} role="status">Loading the builder conversation.</div><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
+  if (!session) return <section className={styles.panel} aria-label="Skill builder"><div className={styles.errorBlock} role={error ? 'alert' : undefined}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
 
   return <section className={styles.panel} aria-busy={busy} aria-label="Skill builder">
+    <div aria-atomic="true" aria-live="polite" className={styles.liveRegion} role="status">{builderLiveMessage(session, effectiveProposal, stopped)}</div>
     <header className={styles.header}>
       <div>
         <span className={styles.eyebrow}>Eve builder</span>
