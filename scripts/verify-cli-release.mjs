@@ -155,6 +155,15 @@ function assertSingleZipMember(path, expectedMember) {
     : lines(run(command, ['-Z1', path]));
   if (memberList.length !== 1) throw new Error('zip release archive must contain exactly one member');
   assertSafeMemberName(memberList[0], expectedMember);
+
+  // The name-only listing cannot distinguish a regular file from a symlink or
+  // special entry. Check the archive's type marker before accepting it.
+  const detailRows = command === 'tar'
+    ? lines(run(command, ['-tvf', path])).filter((line) => line.trimEnd().endsWith(expectedMember))
+    : lines(run(command, ['-Z', '-l', path])).filter((line) => line.trimEnd().endsWith(expectedMember));
+  if (detailRows.length !== 1 || !detailRows[0].trimStart().startsWith('-')) {
+    throw new Error('zip release member must be a regular file');
+  }
 }
 
 function verifyDownloadedFiles(artifactDirectory) {
