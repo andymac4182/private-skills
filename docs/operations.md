@@ -102,7 +102,11 @@ Semantic search is disabled unless `PSKILLS_AI_ENABLED=true`. When it is
 enabled, configure `PSKILLS_EMBEDDING_MODEL` and
 `PSKILLS_EMBEDDING_DIMENSIONS` only when overriding the defaults, plus either
 `AI_GATEWAY_API_KEY` or the deployment's Vercel OIDC credential. The default
-profile is `openai/text-embedding-3-small` with 1,536 dimensions. PostgreSQL
+profile is `openai/text-embedding-3-small` with 1,536 dimensions. Configured
+dimensions must be an integer from 1 through 2,000, matching the search index.
+An optional `PSKILLS_AI_GATEWAY_BASE_URL` must use HTTPS; HTTP is accepted only
+for loopback development. Any production marker in `PSKILLS_ENVIRONMENT`,
+`NODE_ENV`, or `VERCEL_ENV` disables that HTTP exception. PostgreSQL
 uses pgvector; deployments without PostgreSQL use the exact StateRepository
 fallback. The pinned self-hosted `compose.yaml` Postgres image does not ship
 the pgvector extension, so compose explicitly selects `PSKILLS_SEARCH_PROVIDER=state`
