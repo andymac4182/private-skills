@@ -1,10 +1,17 @@
 import { createHash } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Feed, Job, Policy, Resolution, SkillVersion, TransferDescriptor } from '../packages/contracts/src/index.js';
 import type { RegistryDirectoryClient } from '../packages/core/src/index.js';
+import {
+  createFileStateRepository,
+  defaultRegistryState,
+  type StateRepository,
+} from '../packages/database/src/index.js';
 import type { SkillDetailResponse, V1Skill } from '../packages/directory/src/types.js';
 import { digestBytes, decodeBundle } from '../packages/storage/src/index.js';
 import type { ScannerAdapter } from '../packages/scanners/src/types.js';
@@ -46,6 +53,11 @@ const POLICY: Policy = {
   evidenceMaxAgeSeconds: 3_600,
   hooks: [],
 };
+
+function durableFixtureState(): ReturnType<typeof defaultRegistryState> {
+  const base = defaultRegistryState({ production: false, allowUnscanned: false });
+  return { ...base, policy: structuredClone(POLICY) };
+}
 
 type SourceKind = 'github' | 'well-known';
 
@@ -249,7 +261,15 @@ function makeFixture(kind: SourceKind, slug: string): SourceFixture {
   return { kind, externalId, source, slug, name: slug, installUrl, detail, row, files, sourceFetch };
 }
 
-async function createFixtureHarness(fixture: SourceFixture): Promise<{
+interface FixtureHarnessOptions {
+  readonly organizationId?: string;
+  readonly repository?: StateRepository;
+  readonly storageRoot?: string;
+  readonly feed?: Feed;
+  readonly feedName?: string;
+}
+
+async function createFixtureHarness(fixture: SourceFixture, options: FixtureHarnessOptions = {}): Promise<{
   harness: LocalRegistryHarness;
   feed: Feed;
   runner: WorkerRunner;
@@ -275,30 +295,36 @@ async function createFixtureHarness(fixture: SourceFixture): Promise<{
   };
   const harness = await createLocalRegistryHarness({
     origin: REGISTRY_ORIGIN,
-    organizationId: ORGANIZATION_ID,
+    organizationId: options.organizationId ?? ORGANIZATION_ID,
     policy: POLICY,
     directory,
     directoryBaseUrl: CATALOG_BASE,
     allowLoopbackUpstreams: true,
+    repository: options.repository,
+    storageRoot: options.storageRoot,
   });
-  const feedResponse = await request(harness.handler, harness.origin, '/v1/feeds', {
-    method: 'POST',
-    headers: bearer(harness.token),
-    json: {
-      name: `fixture-${fixture.kind}-${fixture.slug}`,
-      kind: 'skills-sh',
-      namespace: '@acme',
-      repositories: [fixture.source],
-      baseUrl: CATALOG_BASE,
-    },
-  });
-  expect(feedResponse.status, await feedResponse.clone().text()).toBe(201);
-  const feed = (await jsonResponse<{ feed: Feed }>(feedResponse)).feed;
+  let feed = options.feed;
+  if (!feed) {
+    const feedResponse = await request(harness.handler, harness.origin, '/v1/feeds', {
+      method: 'POST',
+      headers: bearer(harness.token),
+      json: {
+        name: options.feedName ?? `fixture-${fixture.kind}-${fixture.slug}`,
+        kind: 'skills-sh',
+        namespace: '@acme',
+        repositories: [fixture.source],
+        baseUrl: CATALOG_BASE,
+      },
+    });
+    expect(feedResponse.status, await feedResponse.clone().text()).toBe(201);
+    feed = (await jsonResponse<{ feed: Feed }>(feedResponse)).feed;
+  }
+  if (!feed) throw new Error('source fixture feed was not created');
   const workerFailures: string[] = [];
   const runner = new WorkerRunner({
     baseUrl: harness.origin,
     workerToken: harness.workerToken,
-    workerId: `source-pullthrough-${fixture.kind}`,
+    workerId: `source-pullthrough-${fixture.kind}-${options.organizationId ?? ORGANIZATION_ID}`,
     fetch: async (input, init) => {
       const response = await harness.handler(new Request(String(input), init));
       if (!response.ok) workerFailures.push(await response.clone().text());
@@ -508,5 +534,165 @@ describe('source pull-through across core, WorkerRunner, fetcher, scanner, and t
     expect(directoryCalls).toEqual(directoryCallsAfterApproval);
     const transferred = await approveAndTransfer(harness, resolution);
     assertStoredFixtureBytes(fixture, transferred.bytes);
+  });
+
+  it('composes durable file state and Files SDK storage across tenants, restart, and policy re-evaluation', async () => {
+    const stateRoot = await mkdtemp(join(tmpdir(), 'private-skills-c1-durable-state-'));
+    const fixture = makeFixture('github', 'root-skill');
+    const stateRepository = createFileStateRepository({
+      directory: stateRoot,
+      stateFactory: durableFixtureState,
+    });
+    const tenantA = 'org-source-durable-a';
+    const tenantB = 'org-source-durable-b';
+
+    try {
+      const first = await createFixtureHarness(fixture, {
+        organizationId: tenantA,
+        repository: stateRepository,
+        feedName: 'durable-a',
+      });
+      harnesses.push(first.harness);
+
+      const coldA = await Promise.all([
+        resolveRequest(first.harness, first.feed, fixture.externalId),
+        resolveRequest(first.harness, first.feed, fixture.externalId),
+        resolveRequest(first.harness, first.feed, fixture.externalId),
+      ]);
+      expect(coldA.map((response) => response.status)).toEqual([202, 202, 202]);
+      const coldOperations = await Promise.all(coldA.map((response) => jsonResponse<{ operation: Job }>(response)));
+      expect(new Set(coldOperations.map(({ operation }) => operation.id)).size).toBe(1);
+      expect((await stateRepository.read(tenantA)).jobs.filter((job) => job.kind === 'import')).toHaveLength(1);
+
+      const firstRun = await first.runner.runOnce();
+      expect(firstRun.error, JSON.stringify(first.workerFailures)).toBeUndefined();
+      expect(firstRun.allow).toBe(true);
+      expect(firstRun.scannerResults).toEqual([expect.objectContaining({
+        scannerId: 'skillsguard',
+        status: 'completed',
+        coverage: expect.objectContaining({ filesAnalyzed: 2, filesUnsupported: 0, filesSkipped: 0 }),
+      })]);
+      const sourceFetchesAfterA = fixture.sourceFetch.mock.calls.length;
+      const durableFiles = await readdir(stateRoot);
+      expect(durableFiles.some((file) => file.endsWith('.json'))).toBe(true);
+
+      const secondTenant = await createFixtureHarness(fixture, {
+        organizationId: tenantB,
+        repository: stateRepository,
+        feedName: 'durable-b',
+      });
+      harnesses.push(secondTenant.harness);
+
+      const sourceFetchesBeforeForeignFeed = fixture.sourceFetch.mock.calls.length;
+      const foreignFeed = await resolveRequest(secondTenant.harness, first.feed, fixture.externalId);
+      expect(foreignFeed.status, await foreignFeed.clone().text()).toBe(404);
+      expect(secondTenant.directoryCalls).toEqual({ detail: 0, search: 0, list: 0 });
+      expect(fixture.sourceFetch.mock.calls.length).toBe(sourceFetchesBeforeForeignFeed);
+
+      const coldB = await resolveRequest(secondTenant.harness, secondTenant.feed, fixture.externalId);
+      expect(coldB.status, await coldB.clone().text()).toBe(202);
+      const secondRun = await secondTenant.runner.runOnce();
+      expect(secondRun.error, JSON.stringify(secondTenant.workerFailures)).toBeUndefined();
+      expect(secondRun.allow).toBe(true);
+      expect(fixture.sourceFetch.mock.calls.length).toBeGreaterThan(sourceFetchesAfterA);
+      const tenantAState = await stateRepository.read(tenantA);
+      const tenantBState = await stateRepository.read(tenantB);
+      expect(tenantAState.jobs.filter((job) => job.kind === 'import')).toHaveLength(1);
+      expect(tenantBState.jobs.filter((job) => job.kind === 'import')).toHaveLength(1);
+      expect(tenantAState.skills.every((skill) => skill.organizationId === tenantA)).toBe(true);
+      expect(tenantBState.skills.every((skill) => skill.organizationId === tenantB)).toBe(true);
+
+      const tenantBWarm = await resolveRequest(secondTenant.harness, secondTenant.feed, fixture.externalId);
+      expect(tenantBWarm.status, await tenantBWarm.clone().text()).toBe(200);
+      const tenantBWarmBody = await jsonResponse<{ diagnostics: { upstreamRequests: { catalog: number; source: number }; queuedJobsCreated: number; overflow: boolean }; resolution: Resolution }>(tenantBWarm);
+      expect(tenantBWarmBody.diagnostics).toEqual({
+        version: 1,
+        upstreamRequests: { catalog: 0, source: 0 },
+        queuedJobsCreated: 0,
+        overflow: false,
+      });
+      expect(tenantBWarmBody.resolution.resourceId).not.toBe(tenantAState.skills[0]?.id);
+
+      // Recreate both durable adapters from disk while keeping the sealed
+      // Files SDK root. This is the restart boundary for the local proof.
+      const reloadedRepository = createFileStateRepository({
+        directory: stateRoot,
+        stateFactory: durableFixtureState,
+      });
+      const restarted = await createFixtureHarness(fixture, {
+        organizationId: tenantA,
+        repository: reloadedRepository,
+        storageRoot: first.harness.root,
+        feed: first.feed,
+      });
+      harnesses.push(restarted.harness);
+
+      const sourceFetchesBeforeRestartWarm = fixture.sourceFetch.mock.calls.length;
+      const restartWarm = await resolveRequest(restarted.harness, restarted.feed, fixture.externalId);
+      expect(restartWarm.status, await restartWarm.clone().text()).toBe(200);
+      const restartWarmBody = await jsonResponse<{ diagnostics: { upstreamRequests: { catalog: number; source: number }; queuedJobsCreated: number; overflow: boolean }; resolution: Resolution }>(restartWarm);
+      expect(restartWarmBody.diagnostics).toEqual({
+        version: 1,
+        upstreamRequests: { catalog: 0, source: 0 },
+        queuedJobsCreated: 0,
+        overflow: false,
+      });
+      expect(restarted.directoryCalls).toEqual({ detail: 0, search: 0, list: 0 });
+      expect(fixture.sourceFetch.mock.calls.length).toBe(sourceFetchesBeforeRestartWarm);
+      const transferred = await approveAndTransfer(restarted.harness, restartWarmBody.resolution);
+      assertStoredFixtureBytes(fixture, transferred.bytes);
+
+      const policyResponse = await request(restarted.harness.handler, restarted.harness.origin, '/v1/policy', {
+        method: 'PUT',
+        headers: bearer(restarted.harness.token),
+        json: {
+          scanners: POLICY.scanners,
+          allowUnscanned: false,
+          evidenceMaxAgeSeconds: POLICY.evidenceMaxAgeSeconds,
+          hooks: [],
+        },
+      });
+      expect(policyResponse.status, await policyResponse.clone().text()).toBe(200);
+      const nextPolicy = (await jsonResponse<{ policy: Policy }>(policyResponse)).policy;
+      expect(nextPolicy.revision).not.toBe(POLICY.revision);
+
+      const detailCallsBeforeStale = restarted.directoryCalls.detail;
+      const sourceFetchesBeforeStale = fixture.sourceFetch.mock.calls.length;
+      const originalSkillId = restartWarmBody.resolution.resourceId;
+      const stale = await resolveRequest(restarted.harness, restarted.feed, fixture.externalId);
+      expect(stale.status, await stale.clone().text()).toBe(202);
+      const staleOperation = (await jsonResponse<{ operation: Job }>(stale)).operation;
+      expect(staleOperation.policyRevision).toBe(nextPolicy.revision);
+      expect(staleOperation.id).not.toBe(coldOperations[0]!.operation.id);
+      // A changed policy invalidates the old release before catalog/source
+      // work is repeated. The queued job captures the new policy revision.
+      expect(restarted.directoryCalls.detail).toBe(detailCallsBeforeStale + 1);
+      expect(fixture.sourceFetch.mock.calls.length).toBe(sourceFetchesBeforeStale);
+
+      const staleRun = await restarted.runner.runOnce();
+      expect(staleRun.error, JSON.stringify(restarted.workerFailures)).toBeUndefined();
+      expect(staleRun.allow).toBe(true);
+      expect(fixture.sourceFetch.mock.calls.length).toBeGreaterThan(sourceFetchesBeforeStale);
+      const reevaluatedState = await reloadedRepository.read(tenantA);
+      const originalSkill = reevaluatedState.skills.find((skill) => skill.id === originalSkillId);
+      const replacementSkill = reevaluatedState.skills.find((skill) => skill.id !== originalSkillId && skill.policyRevision === nextPolicy.revision);
+      expect(originalSkill).toMatchObject({ state: 'approved', policyRevision: POLICY.revision });
+      expect(replacementSkill).toMatchObject({ state: 'approved', policyRevision: nextPolicy.revision });
+
+      const afterStale = await resolveRequest(restarted.harness, restarted.feed, fixture.externalId);
+      expect(afterStale.status, await afterStale.clone().text()).toBe(200);
+      const afterStaleBody = await jsonResponse<{ diagnostics: { upstreamRequests: { catalog: number; source: number }; queuedJobsCreated: number; overflow: boolean }; resolution: Resolution }>(afterStale);
+      expect(afterStaleBody.diagnostics).toEqual({
+        version: 1,
+        upstreamRequests: { catalog: 0, source: 0 },
+        queuedJobsCreated: 0,
+        overflow: false,
+      });
+      expect(afterStaleBody.resolution.resourceId).not.toBe(restartWarmBody.resolution.resourceId);
+      expect(restarted.directoryCalls.detail).toBe(detailCallsBeforeStale + 1);
+      expect(fixture.sourceFetch.mock.calls.length).toBeGreaterThan(sourceFetchesBeforeStale);
+    } finally {
+      await rm(stateRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -9,7 +9,7 @@ import {
 import {
   createMemoryStateRepository,
   defaultRegistryState,
-  type MemoryStateRepository,
+  type StateRepository,
 } from '../../packages/database/src/index.js';
 import {
   createRegistryHandler,
@@ -33,7 +33,7 @@ export interface LocalRegistryHarness {
   readonly origin: string;
   readonly token: string;
   readonly workerToken: string;
-  readonly repository: MemoryStateRepository;
+  readonly repository: StateRepository;
   readonly root: string;
   readonly close: () => Promise<void>;
 }
@@ -49,6 +49,10 @@ export interface LocalRegistryOptions {
   readonly directoryBaseUrl?: string;
   readonly trustedSkillsShBaseUrls?: readonly string[];
   readonly allowLoopbackUpstreams?: boolean;
+  /** Inject durable state for composition tests without changing production wiring. */
+  readonly repository?: StateRepository;
+  /** Reuse a caller-owned Files SDK root when constructing a second handler. */
+  readonly storageRoot?: string;
 }
 
 /**
@@ -63,14 +67,15 @@ export async function createLocalRegistryHarness(
   const organizationId = options.organizationId ?? E2E_ORGANIZATION;
   const token = options.token ?? E2E_TOKEN;
   const workerToken = options.workerToken ?? E2E_WORKER_TOKEN;
-  const root = await mkdtemp(join(tmpdir(), 'private-skills-e2e-'));
+  const root = options.storageRoot ?? await mkdtemp(join(tmpdir(), 'private-skills-e2e-'));
+  const ownsRoot = options.storageRoot === undefined;
 
   const developmentState = defaultRegistryState({
     production: false,
     allowUnscanned: true,
     policyRevision: 'development-unscanned',
   });
-  const repository = createMemoryStateRepository({
+  const repository = options.repository ?? createMemoryStateRepository({
     stateFactory: () =>
       options.policy
         ? { ...developmentState, policy: structuredClone(options.policy) }
@@ -139,7 +144,7 @@ export async function createLocalRegistryHarness(
     repository,
     root,
     close: async () => {
-      await rm(root, { recursive: true, force: true });
+      if (ownsRoot) await rm(root, { recursive: true, force: true });
     },
   };
 }
