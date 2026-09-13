@@ -290,3 +290,33 @@ The first full product run hit sandbox-denied loopback binding in the upstream
 suite; rerunning with local networking allowed passed 781 tests with seven opt-in
 skips. TypeScript and diff checks passed. Actual large-tree browser proof remains
 separate from this source/test checkpoint. No remote push or deployment occurred.
+
+
+## Large-tree browser defect checkpoint
+
+The [128-file browser pass](local-large-tree-browser-b4d4dce-20260913.json)
+verified committed source `b4d4dce`: keyboard search, Tab and Enter selected the
+deep TypeScript and JSON paths; syntax colors and long lines were visible. Tree
+scrolling reached the final nested path, and code scrolling reached JSON lines
+289–328 while the selected file and editor content stayed aligned.
+
+It also found a real defect: entering Edit mode without typing marked the draft
+locally changed and enabled Save. Reload cleared the indicators, and server
+revision 1 and the original digest remained unchanged. Verification stopped at
+that boundary; focus/layout/viewport continuation is not claimed for this source.
+The fixture then acknowledged the private stop request, exited successfully, and
+all three owned listener ports were confirmed closed. No save, scanner claim,
+publication, remote push, or deployment occurred.
+
+
+## False dirty state correction
+
+The browser defect traced to render-time reads of the imperative editor ref and
+to unchanged completion callbacks being marked dirty unconditionally. Live edit
+state now carries its file path and is reset at draft/file transitions; stale
+path callbacks are ignored, and identical completion text preserves the current
+file metadata. A rendered regression checks clean mode entry, a no-op completion,
+file selection changes, and real edit detection. The full suite passed 782 tests
+with seven opt-in skips; TypeScript and diff checks passed. Browser retesting of
+this correction follows separately; the prior failing browser source is retained
+as evidence rather than being relabeled as a pass.

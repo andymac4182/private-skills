@@ -9,10 +9,39 @@ import { buildDraftDeltaFiles, canonicalDraftFiles, DraftEditor, draftPayloadFin
 import type { DraftSurfaceEntry } from './PierreDraftSurface'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
 
+const pierreHarness = vi.hoisted(() => ({ shouldThrow: true, contentsByPath: {} as Record<string, string> }))
+
 vi.mock('@tanstack/react-router', () => ({ useBlocker: () => undefined }))
-vi.mock('./PierreDraftSurface', () => ({
-  PierreDraftSurface: () => { throw new Error('simulated beta editor failure') },
-}))
+vi.mock('./PierreDraftSurface', async () => {
+  const React = await import('react')
+  type PierreHandle = { readCurrent: () => string | null }
+  type PierreCallback = (contents: string) => void
+  const PierreDraftSurface = React.forwardRef<PierreHandle, Record<string, unknown>>((props, ref) => {
+    const currentFile = props.currentFile as { path?: unknown } | null | undefined
+    const path = typeof currentFile?.path === 'string' ? currentFile.path : null
+    const mode = props.mode
+    React.useImperativeHandle(ref, () => ({ readCurrent: () => path ? pierreHarness.contentsByPath[path] ?? null : null }), [path])
+    React.useEffect(() => {
+      if (pierreHarness.shouldThrow || mode !== 'edit' || !path) return
+      const contents = pierreHarness.contentsByPath[path]
+      if (contents !== undefined && typeof props.onContentChange === 'function') (props.onContentChange as PierreCallback)(contents)
+    }, [mode, path])
+    if (pierreHarness.shouldThrow) throw new Error('simulated beta editor failure')
+    const onEditChange = typeof props.onEditChange === 'function' ? props.onEditChange as PierreCallback : undefined
+    const onContentChange = typeof props.onContentChange === 'function' ? props.onContentChange as PierreCallback : undefined
+    const entries = Array.isArray(props.entries) ? props.entries as Array<{ path?: unknown }> : []
+    const onSelect = typeof props.onSelect === 'function' ? props.onSelect as (nextPath: string) => void : undefined
+    function changeContents(): void {
+      if (!path) return
+      const next = 'edited body\n'
+      pierreHarness.contentsByPath[path] = next
+      onEditChange?.(next)
+      onContentChange?.(next)
+    }
+    return React.createElement('div', { 'data-testid': 'mock-pierre' }, React.createElement('button', { type: 'button', 'data-testid': 'mock-pierre-change', onClick: changeContents }, 'Change contents'), ...entries.flatMap((entry) => typeof entry.path === 'string' ? [React.createElement('button', { key: entry.path, type: 'button', 'data-testid': `mock-pierre-select-${entry.path}`, onClick: () => onSelect?.(entry.path as string) }, entry.path)] : []))
+  })
+  return { PierreDraftSurface }
+})
 
 const draft: DraftView = {
   id: 'draft-1',
@@ -194,6 +223,76 @@ describe('draft editor renderer fallback', () => {
       await act(async () => { root.unmount() })
       document.body.replaceChildren()
       vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps a loaded editor clean across mode and selection changes until bytes change', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    vi.stubGlobal('crypto', webcrypto)
+    pierreHarness.shouldThrow = false
+    const firstPath = 'packs/000/nested/first/SKILL.md'
+    const secondPath = 'packs/100/nested/second/SKILL.md'
+    const firstText = 'first body\n'
+    const secondText = 'second body\n'
+    pierreHarness.contentsByPath = { [firstPath]: firstText, [secondPath]: secondText }
+    const cleanDraft: DraftView = {
+      ...draft,
+      origin: 'upload',
+      files: [
+        { path: firstPath, size: firstText.length, digest: 'sha256:51e5f80e60c2bb85ed6b8e48aa61e0d8f5cd126dc3907af60319a810b476bb1c' },
+        { path: secondPath, size: secondText.length, digest: 'sha256:a202941a54600108f5b251c071b96b6a1563d219688ce6a773db459a974487a8' },
+      ],
+    }
+    const draftFile = vi.spyOn(api, 'draftFile').mockImplementation(async (_draftId, path) => {
+      const text = pierreHarness.contentsByPath[path] ?? ''
+      const fileDigest = path === firstPath ? cleanDraft.files[0]!.digest : cleanDraft.files[1]!.digest
+      return { file: { path, size: text.length, digest: fileDigest, previewState: 'text', content: btoa(text) } }
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+
+    async function settle(): Promise<void> {
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+    }
+
+    try {
+      await settle()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
+      expect(editButton?.disabled).toBe(false)
+      await act(async () => { editButton?.click() })
+      await settle()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const selectSecond = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid^="mock-pierre-select-"]')).find((button) => button.textContent === secondPath)
+      expect(selectSecond).toBeDefined()
+      await act(async () => { selectSecond?.click() })
+      await settle()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const selectFirst = Array.from(container.querySelectorAll<HTMLButtonElement>('[data-testid^="mock-pierre-select-"]')).find((button) => button.textContent === firstPath)
+      expect(selectFirst).toBeDefined()
+      await act(async () => { selectFirst?.click() })
+      await settle()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+
+      const editAgain = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
+      await act(async () => { editAgain?.click() })
+      await settle()
+      expect(container.querySelector('.draft-dirty')).toBeNull()
+      await act(async () => { container.querySelector<HTMLButtonElement>('[data-testid="mock-pierre-change"]')?.click() })
+      expect(container.querySelector('.draft-dirty')).not.toBeNull()
+    } finally {
+      await act(async () => { root.unmount() })
+      document.body.replaceChildren()
+      draftFile.mockRestore()
+      pierreHarness.shouldThrow = true
+      pierreHarness.contentsByPath = {}
       vi.unstubAllGlobals()
     }
   })

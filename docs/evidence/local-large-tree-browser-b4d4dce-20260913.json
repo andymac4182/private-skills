@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-large-tree-browser-before-dirty-state-fix",
+  "sourceCommit": "b4d4dced4dfcb55a34bc758abe1236308b6a9373",
+  "origin": "http://127.0.0.1:5197",
+  "draft": {
+    "id": "draft_5d466b07-0918-4509-aac6-24c634bca31f",
+    "revision": 1,
+    "digest": "sha256:238982820f6f5665453c68d283a693dc140efd6caefb24b85be70b182bad3cb6",
+    "fileCount": 128
+  },
+  "fixture": {
+    "nestedPaths": 126,
+    "decodedTextBytes": 31246,
+    "proofPaths": {
+      "selectionPath": "fixtures/large-tree/archives/2026/region-local/cohort-00/lane-00/record-000.ts",
+      "highlightPath": "fixtures/large-tree/archives/2026/region-local/cohort-00/lane-01/record-001.json",
+      "scrollPath": "fixtures/large-tree/archives/2026/region-local/cohort-07/lane-13/record-125.txt",
+      "expected": {
+        "selection": "select a long TypeScript line and retain its path while the tree is scrolled",
+        "highlighting": "load the TypeScript and JSON proof paths to inspect syntax highlighting",
+        "scroll": "scroll the nested tree to the distant final path and return to the selected file"
+      }
+    }
+  },
+  "verified": {
+    "authenticatedExactRoute": true,
+    "keyboardSearchTabEnterSelectedTypeScript": true,
+    "keyboardSearchTabEnterSelectedJson": true,
+    "selectedTreePathMatchedEditorHeader": true,
+    "typeScriptSyntaxColorsVisible": true,
+    "jsonSyntaxColorsVisible": true,
+    "longLinesVisible": true,
+    "treeScrollReachedFinalPath": true,
+    "codeScrollReachedJsonLines": [
+      289,
+      328
+    ],
+    "selectedJsonRetainedWhileScrolling": true
+  },
+  "defect": {
+    "trigger": "Open Edit mode without typing or saving",
+    "observed": [
+      "Local changes indicator",
+      "Unsaved changes indicator",
+      "1 changed status",
+      "Save revision enabled"
+    ],
+    "reloadClearedMarkers": true,
+    "savedRevisionAndDigestUnchanged": true
+  },
+  "cleanup": {
+    "stopProtocolVersion": 1,
+    "launcherAcknowledgedRequest": true,
+    "launcherExitCode": 0,
+    "portsConfirmedClosed": [
+      5195,
+      5196,
+      5197
+    ]
+  },
+  "limits": [
+    "Browser proof stopped at the first confirmed defect; focus traversal, diff-layout continuation and viewport checks remain unverified for this source.",
+    "Screenshots were inline CUA emissions, with no persisted screenshot file claimed.",
+    "No text edits, saves, AI prompts, scanner claims, publication, production calls, push or deployment occurred."
+  ]
+}
