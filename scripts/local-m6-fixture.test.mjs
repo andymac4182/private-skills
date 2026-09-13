@@ -179,6 +179,149 @@ test('status binds proposals to the current draft revision and digest', async ()
   }
 });
 
+test('seed defaults to the unchanged two-file draft and fail-closes an invalid profile', async () => {
+  const runRoot = mkdtempSync('/private/tmp/private-skills-m6-local-seed-default-');
+  const stub = await startSeedStub();
+  try {
+    writeSeedMetadata(runRoot, stub.origin);
+    const run = await spawnCli([FIXTURE_LAUNCHER, 'seed', runRoot]);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(stub.draftBody.files.map((file) => file.path), ['SKILL.md', 'README.md']);
+    assert.equal(stub.draftBody.name, '@local/m6-local-combined-fixture');
+    const fixture = JSON.parse(readFileSync(join(runRoot, 'work', 'local-m6-fixture.json'), 'utf8'));
+    assert.equal(fixture.draft.fileCount, 2);
+    assert.equal(fixture.draft.expectedTextBytes, fixture.draft.skillTextBytes + Buffer.byteLength('# Local combined M6 fixture\n'));
+    assert.equal(fixture.manifest, undefined);
+    assert.equal(stub.policyBody.allowUnscanned, false);
+    assert.deepEqual(stub.policyBody.scanners.filter((scanner) => scanner.mode === 'required').map((scanner) => scanner.id), ['skillsguard']);
+  } finally {
+    await stub.close();
+    rmSync(runRoot, { recursive: true, force: true });
+  }
+
+  const invalidRoot = mkdtempSync('/private/tmp/private-skills-m6-local-seed-invalid-');
+  try {
+    const run = await spawnCli([FIXTURE_LAUNCHER, 'seed', invalidRoot, '--profile', 'unknown']);
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /--profile must be two-files or large-tree/u);
+  } finally {
+    rmSync(invalidRoot, { recursive: true, force: true });
+  }
+});
+
+test('large-tree seed is opt-in, canonical, bounded, and records sanitized browser proof metadata', async () => {
+  const runRoot = mkdtempSync('/private/tmp/private-skills-m6-local-seed-large-');
+  const stub = await startSeedStub();
+  try {
+    writeSeedMetadata(runRoot, stub.origin);
+    const run = await spawnCli([FIXTURE_LAUNCHER, 'seed', runRoot, '--profile', 'large-tree']);
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(stub.draftBody.name, '@local/m6-large-tree-fixture');
+    assert.equal(stub.draftBody.files.length, 128);
+    const paths = stub.draftBody.files.map((file) => file.path);
+    assert.equal(paths.filter((filePath) => filePath.includes('/')).length, 126);
+    assert.deepEqual(paths, [...paths].sort());
+    assert.equal(paths.filter((filePath) => filePath.endsWith('.ts')).length, 1);
+    assert.equal(paths.filter((filePath) => filePath.endsWith('.json')).length, 1);
+    assert.ok(paths.every((filePath) => filePath.split('/').length >= 8 || ['SKILL.md', 'README.md'].includes(filePath)));
+
+    const fixture = JSON.parse(readFileSync(join(runRoot, 'work', 'local-m6-fixture.json'), 'utf8'));
+    assert.equal(fixture.manifest.profile, 'large-tree');
+    assert.equal(fixture.manifest.fileCount, 128);
+    assert.equal(fixture.manifest.nestedPathCount, 126);
+    assert.equal(fixture.draft.expectedTextBytes, fixture.manifest.totalBytes);
+    assert.equal(fixture.manifest.canonicalOrder, 'path-ascending');
+    assert.equal(fixture.manifest.longLineFiles.length, 2);
+    assert.ok(fixture.manifest.longLineFiles.every((file) => file.maxLineBytes >= 160));
+    assert.match(fixture.manifest.browserProof.selectionPath, /\.ts$/u);
+    assert.match(fixture.manifest.browserProof.highlightPath, /\.json$/u);
+    assert.match(fixture.manifest.browserProof.scrollPath, /record-125\.txt$/u);
+    assert.equal(fixture.manifest.safety.executableFiles, 0);
+    assert.equal(fixture.manifest.safety.contentExecution, 'none');
+    assert.doesNotMatch(JSON.stringify(fixture.manifest), /token|secret|authorization/iu);
+    assert.doesNotMatch(run.stdout, /local-seed-test-token/u);
+  } finally {
+    await stub.close();
+    rmSync(runRoot, { recursive: true, force: true });
+  }
+});
+
+function writeSeedMetadata(runRoot, origin) {
+  const workRoot = join(runRoot, 'work');
+  mkdirSync(workRoot, { mode: 0o700 });
+  writeFileSync(join(workRoot, 'credentials.json'), JSON.stringify({ origin, token: 'local-seed-test-token' }), { mode: 0o600 });
+  writeFileSync(join(workRoot, 'launch-metadata.json'), JSON.stringify({
+    origins: { origin, builderOrigin: origin, reviewerOrigin: origin },
+    paths: {
+      credentials: join(workRoot, 'credentials.json'),
+      fixture: join(workRoot, 'local-m6-fixture.json'),
+    },
+    reviewer: { mode: 'hold' },
+  }), { mode: 0o600 });
+}
+
+async function startSeedStub() {
+  const policy = {
+    revision: 'policy-seed-test',
+    scanners: [
+      { id: 'skillsguard', mode: 'disabled' },
+      { id: 'cisco-skill-scanner', mode: 'disabled' },
+    ],
+    allowUnscanned: true,
+    evidenceMaxAgeSeconds: 3600,
+    hooks: [],
+  };
+  let policyBody;
+  let draftBody;
+  const server = createServer(async (request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.method === 'GET' && request.url === '/v1/policy') {
+      response.writeHead(200);
+      response.end(JSON.stringify({ policy }));
+      return;
+    }
+    if (request.method === 'PUT' && request.url === '/v1/policy') {
+      policyBody = JSON.parse(await readHttpBody(request));
+      response.writeHead(200);
+      response.end(JSON.stringify({ policy: { ...policyBody, revision: 'policy-seed-updated' } }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/v1/drafts') {
+      draftBody = JSON.parse(await readHttpBody(request));
+      response.writeHead(201);
+      response.end(JSON.stringify({ draft: {
+        id: 'draft-seed-test',
+        name: draftBody.name,
+        revision: 1,
+        digest: `sha256:${'d'.repeat(64)}`,
+        files: draftBody.files,
+      } }));
+      return;
+    }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: 'not found' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('seed stub did not bind a TCP port');
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    get policyBody() { return policyBody; },
+    get draftBody() { return draftBody; },
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+  };
+}
+
+function readHttpBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => resolve(body));
+    request.on('error', reject);
+  });
+}
+
 function spawnCli(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });

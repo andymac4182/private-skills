@@ -47,6 +47,31 @@ route, revision, digest, and policy. The generated browser token is stored only
 in the mode-0600 `work/local-browser-credentials.json`; use it only for the
 reported loopback registry. Do not put credentials into evidence or screenshots.
 
+For the editor tree, selection, syntax, and scroll check, opt into the bounded
+large-tree profile:
+
+```sh
+node scripts/local-m6-fixture.mjs seed <run-root> --profile large-tree
+```
+
+This profile creates 128 files: `SKILL.md`, `README.md`, and 126 canonical
+relative paths nested eight segments deep under `fixtures/large-tree`. The
+paths are sent in ascending canonical order and remain well below the bundle
+file, per-file, expanded-byte, and request limits. One nested `.ts` file has a
+long line plus 64 short lines, and one nested `.json` file has a long property
+value plus 64 rows. All files are ordinary text without executable flags,
+plugin boundary paths, hooks, or package metadata; the fixture never imports or
+executes their contents.
+
+The mode-0600 `work/local-m6-fixture.json` contains a sanitized `manifest` for
+this profile. It records each path's digest/size/line metadata, three distant
+paths, the two long-line paths, and `browserProof.selectionPath`,
+`browserProof.highlightPath`, and `browserProof.scrollPath`. It contains no
+credentials or tokens. Use those exact paths when recording browser evidence;
+the manifest is local correlation data and does not establish a browser pass by
+itself. The default seed command remains the two-file profile and does not write
+this large-tree manifest.
+
 ## Exercise the browser flow
 
 1. Sign in and open the exact seeded draft route.

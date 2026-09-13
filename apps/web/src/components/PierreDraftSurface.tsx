@@ -113,6 +113,9 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
     paths,
     initialExpansion: 'open',
     initialSelectedPaths: selectedPath ? [selectedPath] : [],
+    // @pierre/trees keeps its search UI opt-in. Without this flag the tree
+    // only exposes navigation, so keyboard users cannot search a large draft.
+    search: true,
     onSelectionChange: (selected: readonly string[]) => {
       if (syncingSelection.current) return
       const candidate = selected[selected.length - 1]
@@ -168,10 +171,10 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
 
   return <div className="draft-surface">
     <div className="draft-surface-tree" aria-label="Draft files">
-      <FileTree header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
-      {entries.length > 0 && <div className="draft-surface-tree-status"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
+      <FileTree aria-label="Draft files" header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
+      {entries.length > 0 && <div className="draft-surface-tree-status" role="status" aria-live="polite"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
     </div>
-    <div className="draft-surface-code">
+    <div className="draft-surface-code" role="region" aria-label={mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
       {baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : mode === 'edit' && editable && current ? <EditProvider createEditor={createEditor}><PierreFile
         key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
         className="draft-pierre-file"

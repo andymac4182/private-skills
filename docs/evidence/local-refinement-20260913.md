@@ -261,3 +261,32 @@ The three disposable service ports were confirmed closed after terminating only
 the verified live launcher. Hosted AI Gateway/provider acceptance, production
 publication, native Windows/Linux CI, and deferred roadmap milestones remain
 separate. All changes and evidence stay on local `main`.
+
+
+## Large-tree search and normal restart coverage
+
+The installed Pierre tree had search disabled by default. The editor now enables
+its supported search UI, names the tree and editor/diff regions, and announces
+status changes. An installed-model regression searches among 101 nested paths
+without changing selection. The failed-renderer fallback is explicitly read-only
+and searchable, with ordinary labeled buttons rather than tree roles that imply
+unsupported arrow-key behavior. A rendered failure fixture checks preview text,
+absence of an editing textarea, filtering, and selecting a different path; it is
+not a native browser keyboard or screen-reader test.
+
+A separate composition uses real FileStateRepository and Files SDK filesystem
+storage. It edits three files from an existing approved release, then constructs
+fresh repository, blob store, authentication, and HTTP handler instances using
+only the same persisted directories. The public manifest and exact selected
+file bytes restore at revision 2; stale revision-1 writes return a conflict and
+leave the draft unchanged. The original release metadata and sealed bytes remain
+identical. This models fresh services in one test process; it is not a separately
+spawned OS-process or provider restart.
+
+The optional `large-tree` seed now provides 128 inert files with 126 nested paths,
+long TypeScript/JSON files, and sanitized browser proof pointers. Default seed
+behavior and required-scanner policy are unchanged. Eleven helper checks passed.
+The first full product run hit sandbox-denied loopback binding in the upstream
+suite; rerunning with local networking allowed passed 781 tests with seven opt-in
+skips. TypeScript and diff checks passed. Actual large-tree browser proof remains
+separate from this source/test checkpoint. No remote push or deployment occurred.

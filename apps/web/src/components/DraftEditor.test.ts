@@ -1,7 +1,18 @@
+// @vitest-environment jsdom
+
+import { webcrypto } from 'node:crypto'
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { buildDraftDeltaFiles, canonicalDraftFiles, draftPayloadFingerprint, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, nativeUnifiedDiff, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
+import { buildDraftDeltaFiles, canonicalDraftFiles, DraftEditor, draftPayloadFingerprint, filterNativeDraftEntries, inspectDraftFile, loadImmutableReleaseBaseline, MAX_TEXT_PREVIEW_BYTES, nativeUnifiedDiff, operationKey, releaseBaselineStatus, renameOriginForPath } from './DraftEditor'
+import type { DraftSurfaceEntry } from './PierreDraftSurface'
 import type { DraftView, ReleaseFilesResponse } from '../lib/types'
+
+vi.mock('@tanstack/react-router', () => ({ useBlocker: () => undefined }))
+vi.mock('./PierreDraftSurface', () => ({
+  PierreDraftSurface: () => { throw new Error('simulated beta editor failure') },
+}))
 
 const draft: DraftView = {
   id: 'draft-1',
@@ -30,6 +41,16 @@ describe('draft editor persistence identities', () => {
     expect(nativeUnifiedDiff('same\nold', 'same\nnew')).toBe('  same\n- old\n+ new')
     expect(nativeUnifiedDiff(null, 'new')).toBe('+ new')
     expect(nativeUnifiedDiff('old', null)).toBe('- old')
+  })
+
+  it('filters native fallback paths case-insensitively without changing path identity', () => {
+    const entries: DraftSurfaceEntry[] = [
+      { path: 'packs/000/nested/skill/SKILL.md', status: 'unchanged' },
+      { path: 'packs/100/nested/skill/deeper/SKILL.md', status: 'added' },
+    ]
+
+    expect(filterNativeDraftEntries(entries, 'DEEPER/SKILL')).toEqual([entries[1]])
+    expect(filterNativeDraftEntries(entries, '   ')).toEqual(entries)
   })
 
   it('canonicalizes the same file payload independent of file order', () => {
@@ -105,6 +126,76 @@ describe('draft editor persistence identities', () => {
     expect(serializedDelta.byteLength).toBeLessThan(4_500_000)
     expect(serializedFull.byteLength).toBeGreaterThan(4_500_000)
     expect(await buildDraftDeltaFiles(savedFiles, workingFiles, { 'assets/archive.bin': 'assets/large.bin' })).toEqual(delta)
+  })
+})
+
+describe('draft editor renderer fallback', () => {
+  it('keeps the error fallback read-only while preserving searchable selection', async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    vi.stubGlobal('crypto', webcrypto)
+    const firstPath = 'packs/000/nested/first/SKILL.md'
+    const secondPath = 'packs/100/nested/second/SKILL.md'
+    const firstText = 'first body\n'
+    const secondText = 'second body\n'
+    const fallbackDraft: DraftView = {
+      ...draft,
+      origin: 'upload',
+      files: [
+        { path: firstPath, size: new TextEncoder().encode(firstText).byteLength, digest: 'sha256:51e5f80e60c2bb85ed6b8e48aa61e0d8f5cd126dc3907af60319a810b476bb1c' },
+        { path: secondPath, size: new TextEncoder().encode(secondText).byteLength, digest: 'sha256:a202941a54600108f5b251c071b96b6a1563d219688ce6a773db459a974487a8' },
+      ],
+    }
+    const draftFile = vi.spyOn(api, 'draftFile').mockImplementation(async (_draftId, path) => {
+      const text = path === firstPath ? firstText : secondText
+      const fileDigest = path === firstPath ? 'sha256:51e5f80e60c2bb85ed6b8e48aa61e0d8f5cd126dc3907af60319a810b476bb1c' : 'sha256:a202941a54600108f5b251c071b96b6a1563d219688ce6a773db459a974487a8'
+      return { file: { path, size: new TextEncoder().encode(text).byteLength, digest: fileDigest as `sha256:${string}`, previewState: 'text', content: btoa(text) } }
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: fallbackDraft, onClose: vi.fn() }))
+
+    try {
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      expect(draftFile).toHaveBeenCalledWith(fallbackDraft.id, firstPath, { revision: fallbackDraft.revision, digest: fallbackDraft.digest }, expect.any(AbortSignal))
+
+      const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
+      expect(editButton).toBeDefined()
+      expect(editButton?.disabled).toBe(false)
+      await act(async () => { editButton?.click() })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      expect(container.querySelector('.release-code-fallback')?.textContent).toBe(firstText)
+      expect(container.querySelector('textarea')).toBeNull()
+
+      const search = container.querySelector('input[type="search"]') as HTMLInputElement | null
+      expect(search).not.toBeNull()
+      const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      expect(inputSetter).toBeDefined()
+      await act(async () => {
+        inputSetter?.call(search, 'second')
+        search?.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      expect(Array.from(container.querySelectorAll('.release-file-row code')).map((node) => node.textContent)).toEqual([secondPath])
+
+      await act(async () => {
+        search?.focus()
+        inputSetter?.call(search, '')
+        search?.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      const secondButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.release-file-row')).find((button) => button.textContent?.includes(secondPath))
+      expect(secondButton).toBeDefined()
+      await act(async () => { secondButton?.click() })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      expect(container.querySelector('[aria-current="true"] code')?.textContent).toBe(secondPath)
+      expect(container.querySelector('textarea')).toBeNull()
+    } finally {
+      await act(async () => { root.unmount() })
+      document.body.replaceChildren()
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
   })
 })
 

@@ -43,6 +43,10 @@ const DEFAULT_APP_PORT = 5197;
 const DEFAULT_BUILDER_PORT = 5196;
 const DEFAULT_REVIEWER_PORT = 5195;
 const LOCAL_SKILLSGUARD_IMAGE_ID = 'sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0';
+const DEFAULT_SEED_PROFILE = 'two-files';
+const LARGE_TREE_SEED_PROFILE = 'large-tree';
+const LARGE_TREE_NESTED_FILE_COUNT = 126;
+const MAX_SEED_REQUEST_BYTES = 3_000_000;
 const STOP_PROTOCOL_VERSION = 1;
 const STOP_POLL_INTERVAL_MS = 250;
 const ENV_FILES_READ_BY_VITE = [
@@ -59,7 +63,7 @@ const command = process.argv[2] ?? 'help';
 if (command === 'launch') {
   await launch(parseLaunchOptions(process.argv.slice(3)));
 } else if (command === 'seed') {
-  await seed(requireRunArgument(process.argv[3]));
+  await seed(requireRunArgument(process.argv[3]), parseSeedOptions(process.argv.slice(4)));
 } else if (command === 'status') {
   await status(requireRunArgument(process.argv[3]));
 } else if (command === 'advance') {
@@ -79,20 +83,37 @@ function printHelp() {
     'Local M6 fixture (explicit local-only commands):',
     '',
     '  node scripts/local-m6-fixture.mjs launch [--app-port 5197] [--builder-port 5196] [--reviewer-port 5195] [--reviewer-mode hold|auto|delay] [--reviewer-delay-ms N]',
-    '  node scripts/local-m6-fixture.mjs seed <run-root>',
+    '  node scripts/local-m6-fixture.mjs seed <run-root> [--profile two-files|large-tree]',
     '  node scripts/local-m6-fixture.mjs status <run-root>',
     '  node scripts/local-m6-fixture.mjs advance <run-root> [reviewer-session-id]',
     '  node scripts/local-m6-fixture.mjs prepare-scan <run-root> <expected-job-id> <expected-artifact-digest>',
     '  node scripts/local-m6-fixture.mjs stop <run-root>',
     '',
     'launch starts the real Nitro build and app plus local builder/reviewer boundaries.',
-    'seed sets SkillGuard required/allowUnscanned=false and creates a two-text-file draft.',
+    'seed sets SkillGuard required/allowUnscanned=false and creates a two-text-file draft by default.',
+    'The opt-in large-tree profile creates 128 canonical files, including 126 nested paths and inert TS/JSON long-line proof files.',
     'The browser route is written to the mode-0600 fixture metadata after seed.',
     'Reviewer mode defaults to hold; advance performs the real prepare/complete calls.',
     'prepare-scan writes a mode-0600 WorkerRunner verifier control file; it does not claim or run a scan.',
     'All credentials and logs stay in a private disposable run root under /private/tmp.',
     'The builder and reviewer model boundary is deterministic local fixture behavior.',
   ].join('\n') + '\n');
+}
+
+function parseSeedOptions(args) {
+  let profile = DEFAULT_SEED_PROFILE;
+  for (let index = 0; index < args.length; index += 1) {
+    const name = args[index];
+    const value = args[index + 1];
+    if (name !== '--profile') throw new Error(`unknown seed option ${JSON.stringify(name)}`);
+    if (value === undefined || value.startsWith('--')) throw new Error('--profile requires two-files or large-tree');
+    if (![DEFAULT_SEED_PROFILE, LARGE_TREE_SEED_PROFILE].includes(value)) {
+      throw new Error(`--profile must be ${DEFAULT_SEED_PROFILE} or ${LARGE_TREE_SEED_PROFILE}`);
+    }
+    profile = value;
+    index += 1;
+  }
+  return { profile };
 }
 
 function requireRunArgument(value) {
@@ -658,8 +679,208 @@ async function waitForRegistry(auth) {
   throw new Error('local Nitro registry did not become ready within 30 seconds');
 }
 
-async function seed(runRoot) {
+function encodeText(text) {
+  return Buffer.from(text, 'utf8').toString('base64');
+}
+
+function makeTextFile(filePath, text) {
+  return { path: filePath, content: encodeText(text) };
+}
+
+function sha256Text(text) {
+  return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
+}
+
+function lineCount(text) {
+  if (text.length === 0) return 0;
+  return text.endsWith('\n') ? text.split('\n').length - 1 : text.split('\n').length;
+}
+
+function maxLineBytes(text) {
+  return Math.max(...text.split('\n').map((line) => Buffer.byteLength(line, 'utf8')));
+}
+
+function pathDepth(filePath) {
+  return filePath.split('/').length;
+}
+
+function compareFilePaths(left, right) {
+  if (left.path < right.path) return -1;
+  if (left.path > right.path) return 1;
+  return 0;
+}
+
+function largeTreePath(index, extension) {
+  const cohort = String(Math.floor(index / 16)).padStart(2, '0');
+  const lane = String(index % 16).padStart(2, '0');
+  const record = String(index).padStart(3, '0');
+  return `fixtures/large-tree/archives/2026/region-local/cohort-${cohort}/lane-${lane}/record-${record}.${extension}`;
+}
+
+function largeTreeTypeScript() {
+  const longLine = `export const browserSelectionProof = "${'safe-browser-proof-'.repeat(18)}end";`;
+  const scrollLines = Array.from({ length: 64 }, (_, index) => (
+    `export const browserScrollLine${String(index + 1).padStart(2, '0')} = "inert fixture line ${String(index + 1).padStart(2, '0')}";`
+  ));
+  return [
+    '// Inert local fixture text; this file is never imported or executed.',
+    'export const fixtureProfile = "large-tree";',
+    longLine,
+    ...scrollLines,
+    '',
+  ].join('\n');
+}
+
+function largeTreeJson() {
+  const longLineValue = `${'safe-json-browser-proof-'.repeat(18)}end`;
+  return `${JSON.stringify({
+    fixtureProfile: 'large-tree',
+    purpose: 'selection-highlight-scroll-proof',
+    longLineValue,
+    rows: Array.from({ length: 64 }, (_, index) => ({
+      id: index + 1,
+      pathMarker: `nested-record-${String(index + 1).padStart(3, '0')}`,
+      inert: true,
+    })),
+  }, null, 2)}\n`;
+}
+
+function metadataForTextFile(file) {
+  const bytes = Buffer.from(file.content, 'base64');
+  const text = bytes.toString('utf8');
+  return {
+    path: file.path,
+    digest: sha256Text(text),
+    bytes: bytes.byteLength,
+    lineCount: lineCount(text),
+    maxLineBytes: maxLineBytes(text),
+    pathDepth: pathDepth(file.path),
+    extension: path.extname(file.path).slice(1) || null,
+  };
+}
+
+function createLargeTreeManifest(files, proofPaths) {
+  const fileMetadata = files.map(metadataForTextFile);
+  const nested = fileMetadata.filter((file) => file.path.includes('/'));
+  const longLineFiles = fileMetadata.filter((file) => file.maxLineBytes >= 160);
+  const distantPaths = [nested[0], nested[Math.floor(nested.length / 2)], nested[nested.length - 1]]
+    .filter(Boolean)
+    .map((file, index) => ({
+      ...file,
+      role: ['first-deep-path', 'middle-deep-path', 'last-deep-path'][index],
+    }));
+  const sortedPaths = fileMetadata.map((file) => file.path).every((filePath, index, paths) => index === 0 || paths[index - 1] < filePath);
+  return {
+    schemaVersion: 1,
+    profile: LARGE_TREE_SEED_PROFILE,
+    generator: 'local-m6-large-tree-v1',
+    canonicalOrder: sortedPaths ? 'path-ascending' : 'invalid',
+    fileCount: fileMetadata.length,
+    nestedPathCount: nested.length,
+    maxPathDepth: Math.max(...fileMetadata.map((file) => file.pathDepth)),
+    totalBytes: fileMetadata.reduce((sum, file) => sum + file.bytes, 0),
+    files: fileMetadata,
+    distantPaths,
+    longLineFiles,
+    browserProof: {
+      selectionPath: proofPaths.typeScript,
+      highlightPath: proofPaths.json,
+      scrollPath: proofPaths.scroll,
+      expected: {
+        selection: 'select a long TypeScript line and retain its path while the tree is scrolled',
+        highlighting: 'load the TypeScript and JSON proof paths to inspect syntax highlighting',
+        scroll: 'scroll the nested tree to the distant final path and return to the selected file',
+      },
+    },
+    safety: {
+      executableFiles: 0,
+      pluginBoundaryFiles: 0,
+      hooks: false,
+      contentExecution: 'none',
+    },
+  };
+}
+
+function createSeedDefinition(profile) {
+  const skillText = [
+    '---',
+    `name: ${profile === LARGE_TREE_SEED_PROFILE ? 'm6-local-large-tree' : 'm6-local-combined'}`,
+    `description: Deterministic local ${profile === LARGE_TREE_SEED_PROFILE ? 'large-tree browser' : 'combined'} M6 fixture`,
+    '---',
+    '',
+    profile === LARGE_TREE_SEED_PROFILE ? '# Local large-tree M6 fixture' : '# Local combined M6 fixture',
+    '',
+    'This is inert local test data.',
+    '',
+  ].join('\n');
+  const readmeText = profile === LARGE_TREE_SEED_PROFILE
+    ? '# Local large-tree M6 fixture\n\nThe nested files are inert text for browser tree and editor checks.\n'
+    : '# Local combined M6 fixture\n';
+  if (profile === DEFAULT_SEED_PROFILE) {
+    return {
+      profile,
+      name: '@local/m6-local-combined-fixture',
+      skillText,
+      readmeText,
+      files: [
+        makeTextFile('SKILL.md', skillText),
+        makeTextFile('README.md', readmeText),
+      ],
+    };
+  }
+
+  const typeScriptPath = largeTreePath(0, 'ts');
+  const jsonPath = largeTreePath(1, 'json');
+  const nestedFiles = Array.from({ length: LARGE_TREE_NESTED_FILE_COUNT }, (_, index) => {
+    const extension = index === 0 ? 'ts' : index === 1 ? 'json' : 'txt';
+    const filePath = largeTreePath(index, extension);
+    const text = index === 0
+      ? largeTreeTypeScript()
+      : index === 1
+        ? largeTreeJson()
+        : [
+          `# Inert nested fixture file ${String(index).padStart(3, '0')}`,
+          `path: ${filePath}`,
+          'This text is data only; it is never executed.',
+          '',
+        ].join('\n');
+    return makeTextFile(filePath, text);
+  });
+  const files = [makeTextFile('SKILL.md', skillText), makeTextFile('README.md', readmeText), ...nestedFiles]
+    .sort(compareFilePaths);
+  return {
+    profile,
+    name: '@local/m6-large-tree-fixture',
+    skillText,
+    readmeText,
+    files,
+    manifest: createLargeTreeManifest(files, {
+      typeScript: typeScriptPath,
+      json: jsonPath,
+      scroll: largeTreePath(LARGE_TREE_NESTED_FILE_COUNT - 1, 'txt'),
+    }),
+  };
+}
+
+function assertSeedDefinition(definition) {
+  if (definition.profile === LARGE_TREE_SEED_PROFILE) {
+    const paths = definition.files.map((file) => file.path);
+    if (paths.length !== LARGE_TREE_NESTED_FILE_COUNT + 2 || paths.filter((filePath) => filePath.includes('/')).length !== LARGE_TREE_NESTED_FILE_COUNT || !paths.every((filePath, index) => index === 0 || paths[index - 1] < filePath)) {
+      throw new Error('large-tree seed must contain 128 canonical paths including 126 nested paths');
+    }
+  }
+  // The generated paths/content are deliberately well below the canonical
+  // bundle limits; the real upload route remains the final validator.
+  if (Buffer.byteLength(JSON.stringify({ name: definition.name, files: definition.files }), 'utf8') > MAX_SEED_REQUEST_BYTES) {
+    throw new Error(`seed profile request exceeds the ${MAX_SEED_REQUEST_BYTES}-byte local request limit`);
+  }
+}
+
+async function seed(runRoot, options = { profile: DEFAULT_SEED_PROFILE }) {
   const { metadata } = readMetadata(runRoot);
+  const profile = options.profile ?? DEFAULT_SEED_PROFILE;
+  const definition = createSeedDefinition(profile);
+  assertSeedDefinition(definition);
   const auth = authFromCredentials(metadata.paths.credentials);
   const currentPolicy = await waitForRegistry(auth);
   if (!Array.isArray(currentPolicy.scanners) || !currentPolicy.scanners.some((scanner) => scanner?.id === 'skillsguard')) {
@@ -682,27 +903,12 @@ async function seed(runRoot) {
   if (!policyUpdate.response.ok || !policyUpdate.value?.policy) throw new Error(`local policy update failed with HTTP ${policyUpdate.response.status}`);
   const policy = policyUpdate.value.policy;
 
-  const skillText = [
-    '---',
-    'name: m6-local-combined',
-    'description: Deterministic local combined M6 fixture',
-    '---',
-    '',
-    '# Local combined M6 fixture',
-    '',
-    'This is inert local test data.',
-    '',
-  ].join('\n');
-  const readmeText = '# Local combined M6 fixture\n';
   const draftResponse = await requestJson(auth.origin, '/v1/drafts', {
     method: 'POST',
     headers: { ...auth.headers, 'content-type': 'application/json', 'idempotency-key': `local-m6-draft-${randomUUID()}` },
     body: JSON.stringify({
-      name: '@local/m6-local-combined-fixture',
-      files: [
-        { path: 'SKILL.md', content: Buffer.from(skillText, 'utf8').toString('base64') },
-        { path: 'README.md', content: Buffer.from(readmeText, 'utf8').toString('base64') },
-      ],
+      name: definition.name,
+      files: definition.files,
     }),
   });
   if (![200, 201].includes(draftResponse.response.status) || !draftResponse.value?.draft) {
@@ -721,10 +927,10 @@ async function seed(runRoot) {
       name: draft.name,
       revision: draft.revision,
       digest: draft.digest,
-      fileCount: Array.isArray(draft.files) ? draft.files.length : 2,
-      expectedTextBytes: Buffer.byteLength(skillText) + Buffer.byteLength(readmeText),
-      skillTextBytes: Buffer.byteLength(skillText),
-      skillTextDigest: `sha256:${createHash('sha256').update(skillText).digest('hex')}`,
+      fileCount: Array.isArray(draft.files) ? draft.files.length : definition.files.length,
+      expectedTextBytes: definition.manifest?.totalBytes ?? (Buffer.byteLength(definition.skillText) + Buffer.byteLength(definition.readmeText)),
+      skillTextBytes: Buffer.byteLength(definition.skillText),
+      skillTextDigest: sha256Text(definition.skillText),
     },
     policy: {
       revision: policy.revision,
@@ -735,6 +941,7 @@ async function seed(runRoot) {
       mode: metadata.reviewer.mode,
       deterministicFinding: 'one bounded info finding for the first text file',
     },
+    ...(definition.manifest === undefined ? {} : { manifest: definition.manifest }),
     limitation: 'The builder and upload reviewer are deterministic local HTTP boundaries; no hosted Eve or Gateway call was made.',
   };
   writePrivate(metadata.paths.fixture, fixture);
@@ -745,6 +952,11 @@ async function seed(runRoot) {
     reviewerOrigin: fixture.reviewerOrigin,
     draftRoute: fixture.draftRoute,
     draft: { id: draft.id, revision: draft.revision, digest: draft.digest, fileCount: fixture.draft.fileCount },
+    ...(fixture.manifest === undefined ? {} : {
+      profile: fixture.manifest.profile,
+      nestedPathCount: fixture.manifest.nestedPathCount,
+      longLinePathCount: fixture.manifest.longLineFiles.length,
+    }),
     policy: fixture.policy,
     reviewerMode: fixture.review.mode,
     fixturePath: metadata.paths.fixture,

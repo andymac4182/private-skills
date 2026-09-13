@@ -9,6 +9,7 @@ import type { DraftSurfaceEntry } from './PierreDraftSurface'
 interface FakeTreeOptions {
   paths: readonly string[]
   initialSelectedPaths?: readonly string[]
+  search?: boolean
   onSelectionChange?: (selected: readonly string[]) => void
 }
 
@@ -74,21 +75,23 @@ class FakeTreeModel {
 }
 
 const treeModels: FakeTreeModel[] = []
+const treeOptions: FakeTreeOptions[] = []
 
 vi.mock('@pierre/trees/react', async () => {
   const React = await import('react')
   function useFileTree(options: FakeTreeOptions): { model: FakeTreeModel } {
     const [model] = React.useState(() => {
+      treeOptions.push(options)
       const next = new FakeTreeModel(options)
       treeModels.push(next)
       return next
     })
     return { model }
   }
-  function FileTree({ model }: { model: FakeTreeModel }): ReactNode {
+  function FileTree({ model, 'aria-label': ariaLabel }: { model: FakeTreeModel; 'aria-label'?: string }): ReactNode {
     const [, rerender] = React.useState(0)
     React.useEffect(() => model.subscribe(() => rerender((value) => value + 1)), [model])
-    return React.createElement('ul', { 'data-testid': 'tree' }, model.paths.map((path) => React.createElement('li', { key: path }, React.createElement('button', { type: 'button', onClick: () => model.selectOnly(path) }, path))))
+    return React.createElement('ul', { 'data-testid': 'tree', 'aria-label': ariaLabel }, model.paths.map((path) => React.createElement('li', { key: path }, React.createElement('button', { type: 'button', onClick: () => model.selectOnly(path) }, path))))
   }
   return { FileTree, useFileTree }
 })
@@ -148,6 +151,7 @@ function mountSurface(container: HTMLElement, props: Parameters<typeof PierreDra
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   treeModels.length = 0
+  treeOptions.length = 0
 })
 
 afterEach(() => {
@@ -163,6 +167,20 @@ describe('Pierre draft editor identity', () => {
     expect(pierreEditStateKey('draft-1', 2, 'sha256:first', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:second', 'SKILL.md')).not.toBe(first)
     expect(pierreEditStateKey('draft-1', 1, 'sha256:first', 'README.md')).not.toBe(first)
+  })
+
+  it('enables the installed tree search UI and names the tree for assistive technology', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps())
+
+    try {
+      await act(async () => {})
+      expect(treeOptions[0]?.search).toBe(true)
+      expect(container.querySelector('[data-testid="tree"]')?.getAttribute('aria-label')).toBe('Draft files')
+    } finally {
+      await act(async () => { root.unmount() })
+    }
   })
 })
 
@@ -215,6 +233,25 @@ describe('Pierre draft diff layout', () => {
 })
 
 describe('Pierre draft file tree updates', () => {
+  it('uses the installed tree search model to find nested paths without changing selection', () => {
+    const selectedPath = 'packs/000/nested/skill/SKILL.md'
+    const addedPath = 'packs/100/nested/skill/deeper/SKILL.md'
+    const paths = [selectedPath, ...Array.from({ length: 99 }, (_, index) => `packs/${String(index + 1).padStart(3, '0')}/nested/skill/SKILL.md`), addedPath]
+    const model = new PierreFileTreeModel({ paths, initialExpansion: 'open', initialSelectedPaths: [selectedPath], search: true })
+    try {
+      model.openSearch('deeper')
+      expect(model.getSearchMatchingPaths()).toContain(addedPath)
+      expect(model.getFocusedPath()).toBe(addedPath)
+      expect(model.getSelectedPaths()).toEqual([selectedPath])
+
+      model.setSearch('packs/100/nested/skill')
+      expect(model.getSearchMatchingPaths()).toContain(addedPath)
+      expect(model.getSelectedPaths()).toEqual([selectedPath])
+    } finally {
+      model.cleanUp()
+    }
+  })
+
   it('uses the tree model reset contract to retain selection while adding paths', () => {
     const model = new PierreFileTreeModel({ paths: ['packs/000/SKILL.md'], initialExpansion: 'open', initialSelectedPaths: ['packs/000/SKILL.md'] })
     try {
