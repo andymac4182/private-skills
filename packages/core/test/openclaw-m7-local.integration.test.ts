@@ -34,10 +34,8 @@ import type {
   Authenticator,
   BlobStore,
   Policy,
-  Principal,
   RegistryState,
   SkillBundle,
-  StateRepository,
   StoredBlob,
 } from '../../contracts/src/index.js';
 import { digestBytes } from '../../storage/src/index.js';
@@ -51,13 +49,13 @@ import { WorkerRunner } from '../../../workers/runner/src/index.js';
 
 /**
  * This local-only test consumes the previously verified public NVIDIA archive
- * without checking the archive into this repository. CI or another checkout
- * without the operator cache records the boundary as skipped; the ordinary
- * synthetic source and worker tests remain portable there.
+ * when PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE explicitly points to the operator's
+ * cached copy; the archive is never checked into this repository. CI or
+ * another checkout without that opt-in records the boundary as skipped; the
+ * ordinary synthetic source and worker tests remain portable there.
  */
-const NVIDIA_ARCHIVE_PATH = process.env.PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE
-  ?? '/private/tmp/nvidia-doca-version-27fa3e16.tar.gz';
-const HAS_CACHED_NVIDIA_ARCHIVE = existsSync(NVIDIA_ARCHIVE_PATH);
+const NVIDIA_ARCHIVE_PATH = process.env.PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE;
+const HAS_CACHED_NVIDIA_ARCHIVE = NVIDIA_ARCHIVE_PATH !== undefined && existsSync(NVIDIA_ARCHIVE_PATH);
 
 const ORIGIN = 'https://m7-registry.test';
 const ORGANIZATION_ID = 'org-m7-local';
@@ -74,6 +72,7 @@ const GITHUB_PATH = 'skills/doca-version';
 const GITHUB_COMMIT = '27fa3e16d95f32b55843da712f163754395bd05f';
 const GITHUB_CONTENT_HASH = '4887325e8386bc9a713e38c4dbf05081abdaeb7a6ec1649bb692ce48d015df34';
 const EXTERNAL_DIGEST = `sha256:${GITHUB_CONTENT_HASH}` as `sha256:${string}`;
+const ARCHIVE_DIGEST = 'sha256:6cca84521b3bd68f6aa1ecc6244b03a6cea03fc3703c5f20ac74edebf94fa807';
 
 const POLICY: Policy = {
   revision: 'm7-required-skillsguard',
@@ -105,26 +104,6 @@ class BlobReadback implements BlobStore {
   remove(key: string): Promise<void> {
     return this.inner.remove(key);
   }
-}
-
-function userPrincipal(): Principal {
-  return {
-    organizationId: ORGANIZATION_ID,
-    subject: 'm7-user',
-    roles: ['owner', 'admin', 'publisher', 'reader'],
-    namespaces: ['@acme'],
-    scopes: ['registry:*'],
-  };
-}
-
-function workerPrincipal(): Principal {
-  return {
-    organizationId: ORGANIZATION_ID,
-    subject: 'm7-worker',
-    roles: ['worker'],
-    scopes: ['jobs:claim', 'jobs:complete'],
-    identity: 'worker',
-  } as Principal & { identity: 'worker' };
 }
 
 function localScanner(): ScannerAdapter {
@@ -226,7 +205,9 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
   });
 
   it.skipIf(!HAS_CACHED_NVIDIA_ARCHIVE)('acquires the real PAX GitHub archive, scans and seals it, then serves a private feed to the reference consumer', async () => {
+    if (NVIDIA_ARCHIVE_PATH === undefined) return;
     const archiveBytes = new Uint8Array(await readFile(NVIDIA_ARCHIVE_PATH));
+    expect(await sha256(archiveBytes)).toBe(ARCHIVE_DIGEST);
     root = await mkdtemp(join(tmpdir(), 'private-skills-m7-files-'));
 
     const repository = createMemoryStateRepository({
@@ -591,6 +572,9 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
     expect(await digestBytes(transferredBytes)).toBe(skill!.artifact.digest);
     expect([...transferredBytes]).toEqual([...artifactBytes!]);
 
+    // The queue treats an approved completed source as a warm cache hit and
+    // returns its original operation in the running state for the caller's
+    // polling contract; it does not enqueue a second source acquisition.
     const warm = await request(handler, '/v1/feeds/skills/import', {
       method: 'POST',
       headers: jsonHeaders(USER_TOKEN),
