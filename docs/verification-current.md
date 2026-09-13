@@ -8,6 +8,8 @@ scanner, editor/review, CLI, pgvector, browser, and fixture checks with their
 source-specific limits. Remote state has not been refreshed during this phase;
 the quota response and production source below are historical observations,
 not a new quota check.
+The [production resumption runbook](release-resumption.md) orders the remaining
+source, deployment, and hosted acceptance checks once the owner lifts the pause.
 
 **As of:** 2026-09-13 (latest root-coordinated provider and schedule readbacks
 captured on 13 September 2026 UTC)
