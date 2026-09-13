@@ -1,17 +1,22 @@
 # Current verification checkpoint
 
-**As of:** 2026-09-13 (latest root-coordinated provider readback captured on
-12 September 2026 UTC)
+**As of:** 2026-09-13 (latest root-coordinated provider and schedule readbacks
+captured on 13 September 2026 UTC)
 
-**Current verified delivery checkpoint:** merged main source
-`57bce92403af37e8303c654d7a03da634c63445f` contains PR40 merge `8ed18be`,
-PR39 merge `3e000aa`, and PR41 merge `57bce92`. Fresh root-coordinated Vercel
-API evidence maps that exact source to READY Git-triggered production
-deployments for the registry (`dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`), builder
-(`dpl_6qo7B4evMTgxDg6Zt76LXQuXZcuy`), and upload-reviewer
-(`dpl_CNTXXWDfppG7D8ZKuYVhVnhzmuhU`). The earlier `878c636` cascade remains a
-historical checkpoint. The capture is deployment/source provenance; it does
-not by itself close the remaining product gates.
+**Current repository and production checkpoint:** merged main is
+`499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48
+(`fa56c21fca3aed568a16237cd06c4707d83e5fcb`), PR49
+(`853f4ae4a4155671114b15442f2ef9490d4b329e`), and PR50
+(`499b64fd22ab2ab149a6bf51f77949c0ed004934`). The latest production READY
+source is PR48 `fa56c21`; no production deployment was created for PR49 or PR50.
+The root-coordinated GitHub commit-status/API readback reports `Deployment rate
+limited — retry in 24 hours` for all three projects, so the current production
+state stays on the prior READY source and no manual deployment bypass is
+claimed. The
+preceding PR47 `a4c12d5` cascade and its deployment IDs remain historical
+source-specific evidence. The accepted upload-draft-resume evidence and the
+post-merge PR49/PR50 checks are summarized below. Production/source provenance
+does not by itself close the remaining product gates.
 
 Native CI was waived by explicit repository-owner instruction on 13 September
 2026 for this delivery/review scope. The workflows remain enabled, the captured
@@ -27,7 +32,17 @@ configuration; they do not prove feed import or publication, and M7 remains
 incomplete. The public metadata probe remains interoperability evidence only.
 
 The published v0.2.0 CLI package lacks feed, directory, and current pullthrough
-support. v0.3 packaging is in progress; no v0.3 publication is claimed.
+support. The private [v0.3.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.3.0)
+is non-draft and non-prerelease at tag source `973b34af`; independent archive
+and fresh-download verification passed for all four assets, all three target
+builds, and the Mac package's two-member inert fixture install/verify/warm
+repeat with no changes. The CLI shipping gate is closed with these
+compatibility limits; the release evidence does not prove feed/directory/
+current-pullthrough behavior or native CI. Native CI remains waived, and the
+Linux-container and Windows-Wine checks are not native CI.
+The sanitized [published-release verification record](evidence/production-cli-v0.3-release-20260913.json)
+retains the tag, asset checksums, target builds, and fresh-download result
+without local filesystem paths.
 
 The isolated hosted-edge proof from source `c7a0f03` passed through a temporary
 Cloudflare Worker and Node gateway with required SkillsGuard scanning, private
@@ -38,18 +53,40 @@ replace production release gates or claim M7 completion. The earlier
 [local Cloudflare build record](evidence/edge-build-c7a0f03.json) remains local
 build evidence with its original limits.
 
-M6 remains incomplete: terminal-session restart PR39 (`0f71d4`) shipped in the
-verified `57bce924` checkpoint with its browser-passed final UI guard;
-draft-resume and accessibility changes remain pending. A new live Eve proposal
-is verified, while its apply, review, scan, and publication steps remain
-pending. C1 telemetry/parser work is in progress; physical GitHub/well-known
-source pullthrough remains open. No publication is claimed.
+M6 remains incomplete. Terminal-session restart PR39 (`0f71d4`) and PR45
+(`9c16407`) are included in the current production source; PR45's 21 focused
+accessibility checks and public browser contrast/reduced-motion checks pass.
+The API flow applied the proposal, passed review and required scanning, and
+published through the stable registry alias. Its preflight deployment was
+source-`57bce924` / `dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`; the alias changed during
+the mutation window, so the exact deployment serving each mutation is unknown.
+No skill was installed or executed. The safer exact-form-bound Eve [readback
+record](evidence/production-m6-terminal-restart-release-20260913.json) passed
+isolated login, released content, full scan, upload review, and the exact
+publish-draft URL's revision-2 file/review browser readback. The pre-fix Eve
+panel reported `revision and digest are required for the selected draft`; a
+post-fix panel readback remains blocked while Vercel rate-limits deployment of
+PR49 and PR50. The verifier diff binds required scan evidence to approved skill
+IDs and scanner rule/freshness checks; no skill content or credentials are
+recorded. PR47's accepted direct-draft evidence recorded the same
+identity/revision with two file contents, 19 focused draft-resume tests, 93 web
+tests, TypeScript/build green, and no registry writes; existing production
+secret configuration was preserved and no secret values are recorded. C1
+telemetry/parser implementation is shipped in PR42/43. The root-reviewed
+snapshot warm-cache proof is recorded with zero catalog/source upstream
+requests; source-scoped upstream GitHub/well-known fixtures pass, while hosted
+physical source pullthrough, concurrent cold deduplication, and tenant/secrecy
+acceptance remain open. A snapshot-approved release exists, but it does not
+establish hosted physical-source acceptance.
 
-The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
-the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September 2026
-proof window. The short dated probe was inconclusive and the fuller proof is
-being prepared. Treat the earlier run as deployment-scoped temporal correlation
-until an explicit scheduler/session identifier is captured.
+The dated `0 0 13 9 *` UTC schedule dispatched at 00:09 UTC on 13 September
+2026; its causal record captured two candidates, completed
+submit/session/registry matching, and zero new suggestions. The sanitized
+[restored-schedule evidence](evidence/production-reviewer-cron-causal-20260913.json)
+records effective `/eve/v1/info` HTTP 200 for production `daily-review` with
+the default `0 22 * * *` UTC schedule, using the previously authorized origin
+and token scope. This is concise schedule evidence; it does not inventory every
+Eve route.
 
 **Earlier PR34 functional release checkpoint:** PR34 was merged at
 `2026-09-10T15:02:13Z` with approved head
@@ -95,8 +132,10 @@ remain unverified; this source/build diagnosis does not mark M6 complete.
 
 The editor API and authoring source remain shipped, the local synthetic
 [editor-browser record](evidence/m6-editor-browser-local-29f7.json) retains its
-own source-scoped checks, and physical GitHub/well-known source resolution plus
-direct upstream-zero instrumentation remain pending. A bounded hosted
+own source-scoped checks, and hosted physical GitHub/well-known source
+resolution remains pending. The newer root-reviewed snapshot warm-cache record
+closes the zero-upstream warm-path slice for its exact candidate; it does not
+prove physical source resolution. A bounded hosted
 Neon/object-storage logical restore is verified in the sanitized [restore
 evidence](evidence/hosted-restore-20260910.json): source revision 114, five
 referenced objects totaling 10,381 bytes, exact target revision 114, five
@@ -392,11 +431,16 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
 
 ## Remaining gates
 
-- C1 telemetry/parser work is in progress. Prove representative physical
-  GitHub and well-known source resolution, concurrent cold deduplication, and
-  direct instrumentation that a warm cache path makes no upstream request. The
-  snapshot candidate and quarantined CI-004 records remain source-specific
-  evidence.
+- C1 telemetry/parser implementation is shipped in PR42/43. The root-reviewed snapshot
+  warm-cache proof for `vercel-labs/agent-skills/web-design-guidelines` returned
+  200 with the same resource and artifact digest, zero catalog/source upstream
+  requests, zero queued jobs, and no additional target job after the warm
+  follow-up; the stale admission is recorded separately. Source-scoped upstream
+  GitHub and well-known fixtures pass; prove hosted physical source resolution
+  and concurrent cold deduplication. The snapshot candidate and quarantined
+  CI-004 records remain source-specific evidence. PR48 adds scoped v0.2
+  composed-fixture coverage; hosted physical source resolution and concurrent
+  cold deduplication remain verification gaps.
 - Native CI was waived by explicit repository-owner instruction on 13 September
   2026 for this delivery/review scope. Workflows remain enabled and no native
   target pass is claimed; the captured provider billing/payment or
@@ -406,16 +450,30 @@ not claim zero upstream HTTP calls from a 200 cache response. The prior
   operator-quiescence and provider-lifecycle limits.
 - M6 editor/authoring API and source are shipped, and the local synthetic
   editor/browser fixture passes. Terminal-session restart PR39 (`0f71d4`) shipped
-  in the verified `57bce924` checkpoint with its browser-passed final UI guard;
-  draft-resume and accessibility changes remain pending. A new live Eve proposal
-  is verified, while its apply, review, scan, durable draft/CAS/publication,
-  cross-tenant denial, and screenreader/contrast/reduced-motion checks remain
-  open.
-- The default daily reviewer schedule `0 22 * * *` UTC is temporarily replaced by
-  the dated `0 0 13 9 *` UTC schedule for the `00:00–01:05` UTC 13 September
-  2026 proof window. The short dated probe was inconclusive and the fuller proof
-  is being prepared. The earlier run is deployment-scoped temporal correlation
-  until an explicit scheduler/session identifier is captured.
+  in the verified `a4c12d5` checkpoint with its browser-passed final UI guard;
+  full hosted accessibility and authenticated-control checks remain pending. The
+  API flow applied the proposal,
+  passed review and required scanning, and published through the stable registry
+  alias. Its preflight deployment was source-`57bce924` /
+  `dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`; the alias changed during the mutation
+  window, so the exact deployment serving each mutation is unknown. No skill was
+  installed or executed. The latest sanitized [Eve readback evidence](evidence/production-m6-terminal-restart-release-20260913.json)
+  records isolated login, released content, full scan, upload review, and the
+  exact publish-draft URL's revision-2 file/review browser readback. The pre-fix
+  Eve panel reported `revision and digest are required for the selected draft`;
+  post-fix panel validation is blocked while Vercel rate-limits deployment of
+  PR49 and PR50. PR45 (`9c16407`) is merged with 21 focused accessibility
+  checks and public browser contrast/reduced-motion checks passing. Full hosted
+  builder UI and post-fix Eve-panel validation remain pending. Durable draft/CAS,
+  cross-tenant denial, and complete hosted screenreader/contrast/reduced-motion
+  checks remain open.
+- The dated `0 0 13 9 *` UTC schedule dispatched at 00:09 UTC on 13 September
+  2026; its causal record captured two candidates, completed
+  submit/session/registry matching, and zero new suggestions. The sanitized
+  restored-schedule readback records effective `/eve/v1/info` HTTP 200 for
+  production `daily-review` with
+  the default `0 22 * * *` UTC schedule, using the previously authorized origin
+  and token scope.
 - M7 OpenClaw backend code is shipped and its seven reviewed nonsecret
   production settings are active. The public metadata probe remains
   interoperability evidence only. Two hosted M7 candidates failed closed on

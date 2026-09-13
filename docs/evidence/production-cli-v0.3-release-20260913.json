@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "verifier": "private-cli-v0.3-published-release",
+  "repository": "andymac4182/private-skills",
+  "release": {
+    "url": "https://github.com/andymac4182/private-skills/releases/tag/v0.3.0",
+    "tag": "v0.3.0",
+    "tagSha": "973b34af7cd20b605df72fdfc8466f1d58f3aec0",
+    "isDraft": false,
+    "isPrerelease": false
+  },
+  "assets": [
+    {
+      "id": "RA_kwDOUTRgYc4hZM-l",
+      "name": "pskills-aarch64-apple-darwin.tar.gz",
+      "sha256": "ea826dfbdd032c1385306426e1887576174454a82f05db2346b33c92d144e01b",
+      "size": 2634216
+    },
+    {
+      "id": "RA_kwDOUTRgYc4hZM-g",
+      "name": "pskills-x86_64-pc-windows-msvc.zip",
+      "sha256": "de71fb964161ddfd71787488f2af2bc1ef117b4d35e77957abf578ab690f0be9",
+      "size": 2440963
+    },
+    {
+      "id": "RA_kwDOUTRgYc4hZM-j",
+      "name": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "b25595824a0de566aba3b5ae9931234d2c5e4bd5a7d7fca858970aeb1cf35371",
+      "size": 2878241
+    },
+    {
+      "id": "RA_kwDOUTRgYc4hZM-k",
+      "name": "SHA256SUMS",
+      "sha256": "6bb42c964f1a8528746485fb669d5efa2f08d7faf407f7c64ff7d5ae5595d95b",
+      "size": 309
+    }
+  ],
+  "freshDownload": {
+    "checksumVerification": "passed",
+    "archiveMemberVerification": "passed",
+    "macVersion": "pskills 0.3.0",
+    "packagedMacAcceptanceResult": "first install changed both inert fixture members; verify passed for both; warm reinstall changed neither; no bundled skill content executed",
+    "targetBuilds": [
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu"
+    ],
+    "localPathsOmitted": true
+  }
+}

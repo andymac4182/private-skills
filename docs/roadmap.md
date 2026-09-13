@@ -35,40 +35,68 @@ silently expand that release. The later milestones below are ordered by the
 amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
-- **Now: close the remaining C1 evidence.** The current verified delivery source is merged
-  main `57bce92403af37e8303c654d7a03da634c63445f` and fresh root-coordinated
-  Vercel API evidence maps that exact source to READY registry, builder, and
-  upload-reviewer deployments. PR40, PR39, and PR41 are merged as `8ed18be`,
-  `3e000aa`, and `57bce92`. C1 telemetry/parser work is in progress;
-  physical GitHub/well-known source pullthrough, direct warm-path
-  instrumentation, and tenant/secrecy acceptance remain open. Native CI was
-  waived by explicit repository-owner instruction on 13 September 2026 for this
-  delivery/review scope; workflows remain enabled and no native target pass is
-  claimed. The published v0.2.0 CLI package lacks feed, directory, and current
-  pullthrough support; v0.3 packaging is in progress and no v0.3 publication is
-  claimed. The isolated hosted-edge proof passed separately with its disposable
-  resources cleaned up; it does not close the remaining product gates.
+- **Now: close the remaining C1 evidence.** Merged main is
+  `499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48 (`fa56c21`),
+  PR49, and PR50. The latest production READY source is PR48 `fa56c21`; Vercel
+  rate limiting delayed deployments containing PR49 and PR50. C1
+  telemetry/parser implementation is shipped in PR42/43; the root-reviewed
+  snapshot warm-cache proof records same-resource/digest reuse with zero
+  catalog/source upstream requests, and PR48 adds scoped v0.2 composed-fixture
+  coverage. Source-scoped upstream GitHub/well-known fixtures pass, while
+  hosted physical source pullthrough, concurrent cold deduplication, and
+  tenant/secrecy acceptance remain open. Native CI was waived by explicit
+  repository-owner instruction on 13 September 2026 for this delivery/review
+  scope; workflows remain enabled and no native target pass is claimed. The
+  published v0.2.0 CLI package lacks feed, directory, and current pullthrough
+  support. The private v0.3.0 release at PR46 (`973b34a`) is published with
+  archive/fresh-download verification; Linux-container and Windows-Wine checks
+  are not native CI. The isolated hosted-edge proof passed separately with its
+  disposable resources cleaned up; it does not close the remaining product
+  gates.
 - **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,
   on-demand catalog adapter, identity-preserving pullthrough, approved-cache
   behavior, and Packs, Topics, Official, and external Audits views remain the
   scoped C1 delivery described in [`skills-sh.md`](skills-sh.md). Telemetry and
-  parser work is in progress. A complete source identity still must pass
-  canonical validation and required scanning before caching; physical source
-  resolution, direct warm-path instrumentation, and tenant/secrecy acceptance
-  remain open. Existing private-pack management is in
-  scope; external batch migration remains future work.
+  parser implementation is shipped in PR42/43. The root-reviewed snapshot warm-cache proof
+  records same-resource/digest reuse with zero catalog/source upstream requests;
+  source-scoped upstream GitHub/well-known fixtures pass, while hosted physical
+  source resolution, concurrent cold deduplication, and tenant/secrecy
+  acceptance remain open. Existing private-pack management is in scope; external
+  batch migration remains future work.
 - **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
   The current READY service set and historic [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
   establish the viewer boundary only. The [local synthetic editor/browser
   evidence](evidence/m6-editor-browser-local-29f7.json) passes bounded
   desktop/mobile draft checks. Terminal-session restart PR39 (`0f71d4`) shipped in
-  the verified `57bce924` checkpoint with its browser-passed final UI guard;
-  draft-resume and accessibility changes remain pending. A new live Eve proposal
-  is verified, while its apply, review, scan, and publication steps remain
-  pending. Complete M6 still requires the
-  composed editor, durable drafts, upload/edit reviewer, builder, and their
-  end-to-end evidence. This milestone is active implementation work, but it is
-  not a G0 or C1 release gate until its criteria and evidence pass.
+  the verified `a4c12d5` checkpoint with its browser-passed final UI guard;
+  full hosted accessibility and authenticated-control checks remain pending. The
+  API flow applied the proposal,
+  passed review and required scanning, and published through the stable registry
+  alias. Its preflight deployment was source-`57bce924` /
+  `dpl_3gsnBMSPpdvpFdpJdcUwrD8aDVcy`; the alias changed during the mutation
+  window, so the exact deployment serving each mutation is unknown. No skill was
+  installed or executed. PR45 (`9c16407`) is merged with 21 focused
+  accessibility checks and public browser contrast/reduced-motion checks passing.
+  The Eve workstream's safer exact-form-bound [readback evidence](evidence/production-m6-terminal-restart-release-20260913.json)
+  passed isolated login, released `SKILL.md` content, full scan, upload-review
+  state, and the exact publish-draft URL's revision-2 file/review browser
+  readback. The pre-fix Eve panel reported `revision and digest are required for
+  the selected draft`; post-fix panel validation is blocked while Vercel
+  rate-limits deployment of PR49 and PR50. Full hosted builder UI and post-fix
+  Eve-panel validation remain pending. The
+  upload-origin editor route remains unverified because this draft has no
+  release base. Its verifier diff (`verify-m6-post-proposal-reviewed.diff`)
+  binds required scan evidence to approved skill IDs and scanner
+  rules/freshness checks; no PR or production deployment is claimed for that
+  doc commit. Bearer and cookie API/session diagnostics passed. PR47 (`a4c12d5`)
+  now has all three Git-triggered production deployments READY. Its direct-draft
+  evidence records the same identity/revision with two file contents, 19 focused
+  draft-resume tests, 93 web tests, TypeScript/build green, and no registry
+  writes; existing production secret configuration was preserved and no secret
+  values are recorded. Complete M6 still requires the composed editor, durable drafts, upload/edit reviewer,
+  builder, and their end-to-end evidence. This milestone is active
+  implementation work, but it is not a G0 or C1 release gate until its criteria
+  and evidence pass.
 - **Active implementation, incomplete: M7 OpenClaw skills feed interoperability.**
   Seven reviewed nonsecret production settings are active. Two hosted M7
   candidates failed closed on artifact digest mismatches. The public-GitHub M7
