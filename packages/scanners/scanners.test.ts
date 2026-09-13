@@ -9,10 +9,13 @@ import {
   createNvidiaAdapter,
   createSkillsGuardAdapter,
   mapDockerScannerArgs,
+  requiredResultSatisfies,
   TrustedLocalExecutor,
   type CommandExecutor,
   type CommandRequest,
   type CommandResult,
+  type ScannerAdapter,
+  type ScannerPolicy,
 } from './src/index.js';
 
 const DIGEST = `sha256:${'a'.repeat(64)}` as `sha256:${string}`;
@@ -139,6 +142,99 @@ describe('pinned scanner adapters', () => {
       expect(scan.result.status).toBe('completed');
       expect(scan.result.coverage.filesAnalyzed).toBe(2);
       expect(scan.result.coverage.limitations.join(' ')).toContain('does not observe runtime behavior');
+    });
+  });
+
+  it('uses the worker file set as the coverage denominator for every pinned adapter', async () => {
+    const cases: Array<{ name: string; adapter: () => ScannerAdapter; report: unknown }> = [
+      {
+        name: 'cisco-underreported',
+        adapter: createCiscoAdapter,
+        report: { findings: [], files_enumerated: 1, files_analyzed: 1, files_skipped: 0, files_unsupported: 0 },
+      },
+      {
+        name: 'nvidia-underreported',
+        adapter: createNvidiaAdapter,
+        report: { issues: [], files_enumerated: 1, files_analyzed: 1, files_skipped: 0, files_unsupported: 0 },
+      },
+      {
+        name: 'skillsguard-underreported',
+        adapter: createSkillsGuardAdapter,
+        report: { findings: [], filesScanned: 1, filesSkipped: 0, filesUnsupported: 0 },
+      },
+    ];
+
+    await withInput(async (inputDir) => {
+      for (const testCase of cases) {
+        const scan = await testCase.adapter().scan(request(inputDir, testCase.name), reportExecutor(testCase.report));
+        expect(scan.result.coverage.filesEnumerated, testCase.name).toBe(2);
+        expect(scan.result.coverage.filesAnalyzed, testCase.name).toBe(1);
+        expect(scan.result.status, testCase.name).toBe('degraded');
+        expect(scan.result.coverage.limitations, testCase.name).toContain(
+          'scanner coverage mismatch: report enumerated 1 file but worker observed 2',
+        );
+      }
+    });
+  });
+
+  it('counts regular signature and binary files in the worker denominator', async () => {
+    await withInput(async (inputDir) => {
+      await writeFile(join(inputDir, 'artifact.sig'), Buffer.from([0xde, 0xad, 0xbe, 0xef]));
+      const scan = await createSkillsGuardAdapter().scan(
+        request(inputDir, 'skillsguard-signature'),
+        reportExecutor({ findings: [], filesScanned: 2, filesSkipped: 0, filesUnsupported: 0 }),
+      );
+      expect(scan.result.coverage).toMatchObject({ filesEnumerated: 3, filesAnalyzed: 2, filesSkipped: 0, filesUnsupported: 0 });
+      expect(scan.result.status).toBe('degraded');
+      expect(scan.result.coverage.limitations).toContain(
+        'scanner coverage mismatch: report enumerated 2 files but worker observed 3',
+      );
+      expect(requiredResultSatisfies(scan.result, {
+        id: 'skillsguard',
+        mode: 'required',
+        blockSeverities: ['high', 'critical'],
+        timeoutSeconds: 2,
+      })).toBe(false);
+    });
+  });
+
+  it('does not approve overreported or incomplete coverage when report partitions look clean', async () => {
+    const requiredPolicy = (id: ScannerPolicy['id']): ScannerPolicy => ({
+      id,
+      mode: 'required',
+      blockSeverities: ['high', 'critical'],
+      timeoutSeconds: 2,
+    });
+    await withInput(async (inputDir) => {
+      const overreported = await createSkillsGuardAdapter().scan(
+        request(inputDir, 'skillsguard-overreported'),
+        reportExecutor({ findings: [], filesScanned: 99, filesSkipped: 0, filesUnsupported: 0 }),
+      );
+      expect(overreported.result.coverage).toMatchObject({ filesEnumerated: 2, filesAnalyzed: 2, filesSkipped: 0, filesUnsupported: 0 });
+      expect(overreported.result.status).toBe('degraded');
+      expect(overreported.result.coverage.limitations).toContain(
+        'scanner coverage mismatch: report enumerated 99 files but worker observed 2',
+      );
+      expect(requiredResultSatisfies(overreported.result, requiredPolicy('skillsguard'))).toBe(false);
+
+      const sameTotalIncomplete = await createCiscoAdapter().scan(
+        request(inputDir, 'cisco-incomplete'),
+        reportExecutor({ findings: [], files_enumerated: 2, files_analyzed: 1, files_skipped: 0, files_unsupported: 0 }),
+      );
+      expect(sameTotalIncomplete.result.coverage).toMatchObject({ filesEnumerated: 2, filesAnalyzed: 1, filesSkipped: 0, filesUnsupported: 0 });
+      expect(sameTotalIncomplete.result.status).toBe('degraded');
+      expect(sameTotalIncomplete.result.coverage.limitations).toContain(
+        'scanner coverage mismatch: report accounts for 1 of 2 input files',
+      );
+      expect(requiredResultSatisfies(sameTotalIncomplete.result, requiredPolicy('cisco-skill-scanner'))).toBe(false);
+
+      const missingAnalyzed = await createCiscoAdapter().scan(
+        request(inputDir, 'cisco-missing-analyzed'),
+        reportExecutor({ findings: [], files_enumerated: 2 }),
+      );
+      expect(missingAnalyzed.result.coverage).toMatchObject({ filesEnumerated: 2, filesAnalyzed: 0 });
+      expect(missingAnalyzed.result.status).toBe('degraded');
+      expect(requiredResultSatisfies(missingAnalyzed.result, requiredPolicy('cisco-skill-scanner'))).toBe(false);
     });
   });
 

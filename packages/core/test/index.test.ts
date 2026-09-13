@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyRegistryState,
   createRegistryHandler,
+  isSkillCurrentlyApproved,
 } from '../src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 import type {
   Authenticator,
   BlobStore,
+  Digest,
+  Policy,
   Principal,
   RegistryDependencies,
   RegistryState,
+  ScanResult,
+  SkillVersion,
   StateRepository,
 } from '../../contracts/src/index.js';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
@@ -29,6 +34,14 @@ const bundle = (name: string) => ({
     path: 'SKILL.md',
     content: base64(`---\nname: ${name}\ndescription: Test skill ${name}\n---\n# ${name}\n`),
   }],
+});
+
+const bundleWithTwoFiles = (name: string) => ({
+  ...bundle(name),
+  files: [
+    ...bundle(name).files,
+    { path: 'README.md', content: base64(`# ${name}\n`) },
+  ],
 });
 
 class MemoryRepository implements StateRepository {
@@ -57,6 +70,7 @@ class MemoryRepository implements StateRepository {
 
 class MemoryBlobs implements BlobStore {
   readonly values = new Map<string, Uint8Array>();
+  reads = 0;
   nextKey = 0;
 
   async put(bytes: Uint8Array) {
@@ -67,6 +81,7 @@ class MemoryBlobs implements BlobStore {
   }
 
   async get(key: string): Promise<Uint8Array> {
+    this.reads += 1;
     const value = this.values.get(key);
     if (!value) throw new Error('missing blob');
     return value.slice();
@@ -75,6 +90,107 @@ class MemoryBlobs implements BlobStore {
   async remove(key: string): Promise<void> {
     this.values.delete(key);
   }
+}
+
+function requiredFilePolicy(revision = 'required-file-count'): Policy {
+  return {
+    revision,
+    scanners: [{
+      id: 'skillsguard',
+      mode: 'required',
+      blockSeverities: ['high', 'critical'],
+      timeoutSeconds: 60,
+    }],
+    allowUnscanned: false,
+    evidenceMaxAgeSeconds: 3_600,
+    hooks: [],
+  };
+}
+
+function cleanScan(
+  id: string,
+  digest: Digest,
+  policyRevision: string,
+  fileCount: number,
+): ScanResult {
+  return {
+    id,
+    organizationId: 'org-test',
+    jobId: `${id}-job`,
+    artifactDigest: digest,
+    policyRevision,
+    scannerId: 'skillsguard',
+    engineVersion: 'test',
+    rulesRevision: 'test',
+    configurationHash: 'test',
+    status: 'completed',
+    findings: [],
+    coverage: {
+      filesEnumerated: fileCount,
+      filesAnalyzed: fileCount,
+      filesSkipped: 0,
+      filesUnsupported: 0,
+      limitations: [],
+      externalDestinations: [],
+    },
+    createdAt: new Date().toISOString(),
+    durationMs: 1,
+  };
+}
+
+function incompleteScanResult(job: { id: string; artifact: { digest: Digest }; policyRevision: string }, fileCount: number) {
+  return {
+    id: `scan-${job.id}`,
+    organizationId: 'org-test',
+    jobId: job.id,
+    artifactDigest: job.artifact.digest,
+    policyRevision: job.policyRevision,
+    scannerId: 'skillsguard',
+    engineVersion: 'test',
+    rulesRevision: 'test',
+    configurationHash: 'test',
+    status: 'completed',
+    findings: [],
+    coverage: {
+      filesEnumerated: fileCount,
+      filesAnalyzed: fileCount,
+      filesSkipped: 0,
+      filesUnsupported: 0,
+      limitations: [],
+      externalDestinations: [],
+    },
+    createdAt: new Date().toISOString(),
+    durationMs: 1,
+  };
+}
+
+async function seedApprovedSkill(
+  test: ReturnType<typeof setup>,
+  name: string,
+  files: ReturnType<typeof bundleWithTwoFiles>,
+  scanFileCount: number,
+) {
+  const artifact = await test.blobs.put(encodeBundle(files));
+  const policyRevision = test.repository.state.policy.revision;
+  const skill: SkillVersion = {
+    id: `skill-${name}`,
+    organizationId: 'org-test',
+    name: `@team/${name}`,
+    skillName: name,
+    version: '1.0.0',
+    description: name,
+    artifact,
+    state: 'approved',
+    policyRevision,
+    createdAt: new Date().toISOString(),
+    approvedAt: new Date().toISOString(),
+    provenance: { kind: 'native' },
+    fileCount: files.files.length,
+    scanIds: [`scan-${name}`],
+  };
+  test.repository.state.skills.push(skill);
+  test.repository.state.scans.push(cleanScan(`scan-${name}`, artifact.digest, policyRevision, scanFileCount));
+  return skill;
 }
 
 function principalFor(subject: string, roles: Principal['roles'], namespaces?: string[]): Principal {
@@ -421,5 +537,152 @@ describe('registry core handler', () => {
       body: JSON.stringify({ resourceId: skill.id, authorizationId: authorization.id }),
     }));
     expect(afterRevoke.status).toBe(409);
+  });
+
+  it('invalidates legacy partial scan evidence before resolution, authorization, or transfer', async () => {
+    const test = setup({ allowUnscanned: false });
+    test.repository.state.policy = requiredFilePolicy();
+    const skill = await seedApprovedSkill(test, 'legacy-file-count', bundleWithTwoFiles('legacy-file-count'), 2);
+    test.setPrincipal(principalFor('reader', ['reader'], ['@team']));
+
+    const resolved = await test.handler(new Request(`${ORIGIN}/v1/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'skill', ref: skill.name, version: skill.version }),
+    }));
+    expect(resolved.status).toBe(200);
+
+    const authorizationResponse = await test.handler(new Request(`${ORIGIN}/v1/install-authorizations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'skill', ref: skill.name, version: skill.version }),
+    }));
+    expect(authorizationResponse.status).toBe(201);
+    const authorization = (await json(authorizationResponse)).authorization;
+
+    const descriptor = await test.handler(new Request(`${ORIGIN}/v1/artifacts/${encodeURIComponent(skill.artifact.digest)}/download`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceId: skill.id, authorizationId: authorization.id }),
+    }));
+    expect(descriptor.status).toBe(200);
+    const transferUrl = (await json(descriptor)).url as string;
+    const initialTransfer = await test.handler(new Request(transferUrl));
+    expect(initialTransfer.status).toBe(200);
+    expect(test.blobs.reads).toBe(1);
+
+    const storedScan = test.repository.state.scans.find((scan) => scan.id === skill.scanIds[0]);
+    expect(storedScan).toBeDefined();
+    storedScan!.coverage.filesEnumerated = 3;
+    storedScan!.coverage.filesAnalyzed = 3;
+    expect(isSkillCurrentlyApproved(test.repository.state, skill)).toBe(false);
+    storedScan!.coverage.filesEnumerated = 1;
+    storedScan!.coverage.filesAnalyzed = 1;
+    expect(isSkillCurrentlyApproved(test.repository.state, skill)).toBe(false);
+
+    const afterResolve = await test.handler(new Request(`${ORIGIN}/v1/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'skill', ref: skill.name, version: skill.version }),
+    }));
+    expect(afterResolve.status).toBe(404);
+
+    const afterAuthorization = await test.handler(new Request(`${ORIGIN}/v1/install-authorizations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'skill', ref: skill.name, version: skill.version }),
+    }));
+    expect(afterAuthorization.status).toBe(404);
+
+    const afterGrant = await test.handler(new Request(`${ORIGIN}/v1/artifacts/${encodeURIComponent(skill.artifact.digest)}/download`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceId: skill.id, authorizationId: authorization.id }),
+    }));
+    expect(afterGrant.status).toBe(409);
+
+    const readsBeforeDeniedTransfer = test.blobs.reads;
+    const deniedTransfer = await test.handler(new Request(transferUrl));
+    expect(deniedTransfer.status).toBe(409);
+    expect(test.blobs.reads).toBe(readsBeforeDeniedTransfer);
+  });
+
+  it('requires complete file-count evidence for native scan completion', async () => {
+    const test = setup({ allowUnscanned: false });
+    test.repository.state.policy = requiredFilePolicy();
+    test.setPrincipal(principalFor('publisher', ['publisher'], ['@team']));
+    const publish = await test.handler(new Request(`${ORIGIN}/v1/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '@team/incomplete-scan', version: '1.0.0', bundle: bundleWithTwoFiles('incomplete-scan') }),
+    }));
+    expect(publish.status).toBe(202);
+    const operation = (await json(publish)).operation;
+
+    test.setPrincipal(principalFor('worker', ['worker']));
+    const claim = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const job = (await json(claim)).job;
+    const complete = await test.handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        leaseToken: job.leaseToken,
+        scanResults: [incompleteScanResult(job, 1)],
+      }),
+    }));
+    expect(complete.status).toBe(200);
+    expect((await json(complete)).operation).toMatchObject({ id: operation.id, state: 'completed' });
+    expect(test.repository.state.skills[0]).toMatchObject({ fileCount: 2, state: 'scan-error' });
+    expect(test.repository.state.jobs[0]).toMatchObject({ state: 'completed', error: expect.stringContaining('did not enumerate every artifact file') });
+  });
+
+  it('requires complete file-count evidence for imported scan completion', async () => {
+    const test = setup({ allowUnscanned: false });
+    test.repository.state.policy = requiredFilePolicy();
+    test.setPrincipal(principalFor('admin', ['admin']));
+    const upstream = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'trusted-source', kind: 'registry', namespace: '@team', baseUrl: 'https://source.example.test' }),
+    }));
+    expect(upstream.status).toBe(201);
+    const upstreamId = (await json(upstream)).upstream.id;
+
+    const importedBundle = bundleWithTwoFiles('incomplete-import');
+    test.setPrincipal(principalFor('publisher', ['publisher'], ['@team']));
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/imports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ upstreamId, path: 'skills/incomplete-import', name: '@team/incomplete-import', version: '1.0.0' }),
+    }));
+    expect(queued.status).toBe(202);
+    const operation = (await json(queued)).operation;
+
+    test.setPrincipal(principalFor('worker', ['worker']));
+    const claim = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const job = (await json(claim)).job;
+    const bytes = encodeBundle(importedBundle);
+    const digest = await digestBytes(bytes);
+    const complete = await test.handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        leaseToken: job.leaseToken,
+        artifactDigest: digest,
+        bundle: importedBundle,
+        provenance: {
+          kind: 'registry',
+          upstreamId,
+          repository: 'https://source.example.test',
+          path: 'skills/incomplete-import',
+          revision: digest,
+        },
+        scanResults: [incompleteScanResult({ id: job.id, artifact: { digest }, policyRevision: job.policyRevision }, 1)],
+      }),
+    }));
+    expect(complete.status).toBe(200);
+    expect((await json(complete)).operation).toMatchObject({ id: operation.id, state: 'completed' });
+    expect(test.repository.state.skills[0]).toMatchObject({ fileCount: 2, state: 'scan-error' });
+    expect(test.repository.state.jobs[0]).toMatchObject({ state: 'completed', error: expect.stringContaining('did not enumerate every artifact file') });
   });
 });

@@ -1,6 +1,6 @@
 # Local refinement evidence — 2026-09-13
 
-This is local-only evidence from the isolated refinement worktree. It includes
+This is local-only evidence from the initial isolated refinement worktree and subsequent work on local `main`. It includes
 no production API calls, deployment, remote catalog enumeration, credentials,
 or claims about production milestones. No live registry state was changed.
 
@@ -59,3 +59,33 @@ checks listed above; no sweeping roadmap or status-document edits were made.
 - Root TypeScript and diff checks passed. The local app, builder, and disposable
   pgvector database were stopped after verification. All changes stay on local
   `main`; no push or Vercel deployment occurred during this continuation.
+
+## Scanner coverage correction on local main
+
+The real provider check exposed a file-accounting defect: a scanner could omit
+a file and report a self-consistent clean count for the smaller set. The worker
+now uses its own regular-file count as the denominator and degrades mismatched
+reports. Required scan admission also checks the stored artifact file count,
+so previously persisted incomplete evidence cannot authorize new downloads or
+reuse an already-issued transfer grant. The standalone OpenClaw projection
+applies the same admission check.
+
+- The [real SkillsGuard before/after check](local-skillsguard-coverage-regression-20260913.json)
+  preserves the positive two-file case. Adding a harmless signature/binary file
+  previously passed with reported 2/2 coverage; after the fix it reports 3
+  enumerated / 2 analyzed, degrades, and denies required approval. The before
+  execution used a verified tag; the after execution used the immutable image ID.
+- The [updated real OpenClaw source check](local-m7-real-skillsguard-coverage-rejection-20260913.json)
+  now retains all seven input files in normalized coverage. Its six analyzed
+  files produce `scan-error`, with no source proof, feed entry, or distribution.
+  The earlier quarantine record above remains historical evidence.
+- Core regressions cover native and imported completion, invalidation of
+  persisted underreported and overreported evidence, and denial of an existing
+  transfer grant before reading blob bytes. The authoring and GitHub worker
+  test scanners now count their actual input files, including nested files.
+- Final root verification passed: 757 tests, seven opt-in tests skipped,
+  TypeScript, and whitespace checks. Separate real Docker provider checks
+  above cover the positive and expected-negative scanner paths.
+
+These checks are local only and do not advance hosted acceptance or native
+Windows/Linux CI. No remote push or deployment was performed.

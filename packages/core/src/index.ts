@@ -2387,7 +2387,7 @@ function resolveResource(
 function skillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now = Date.now()): boolean {
   if (skill.state !== 'approved' || skill.policyRevision !== state.policy.revision) return false;
   const scans = state.scans.filter((scan) => skill.scanIds.includes(scan.id));
-  return evaluatePolicy(state.policy, scans, skill.artifact.digest, now).state === 'approved';
+  return evaluatePolicy(state.policy, scans, skill.artifact.digest, skill.fileCount, now).state === 'approved';
 }
 
 /** Shared admission predicate for durable source-proof projections. */
@@ -5617,7 +5617,7 @@ async function completeJob(
       const skill = currentJob.resourceId ? mutable.skills.find((candidate) => candidate.id === currentJob.resourceId) : undefined;
       if (!skill) throw new RegistryApiError('NOT_AVAILABLE', 'Job resource is unavailable', 404);
       if (!currentJob.artifact || skill.artifact.digest !== currentJob.artifact.digest) throw new RegistryApiError('DIGEST_MISMATCH', 'Job artifact changed', 409);
-      const evaluation = evaluatePolicy(currentJob.policy, scanResults, currentJob.artifact.digest);
+      const evaluation = evaluatePolicy(currentJob.policy, scanResults, currentJob.artifact.digest, skill.fileCount);
       mutable.scans.push(...scanResults);
       skill.scanIds = [...new Set([...skill.scanIds, ...scanResults.map((scan) => scan.id)])];
       if (skill.state !== 'revoked') skill.state = evaluation.state;
@@ -5642,7 +5642,7 @@ async function completeJob(
     if (mutable.skills.some((skill) => skill.name === request.name && skill.version === request.version)) {
       throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
     }
-    const evaluation = evaluatePolicy(currentJob.policy, scanResults, imported.digest);
+    const evaluation = evaluatePolicy(currentJob.policy, scanResults, imported.digest, imported.bundle.files.length);
     const skill: SkillVersion = {
       id: randomId('skill'),
       organizationId: config.organizationId,
@@ -5832,6 +5832,7 @@ function evaluatePolicy(
   policy: Policy,
   results: ScanResult[],
   digest: Digest,
+  fileCount: number,
   now = Date.now(),
 ): { state: DistributionState; error?: string } {
   const scanners = Array.isArray(policy.scanners) ? policy.scanners : [];
@@ -5850,6 +5851,7 @@ function evaluatePolicy(
       result.coverage.filesAnalyzed !== result.coverage.filesEnumerated
     ) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not cover every file` };
     if (result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return { state: 'quarantined', error: `Required scanner ${scanner.id} reported a blocking finding` };
+    if (result.coverage.filesEnumerated !== fileCount) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not enumerate every artifact file` };
   }
   if (required.length > 0) return { state: 'approved' };
   if (enabled.length === 0) {

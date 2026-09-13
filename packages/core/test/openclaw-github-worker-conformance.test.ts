@@ -36,6 +36,7 @@ import type {
   StoredBlob,
 } from '../../contracts/src/index.js';
 import { digestBytes } from '../../storage/src/index.js';
+import { countInputFiles } from '../../scanners/src/index.js';
 import type { ScannerAdapter, ScanResult as AdapterScanResult } from '../../scanners/src/types.js';
 import {
   createDefaultOpenClawSourceConfiguration,
@@ -196,6 +197,11 @@ function makeScanner(): ScannerAdapter {
       rulesRevision: 'fixture',
     },
     scan: async (input) => {
+      // Keep the deterministic adapter bound to the materialized worker input
+      // rather than hard-coding the source fixture's SKILL.md count. GitHub
+      // folders may include additional regular files that the source parser
+      // deliberately retains (for example, an inert asset).
+      const inputFileCount = await countInputFiles(input.inputDir);
       const result: AdapterScanResult = {
         schemaVersion: 1,
         organizationId: input.organizationId,
@@ -213,8 +219,8 @@ function makeScanner(): ScannerAdapter {
         status: 'completed',
         durationMs: 1,
         coverage: {
-          filesEnumerated: 1,
-          filesAnalyzed: 1,
+          filesEnumerated: inputFileCount,
+          filesAnalyzed: inputFileCount,
           filesSkipped: 0,
           filesUnsupported: 0,
           limitations: ['deterministic local test scanner'],

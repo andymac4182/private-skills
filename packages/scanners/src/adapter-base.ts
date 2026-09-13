@@ -164,6 +164,7 @@ export function createCommandAdapter(
       }
       const limitations = uniqueLimitations([...baseLimitations, ...parsed.limitations, ...(parsed.coverage.limitations ?? [])]);
       const coverage = reconcileCoverage(parsed.coverage, inputFileCount, limitations);
+      const coverageMismatch = coverageMismatchReasons(parsed.coverage, inputFileCount).length > 0;
       if (!parsed.valid) {
         const result = resultBase(request, definition.id, adapterMetadata, 'error', execution.durationMs, coverage, parsed.findings, parsed.error ?? 'scanner report did not contain required evidence');
         return { result, raw };
@@ -176,6 +177,8 @@ export function createCommandAdapter(
       const degraded = parsed.degraded === true
         || publisherControlLimitations.length > 0
         || (definition.degradedLimitations ?? []).some((item) => limitations.includes(item))
+        || coverageMismatch
+        || coverage.filesAnalyzed + coverage.filesSkipped + coverage.filesUnsupported < normalizeInputFileCount(inputFileCount)
         || coverage.filesAnalyzed === 0
         || coverage.filesSkipped > 0
         || coverage.filesUnsupported > 0;
@@ -225,18 +228,68 @@ function parseJsonDocument(text: string): unknown {
 }
 
 export function reconcileCoverage(parsed: ParsedCoverage, inputFileCount: number, limitations: string[]): ParsedCoverage & Required<Pick<ParsedCoverage, 'filesEnumerated' | 'filesAnalyzed' | 'filesSkipped' | 'filesUnsupported' | 'limitations' | 'externalDestinations'>> {
-  const enumerated = Math.max(0, Number.isFinite(parsed.filesEnumerated) ? Math.floor(parsed.filesEnumerated as number) : inputFileCount);
-  const analyzed = Math.max(0, Math.min(enumerated, Number.isFinite(parsed.filesAnalyzed) ? Math.floor(parsed.filesAnalyzed as number) : 0));
-  const skipped = Math.max(0, Math.min(enumerated - analyzed, Number.isFinite(parsed.filesSkipped) ? Math.floor(parsed.filesSkipped as number) : Math.max(0, enumerated - analyzed)));
-  const unsupported = Math.max(0, Math.min(enumerated - analyzed - skipped, Number.isFinite(parsed.filesUnsupported) ? Math.floor(parsed.filesUnsupported as number) : 0));
+  // The worker has the authoritative file set. Scanner-reported enumeration
+  // counts describe what the engine claims to have seen, but must never shrink
+  // the denominator used for the release gate. A provider that omits a binary,
+  // signature, or otherwise unsupported file therefore produces incomplete
+  // coverage instead of a self-consistent clean 6/6 report over a 7-file input.
+  const enumerated = normalizeInputFileCount(inputFileCount);
+  const reportedAnalyzed = normalizeReportCount(parsed.filesAnalyzed);
+  const reportedSkipped = normalizeReportCount(parsed.filesSkipped);
+  const reportedUnsupported = normalizeReportCount(parsed.filesUnsupported);
+  const analyzed = clampCoverageCount(reportedAnalyzed ?? 0, enumerated);
+  const skipped = Math.max(0, Math.min(enumerated - analyzed, reportedSkipped ?? Math.max(0, enumerated - analyzed)));
+  const unsupported = Math.max(0, Math.min(enumerated - analyzed - skipped, reportedUnsupported ?? 0));
+  const mismatchLimitations = coverageMismatchReasons(parsed, inputFileCount)
+    .map((reason) => `scanner coverage mismatch: ${reason}`);
   return {
     filesEnumerated: enumerated,
     filesAnalyzed: analyzed,
     filesSkipped: skipped,
     filesUnsupported: unsupported,
-    limitations: uniqueLimitations(limitations),
+    limitations: uniqueLimitations([...limitations, ...mismatchLimitations]),
     externalDestinations: [...new Set((parsed.externalDestinations ?? []).filter((item): item is string => typeof item === 'string').slice(0, 100))],
   };
+}
+
+function normalizeInputFileCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function normalizeReportCount(value: number | undefined): number | undefined {
+  return value === undefined || !Number.isFinite(value) ? undefined : Math.floor(value);
+}
+
+function clampCoverageCount(value: number, maximum: number): number {
+  return Math.max(0, Math.min(maximum, value));
+}
+
+function coverageMismatchReasons(parsed: ParsedCoverage, inputFileCount: number): string[] {
+  const observed = normalizeInputFileCount(inputFileCount);
+  const rawCounts = [parsed.filesEnumerated, parsed.filesAnalyzed, parsed.filesSkipped, parsed.filesUnsupported];
+  const malformed = rawCounts.some((value) => value !== undefined && (!Number.isFinite(value) || !Number.isInteger(value) || value < 0));
+  const reasons: string[] = [];
+  if (malformed) reasons.push('report contains a negative, fractional, or non-finite file count');
+
+  const reportedEnumerated = normalizeReportCount(parsed.filesEnumerated);
+  if (reportedEnumerated !== undefined && reportedEnumerated !== observed) {
+    reasons.push(`report enumerated ${reportedEnumerated} file${reportedEnumerated === 1 ? '' : 's'} but worker observed ${observed}`);
+  }
+
+  // A report may omit one or more of the partition counts. Compare the counts
+  // it did provide with the independently observed input set; an omitted file
+  // must remain visible as incomplete coverage rather than being inferred away.
+  const reportedPartitions = [
+    normalizeReportCount(parsed.filesAnalyzed),
+    normalizeReportCount(parsed.filesSkipped),
+    normalizeReportCount(parsed.filesUnsupported),
+  ].filter((value): value is number => value !== undefined);
+  if (reportedPartitions.length > 0) {
+    const accounted = reportedPartitions.reduce((total, value) => total + value, 0);
+    if (accounted < observed) reasons.push(`report accounts for ${accounted} of ${observed} input files`);
+    if (accounted > observed) reasons.push(`report accounts for ${accounted} files but worker observed ${observed}`);
+  }
+  return reasons;
 }
 
 export function reportArray(value: unknown, keys: string[]): unknown[] | undefined {

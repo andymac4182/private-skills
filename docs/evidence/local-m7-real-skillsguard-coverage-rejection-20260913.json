@@ -1,0 +1,73 @@
+{
+  "kind": "private-skills.local-m7-real-skillsguard-coverage-rejection",
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-13T04:41:38Z",
+  "source": {
+    "parentCommit": "d10fcc5c8ac095fa936b02f9e699fdebe4b66348",
+    "testPath": "packages/core/test/openclaw-m7-local.integration.test.ts",
+    "testWorkingTreeSha256": "sha256:cef96688aae4de6a5b2ec0bc54525549c99bce21a6745c005bd0ea4073d461f5",
+    "adapterPath": "packages/scanners/src/adapter-base.ts",
+    "adapterWorkingTreeSha256": "sha256:dd66a0c084676d85bfbe2ddddde92901dc53057943b7052192e692043ac6530f"
+  },
+  "archive": {
+    "input": "operator-provided PRIVATE_SKILLS_M7_NVIDIA_ARCHIVE",
+    "rawSha256": "sha256:6cca84521b3bd68f6aa1ecc6244b03a6cea03fc3703c5f20ac74edebf94fa807",
+    "repository": "NVIDIA/skills",
+    "path": "skills/doca-version",
+    "commit": "27fa3e16d95f32b55843da712f163754395bd05f",
+    "sourceContentHash": "sha256:4887325e8386bc9a713e38c4dbf05081abdaeb7a6ec1649bb692ce48d015df34",
+    "canonicalFileCount": 7
+  },
+  "scanner": {
+    "mode": "PRIVATE_SKILLS_M7_SCANNER=docker-skillsguard",
+    "id": "skillsguard",
+    "image": "private-skills/skillsguard:1.1.1",
+    "imageId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+    "engineVersion": "1.1.1",
+    "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+    "rawReportCoverage": {
+      "filesEnumerated": 6,
+      "filesAnalyzed": 6,
+      "filesSkipped": 0,
+      "filesUnsupported": 0
+    },
+    "normalizedCoverage": {
+      "filesEnumerated": 7,
+      "filesAnalyzed": 6,
+      "filesSkipped": 0,
+      "filesUnsupported": 0
+    },
+    "status": "degraded",
+    "findingsCount": 237,
+    "blockingFindingPresent": true,
+    "allowUnscanned": false
+  },
+  "boundary": {
+    "workerResult": "allow=false",
+    "jobState": "completed",
+    "skillState": "scan-error",
+    "sourceProofCount": 0,
+    "privateFeedEntryCount": 0,
+    "installAuthorizationCount": 0,
+    "transferGrantCount": 0,
+    "sourceFetches": 1,
+    "uploadedContentExecution": false
+  },
+  "validation": {
+    "scannerAdapterTests": "9 passed",
+    "deterministicM7": "1 passed",
+    "realM7": "1 passed",
+    "rootTypecheck": "passed",
+    "diffCheck": "passed"
+  },
+  "limitations": [
+    "SkillsGuard reports six analyzable files from the seven-file canonical bundle; the worker now retains seven as the coverage denominator and rejects the incomplete evidence.",
+    "The deterministic local scanner remains the positive publication/feed-consumer fixture; this provider run is an expected negative and does not publish.",
+    "This is local Docker evidence only and does not claim hosted provider, production, or runtime behavior analysis."
+  ],
+  "redaction": {
+    "containsCredentials": false,
+    "containsRawArtifactBytes": false,
+    "containsScannerReportContent": false
+  }
+}

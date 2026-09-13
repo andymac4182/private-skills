@@ -259,6 +259,65 @@ describe('OpenClaw source proof and consumer services', () => {
     })).resolves.toEqual([]);
   });
 
+  it('does not project a skill when persisted required scan coverage no longer matches fileCount', async () => {
+    const repository = await repositoryWithCompletedImport();
+    await repository.transaction(TENANT, (state) => {
+      state.policy.scanners = [{
+        id: 'skillsguard',
+        mode: 'required',
+        blockSeverities: ['high', 'critical'],
+        timeoutSeconds: 60,
+      }];
+      state.policy.allowUnscanned = false;
+      state.skills[0]!.fileCount = 2;
+      state.skills[0]!.scanIds = ['scan-required'];
+      state.scans.push({
+        id: 'scan-required',
+        organizationId: TENANT,
+        jobId: 'job-1',
+        artifactDigest: REGISTRY_DIGEST,
+        policyRevision: state.policy.revision,
+        scannerId: 'skillsguard',
+        engineVersion: 'test',
+        rulesRevision: 'test',
+        configurationHash: 'test',
+        status: 'completed',
+        findings: [],
+        coverage: { filesEnumerated: 2, filesAnalyzed: 2, filesSkipped: 0, filesUnsupported: 0, limitations: [], externalDestinations: [] },
+        createdAt: '2030-01-01T00:00:00.000Z',
+        durationMs: 1,
+      });
+    });
+
+    const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => FIXED_NOW });
+    await proofs.recordFromCompletion({
+      tenantId: TENANT,
+      completionJobId: 'job-1',
+      skillId: 'skill-1',
+      entry,
+      sourceArtifact,
+    });
+    const provider = createOpenClawCandidateProvider({ proofs, now: () => FIXED_NOW });
+    await expect(provider({
+      tenantId: TENANT,
+      principal: principal(),
+      state: await repository.read(TENANT),
+      signal: new AbortController().signal,
+    })).resolves.toHaveLength(1);
+
+    await repository.transaction(TENANT, (state) => {
+      const scan = state.scans.find((candidate) => candidate.id === 'scan-required')!;
+      scan.coverage.filesEnumerated = 1;
+      scan.coverage.filesAnalyzed = 1;
+    });
+    await expect(provider({
+      tenantId: TENANT,
+      principal: principal(),
+      state: await repository.read(TENANT),
+      signal: new AbortController().signal,
+    })).resolves.toEqual([]);
+  });
+
   it('uses current trusted metadata claims without changing source identity, and withholds blocked states', async () => {
     const repository = await repositoryWithCompletedImport();
     const proofs = new StateRepositoryOpenClawSourceProofStore(repository, { now: () => FIXED_NOW });

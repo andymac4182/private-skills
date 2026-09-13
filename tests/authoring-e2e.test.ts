@@ -115,7 +115,7 @@ function deterministicScanner(observe?: (input: ScanRequest) => void): ScannerAd
     },
     scan: async (input) => {
       observe?.(input);
-      const files = await readdir(input.inputDir, { withFileTypes: true });
+      const files = await readdir(input.inputDir, { withFileTypes: true, recursive: true });
       const count = files.filter((entry) => entry.isFile()).length;
       return {
         result: {

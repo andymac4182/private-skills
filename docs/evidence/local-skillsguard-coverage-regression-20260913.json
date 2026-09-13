@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-skillsguard-coverage-regression",
+  "capturedAt": "2026-09-13T04:36:35.444Z",
+  "source": {
+    "checkout": "/private/tmp/private-skills-01a08524",
+    "commit": "d10fcc5c8ac095fa936b02f9e699fdebe4b66348",
+    "scannerChange": "packages/scanners/src/adapter-base.ts shared working-tree fix; not authored here",
+    "workingTreeFileSha256": "sha256:dd66a0c084676d85bfbe2ddddde92901dc53057943b7052192e692043ac6530f",
+    "uncommittedDiffSha256": "sha256:446de68612ecb01c5138b61027972eece145a45cda95d81ee1ff764649619e13"
+  },
+  "executor": {
+    "adapter": "skillsguard",
+    "executor": "DockerExecutor",
+    "imageId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+    "postFixReference": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+    "preFixReference": "private-skills/skillsguard:1.1.1 (tag verified against imageId before execution)"
+  },
+  "policy": {
+    "scanner": "skillsguard",
+    "mode": "required",
+    "allowUnscanned": false
+  },
+  "before": {
+    "capturedAt": "2026-09-13T04:31:17.105Z",
+    "results": [
+      {
+        "fixture": "two-text-files",
+        "inputFileCount": 2,
+        "artifactDigest": "sha256:23228bd59d113ac97910baca4b54d6c10a96ec4e296fe9f6833bbd9d049fbde4",
+        "status": "completed",
+        "requiredResultSatisfies": true,
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 2,
+          "filesAnalyzed": 2,
+          "filesSkipped": 0,
+          "filesUnsupported": 0,
+          "limitationCount": 2
+        },
+        "findingCount": 0
+      },
+      {
+        "fixture": "two-text-plus-signature-binary",
+        "inputFileCount": 3,
+        "artifactDigest": "sha256:7bec183b7a521ca27815252e3719a029fe89ad82296746d89996c220a5cab635",
+        "status": "completed",
+        "requiredResultSatisfies": true,
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 2,
+          "filesAnalyzed": 2,
+          "filesSkipped": 0,
+          "filesUnsupported": 0,
+          "limitationCount": 2
+        },
+        "findingCount": 0
+      }
+    ]
+  },
+  "after": {
+    "capturedAt": "2026-09-13T04:36:35.444Z",
+    "results": [
+      {
+        "fixture": "two-text-files",
+        "inputFileCount": 2,
+        "artifactDigest": "sha256:23228bd59d113ac97910baca4b54d6c10a96ec4e296fe9f6833bbd9d049fbde4",
+        "status": "completed",
+        "requiredResultSatisfies": true,
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 2,
+          "filesAnalyzed": 2,
+          "filesSkipped": 0,
+          "filesUnsupported": 0,
+          "limitationCount": 2
+        },
+        "findingCount": 0
+      },
+      {
+        "fixture": "two-text-plus-signature-binary",
+        "inputFileCount": 3,
+        "artifactDigest": "sha256:7bec183b7a521ca27815252e3719a029fe89ad82296746d89996c220a5cab635",
+        "status": "degraded",
+        "requiredResultSatisfies": false,
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 3,
+          "filesAnalyzed": 2,
+          "filesSkipped": 0,
+          "filesUnsupported": 0,
+          "limitationCount": 4
+        },
+        "findingCount": 0
+      }
+    ]
+  },
+  "assertions": {
+    "cleanTwoFileFixtureRemainsAllowed": true,
+    "unaccountedBinaryFileDegradesAndDenies": true,
+    "noFindingsFabricated": true
+  },
+  "redaction": {
+    "containsCredentials": false,
+    "containsRawFixtureBytes": false,
+    "containsScannerReportContent": false
+  },
+  "limitations": [
+    "The fixtures are harmless local test bytes and never execute content.",
+    "The before result demonstrates the pre-fix behavior; the after result uses the shared uncommitted adapter working tree at source commit d10fcc5.",
+    "The before run used a verified local image tag; the after run executed by immutable image ID. No hosted scanner or production behavior is claimed."
+  ]
+}

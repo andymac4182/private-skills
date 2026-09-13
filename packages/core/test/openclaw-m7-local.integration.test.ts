@@ -487,7 +487,7 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
     const scannerResult = run.scannerResults?.[0];
     expect(scannerResult).toMatchObject({
       scannerId: 'skillsguard',
-      status: 'completed',
+      status: RUN_REAL_SKILLSGUARD ? 'degraded' : 'completed',
       policyRevision: POLICY.revision,
       rulesRevision: RUN_REAL_SKILLSGUARD ? SKILLSGUARD_PIN.sourceRevision : 'm7-fixture-rules-1',
     });
@@ -501,8 +501,11 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
       // evidence instead of being treated as a clean approval.
       expect(scannerResult?.engineVersion).toBe('1.1.1');
       expect(scannerResult?.rulesRevision).toBe(SKILLSGUARD_PIN.sourceRevision);
-      expect(scannerResult?.coverage.filesEnumerated).toBe(6);
+      expect(scannerResult?.coverage.filesEnumerated).toBe(EXPECTED_ARCHIVE_FILE_COUNT);
       expect(scannerResult?.coverage.filesAnalyzed).toBe(6);
+      expect(scannerResult?.coverage.limitations).toContain(
+        'scanner coverage mismatch: report enumerated 6 files but worker observed 7',
+      );
       expect(scannerResult?.coverage.limitations).toContain('SkillsGuard is pattern/decode-based static analysis and does not observe runtime behavior');
       expect(scannerResult?.findings.some((finding) => finding.severity === 'high' || finding.severity === 'critical')).toBe(true);
       expect(run.allow).toBe(false);
@@ -512,17 +515,17 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
       expect(deniedJob).toMatchObject({
         state: 'completed',
         resourceId: expect.any(String),
-        error: expect.stringContaining('Required scanner skillsguard reported a blocking finding'),
+        error: expect.stringContaining('Required scanner skillsguard returned degraded'),
       });
       const deniedSkill = deniedState.skills.find((value) => value.id === deniedJob?.resourceId);
       expect(deniedSkill).toMatchObject({
-        state: 'quarantined',
+        state: 'scan-error',
         fileCount: EXPECTED_ARCHIVE_FILE_COUNT,
       });
       expect(deniedSkill?.state).not.toBe('approved');
       expect(deniedState.scans).toEqual([expect.objectContaining({
         scannerId: 'skillsguard',
-        status: 'completed',
+        status: 'degraded',
         artifactDigest: deniedSkill?.artifact.digest,
         policyRevision: POLICY.revision,
       })]);
@@ -553,7 +556,7 @@ describe('OpenClaw M7 local source/worker/producer/consumer composition', () => 
         headers: { authorization: `Bearer ${USER_TOKEN}` },
       });
       expect(rejectedSkillView.status).toBe(200);
-      await expect(json(rejectedSkillView)).resolves.toMatchObject({ skill: { state: 'quarantined' } });
+      await expect(json(rejectedSkillView)).resolves.toMatchObject({ skill: { state: 'scan-error' } });
       const rejectedResolution = await request(handler, '/v1/resolve', {
         method: 'POST',
         headers: jsonHeaders(USER_TOKEN),

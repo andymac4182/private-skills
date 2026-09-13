@@ -809,7 +809,7 @@ function defaultCurrentPolicyApproved(state: RegistryState, skill: SkillVersion,
   };
   for (const scanner of required) {
     const result = latest(scanner.id);
-    if (!result || result.status !== 'completed' || evidenceExpired(result, state.policy.evidenceMaxAgeSeconds, now) || result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0 || result.coverage.filesSkipped > 0 || result.coverage.filesUnsupported > 0 || result.coverage.filesAnalyzed !== result.coverage.filesEnumerated || result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return false;
+    if (!result || result.status !== 'completed' || evidenceExpired(result, state.policy.evidenceMaxAgeSeconds, now) || result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0 || result.coverage.filesEnumerated !== skill.fileCount || result.coverage.filesSkipped > 0 || result.coverage.filesUnsupported > 0 || result.coverage.filesAnalyzed !== result.coverage.filesEnumerated || result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return false;
   }
   if (enabled.length === 0) return state.policy.allowUnscanned;
   if (!state.policy.allowUnscanned && enabled.some((scanner) => latest(scanner.id) === undefined)) return false;
