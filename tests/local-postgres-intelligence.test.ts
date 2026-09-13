@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import postgres from 'postgres';
 
@@ -21,8 +24,17 @@ import {
   request,
   type LocalRegistryHarness,
 } from './e2e/harness.js';
+import {
+  runLocalCli,
+  startLocalRegistry,
+  withLocalTempDirectory,
+  type LocalCliRun,
+} from './local-postgres-cli-helper.js';
 
-const enabled = process.env.PSKILLS_TEST_POSTGRES_URL !== undefined;
+const databaseUrl = process.env.PSKILLS_TEST_POSTGRES_URL?.trim();
+const cliPath = process.env.PSKILLS_TEST_CLI_PATH?.trim();
+const enabled = databaseUrl !== undefined && databaseUrl.length > 0;
+const cliEnabled = enabled && cliPath !== undefined && cliPath.length > 0;
 const local = describe.skipIf(!enabled);
 const ORIGIN = 'http://127.0.0.1:5199';
 const ORGANIZATION = 'org-postgres-local';
@@ -57,15 +69,33 @@ function pgPool(sql: SqlClient): PgPoolLike {
   } as PgPoolLike;
 }
 
-async function publishAndApprove(harness: LocalRegistryHarness) {
-  const bundle = bundleFor('postgres-alpha', 'alpha durable local search skill');
+type PublishedSkill = {
+  id: string;
+  name: string;
+  version: string;
+  artifact: { key: string; digest: `sha256:${string}` };
+  bundle: ReturnType<typeof bundleFor>;
+};
+
+async function publishAndApprove(
+  harness: LocalRegistryHarness,
+  options: {
+    skillName?: string;
+    packageName?: string;
+    description?: string;
+  } = {},
+): Promise<PublishedSkill> {
+  const skillName = options.skillName ?? 'postgres-alpha';
+  const packageName = options.packageName ?? `@acme/${skillName}`;
+  const description = options.description ?? 'alpha durable local search skill';
+  const bundle = bundleFor(skillName, description);
   const publish = await request(harness.handler, harness.origin, '/v1/publish', {
     method: 'POST',
     headers: bearer(harness.token),
     json: {
-      name: '@acme/postgres-alpha',
+      name: packageName,
       version: '1.0.0',
-      description: 'alpha durable local search skill',
+      description,
       bundle,
     },
   });
@@ -100,8 +130,20 @@ async function publishAndApprove(harness: LocalRegistryHarness) {
   );
   expect(skillResponse.status).toBe(200);
   const body = await jsonResponse<{ skill: { id: string; name: string; version: string; artifact: { key: string; digest: `sha256:${string}` } } }>(skillResponse);
-  expect(body.skill.name).toBe('@acme/postgres-alpha');
-  return body.skill;
+  expect(body.skill.name).toBe(packageName);
+  return { ...body.skill, bundle };
+}
+
+function cliJson<T>(run: LocalCliRun, label: string): T {
+  if (run.timedOut || run.code !== 0) {
+    const signal = run.signal ? ` (${run.signal})` : '';
+    throw new Error(`${label} failed with exit ${run.code}${signal}: ${run.stderr.slice(0, 2_000)}`);
+  }
+  try {
+    return JSON.parse(run.stdout) as T;
+  } catch (error) {
+    throw new Error(`${label} did not emit JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 local('durable PostgreSQL state, Files SDK storage, persisted exact search, and install analytics', () => {
@@ -112,9 +154,8 @@ local('durable PostgreSQL state, Files SDK storage, persisted exact search, and 
   let blobs: Awaited<ReturnType<typeof createNodeFilesSdkBlobStore>>;
 
   beforeAll(async () => {
-    const url = process.env.PSKILLS_TEST_POSTGRES_URL;
-    if (!url) throw new Error('PSKILLS_TEST_POSTGRES_URL is required');
-    sql = postgres(url, { max: 4, prepare: false });
+    if (!databaseUrl) throw new Error('PSKILLS_TEST_POSTGRES_URL is required');
+    sql = postgres(databaseUrl, { max: 4, prepare: false });
     tableName = `private_skills_local_${crypto.randomUUID().replaceAll('-', '')}`;
     repository = new PostgresStateRepository(pgPool(sql), {
       tableName,
@@ -148,7 +189,7 @@ local('durable PostgreSQL state, Files SDK storage, persisted exact search, and 
   });
 
   it('survives repository reload, records warm analytics, and removes revoked search rows', async () => {
-    const skill = await publishAndApprove(harness);
+    const { bundle, ...skill } = await publishAndApprove(harness);
 
     // Verify the same sealed artifact through a second Files SDK client,
     // proving that the index document can be rehydrated from provider bytes.
@@ -256,5 +297,151 @@ local('durable PostgreSQL state, Files SDK storage, persisted exact search, and 
       vector: [1, 0, 0],
       limit: 5,
     })).resolves.toEqual([]);
+  });
+
+  it.skipIf(!cliEnabled)('installs and verifies through a configured Rust CLI binary', async () => {
+    if (!databaseUrl || !cliPath) {
+      throw new Error('PSKILLS_TEST_POSTGRES_URL and PSKILLS_TEST_CLI_PATH are required');
+    }
+
+    const cliTableName = `private_skills_cli_${crypto.randomUUID().replaceAll('-', '')}`;
+    const cliOrganization = `org-postgres-cli-${crypto.randomUUID()}`;
+    const cliToken = `postgres-cli-${crypto.randomUUID()}`;
+    const cliWorkerToken = `postgres-cli-worker-${crypto.randomUUID()}`;
+    const cliRepository = new PostgresStateRepository(pgPool(sql), {
+      tableName: cliTableName,
+      autoMigrate: true,
+      stateFactory: () => defaultRegistryState({
+        production: false,
+        allowUnscanned: true,
+        policyRevision: 'local-postgres-cli-unscanned',
+      }),
+    });
+    let server: Awaited<ReturnType<typeof startLocalRegistry<LocalRegistryHarness>>> | undefined;
+
+    try {
+      server = await startLocalRegistry((origin) => createLocalRegistryHarness({
+        origin,
+        organizationId: cliOrganization,
+        token: cliToken,
+        workerToken: cliWorkerToken,
+        repository: cliRepository,
+      }));
+
+      await withLocalTempDirectory('private-skills-cli-install-', async (installRoot) => {
+        const published = await publishAndApprove(server!.registry, {
+          skillName: 'postgres-cli-alpha',
+          packageName: '@acme/postgres-cli-alpha',
+          description: 'alpha durable local CLI skill',
+        });
+        const installArgs = [
+          '--registry', server!.origin,
+          '--directory', installRoot,
+          '--agent', 'universal',
+          '--json',
+          'install', `${published.name}@${published.version}`,
+        ] as const;
+        const first = cliJson<{
+          ok: boolean;
+          changed: boolean;
+          version: string;
+          digest: string;
+          destination: string;
+        }>(await runLocalCli({
+          binaryPath: cliPath,
+          registryOrigin: server!.origin,
+          token: cliToken,
+          cwd: installRoot,
+          args: installArgs,
+        }), 'first CLI install');
+        expect(first).toMatchObject({
+          ok: true,
+          changed: true,
+          version: published.version,
+          digest: published.artifact.digest,
+        });
+
+        const second = cliJson<{ ok: boolean; changed: boolean; version: string; digest: string }>(
+          await runLocalCli({
+            binaryPath: cliPath,
+            registryOrigin: server!.origin,
+            token: cliToken,
+            cwd: installRoot,
+            args: installArgs,
+          }),
+          'warm CLI reinstall',
+        );
+        expect(second).toMatchObject({
+          ok: true,
+          changed: false,
+          version: published.version,
+          digest: published.artifact.digest,
+        });
+
+        const expectedSkill = Buffer.from(
+          published.bundle.files.find((file) => file.path === 'SKILL.md')!.content,
+          'base64',
+        );
+        const installedSkill = await readFile(join(installRoot, 'postgres-cli-alpha', 'SKILL.md'));
+        expect(installedSkill).toEqual(expectedSkill);
+
+        const list = cliJson<Array<{ skill_name: string; digest: string }>>(
+          await runLocalCli({
+            binaryPath: cliPath,
+            registryOrigin: server!.origin,
+            token: cliToken,
+            cwd: installRoot,
+            args: [
+              '--registry', server!.origin,
+              '--directory', installRoot,
+              '--agent', 'universal',
+              '--json',
+              'list',
+            ],
+          }),
+          'CLI list',
+        );
+        expect(list).toEqual([
+          expect.objectContaining({
+            skill_name: 'postgres-cli-alpha',
+            digest: published.artifact.digest,
+          }),
+        ]);
+
+        const verify = cliJson<{ ok: boolean; entries: Array<{ ok: boolean }> }>(
+          await runLocalCli({
+            binaryPath: cliPath,
+            registryOrigin: server!.origin,
+            token: cliToken,
+            cwd: installRoot,
+            args: [
+              '--registry', server!.origin,
+              '--directory', installRoot,
+              '--agent', 'universal',
+              '--json',
+              'verify',
+            ],
+          }),
+          'CLI verify',
+        );
+        expect(verify.ok).toBe(true);
+        expect(verify.entries).toEqual([expect.objectContaining({ ok: true })]);
+
+        const analytics = await request(server!.registry.handler, server!.origin, '/v1/analytics?days=1', {
+          headers: bearer(cliToken),
+        });
+        expect(analytics.status).toBe(200);
+        const analyticsBody = await jsonResponse<{ totals: Record<string, number> }>(analytics);
+        expect(analyticsBody.totals).toEqual({
+          installOperations: 2,
+          skillInstalls: 1,
+          packInstalls: 0,
+          upToDateChecks: 1,
+        });
+      });
+    } finally {
+      await server?.close();
+      await sql.unsafe(`DROP TABLE IF EXISTS "${cliTableName}"`);
+    }
   });
 });
