@@ -352,3 +352,22 @@ and non-editable targets; it does not intercept Tab indentation. Rendered tests
 verify focus restoration, clean bytes, and the excluded key paths. The full suite
 passed 783 tests with seven opt-in skips; TypeScript and diff checks passed.
 The actual shadow-DOM browser Escape check remains separate from this checkpoint.
+
+
+## Real browser keyboard exit proof
+
+The [targeted `4a03ad5` browser check](local-editor-escape-4a03ad5-20260913.json)
+passed against the rebuilt 128-file fixture. Keyboard search selected the exact
+TypeScript path; entering Edit stayed clean and displayed the Escape hint.
+Escape from the actual contenteditable returned to Diff with Edit focused.
+Tab then moved to Split outside the editor without inserting indentation.
+The selected path, revision and digest stayed unchanged, with zero changed files
+and Save disabled. The owned browser tab was closed; the fixture acknowledged
+shutdown, exited successfully, and its three ports were confirmed closed.
+
+This completes the targeted local search/false-dirty/keyboard-exit refinement.
+The 783-test suite, TypeScript, production build, normal fresh-service restart
+proof, prior large-tree highlighting/scroll and 390/1280 reflow results remain
+source-attributed above. It does not close hosted M6, full assistive-technology,
+C1/M7 provider, or production shipment requirements. Pushes and deployments remain
+paused by the owner.

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-browser-editor-keyboard-exit",
+  "sourceCommit": "4a03ad529f3daf0fcf66c7f2985e9dd589c852d3",
+  "origin": "http://127.0.0.1:5197",
+  "draft": {
+    "id": "draft_2a174fc1-0b8d-4a83-976c-4c0f6c5d6d81",
+    "revision": 1,
+    "digest": "sha256:238982820f6f5665453c68d283a693dc140efd6caefb24b85be70b182bad3cb6",
+    "fileCount": 128
+  },
+  "selectedPath": "fixtures/large-tree/archives/2026/region-local/cohort-00/lane-00/record-000.ts",
+  "verified": {
+    "keyboardSearchSelectedPath": true,
+    "editWithoutTypingClean": true,
+    "visibleEscapeHelp": true,
+    "escapeFromActualContentEditableReturnedToDiff": true,
+    "editButtonFocusedAfterEscape": true,
+    "tabMovedToSplitOutsideContentEditable": true,
+    "zeroChangedAfterEscapeAndTab": true,
+    "saveDisabled": true,
+    "revisionAndDigestUnchanged": true
+  },
+  "cleanup": {
+    "ownedBrowserTabClosed": true,
+    "stopRequestAcknowledged": true,
+    "launcherExitCode": 0,
+    "portsConfirmedClosed": [
+      5195,
+      5196,
+      5197
+    ]
+  },
+  "limits": [
+    "Targeted local browser check; broader rendering, scroll and reflow evidence is recorded for preceding source commits.",
+    "Screenshot was sanitized inline CUA output with no persisted file claimed.",
+    "No text edits, saves, prompts, scans, publication, production calls, push or deployment occurred.",
+    "Does not establish a full screen-reader or hosted accessibility audit."
+  ]
+}
