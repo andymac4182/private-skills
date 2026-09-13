@@ -17,6 +17,12 @@ pnpm installation, OpenSSL, and tar. The current launcher is a macOS-oriented
 local verification tool; the application's hosting and Rust CLI portability
 contracts are separate.
 
+The deterministic stubs use `scripts/local-m6-http.mjs` for registry callbacks.
+Those requests have an 8-second default timeout and read at most 2 MiB of
+response data, including streamed responses; invalid UTF-8 or JSON and oversized
+responses fail with bounded, body-free errors. The helper's focused tests also
+cover stalled and oversized responses.
+
 ## Start and seed
 
 From the repository root:
@@ -94,7 +100,7 @@ The script's separate negative regression uses only local HTTP and Docker
 command stubs:
 
 ```sh
-node --test scripts/local-m6-fixture.test.mjs scripts/verify-local-authoring-scan.test.mjs
+node --test scripts/local-m6-fixture.test.mjs scripts/local-m6-http.test.mjs scripts/verify-local-authoring-scan.test.mjs
 ```
 
 ## Stop
@@ -103,6 +109,16 @@ node --test scripts/local-m6-fixture.test.mjs scripts/verify-local-authoring-sca
 node scripts/local-m6-fixture.mjs stop <run-root>
 ```
 
-Verify that the three owned service ports are no longer listening. Keep any
-needed sanitized evidence separately from private credentials, logs, certificates,
-and draft data. No command in this flow pushes Git or deploys to Vercel.
+`stop` writes an atomic mode-0600 request to the launcher's private
+`work/stop-request.json`. The launch metadata records the stop protocol version
+and path. The live launcher polls that request while the build or app is running,
+then shuts down only its in-memory child handles; persisted process metadata is
+never used to signal a PID. A request made during the build is consumed on the
+next poll. The CLI returns after writing the request, so verify closure separately
+by checking that the three owned service ports are no longer listening. Old launch
+metadata without the current stop protocol is rejected clearly and does not signal
+any persisted PID.
+
+Keep any needed sanitized evidence separately from private credentials, logs,
+certificates, and draft data. No command in this flow pushes Git or deploys to
+Vercel.

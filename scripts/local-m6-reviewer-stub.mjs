@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { requestBoundedJson } from './local-m6-http.mjs';
 
 // Disposable local-only reviewer boundary. It exercises the registry's real
 // upload-review HTTP handler and persistence while keeping the model boundary
@@ -98,7 +99,7 @@ function readJson(request, maximum = 128 * 1024) {
 }
 
 async function registryRequest(path, body) {
-  const response = await fetch(new URL(path, registryOrigin), {
+  return requestBoundedJson(new URL(path, registryOrigin), {
     method: 'POST',
     headers: {
       accept: 'application/json',
@@ -108,14 +109,6 @@ async function registryRequest(path, body) {
     body: JSON.stringify(body),
     redirect: 'error',
   });
-  const text = await response.text();
-  let value = {};
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new Error(`registry response ${response.status} was not JSON`);
-  }
-  return { response, value };
 }
 
 function wait(milliseconds) {

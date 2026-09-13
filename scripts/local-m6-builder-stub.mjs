@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:https';
 import { randomUUID } from 'node:crypto';
+import { requestBoundedJson } from './local-m6-http.mjs';
 
 const port = Number(process.env.LOCAL_BUILDER_PORT ?? '5196');
 const registryOrigin = required('LOCAL_REGISTRY_ORIGIN');
@@ -94,14 +95,11 @@ async function registryJson(path, init = {}) {
   headers.set('accept', 'application/json');
   headers.set('authorization', `Bearer ${registryToken}`);
   headers.set('x-pskills-tool-identity', 'skill-builder');
-  const response = await fetch(new URL(path, registryOrigin), {
+  const { response, value } = await requestBoundedJson(new URL(path, registryOrigin), {
     ...init,
     headers,
     redirect: 'error',
   });
-  const text = await response.text();
-  let value;
-  try { value = JSON.parse(text); } catch { throw new Error('registry returned invalid json'); }
   if (!response.ok) throw new Error(`registry returned HTTP ${response.status}`);
   return value;
 }

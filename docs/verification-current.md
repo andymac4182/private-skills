@@ -1,11 +1,13 @@
 # Current verification checkpoint
 
-**Local continuation:** work is on local `main`, including the verified review-rerun continuation after
-`90859c9` (768 tests passed; TypeScript and build passed), with pushes and deployments paused at the owner's request. The
-[local evidence](evidence/local-refinement-20260913.md) records scanner,
-editor/review, CLI, pgvector, and browser checks with their limits. Remote
-state has not been refreshed during this phase; the quota response and
-production source below are historical observations, not a new quota check.
+**Local continuation:** work is on local `main`, with pushes and deployments
+paused at the owner's request. The latest full local product suite passed 776
+tests with seven opt-in skips; TypeScript and the isolated production build
+passed. The [local evidence](evidence/local-refinement-20260913.md) records
+scanner, editor/review, CLI, pgvector, browser, and fixture checks with their
+source-specific limits. Remote state has not been refreshed during this phase;
+the quota response and production source below are historical observations,
+not a new quota check.
 
 **As of:** 2026-09-13 (latest root-coordinated provider and schedule readbacks
 captured on 13 September 2026 UTC)

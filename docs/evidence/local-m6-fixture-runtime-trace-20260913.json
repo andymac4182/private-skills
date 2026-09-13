@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-fixture-runtime-trace",
+  "sourceCommit": "3f1a372",
+  "origin": "http://127.0.0.1:5197",
+  "builderAvailabilityTrace": {
+    "browserRoute": "GET /v1/drafts/:draftId/builder/availability",
+    "clientSource": "apps/web/src/lib/api.ts",
+    "compositionSource": "apps/web/server/runtime.ts",
+    "runtimeGuardSource": "apps/web/server/builder-runtime.ts",
+    "before": {
+      "fixtureSource": "2ab3bc0",
+      "nodeEnvironment": "production",
+      "registryEnvironment": "development",
+      "builderOrigin": "https://127.0.0.1:5196",
+      "enabled": false,
+      "proposalCreated": false
+    },
+    "cause": "NODE_ENV=production makes the runtime guard accept only the configured production builder origin; the loopback fixture bridge was absent.",
+    "after": {
+      "buildEnvironment": "production",
+      "runtimeEnvironment": "development",
+      "httpStatus": 200,
+      "enabled": true,
+      "productionGuardChanged": false
+    }
+  },
+  "dependencyMetadataTrace": {
+    "cause": "pnpm invoked in a Git archive with shared dependency symlinks rewrote workspace metadata to the archive paths.",
+    "repair": "Offline frozen-lockfile installation with lifecycle scripts disabled restored paths; matching normal global-store settings restored command checks.",
+    "prevention": "Invoke the installed Vite entrypoint directly in the isolated application folder.",
+    "beforeAfterMetadataHashesMatched": true,
+    "checkedFiles": [
+      "node_modules/.modules.yaml",
+      "node_modules/.pnpm-workspace-state-v1.json",
+      "node_modules/.pnpm/lock.yaml"
+    ]
+  },
+  "limits": [
+    "No production URL or credential was used.",
+    "Builder/reviewer model boundaries are deterministic local services.",
+    "Browser proposal/apply/review/scan proof is separate from this availability trace."
+  ]
+}

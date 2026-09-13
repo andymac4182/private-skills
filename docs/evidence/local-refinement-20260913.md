@@ -2,7 +2,7 @@
 
 This is local-only evidence from the initial isolated refinement worktree and subsequent work on local `main`. It includes
 no production API calls, deployment, remote catalog enumeration, credentials,
-or claims about production milestones. No live registry state was changed.
+or claims about production milestones. No production registry state was changed; disposable local fixtures were mutated explicitly.
 
 ## Initial local checkpoint
 
@@ -206,3 +206,58 @@ frozen lockfile with lifecycle scripts disabled; normal typechecking passes.
 Three separate script tests cover direct Vite invocation, unchanged metadata,
 and the scanner verifier's precheck/claim guards. No successful combined live
 builder flow is claimed until the corrected fixture is exercised.
+
+
+## Corrected runtime trace and helper controls
+
+The [runtime trace](local-m6-fixture-runtime-trace-20260913.json) follows the
+browser availability request through Nitro composition to the production-origin
+guard. The corrected fixture at `3f1a37268a1429ec4e8124556fd69343a96190fa`
+built successfully and returned enabled builder availability. Hashes of all three
+shared pnpm metadata files matched before and after its direct Vite build.
+The production guard was not changed.
+
+Subsequent helper-only changes bind status queries to the current draft revision
+and digest, replacing the original seed binding that caused a read-only 409
+after proposal apply. Local registry callbacks now have an eight-second timeout
+and a two-MiB response limit. Shutdown writes a private request consumed by the
+live launcher; it never sends signals from persisted PID metadata. Nine focused
+helper tests passed, including stalled/oversized HTTP responses, stale PID
+sentinels, current-revision status, and scanner precheck/claim rejection. Script
+syntax and diff checks passed. These helper checks are separate from the product
+suite and from the already-running fixture process.
+
+
+## Combined live browser, review, and required scanner proof
+
+The [combined local evidence](local-m6-combined-authoring-20260913.json) verifies
+application source `3f1a37268a1429ec4e8124556fd69343a96190fa` through the real
+Nitro application and deterministic local builder/reviewer HTTP services. The
+browser inspected a proposal before explicitly applying it, reloaded the same
+revision-2 draft, and checked Split/Unified controls before and after apply.
+It dismissed one finding by keyboard with a reason, queued one explicit review
+rerun, observed pending state, and used Refresh status after the exact fresh
+session completed. A new open finding replaced the prior dismissed result.
+The initial completed review loaded in a replacement tab, so manual refresh of
+that first attempt was not observed; the rerun provides the refresh proof.
+
+At 390×844, the active Review controls fit and body scroll width remained 390px;
+the temporary viewport override was reset. This is not a full-screen-reader,
+all-route, large-tree-scroll, or syntax-highlighting acceptance claim.
+
+The browser explicitly queued version `0.0.1-combined-flow` once. The verifier
+claimed the exact scan job and digest through the real WorkerRunner and
+DockerExecutor with the pinned immutable SkillsGuard image. SkillsGuard 1.1.1
+analyzed both files, skipped none, returned no findings, and admitted the release
+under required policy. Its two reported limitations remain recorded; no claim
+of exhaustive detection is made. The browser then observed Approved in the
+catalog and the edited README in the file viewer. Independent authenticated
+loopback readback verified the release manifest digest and compared the README
+bytes and content hash to the saved revision-2 draft. The first comparison
+attempt used the wrong draft payload field; source inspection identified the
+base64 `file.content` contract, and the corrected read-only comparison passed.
+
+The three disposable service ports were confirmed closed after terminating only
+the verified live launcher. Hosted AI Gateway/provider acceptance, production
+publication, native Windows/Linux CI, and deferred roadmap milestones remain
+separate. All changes and evidence stay on local `main`.

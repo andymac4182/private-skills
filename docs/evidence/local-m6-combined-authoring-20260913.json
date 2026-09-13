@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-combined-authoring-browser-and-real-scanner",
+  "sourceCommit": "3f1a37268a1429ec4e8124556fd69343a96190fa",
+  "origin": "http://127.0.0.1:5197",
+  "draft": {
+    "id": "draft_e5503c08-39b0-4dae-a4f0-72903a36c220",
+    "revision": 2,
+    "digest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9"
+  },
+  "browser": {
+    "proposalPreviewBeforeExplicitApply": true,
+    "explicitApplyCount": 1,
+    "reloadPreservedRevisionAndDigest": true,
+    "splitAndUnifiedVerifiedBeforeAndAfterApply": true,
+    "review": {
+      "jobId": "upload-review-job_cd674d65-7a80-4886-b140-51948082f0b8",
+      "keyboardDismissalWithReason": true,
+      "explicitRerunCount": 1,
+      "rerunSessionId": "local-upload-review-3-751b8903-c479-4da4-835b-866d65fd91a0",
+      "rerunResultId": "upload-review-result_9b442575-2141-4882-b64c-50ac6f295af2",
+      "pendingRefreshClickedAfterAdvance": true,
+      "currentFindingStateAfterRerun": "open",
+      "politeStatusTransitionsObserved": true
+    },
+    "reflow": {
+      "width": 390,
+      "height": 844,
+      "clientWidth": 390,
+      "bodyScrollWidth": 390,
+      "reviewControlsFit": true,
+      "viewportOverrideReset": true
+    },
+    "queueCount": 1,
+    "catalogApproved": true,
+    "manifestPaths": [
+      "README.md",
+      "SKILL.md"
+    ],
+    "editedReadmeVisible": true
+  },
+  "scan": {
+    "schemaVersion": 4,
+    "mode": "local-authoring-worker-runner",
+    "origin": "http://127.0.0.1:5197",
+    "executor": "DockerExecutor",
+    "startedAt": "2026-09-13T06:47:43.262Z",
+    "completedAt": "2026-09-13T06:47:44.806Z",
+    "expected": {
+      "jobId": "job_ced5effc-4e8d-477b-9b38-e81cbdf70fa9",
+      "kind": "scan",
+      "artifactDigest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9"
+    },
+    "image": {
+      "immutableId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+      "available": true,
+      "inspectedId": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0"
+    },
+    "precheck": {
+      "status": "passed",
+      "expectedJobId": "job_ced5effc-4e8d-477b-9b38-e81cbdf70fa9",
+      "expectedKind": "scan",
+      "expectedArtifactDigest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9",
+      "observedJobId": "job_ced5effc-4e8d-477b-9b38-e81cbdf70fa9",
+      "observedState": "queued",
+      "observedArtifactDigest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9"
+    },
+    "result": {
+      "claimed": true,
+      "jobId": "job_ced5effc-4e8d-477b-9b38-e81cbdf70fa9",
+      "kind": "scan",
+      "jobMatchesExpected": true,
+      "kindMatchesExpected": true,
+      "abortedBeforeMaterialization": false,
+      "allow": true,
+      "error": null,
+      "scannerDigestMatches": true,
+      "scanners": [
+        {
+          "scannerId": "skillsguard",
+          "artifactDigest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9",
+          "status": "completed",
+          "policyRevision": "policy_e520115d-2d28-4854-b540-f303bb88c470",
+          "engineVersion": "1.1.1",
+          "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+          "coverage": {
+            "filesEnumerated": 2,
+            "filesAnalyzed": 2,
+            "filesSkipped": 0,
+            "filesUnsupported": 0,
+            "limitationCount": 2,
+            "externalDestinationCount": 0
+          },
+          "findingCount": 0
+        }
+      ]
+    }
+  },
+  "releaseReadback": {
+    "observedAt": "2026-09-13T06:49:30.967Z",
+    "origin": "http://127.0.0.1:5197",
+    "skillId": "skill_3b0a5d64-bc09-4443-a237-018c899fb4fa",
+    "draftId": "draft_e5503c08-39b0-4dae-a4f0-72903a36c220",
+    "version": "0.0.1-combined-flow",
+    "digest": "sha256:a2ecfc50c21a13e12cff48db6c49865fde0dec53660443701130b6e1889f2ee9",
+    "fileCount": 2,
+    "paths": [
+      "README.md",
+      "SKILL.md"
+    ],
+    "readmeContentDigest": "sha256:7d44d318239f131163dc27ac0d0139ccbfb1ce72952ccd4cb0bcb6e97c63504d",
+    "releaseBytesEqualSavedDraft": true,
+    "releaseContentDigestVerified": true
+  },
+  "cleanup": {
+    "verifiedLiveLauncherTerminated": true,
+    "portsConfirmedClosed": [
+      5195,
+      5196,
+      5197
+    ],
+    "persistedPidListUsedForSignals": false
+  },
+  "limits": [
+    "Builder and upload-review model boundaries used deterministic local services; hosted Eve and AI Gateway were not contacted.",
+    "SkillsGuard reported two limitations; this is bounded scanner admission evidence, not exhaustive detection.",
+    "The first completed review was loaded in a replacement tab, so its manual refresh was not observed. Manual pending refresh was verified for the explicit rerun.",
+    "The 390px check covers active Review controls, not every screen or large file-tree scrolling.",
+    "No screenshots were captured in this run.",
+    "Later local helper shutdown, status, and HTTP-bound changes were covered by focused tests, not by restarting this live fixture.",
+    "No push, deployment, production credentials, or native Windows/Linux CI occurred."
+  ]
+}

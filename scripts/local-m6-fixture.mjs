@@ -26,6 +26,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  renameSync,
   readFileSync,
   symlinkSync,
   unlinkSync,
@@ -42,6 +43,8 @@ const DEFAULT_APP_PORT = 5197;
 const DEFAULT_BUILDER_PORT = 5196;
 const DEFAULT_REVIEWER_PORT = 5195;
 const LOCAL_SKILLSGUARD_IMAGE_ID = 'sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0';
+const STOP_PROTOCOL_VERSION = 1;
+const STOP_POLL_INTERVAL_MS = 250;
 const ENV_FILES_READ_BY_VITE = [
   '.env',
   '.env.local',
@@ -166,6 +169,21 @@ function parseDelay(value) {
 function writePrivate(filePath, value) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   chmodSync(filePath, 0o600);
+}
+
+function writeStopRequest(filePath) {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writePrivate(temporaryPath, {
+      protocolVersion: STOP_PROTOCOL_VERSION,
+      kind: 'shutdown',
+      requestedAt: new Date().toISOString(),
+    });
+    renameSync(temporaryPath, filePath);
+    chmodSync(filePath, 0o600);
+  } finally {
+    try { unlinkSync(temporaryPath); } catch { /* renamed or already absent */ }
+  }
 }
 
 function makePrivateDirectory(directory) {
@@ -312,6 +330,7 @@ async function launch(options) {
   const fixturePath = path.join(workRoot, 'local-m6-fixture.json');
   const metadataPath = path.join(workRoot, 'launch-metadata.json');
   const processesPath = path.join(workRoot, 'processes.json');
+  const stopRequestPath = path.join(workRoot, 'stop-request.json');
   const appLog = path.join(logRoot, 'app.log');
   const builderLog = path.join(logRoot, 'builder.log');
   const reviewerLog = path.join(logRoot, 'reviewer.log');
@@ -394,14 +413,17 @@ async function launch(options) {
       control: controlPath,
       fixture: fixturePath,
       processes: processesPath,
+      stopRequest: stopRequestPath,
       logs: logRoot,
       tls: tlsRoot,
       builderCertificate: tls.certificatePath,
     },
+    stopRequestPath,
     reviewer: {
       mode: options.reviewerMode,
       ...(options.reviewerDelayMs === undefined ? {} : { delayMs: options.reviewerDelayMs }),
     },
+    stopProtocolVersion: STOP_PROTOCOL_VERSION,
     boundary: {
       real: [
         'Nitro HTTP routes and persistence',
@@ -464,6 +486,7 @@ async function launch(options) {
   let app;
   let stopping = false;
   let exitCode = 0;
+  let stopRequestPoller;
 
   const writeProcesses = () => writePrivate(processesPath, {
     launcherPid: process.pid,
@@ -479,6 +502,10 @@ async function launch(options) {
     if (stopping) return;
     stopping = true;
     exitCode = code;
+    if (stopRequestPoller) {
+      clearInterval(stopRequestPoller);
+      stopRequestPoller = undefined;
+    }
     stopChildren();
     setTimeout(() => {
       for (const fd of [appFd, builderFd, reviewerFd]) {
@@ -529,6 +556,24 @@ async function launch(options) {
       try { child.kill('SIGTERM'); } catch { /* process already exited */ }
     }
   };
+  const pollStopRequest = () => {
+    if (stopping || !existsSync(stopRequestPath)) return;
+    let request;
+    try {
+      request = readPrivateJson(stopRequestPath);
+    } catch {
+      fail('stop-request', 'invalid');
+      return;
+    }
+    if (request.protocolVersion !== STOP_PROTOCOL_VERSION || request.kind !== 'shutdown' || typeof request.requestedAt !== 'string') {
+      fail('stop-request', 'unsupported-protocol');
+      return;
+    }
+    process.stdout.write('local-stop-request-accepted\n');
+    shutdown(0);
+  };
+  stopRequestPoller = setInterval(pollStopRequest, STOP_POLL_INTERVAL_MS);
+  stopRequestPoller.unref();
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
   builder.once('exit', (code, signal) => {
@@ -552,6 +597,7 @@ async function launch(options) {
     `credentials:${credentialsPath}`,
     `owner-credentials:${credentialsPath}`,
     `worker-control:${workerControlPath}`,
+    `stop-request:${stopRequestPath}`,
     `control:${controlPath}`,
     `fixture:${fixturePath}`,
     `logs:${logRoot}`,
@@ -748,13 +794,17 @@ function sanitizeResult(result) {
 async function collectStatus(metadata, fixture) {
   const auth = authFromCredentials(metadata.paths.credentials);
   const encoded = encodeURIComponent(fixture.draft.id);
-  const [draftResult, reviewsResult, proposalsResult, reviewerResult] = await Promise.all([
-    requestJson(auth.origin, `/v1/drafts/${encoded}`, { headers: auth.headers }),
+  const draftResult = await requestJson(auth.origin, `/v1/drafts/${encoded}`, { headers: auth.headers });
+  if (!draftResult.response.ok) throw new Error(`draft GET failed with HTTP ${draftResult.response.status}`);
+  const currentDraft = draftResult.value?.draft ?? draftResult.value;
+  if (!currentDraft || !Number.isSafeInteger(currentDraft.revision) || typeof currentDraft.digest !== 'string') {
+    throw new Error('draft GET returned no usable revision and digest');
+  }
+  const [reviewsResult, proposalsResult, reviewerResult] = await Promise.all([
     requestJson(auth.origin, `/v1/drafts/${encoded}/reviews`, { headers: auth.headers }),
-    requestJson(auth.origin, `/v1/drafts/${encoded}/proposals?revision=${fixture.draft.revision}&digest=${encodeURIComponent(fixture.draft.digest)}`, { headers: auth.headers }),
+    requestJson(auth.origin, `/v1/drafts/${encoded}/proposals?revision=${currentDraft.revision}&digest=${encodeURIComponent(currentDraft.digest)}`, { headers: auth.headers }),
     requestJson(metadata.origins.reviewerOrigin, '/control/status', { headers: { authorization: `Bearer ${readPrivateJson(metadata.paths.control).reviewerControlToken}` } }),
   ]);
-  if (!draftResult.response.ok) throw new Error(`draft GET failed with HTTP ${draftResult.response.status}`);
   if (!reviewsResult.response.ok) throw new Error(`reviews GET failed with HTTP ${reviewsResult.response.status}`);
   if (!proposalsResult.response.ok) throw new Error(`proposals GET failed with HTTP ${proposalsResult.response.status}`);
   if (!reviewerResult.response.ok) throw new Error(`reviewer status failed with HTTP ${reviewerResult.response.status}`);
@@ -898,13 +948,10 @@ function requireExpectedDigest(value) {
 
 async function stop(runRoot) {
   const { metadata } = readMetadata(runRoot);
-  const processPath = metadata.paths.processes;
-  if (!existsSync(processPath)) throw new Error(`process metadata is missing at ${processPath}`);
-  const processes = readPrivateJson(processPath);
-  const pids = [processes.launcherPid, processes.appPid, processes.buildPid, processes.builderPid, processes.reviewerPid]
-    .filter((pid) => Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
-  for (const pid of pids) {
-    try { process.kill(pid, 'SIGTERM'); } catch { /* already exited */ }
+  const expectedPath = path.join(runRoot, 'work', 'stop-request.json');
+  if (metadata.stopProtocolVersion !== STOP_PROTOCOL_VERSION || metadata.stopRequestPath !== expectedPath || metadata?.paths?.stopRequest !== expectedPath) {
+    throw new Error('fixture launcher uses an unsupported stop protocol; refusing persisted PID termination');
   }
-  process.stdout.write(JSON.stringify({ event: 'local_m6_fixture_stop_requested', runRoot, processCount: pids.length }) + '\n');
+  writeStopRequest(expectedPath);
+  process.stdout.write(JSON.stringify({ event: 'local_m6_fixture_stop_requested', runRoot, protocolVersion: STOP_PROTOCOL_VERSION, requestPath: expectedPath }) + '\n');
 }
