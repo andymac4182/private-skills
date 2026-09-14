@@ -21,6 +21,8 @@ export interface WorkerClaimedJob {
   expiresAt?: string;
   /** Server-owned OpenClaw source target/entry; never accepted from browser input. */
   openclawSource?: unknown;
+  /** Server-owned native source acquisition descriptor; never browser input. */
+  sourceAcquisition?: unknown;
   [key: string]: unknown;
 }
 

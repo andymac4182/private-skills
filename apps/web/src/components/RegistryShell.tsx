@@ -10,6 +10,7 @@ const sections = [
   { id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' },
   { id: 'packs', label: 'Skill packs', hint: 'Curated installs', glyph: '▦' },
   { id: 'directory', label: 'Cloud directory', hint: 'All / trending / hot', glyph: '◌' },
+  { id: 'source-discovery', label: 'Find skills', hint: 'Search configured sources', glyph: '⌕' },
   { id: 'official', label: 'Official makers', hint: 'Maker-curated', glyph: '✦' },
   { id: 'topics', label: 'Topics', hint: 'Source taxonomy', glyph: '⌘' },
   { id: 'cloud-audits', label: 'External audits', hint: 'Partner evidence', glyph: '◉' },

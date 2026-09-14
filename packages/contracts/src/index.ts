@@ -47,6 +47,8 @@ export interface Provenance {
   feedConfigRevision?: string;
   /** Server-derived public source identity; never accepted from install input. */
   sourceReference?: string;
+  /** Server-owned source catalog adapter identity for imported releases. */
+  externalSource?: string;
   /** Verified origin emitted by the acquisition adapter, not a catalog URL hint. */
   sourceProviderOrigin?: string;
   /** How the worker established the source identity. */
@@ -344,8 +346,14 @@ export interface ImportRequest {
   feedConfigRevision?: string;
   /** Server-derived canonical source reference for reader-triggered pull-through jobs. */
   sourceReference?: string;
+  /** Server-owned discovery adapter identity for warm-cache reconciliation. */
+  sourceCatalogId?: string;
+  /** Source adapter trust/config revision captured when this job was queued. */
+  sourceCatalogConfigRevision?: string;
+  /** Provider version retained separately from the registry SemVer cache version. */
+  sourceCatalogProviderVersion?: string;
 }
-export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
 export interface RegistryState {
   metadataRevision?: number;

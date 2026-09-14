@@ -154,6 +154,98 @@ export interface AcquisitionResult {
 }
 
 /**
+ * Immutable Tessl tile-version identity selected by the source catalog.
+ *
+ * Tessl exposes a version fingerprint for the tile metadata.  It is a
+ * provider identity, not a documented SHA-256 digest of the tarball returned
+ * by the files endpoint, so it is kept separate from `artifactDigest`.
+ */
+export interface TesslSourceAcquisition {
+  kind: 'tessl';
+  workspace: string;
+  tile: string;
+  version: string;
+  fingerprint: string;
+  /** Exact relative skill directory selected from the tile archive. */
+  skillPath: string;
+  /** Optional digest of the files response, when the catalog supplied one. */
+  artifactDigest?: `sha256:${string}`;
+  /** Tessl's fixed public API origin; transport never follows this field. */
+  sourceProviderOrigin?: 'https://api.tessl.io';
+}
+
+/** Alias used by source-catalog adapters and worker callers. */
+export type TesslSourceIdentity = TesslSourceAcquisition;
+
+export interface TesslSourceAcquireInput extends AcquireSkillOptions {
+  source: TesslSourceAcquisition;
+  /** Optional source API token resolver; never persisted or returned. */
+  getTesslToken?: (signal?: AbortSignal) => Promise<string>;
+  /** Explicit token for tightly scoped tests or process-local adapters. */
+  tesslToken?: string;
+  /** Optional loopback fixture origin; production remains fixed at api.tessl.io. */
+  tesslApiBaseUrl?: string;
+  upstreamId?: string;
+  externalId?: string;
+  /** Source catalog revision/fingerprint is retained as external evidence. */
+  externalSnapshotHash?: string | null;
+  /** Completion contract overrides supplied by the registry worker. */
+  provenanceKind?: Provenance['kind'];
+  provenanceRepository?: string;
+  provenancePath?: string;
+  sourceReference?: string;
+}
+
+export interface TesslSourceResolution extends AcquisitionResult {
+  source: TesslSourceAcquisition;
+  /** Digest of the fetched Tessl files response, computed locally. */
+  externalDigest: `sha256:${string}`;
+}
+
+/** A raw ClawHub version manifest entry. The provider uses an unprefixed SHA-256. */
+export interface ClawHubSourceFile {
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+/**
+ * Immutable native ClawHub identity selected by the source catalog.
+ *
+ * `files` is the exact version manifest returned by ClawHub. It is kept on the
+ * job so the worker can verify the downloaded archive without treating the
+ * provider's security report as an artifact digest.
+ */
+export interface ClawHubSourceAcquisition {
+  kind: 'clawhub';
+  owner: string;
+  slug: string;
+  version: string;
+  files: readonly ClawHubSourceFile[];
+  /** ClawHub's fixed public API origin; transport never follows this field. */
+  sourceProviderOrigin?: 'https://clawhub.ai';
+}
+
+export interface ClawHubSourceAcquireInput extends AcquireSkillOptions {
+  source: ClawHubSourceAcquisition;
+  /** Optional loopback fixture origin; production remains fixed at clawhub.ai. */
+  clawHubApiBaseUrl?: string;
+  upstreamId?: string;
+  externalId?: string;
+  externalSnapshotHash?: string | null;
+  provenanceKind?: Provenance['kind'];
+  provenanceRepository?: string;
+  provenancePath?: string;
+  sourceReference?: string;
+}
+
+export interface ClawHubSourceResolution extends AcquisitionResult {
+  source: ClawHubSourceAcquisition;
+  /** Digest of the downloaded archive, computed locally. */
+  externalDigest: `sha256:${string}`;
+}
+
+/**
  * The source transport deliberately returns the bytes that were fetched.  It
  * does not return a display snapshot or a catalog URL, and the resolver below
  * never asks it to execute or interpret skill content.  A directory/core
@@ -531,6 +623,10 @@ interface RegistryTransferDescriptor {
 const DEFAULT_FETCH: FetchLike = (input, init) => globalThis.fetch(input, init);
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
+/** The Tessl API origin is fixed by the native adapter contract. */
+export const TESSL_API_ORIGIN = 'https://api.tessl.io';
+/** The ClawHub API origin is fixed by the native adapter contract. */
+export const CLAWHUB_API_ORIGIN = 'https://clawhub.ai';
 const SKILLS_SH_CANONICAL_ORIGIN = 'https://skills.sh';
 const MAX_TOKEN_BYTES = 4_096;
 const MAX_CHAIN_BYTES = 4_096;
@@ -632,6 +728,230 @@ export async function acquireSkillsShSkill(
   }
   assertUpstreamEnabled(normalized.upstream);
   return acquireSkillsSh(normalized);
+}
+
+/**
+ * Acquire one exact skill directory from a Tessl tile-version archive.
+ *
+ * This adapter is deliberately separate from `acquireRegistrySkill`: Tessl's
+ * files route is a provider archive endpoint, not the Private Skills
+ * resolution/authorization/transfer protocol.  The caller supplies a
+ * server-owned, immutable tile identity and exact skill directory selected by
+ * the catalog adapter.  No provider lifecycle or package hooks are invoked.
+ */
+export async function acquireTesslSource(
+  input: TesslSourceAcquireInput,
+): Promise<TesslSourceResolution> {
+  const limits = mergeLimits(input.limits);
+  const source = validateTesslSourceIdentity(input.source, limits);
+  const base = normalizeTesslApiBase(
+    input.tesslApiBaseUrl,
+    input.allowLoopbackForTests ?? false,
+  );
+  const url = appendBasePath(base, [
+    'v1',
+    'tiles',
+    source.workspace,
+    source.tile,
+    'versions',
+    source.version,
+    'files',
+  ]);
+  const fetchImpl = input.fetchImpl ?? input.fetch ?? DEFAULT_FETCH;
+  const clientOptions: AcquireSkillOptions = {
+    ...input,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+  const client = new HttpClient(fetchImpl, limits, clientOptions, base.origin, 'source');
+  const token = await resolveTesslToken(input);
+  const headers: FetchHeaders = {
+    accept: 'application/gzip',
+    'user-agent': 'private-skills-tessl-worker/0.1',
+  };
+  if (token !== undefined) headers.authorization = `Bearer ${token}`;
+  // Revalidate the provider fingerprint immediately before downloading the
+  // archive.  Tessl documents this as the immutable tile-version identity;
+  // it is intentionally compared with the metadata response and never with
+  // a guessed hash algorithm for the archive bytes.
+  const metadataURL = appendBasePath(base, [
+    'v1',
+    'tiles',
+    source.workspace,
+    source.tile,
+    'versions',
+    source.version,
+  ]);
+  const metadata = await client.json<Record<string, unknown>>(metadataURL, {
+    headers: { ...headers, accept: 'application/json' },
+    allowedOrigin: base.origin,
+    signal: input.signal,
+    retryable: false,
+    rejectRedirects: true,
+  });
+  const liveFingerprint = tesslVersionFingerprint(metadata);
+  if (liveFingerprint !== source.fingerprint) {
+    throw new UpstreamAcquisitionError(
+      'digest_mismatch',
+      'Tessl tile version fingerprint changed during acquisition',
+    );
+  }
+  const response = await client.bytes(url, {
+    headers,
+    allowedOrigin: base.origin,
+    signal: input.signal,
+    retryable: false,
+    rejectRedirects: true,
+  });
+  const archiveDigest = digestBytes(response.bytes);
+  if (source.artifactDigest !== undefined && archiveDigest !== source.artifactDigest) {
+    throw new UpstreamAcquisitionError(
+      'digest_mismatch',
+      'Tessl files archive digest did not match its source identity',
+    );
+  }
+  const files = extractTesslArchive(
+    response.bytes,
+    response.response.headers.get('content-type') ?? '',
+    url.href,
+    limits,
+  );
+  const selected = selectTesslSkillDirectory(files, source.skillPath, limits);
+  const bundle = bundleFromRawFiles(selected, limits);
+  const sourceDigest = digestBytes(serializeSkillBundle(bundle));
+  const fetchedAt = sourceFetchedAt();
+  const sourceCoordinate = source.skillPath
+    ? `${source.workspace}/${source.tile}/${source.skillPath}`
+    : `${source.workspace}/${source.tile}`;
+  return {
+    source,
+    externalDigest: archiveDigest,
+    bundle,
+    provenance: {
+      // Native source adapters share the non-upstream provenance kind.  The
+      // registry binds this result to its queued source descriptor and may
+      // preserve the source id separately from the provider external id.
+      kind: input.provenanceKind ?? 'native',
+      ...(input.upstreamId === undefined ? {} : { upstreamId: input.upstreamId }),
+      repository: input.provenanceRepository ?? TESSL_API_ORIGIN,
+      path: input.provenancePath ?? source.skillPath,
+      revision: source.version,
+      sourceDigest,
+      ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+      externalSnapshotHash: input.externalSnapshotHash ?? source.fingerprint,
+      sourceProviderOrigin: TESSL_API_ORIGIN,
+      sourceResolutionKind: 'snapshot',
+      fetchedAt,
+      externalDigest: archiveDigest,
+      sourceUrl: url.href,
+      sourceReference: input.sourceReference ?? `tessl:${sourceCoordinate}@${source.version}#${source.fingerprint}`,
+    },
+  };
+}
+
+/** Explicit source-kind alias used by worker dispatchers. */
+export const acquireTesslSkill = acquireTesslSource;
+
+/**
+ * Validate a server-owned Tessl identity before any network request.  The
+ * provider fingerprint is opaque to this adapter beyond Tessl's documented
+ * 64-lowercase-hex shape; it is never treated as the archive SHA-256.
+ */
+export function validateTesslSourceIdentity(
+  source: TesslSourceAcquisition,
+  limitsInput?: Partial<AcquisitionLimits>,
+): TesslSourceAcquisition {
+  const limits = mergeLimits(limitsInput);
+  if (!isRecord(source) || source.kind !== 'tessl') {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl source identity is invalid');
+  }
+  const workspace = validateTesslCoordinate(source.workspace, 'workspace');
+  const tile = validateTesslCoordinate(source.tile, 'tile');
+  const version = validateTesslCoordinate(source.version, 'version');
+  if (typeof source.fingerprint !== 'string' || !/^[0-9a-f]{64}$/u.test(source.fingerprint)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl source fingerprint is invalid');
+  }
+  if (typeof source.artifactDigest !== 'undefined' &&
+    (typeof source.artifactDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(source.artifactDigest))) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl archive digest is invalid');
+  }
+  if (source.sourceProviderOrigin !== undefined && source.sourceProviderOrigin !== TESSL_API_ORIGIN) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl source provider origin is invalid');
+  }
+  const skillPath = validateTesslSkillPath(source.skillPath, limits);
+  return {
+    kind: 'tessl',
+    workspace,
+    tile,
+    version,
+    fingerprint: source.fingerprint,
+    skillPath,
+    ...(source.artifactDigest === undefined ? {} : { artifactDigest: source.artifactDigest }),
+    sourceProviderOrigin: TESSL_API_ORIGIN,
+  };
+}
+
+function tesslVersionFingerprint(value: unknown): string {
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl version response is invalid');
+  }
+  const data = isRecord(value.data) ? value.data : value;
+  const attributes = isRecord(data.attributes) ? data.attributes : data;
+  const fingerprint = attributes.fingerprint;
+  if (typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/u.test(fingerprint)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl version response omitted a valid fingerprint');
+  }
+  return fingerprint;
+}
+
+function validateTesslCoordinate(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256 ||
+    hasLoneSurrogate(value) || /[\u0000-\u001f\u007f]/u.test(value) ||
+    value.includes('/') || value.includes('\\') || value === '.' || value === '..' ||
+    value.startsWith('-')) {
+    throw new UpstreamAcquisitionError('invalid_source', `Tessl ${label} is invalid`);
+  }
+  return value;
+}
+
+function validateTesslSkillPath(value: unknown, limits: AcquisitionLimits): string {
+  if (typeof value !== 'string' || value.endsWith('/')) {
+    throw new UpstreamAcquisitionError('invalid_path', 'Tessl source skillPath is invalid');
+  }
+  // The empty string is the explicit archive-root selection.  It is allowed
+  // only as an intentional value and is resolved below without inferring a
+  // root from archive member names.
+  if (value === '') return '';
+  return validateSkillPath(value, limits, false);
+}
+
+function normalizeTesslApiBase(value: string | undefined, allowLoopbackForTests: boolean): URL {
+  if (value === undefined) return new URL(TESSL_API_ORIGIN);
+  const parsed = parseFixedBase(value, allowLoopbackForTests);
+  if (!allowLoopbackForTests && parsed.origin !== TESSL_API_ORIGIN) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl source transport origin is fixed to api.tessl.io');
+  }
+  if (allowLoopbackForTests && parsed.origin !== TESSL_API_ORIGIN && !isLoopbackHost(parsed.hostname)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'Tessl test source transport must use loopback');
+  }
+  return parsed;
+}
+
+async function resolveTesslToken(input: TesslSourceAcquireInput): Promise<string | undefined> {
+  let token: unknown;
+  if (input.getTesslToken !== undefined) {
+    try {
+      token = await input.getTesslToken(input.signal);
+    } catch {
+      throw new UpstreamAcquisitionError('credential_missing', 'Tessl source credential is unavailable');
+    }
+  } else {
+    token = input.tesslToken;
+  }
+  if (token === undefined) return undefined;
+  if (typeof token !== 'string' || token.length === 0 || Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES || /[\r\n]/u.test(token)) {
+    throw new UpstreamAcquisitionError('credential_invalid', 'Tessl source credential is invalid');
+  }
+  return token;
 }
 
 /** Validate a claimed OpenClaw source identity before any source request. */
@@ -1169,7 +1489,7 @@ async function acquireGithub(input: NormalizedInput): Promise<AcquisitionResult>
       kind: 'github',
       upstreamId: upstream.id,
       repository,
-      ...(selectedPath ? { path: selectedPath } : {}),
+      path: selectedPath,
       revision,
       sourceDigest,
       fetchedAt,
@@ -2699,6 +3019,483 @@ function extractWellKnownArchive(
     return extractTarArchive(bytes, limits);
   }
   throw new UpstreamAcquisitionError('unsupported_archive', 'Well-known archive is not a supported ZIP, tar, or tar.gz file');
+}
+
+/**
+ * Decode a Tessl files response with the same bounded archive implementation
+ * used for other external sources. Tessl currently documents a tar.gz
+ * response for `Accept: application/gzip`; ZIP/tar forms remain accepted when
+ * a compatible test/provider response identifies them by magic or type.
+ */
+export function extractTesslArchive(
+  bytes: Uint8Array,
+  contentType = 'application/gzip',
+  artifactUrl = `${TESSL_API_ORIGIN}/v1/tiles/files`,
+  limitsInput?: Partial<AcquisitionLimits>,
+): Array<{ path: string; bytes: Uint8Array }> {
+  const limits = mergeLimits(limitsInput);
+  if (!(bytes instanceof Uint8Array)) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'Tessl source archive is not a byte sequence');
+  }
+  return extractWellKnownArchive(bytes, contentType, artifactUrl, limits);
+}
+
+/**
+ * Select the exact Tessl skill directory named by the source catalog.  The
+ * archive may contain several skills; an empty path is an explicit request
+ * for the archive root and is never inferred from the first member.
+ */
+export function selectTesslSkillDirectory(
+  files: readonly { path: string; bytes: Uint8Array }[],
+  skillPath: string,
+  limitsInput?: Partial<AcquisitionLimits>,
+): Array<{ path: string; bytes: Uint8Array }> {
+  const limits = mergeLimits(limitsInput);
+  const selectedPath = validateTesslSkillPath(skillPath, limits);
+  if (!Array.isArray(files) || files.length === 0) {
+    throw new UpstreamAcquisitionError('source_not_found', 'Tessl source archive contains no files');
+  }
+  const prefix = selectedPath === '' ? '' : `${selectedPath}/`;
+  const selected = files
+    .filter((file) => {
+      if (!file || typeof file.path !== 'string' || !(file.bytes instanceof Uint8Array)) {
+        throw new UpstreamAcquisitionError('invalid_archive', 'Tessl source archive contains an invalid file');
+      }
+      if (selectedPath === '') return true;
+      return file.path.startsWith(prefix) && file.path !== selectedPath;
+    })
+    .map((file) => ({
+      path: selectedPath === '' ? file.path : file.path.slice(prefix.length),
+      bytes: file.bytes,
+    }));
+  if (!selected.some((file) => file.path === 'SKILL.md')) {
+    throw new UpstreamAcquisitionError(
+      'source_not_found',
+      `Tessl source archive does not contain SKILL.md at ${selectedPath || '/'}`,
+    );
+  }
+  // Validate the relative names before bundle conversion so the selected
+  // directory cannot smuggle an archive-only path or an oversized member into
+  // a later stage. Bundle validation repeats the checks with its stricter
+  // reserved-directory policy.
+  for (const file of selected) validateSkillPath(file.path, limits, false);
+  if (selected.length > limits.maxFiles) {
+    throw new UpstreamAcquisitionError('file_count_limit', 'Tessl selected skill directory is too large');
+  }
+  return selected;
+}
+
+/** Compatibility alias for callers that use the source-layer terminology. */
+export const decodeTesslArchive = extractTesslArchive;
+
+/**
+ * Acquire one exact native ClawHub release.  The catalog's version manifest
+ * is the integrity authority: the worker revalidates the owner/slug detail,
+ * revalidates the exact version endpoint, and then checks every downloaded
+ * archive member against the queued path, size, and raw SHA-256. ClawHub's
+ * security report hash is deliberately never used here.
+ */
+export async function acquireClawHubSource(
+  input: ClawHubSourceAcquireInput,
+): Promise<ClawHubSourceResolution> {
+  const limits = mergeLimits(input.limits);
+  const source = validateClawHubSourceIdentity(input.source, limits);
+  const base = normalizeClawHubApiBase(
+    input.clawHubApiBaseUrl,
+    input.allowLoopbackForTests ?? false,
+  );
+  const fetchImpl = input.fetchImpl ?? input.fetch ?? DEFAULT_FETCH;
+  const client = new HttpClient(fetchImpl, limits, input, base.origin, 'source');
+  const headers: FetchHeaders = {
+    accept: 'application/json',
+    'user-agent': 'private-skills-clawhub-worker/0.1',
+  };
+  const detailURL = appendBasePath(base, ['api', 'v1', 'skills', source.slug]);
+  const detail = await client.json<unknown>(detailURL, {
+    headers,
+    allowedOrigin: base.origin,
+    signal: input.signal,
+    retryable: false,
+    rejectRedirects: true,
+  });
+  const detailIdentity = clawHubDetailIdentity(detail);
+  if (detailIdentity.owner !== source.owner || detailIdentity.slug !== source.slug) {
+    throw new UpstreamAcquisitionError(
+      'digest_mismatch',
+      'ClawHub detail identity changed during acquisition',
+    );
+  }
+
+  const versionURL = appendBasePath(base, [
+    'api',
+    'v1',
+    'skills',
+    source.slug,
+    'versions',
+    source.version,
+  ]);
+  const versionPayload = await client.json<unknown>(versionURL, {
+    headers,
+    allowedOrigin: base.origin,
+    signal: input.signal,
+    retryable: false,
+    rejectRedirects: true,
+  });
+  const liveVersion = clawHubVersionValue(versionPayload);
+  if (liveVersion !== source.version) {
+    throw new UpstreamAcquisitionError(
+      'digest_mismatch',
+      'ClawHub version identity changed during acquisition',
+    );
+  }
+  const liveFiles = clawHubVersionManifest(versionPayload, limits);
+  assertClawHubManifestEqual(source.files, liveFiles, limits);
+
+  const downloadURL = new URL('/api/v1/download', base.origin);
+  downloadURL.searchParams.set('slug', source.slug);
+  if (source.owner !== '') downloadURL.searchParams.set('ownerHandle', source.owner);
+  downloadURL.searchParams.set('version', source.version);
+  const response = await client.bytes(downloadURL, {
+    headers: { ...headers, accept: 'application/zip, application/octet-stream' },
+    allowedOrigin: base.origin,
+    signal: input.signal,
+    retryable: false,
+    rejectRedirects: true,
+  });
+  const archiveDigest = digestBytes(response.bytes);
+  const archiveFiles = extractWellKnownArchive(
+    response.bytes,
+    response.response.headers.get('content-type') ?? '',
+    downloadURL.href,
+    limits,
+  );
+  const verifiedFiles = verifyClawHubArchiveFiles(archiveFiles, source.files, limits, source);
+  const bundle = bundleFromRawFiles(verifiedFiles, limits);
+  const sourceDigest = digestBytes(serializeSkillBundle(bundle));
+  const sourceReference = input.sourceReference ?? `@clawhub/${source.owner}/${source.slug}`;
+  return {
+    source,
+    externalDigest: archiveDigest,
+    bundle,
+    provenance: {
+      // Native ClawHub releases are admitted through the registry contract.
+      // Keep the provider's archive digest separate from the canonical bundle
+      // digest and never copy the provider security.sha256hash field.
+      kind: 'registry',
+      ...(input.upstreamId === undefined ? {} : { upstreamId: input.upstreamId }),
+      repository: input.provenanceRepository ?? CLAWHUB_API_ORIGIN,
+      path: input.provenancePath ?? `@${source.owner}/${source.slug}`,
+      revision: source.version,
+      sourceDigest,
+      externalId: input.externalId ?? `@${source.owner}/${source.slug}`,
+      externalSnapshotHash: input.externalSnapshotHash,
+      sourceProviderOrigin: CLAWHUB_API_ORIGIN,
+      sourceResolutionKind: 'snapshot',
+      fetchedAt: sourceFetchedAt(),
+      externalDigest: archiveDigest,
+      sourceUrl: downloadURL.href,
+      sourceReference,
+    },
+  };
+}
+
+/** Explicit source-kind alias used by worker dispatchers. */
+export const acquireClawHubSkill = acquireClawHubSource;
+
+/** Validate a server-owned ClawHub identity before any provider request. */
+export function validateClawHubSourceIdentity(
+  source: ClawHubSourceAcquisition,
+  limitsInput?: Partial<AcquisitionLimits>,
+): ClawHubSourceAcquisition {
+  const limits = mergeLimits(limitsInput);
+  if (!isRecord(source) || source.kind !== 'clawhub') {
+    throw new UpstreamAcquisitionError('invalid_source', 'ClawHub source identity is invalid');
+  }
+  const owner = validateClawHubCoordinate(source.owner, 'owner');
+  const slug = validateClawHubCoordinate(source.slug, 'slug');
+  const version = validateClawHubCoordinate(source.version, 'version');
+  const files = validateClawHubManifest(source.files, limits);
+  if (source.sourceProviderOrigin !== undefined && source.sourceProviderOrigin !== CLAWHUB_API_ORIGIN) {
+    throw new UpstreamAcquisitionError('invalid_source', 'ClawHub source provider origin is invalid');
+  }
+  return {
+    kind: 'clawhub',
+    owner,
+    slug,
+    version,
+    files,
+    sourceProviderOrigin: CLAWHUB_API_ORIGIN,
+  };
+}
+
+/**
+ * Decode and verify a native ClawHub download against a version manifest.
+ * This helper is exported for the worker's focused conformance tests and for
+ * deployments that keep transport separate from the source adapter.
+ */
+export function verifyClawHubArchive(
+  bytes: Uint8Array,
+  manifest: readonly ClawHubSourceFile[],
+  contentType = '',
+  artifactUrl = `${CLAWHUB_API_ORIGIN}/api/v1/download`,
+  limitsInput?: Partial<AcquisitionLimits>,
+): Array<{ path: string; bytes: Uint8Array }> {
+  const limits = mergeLimits(limitsInput);
+  const normalizedManifest = validateClawHubManifest(manifest, limits);
+  const files = extractWellKnownArchive(bytes, contentType, artifactUrl, limits);
+  return verifyClawHubArchiveFiles(files, normalizedManifest, limits);
+}
+
+function validateClawHubCoordinate(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256 ||
+    hasLoneSurrogate(value) || /[\u0000-\u001f\u007f]/u.test(value) ||
+    value.includes('/') || value.includes('\\') || value === '.' || value === '..' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)) {
+    throw new UpstreamAcquisitionError('invalid_source', `ClawHub ${label} is invalid`);
+  }
+  return value;
+}
+
+function validateClawHubManifest(
+  value: unknown,
+  limits: AcquisitionLimits,
+): ClawHubSourceFile[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new UpstreamAcquisitionError('invalid_source', 'ClawHub version file manifest is invalid');
+  }
+  if (value.length > limits.maxFiles) {
+    throw new UpstreamAcquisitionError('file_count_limit', 'ClawHub version file manifest is too large');
+  }
+  const seen = new Set<string>();
+  let total = 0;
+  const files: ClawHubSourceFile[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new UpstreamAcquisitionError('invalid_source', 'ClawHub version file manifest entry is invalid');
+    }
+    const path = validateSkillPath(entry.path as string, limits, false);
+    if (seen.has(path)) {
+      throw new UpstreamAcquisitionError('path_collision', `ClawHub version manifest contains duplicate path ${path}`);
+    }
+    seen.add(path);
+    if (!Number.isSafeInteger(entry.size) || (entry.size as number) < 0 || (entry.size as number) > limits.maxFileBytes) {
+      throw new UpstreamAcquisitionError('file_size_limit', `ClawHub version manifest size is invalid for ${path}`);
+    }
+    const sha256 = entry.sha256;
+    if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(sha256)) {
+      throw new UpstreamAcquisitionError('invalid_source', `ClawHub version manifest SHA-256 is invalid for ${path}`);
+    }
+    total += entry.size as number;
+    if (total > limits.maxExpandedBytes) {
+      throw new UpstreamAcquisitionError('expanded_size_limit', 'ClawHub version manifest exceeds the expanded size limit');
+    }
+    files.push({ path, size: entry.size as number, sha256 });
+  }
+  return files;
+}
+
+function clawHubPayloadRecords(value: unknown): Record<string, any>[] {
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_response', 'ClawHub response is invalid');
+  }
+  const records: Record<string, any>[] = [value];
+  if (isRecord(value.data)) records.push(value.data);
+  if (isRecord(value.data) && isRecord(value.data.attributes)) records.push(value.data.attributes);
+  if (isRecord(value.attributes)) records.push(value.attributes);
+  return records;
+}
+
+function clawHubPathValue(record: Record<string, any>, path: string): unknown {
+  let value: unknown = record;
+  for (const segment of path.split('.')) {
+    if (!isRecord(value)) return undefined;
+    value = value[segment];
+  }
+  return value;
+}
+
+function clawHubFirstString(records: readonly Record<string, any>[], paths: readonly string[]): string | undefined {
+  for (const record of records) {
+    for (const path of paths) {
+      const value = clawHubPathValue(record, path);
+      if (typeof value === 'string' && value.length > 0) return value;
+    }
+  }
+  return undefined;
+}
+
+function clawHubDetailIdentity(value: unknown): { owner: string; slug: string } {
+  const records = clawHubPayloadRecords(value);
+  const ownerValue = clawHubFirstString(records, ['owner.handle', 'ownerHandle', 'owner']);
+  const slugValue = clawHubFirstString(records, ['skill.slug', 'slug']);
+  if (ownerValue === undefined || slugValue === undefined) {
+    throw new UpstreamAcquisitionError('invalid_response', 'ClawHub detail omitted its owner or slug');
+  }
+  return {
+    owner: validateClawHubCoordinate(ownerValue.replace(/^@/u, ''), 'owner'),
+    slug: validateClawHubCoordinate(slugValue, 'slug'),
+  };
+}
+
+function clawHubVersionValue(value: unknown): string {
+  const records = clawHubPayloadRecords(value);
+  const version = clawHubFirstString(records, ['version.version', 'version', 'release.version']);
+  if (version === undefined) {
+    throw new UpstreamAcquisitionError('invalid_response', 'ClawHub version response omitted its version');
+  }
+  return validateClawHubCoordinate(version, 'version');
+}
+
+function clawHubVersionManifest(value: unknown, limits: AcquisitionLimits): ClawHubSourceFile[] {
+  const records = clawHubPayloadRecords(value);
+  const raw = records
+    .map((record) => ['files', 'version.files', 'release.files']
+      .map((path) => clawHubPathValue(record, path))
+      .find((candidate) => Array.isArray(candidate)))
+    .find((candidate): candidate is unknown[] => Array.isArray(candidate));
+  return validateClawHubManifest(raw, limits);
+}
+
+function assertClawHubManifestEqual(
+  expected: readonly ClawHubSourceFile[],
+  actual: readonly ClawHubSourceFile[],
+  limits: AcquisitionLimits,
+): void {
+  const expectedNormalized = validateClawHubManifest(expected, limits);
+  const actualNormalized = validateClawHubManifest(actual, limits);
+  if (clawHubManifestKey(expectedNormalized) !== clawHubManifestKey(actualNormalized)) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub version file manifest changed during acquisition');
+  }
+}
+
+function clawHubManifestKey(files: readonly ClawHubSourceFile[]): string {
+  return files
+    .map((file) => `${file.path}\u0000${file.size}\u0000${file.sha256}`)
+    .sort((left, right) => left.localeCompare(right))
+    .join('\n');
+}
+
+function verifyClawHubArchiveFiles(
+  archiveFiles: readonly { path: string; bytes: Uint8Array }[],
+  manifest: readonly ClawHubSourceFile[],
+  limits: AcquisitionLimits,
+  source?: ClawHubSourceAcquisition,
+): Array<{ path: string; bytes: Uint8Array }> {
+  const expected = validateClawHubManifest(manifest, limits);
+  if (!Array.isArray(archiveFiles)) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub download files do not match its version manifest');
+  }
+  const metadataEntries = archiveFiles.filter((entry) => entry?.path === '_meta.json');
+  if (metadataEntries.length > 0) {
+    if (source === undefined || metadataEntries.length !== 1) {
+      throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub download contains an unexpected metadata wrapper');
+    }
+    validateClawHubDownloadMetadata(metadataEntries[0]!.bytes, source, limits);
+  }
+  const skillArchiveFiles = archiveFiles.filter((entry) => entry?.path !== '_meta.json');
+  if (skillArchiveFiles.length !== expected.length) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub download files do not match its version manifest');
+  }
+  const actual = new Map<string, Uint8Array>();
+  for (const entry of skillArchiveFiles) {
+    if (!entry || typeof entry.path !== 'string' || !(entry.bytes instanceof Uint8Array)) {
+      throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub download contains an invalid file');
+    }
+    const path = validateSkillPath(entry.path, limits, false);
+    if (actual.has(path)) {
+      throw new UpstreamAcquisitionError('path_collision', `ClawHub download contains duplicate path ${path}`);
+    }
+    actual.set(path, entry.bytes);
+  }
+  const verified: Array<{ path: string; bytes: Uint8Array }> = [];
+  for (const file of expected) {
+    const bytes = actual.get(file.path);
+    if (bytes === undefined) {
+      throw new UpstreamAcquisitionError('digest_mismatch', `ClawHub download is missing ${file.path}`);
+    }
+    if (bytes.byteLength !== file.size) {
+      throw new UpstreamAcquisitionError('size_mismatch', `ClawHub download size does not match ${file.path}`);
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (digest !== file.sha256) {
+      throw new UpstreamAcquisitionError('digest_mismatch', `ClawHub download digest does not match ${file.path}`);
+    }
+    verified.push({ path: file.path, bytes: bytes.slice() });
+  }
+  for (const path of actual.keys()) {
+    if (!expected.some((file) => file.path === path)) {
+      throw new UpstreamAcquisitionError('digest_mismatch', `ClawHub download contains an unexpected file ${path}`);
+    }
+  }
+  return verified;
+}
+
+/**
+ * ClawHub's documented download wrapper adds one root `_meta.json` member to
+ * the version-file archive. It is provider metadata rather than skill
+ * content: bound it, parse it as data, and validate every identity field that
+ * can be compared with the queued source before dropping only this exact
+ * reserved member. Any other unlisted archive member remains a hard failure.
+ */
+function validateClawHubDownloadMetadata(
+  bytes: Uint8Array,
+  source: ClawHubSourceAcquisition,
+  limits: AcquisitionLimits,
+): void {
+  const maxBytes = Math.min(limits.maxFileBytes, 64 * 1024);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength > maxBytes) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper exceeds its byte limit');
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+  } catch {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper is not valid JSON');
+  }
+  if (!isRecord(value)) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper is invalid');
+  }
+  const slug = value.slug;
+  if (slug !== undefined && (typeof slug !== 'string' || slug !== source.slug)) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub metadata wrapper slug does not match the source');
+  }
+  const version = value.version;
+  if (version !== undefined && (typeof version !== 'string' || version !== source.version)) {
+    throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub metadata wrapper version does not match the source');
+  }
+  const ownerValues = [value.owner, value.ownerHandle];
+  for (const ownerValue of ownerValues) {
+    if (ownerValue === undefined) continue;
+    const owner = typeof ownerValue === 'string'
+      ? ownerValue
+      : isRecord(ownerValue) && typeof ownerValue.handle === 'string'
+        ? ownerValue.handle
+        : undefined;
+    if (owner === undefined || owner.replace(/^@/u, '') !== source.owner) {
+      throw new UpstreamAcquisitionError('digest_mismatch', 'ClawHub metadata wrapper owner does not match the source');
+    }
+  }
+  if (value.ownerId !== undefined && (typeof value.ownerId !== 'string' || value.ownerId.length === 0 || value.ownerId.length > 256 || hasLoneSurrogate(value.ownerId) || /[\u0000-\u001f\u007f\r\n]/u.test(value.ownerId))) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper owner id is invalid');
+  }
+  if (value.publishedAt !== undefined && (!Number.isSafeInteger(value.publishedAt) || (value.publishedAt as number) < 0)) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper publication time is invalid');
+  }
+  if (slug === undefined && version === undefined && ownerValues.every((entry) => entry === undefined)) {
+    throw new UpstreamAcquisitionError('invalid_archive', 'ClawHub metadata wrapper omitted its source identity');
+  }
+}
+
+function normalizeClawHubApiBase(value: string | undefined, allowLoopbackForTests: boolean): URL {
+  if (value === undefined) return new URL(CLAWHUB_API_ORIGIN);
+  const parsed = parseFixedBase(value, allowLoopbackForTests);
+  if (!allowLoopbackForTests && parsed.origin !== CLAWHUB_API_ORIGIN) {
+    throw new UpstreamAcquisitionError('invalid_source', 'ClawHub source transport origin is fixed to clawhub.ai');
+  }
+  if (allowLoopbackForTests && parsed.origin !== CLAWHUB_API_ORIGIN && !isLoopbackHost(parsed.hostname)) {
+    throw new UpstreamAcquisitionError('invalid_source', 'ClawHub test source transport must use loopback');
+  }
+  return parsed;
 }
 
 function extractOpenClawArchive(

@@ -6,6 +6,7 @@ import type {
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
   CuratedSkillsResponse, DirectorySkillListResponse, SkillAuditResponse, SkillDetailMetadataResponse, SkillSearchResponse, SkillsTopicResponse, SkillView,
   SkillsPackManifest, FeedListResponse, ProxyResolveResponse, ReleaseFilesResponse, DraftResponse, DraftPublishResponse,
+  SourceListResponse, SourceSearchResponse, SourceResolveResponse,
   BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
   DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
 } from './types'
@@ -176,6 +177,17 @@ export const api = {
   directoryDetail(id: string, options: { feed?: string } = {}) { return request<SkillDetailMetadataResponse>('/v1/directory/detail', { query: { id, feed: options.feed } }) },
   directoryAudits(id: string, options: { feed?: string } = {}) { return request<SkillAuditResponse>('/v1/directory/audits', { query: { id, feed: options.feed } }) },
   feeds() { return request<FeedListResponse>('/v1/feeds') },
+  sources() { return request<SourceListResponse>('/v1/sources') },
+  sourceSearch(query: string, options: { source?: string; limit?: number } = {}) {
+    return request<SourceSearchResponse>('/v1/sources/search', { query: {
+      q: query,
+      source: options.source,
+      limit: options.limit === undefined ? undefined : String(options.limit),
+    } })
+  },
+  sourceResolve(sourceId: string, input: { externalId: string; refresh?: boolean }) {
+    return request<SourceResolveResponse>(`/v1/sources/${encodeURIComponent(sourceId)}/resolve`, { method: 'POST', body: input })
+  },
   directoryImport(input: { id: string; name: string; version: string; upstreamId?: string }) {
     return request<OperationResponse>('/v1/directory/import', { method: 'POST', body: input })
   },

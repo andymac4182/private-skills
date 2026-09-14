@@ -227,7 +227,7 @@ export function DirectoryView() {
         <h1>Discover skills beyond your registry.</h1>
         <p className="muted">Browse skills.sh metadata on demand. Public listings, source identity, and external evidence stay separate from private approval.</p>
       </div>
-      <a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a>
+      <div className="page-actions"><Link className="button button-primary" params={{ section: 'source-discovery' }} to="/app/$section">Find across sources</Link><a className="button button-secondary" href="https://skills.sh" rel="noreferrer" target="_blank">Open skills.sh ↗</a></div>
     </div>
     <Panel className="directory-toolbar">
       <div className="directory-view-tabs" aria-label="Cloud directory views" role="tablist">

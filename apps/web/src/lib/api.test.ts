@@ -51,3 +51,27 @@ describe('lazy draft file API', () => {
     expect(init.credentials).toBe('include')
   })
 })
+
+describe('multi-source discovery API', () => {
+  it('keeps provider selection in the search query and posts only the external identity to resolve', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ protocolVersion: 1, query: 'review', data: [], sources: [] }))
+      .mockResolvedValueOnce(response({ sourceId: 'tessl', externalId: 'workspace/review', reference: '@tessl/workspace/review', resolution: { members: [] } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.sourceSearch('review', { source: 'tessl', limit: 50 })
+    await api.sourceResolve('tessl', { externalId: 'workspace/review' })
+
+    const [searchPath] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const searchUrl = new URL(searchPath, 'https://registry.test')
+    expect(searchUrl.pathname).toBe('/v1/sources/search')
+    expect(searchUrl.searchParams.get('q')).toBe('review')
+    expect(searchUrl.searchParams.get('source')).toBe('tessl')
+    expect(searchUrl.searchParams.get('limit')).toBe('50')
+
+    const [resolvePath, resolveInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(resolvePath).toBe('/v1/sources/tessl/resolve')
+    expect(JSON.parse(String(resolveInit.body))).toEqual({ externalId: 'workspace/review' })
+    expect(resolveInit.credentials).toBe('include')
+  })
+})

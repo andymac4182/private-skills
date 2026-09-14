@@ -99,6 +99,15 @@ import {
   type OpenClawFeedEntry,
 } from '../../openclaw/src/index.ts';
 import { SERVICE_VERSION } from '../../contracts/src/version.js';
+import type { SourceCatalogClient } from '../../source-catalog/src/client.js';
+import {
+  SourceCatalogError,
+  type SourceAcquisition,
+  type SourceCatalogListResponse,
+  type SourceCatalogRow,
+  type SourceId,
+  type SourceResolution,
+} from '../../source-catalog/src/types.js';
 
 /**
  * The registry handler is deliberately implemented using only Web APIs.  The
@@ -493,6 +502,8 @@ export interface RegistryOpenClawDependencies {
 }
 
 export type RegistryHandlerDependencies = RegistryDependencies & {
+  /** Optional federated source discovery/resolve facade. */
+  sourceCatalog?: SourceCatalogClient;
   directory?: RegistryDirectoryClient;
   /** Resolve the metadata client bound to one exact transparent feed base. */
   directoryForBase?: (baseUrl: string) => RegistryDirectoryClient | undefined;
@@ -692,6 +703,7 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
             imports: true,
             proxyResolve: true,
             directory: !!deps.directory,
+            sources: !!deps.sourceCatalog,
             installAuthorizations: true,
             installReceipts: true,
             uploadReview: {
@@ -709,6 +721,19 @@ export function createRegistryHandler(deps: RegistryHandlerDependencies): Regist
           },
           scanners: [...SUPPORTED_SCANNERS],
         });
+      }
+
+      if (segments[0] === 'v1' && segments[1] === 'sources') {
+        return await handleSourceCatalogRoute(
+          method,
+          segments,
+          url,
+          request,
+          principal,
+          deps,
+          config,
+          requestId,
+        );
       }
 
       if (segments[0] === 'v1' && segments[1] === 'drafts') {
@@ -1153,6 +1178,10 @@ function requireRouteScopes(principal: Principal, required: readonly string[]): 
 function scopesForRoute(method: HttpMethod, path: string, segments: string[]): readonly string[] {
   if (path === '/v1/me') return [];
   if (path === '/v1/capabilities') return ['registry:read'];
+  if (segments[0] === 'v1' && segments[1] === 'sources') {
+    if (method === 'GET') return ['registry:read'];
+    if (method === 'POST' && (segments[2] === 'resolve' || segments[3] === 'resolve')) return ['proxy:resolve'];
+  }
   if (segments[0] === 'v1' && segments[1] === 'drafts' && (segments[3] === 'builder-context' || segments[3] === 'builder-file')) {
     return ['skills:builder'];
   }
@@ -1448,6 +1477,580 @@ async function handleSkillsRoute(
  * policy and request-scoped credentials; this route only authenticates the
  * caller, validates bounded query/body fields, and returns its validated DTO.
  */
+async function handleSourceCatalogRoute(
+  method: HttpMethod,
+  segments: string[],
+  url: URL,
+  request: Request,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<Response> {
+  const sourceCatalog = deps.sourceCatalog;
+  if (!sourceCatalog) {
+    throw new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is not configured for this registry', 503, { retryable: true });
+  }
+  if (segments.length === 2) {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    try {
+      const response: SourceCatalogListResponse = await sourceCatalog.list({ organizationId: principal.organizationId, signal: request.signal });
+      return jsonResponse(response);
+    } catch (error) {
+      throw sourceCatalogApiError(error);
+    }
+  }
+  if (segments.length === 3 && segments[2] === 'search') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    requireReader(principal);
+    const query = url.searchParams.get('q');
+    const sourceParam = url.searchParams.get('source');
+    const limitParam = url.searchParams.get('limit');
+    const limit = limitParam === null || limitParam === '' ? undefined : Number(limitParam);
+    if (limitParam !== null && (!Number.isSafeInteger(limit) || limit! < 1)) {
+      throw new RegistryApiError('INVALID_SOURCE_SEARCH', 'limit must be a positive integer', 400);
+    }
+    try {
+      return jsonResponse(await sourceCatalog.search({
+        query: query ?? '',
+        ...(sourceParam === null || sourceParam === '' ? {} : { source: sourceParam }),
+        ...(limit === undefined ? {} : { limit }),
+        organizationId: principal.organizationId,
+        signal: request.signal,
+      }));
+    } catch (error) {
+      throw sourceCatalogApiError(error);
+    }
+  }
+  if (segments.length === 4 && segments[3] === 'resolve') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    requireReader(principal);
+    requireRouteScopes(principal, ['proxy:resolve']);
+    const sourceId = decodePathPart(segments[2]);
+    const body = await readJson(request, config.maxBodyBytes);
+    const input = parseSourceResolveRequest(body, sourceId);
+    try {
+      return await resolveSourceCatalogRequest(input, principal, deps, config, requestId, request.signal);
+    } catch (error) {
+      throw sourceCatalogApiError(error);
+    }
+  }
+  return methodNotAllowed(['GET', 'POST']);
+}
+
+interface SourceCatalogResolveInput {
+  sourceId: SourceId;
+  externalId: string;
+  refresh: boolean;
+}
+
+function parseSourceResolveRequest(body: JsonObject, sourceId: string): SourceCatalogResolveInput {
+  const allowed = new Set(['externalId', 'refresh']);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    throw new RegistryApiError('INVALID_SOURCE_RESOLVE', 'Source resolution accepts only externalId and refresh', 400);
+  }
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(sourceId)) {
+    throw new RegistryApiError('INVALID_SOURCE_RESOLVE', 'sourceId is invalid', 400);
+  }
+  const externalId = stringValue(body.externalId);
+  if (!externalId || externalId.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(externalId)) {
+    throw new RegistryApiError('INVALID_SOURCE_RESOLVE', 'externalId is invalid', 400);
+  }
+  if (body.refresh !== undefined && typeof body.refresh !== 'boolean') {
+    throw new RegistryApiError('INVALID_SOURCE_RESOLVE', 'refresh must be a boolean', 400);
+  }
+  return { sourceId, externalId, refresh: body.refresh === true };
+}
+
+function sourceCatalogApiError(error: unknown): RegistryApiError {
+  if (error instanceof RegistryApiError) return error;
+  if (error instanceof SourceCatalogError) {
+    const message = error.code === 'SOURCE_DISABLED'
+      ? 'Source is disabled by server configuration'
+      : error.code === 'SOURCE_NOT_FOUND'
+        ? 'Source is not configured'
+        : error.code === 'SOURCE_INVALID_QUERY' || error.code === 'SOURCE_INVALID_EXTERNAL_ID'
+          ? error.message
+          : error.code === 'SOURCE_TIMEOUT'
+            ? 'Source request timed out'
+            : 'Source is unavailable';
+    return new RegistryApiError(error.code, message, error.status, { retryable: error.retryable });
+  }
+  return new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is temporarily unavailable', 503, { retryable: true });
+}
+
+interface SourceCatalogQueueResult {
+  status: 202 | 200;
+  job: Job;
+  resolution?: Resolution;
+  reference: string;
+  sourceId: SourceId;
+  externalId: string;
+}
+
+/** Resolve an adapter identity and bind it to the existing import pipeline. */
+async function resolveSourceCatalogRequest(
+  input: SourceCatalogResolveInput,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const sourceCatalog = deps.sourceCatalog;
+  if (!sourceCatalog) throw new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is not configured for this registry', 503, { retryable: true });
+  const descriptor = await sourceCatalog.status({ sourceId: input.sourceId, organizationId: principal.organizationId, signal });
+  if (descriptor.availability.state === 'disabled') {
+    throw new RegistryApiError('SOURCE_DISABLED', 'Source is disabled by server configuration', 403);
+  }
+  if (descriptor.availability.state === 'unavailable') {
+    throw new RegistryApiError('SOURCE_UNAVAILABLE', 'Source is unavailable', 503, { retryable: descriptor.availability.retryable });
+  }
+  const expectedRevision = descriptor.configRevision;
+  const namespace = sourceCatalogNamespace(principal);
+  if (!canReadNamespace(principal, `@${namespace}/source`)) {
+    throw new RegistryApiError('FORBIDDEN', 'Source namespace access denied', 403);
+  }
+  if (!input.refresh) {
+    const state = await readState(deps.repository, config.organizationId);
+    const cached = findSourceCatalogCachedResult(state, input.sourceId, input.externalId, expectedRevision, principal);
+    if (cached) return sourceCatalogResponse(cached);
+  }
+  const resolution = await sourceCatalog.resolve({
+    sourceId: input.sourceId,
+    externalId: input.externalId,
+    refresh: input.refresh,
+    organizationId: principal.organizationId,
+    signal,
+  });
+  if (resolution.configRevision !== expectedRevision) {
+    throw new RegistryApiError('SOURCE_CONFIGURATION_CHANGED', 'Source configuration changed while this source was being resolved', 409, { retryable: true });
+  }
+  if (!resolution.row.installable) {
+    throw new RegistryApiError('SOURCE_NOT_INSTALLABLE', resolution.row.unavailableReason ?? 'The selected source cannot be imported by this registry', 409);
+  }
+  const reference = sourceCatalogReference(resolution);
+  const nameDigest = await digestBytes(new TextEncoder().encode(`source-catalog\u0000${reference}`));
+  const managedName = `@${namespace}/source-${nameDigest.slice('sha256:'.length, 'sha256:'.length + 48)}`;
+  const version = await sourceCatalogVersion(resolution);
+  const mapping = await sourceCatalogMapping(input.sourceId, resolution, reference, managedName, version, principal, expectedRevision);
+  const result = await queueSourceCatalogImport(
+    mapping,
+    resolution,
+    input.refresh,
+    principal,
+    deps,
+    config,
+    requestId,
+  );
+  return sourceCatalogResponse(result);
+}
+
+function sourceCatalogResponse(result: SourceCatalogQueueResult): Response {
+  const response: JsonObject = {
+    sourceId: result.sourceId,
+    externalId: result.externalId,
+    reference: result.reference,
+    ...(result.status === 200 && result.resolution ? { resolution: result.resolution } : {}),
+    ...(result.status === 202 ? { operation: publicSourceCatalogOperation(result.job) } : {}),
+  };
+  return jsonResponse(response, result.status);
+}
+
+/** Do not expose the frozen upstream/import descriptor to browser callers. */
+function publicSourceCatalogOperation(job: Job): Pick<Job, 'id' | 'state'> {
+  return { id: job.id, state: job.state };
+}
+
+function findSourceCatalogCachedResult(
+  state: RegistryState,
+  sourceId: SourceId,
+  externalId: string,
+  configRevision: string,
+  principal: Principal,
+): SourceCatalogQueueResult | undefined {
+  const candidates = state.jobs
+    .filter((job) => {
+      if (job.organizationId !== principal.organizationId || job.kind !== 'import' || !job.import) return false;
+      const request = job.import;
+      const primary = request.sourceCatalogId === sourceId &&
+        request.sourceCatalogConfigRevision === configRevision &&
+        request.externalId === externalId;
+      const alias = job.sourceCatalogAliases?.some((candidate) =>
+        candidate.sourceId === sourceId && candidate.externalId === externalId && candidate.configRevision === configRevision,
+      ) ?? false;
+      return (primary || alias) && canReadNamespace(principal, request.name);
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
+  if (active && active.import?.sourceReference) {
+    return {
+      status: 202,
+      job: active,
+      reference: active.import.sourceReference,
+      sourceId,
+      externalId,
+    };
+  }
+  for (const candidate of candidates) {
+    if (candidate.state !== 'completed' || !candidate.resourceId || !candidate.import?.sourceReference) continue;
+    const skill = state.skills.find((entry) => entry.id === candidate.resourceId && entry.organizationId === principal.organizationId);
+    if (!skill || !skillCurrentlyApproved(state, skill) || !canReadNamespace(principal, skill.name)) continue;
+    return {
+      status: 200,
+      job: candidate,
+      resolution: skillResolution(skill),
+      reference: candidate.import.sourceReference,
+      sourceId,
+      externalId,
+    };
+  }
+  return undefined;
+}
+
+interface SourceCatalogMapping {
+  sourceId: SourceId;
+  reference: string;
+  externalId: string;
+  importRequest: ImportRequest;
+  upstream: Upstream;
+  acquisition: SourceAcquisition;
+}
+
+async function sourceCatalogMapping(
+  sourceId: SourceId,
+  resolution: SourceResolution,
+  reference: string,
+  managedName: string,
+  version: string,
+  principal: Principal,
+  configRevision: string,
+): Promise<SourceCatalogMapping> {
+  const acquisition = resolution.acquisition;
+  const sourceIdentity = stableStringify({ sourceId, reference, acquisition, configRevision });
+  const upstreamDigest = await digestBytes(new TextEncoder().encode(`source-catalog\u0000${sourceIdentity}`));
+  const upstreamId = `source-${upstreamDigest.slice('sha256:'.length, 'sha256:'.length + 32)}`;
+  const namespace = sourceCatalogNamespace(principal);
+  const base = sourceCatalogAcquisitionBase(acquisition);
+  const upstream: Upstream = {
+    id: upstreamId,
+    organizationId: principal.organizationId,
+    name: `source-${sourceId}`,
+    kind: base.kind,
+    enabled: true,
+    repositories: base.repositories,
+    baseUrl: base.baseUrl,
+    namespace,
+    configRevision,
+  };
+  const importRequest: ImportRequest = {
+    upstreamId,
+    repository: base.repository,
+    path: base.path,
+    ...(base.ref === undefined ? {} : { ref: base.ref }),
+    name: managedName,
+    version,
+    externalId: resolution.externalId,
+    ...(resolution.snapshotDigest === undefined ? {} : { externalSnapshotHash: resolution.snapshotDigest }),
+    sourceReference: reference,
+    sourceCatalogId: sourceId,
+    sourceCatalogConfigRevision: configRevision,
+    sourceCatalogProviderVersion: resolution.version,
+  };
+  return { sourceId, reference, externalId: resolution.externalId, importRequest, upstream, acquisition };
+}
+
+function sourceCatalogAcquisitionBase(acquisition: SourceAcquisition): {
+  kind: Upstream['kind'];
+  baseUrl: string;
+  repositories: string[];
+  repository: string;
+  path: string;
+  ref?: string;
+} {
+  if (acquisition.kind === 'github') {
+    return {
+      kind: 'github',
+      baseUrl: 'https://api.github.com',
+      repositories: [acquisition.repository],
+      repository: acquisition.repository,
+      path: acquisition.path,
+      ref: acquisition.ref,
+    };
+  }
+  if (acquisition.kind === 'openclaw') {
+    if (acquisition.source.kind === 'public-github') {
+      return {
+        kind: 'github',
+        baseUrl: 'https://api.github.com',
+        repositories: [acquisition.source.repo],
+        repository: acquisition.source.repo,
+        path: acquisition.source.path,
+        ref: acquisition.source.commit,
+      };
+    }
+    const baseUrl = acquisition.sourceProviderOrigin ?? 'https://clawhub.ai';
+    return {
+      kind: 'registry',
+      baseUrl,
+      repositories: [baseUrl],
+      repository: baseUrl,
+      path: acquisition.source.packageName,
+      ref: acquisition.source.version,
+    };
+  }
+  if (acquisition.kind === 'tessl') {
+    return {
+      kind: 'registry',
+      baseUrl: acquisition.sourceProviderOrigin,
+      repositories: [acquisition.sourceProviderOrigin],
+      repository: acquisition.sourceProviderOrigin,
+      path: `${acquisition.workspace}/${acquisition.tile}/${acquisition.skillPath}`,
+      ref: acquisition.version,
+    };
+  }
+  if (acquisition.kind === 'polyskill') {
+    return {
+      kind: 'registry',
+      baseUrl: acquisition.sourceProviderOrigin,
+      repositories: [acquisition.sourceProviderOrigin],
+      repository: acquisition.sourceProviderOrigin,
+      path: acquisition.name,
+      ref: acquisition.version,
+    };
+  }
+  if (acquisition.kind === 'clawhub') {
+    return {
+      kind: 'registry',
+      baseUrl: acquisition.sourceProviderOrigin,
+      repositories: [acquisition.sourceProviderOrigin],
+      repository: acquisition.sourceProviderOrigin,
+      path: `@${acquisition.owner}/${acquisition.slug}`,
+      ref: acquisition.version,
+    };
+  }
+  return {
+    kind: 'registry',
+    baseUrl: acquisition.baseUrl,
+    repositories: [acquisition.baseUrl],
+    repository: acquisition.baseUrl,
+    path: acquisition.package,
+    ref: acquisition.version,
+  };
+}
+
+function sourceCatalogReference(resolution: SourceResolution): string {
+  const acquisition = resolution.acquisition;
+  if (acquisition.kind === 'github') return acquisition.path
+    ? `@github/${acquisition.repository}/${acquisition.path}`
+    : `@github/${acquisition.repository}`;
+  if (acquisition.kind === 'openclaw') {
+    return acquisition.source.kind === 'public-github'
+      ? acquisition.source.path
+        ? `@github/${acquisition.source.repo}/${acquisition.source.path}`
+        : `@github/${acquisition.source.repo}`
+      : `@clawhub/${acquisition.source.packageName}@${acquisition.source.version}`;
+  }
+  if (acquisition.kind === 'tessl') return `@tessl/${acquisition.workspace}/${acquisition.tile}${acquisition.skillPath ? `/${acquisition.skillPath}` : ''}@${acquisition.version}`;
+  if (acquisition.kind === 'polyskill') return `@polyskill/${acquisition.name}@${acquisition.version}`;
+  if (acquisition.kind === 'clawhub') return `@clawhub/${acquisition.owner}/${acquisition.slug}@${acquisition.version}`;
+  return resolution.reference;
+}
+
+async function sourceCatalogVersion(resolution: SourceResolution): Promise<string> {
+  const acquisition = resolution.acquisition;
+  let physical: unknown;
+  if (acquisition.kind === 'github') {
+    physical = { kind: 'github', repository: acquisition.repository, path: acquisition.path, ref: acquisition.ref };
+  } else if (acquisition.kind === 'openclaw') {
+    const source = acquisition.source;
+    if (source.kind === 'public-github') {
+      physical = { kind: 'github', repository: source.repo, path: source.path, ref: source.commit };
+    } else {
+      physical = { kind: 'clawhub', packageName: source.packageName, version: source.version, artifactDigest: source.artifactDigest };
+    }
+  } else if (acquisition.kind === 'tessl') {
+    physical = { kind: 'tessl', workspace: acquisition.workspace, tile: acquisition.tile, version: acquisition.version, skillPath: acquisition.skillPath, fingerprint: acquisition.fingerprint, artifactDigest: acquisition.artifactDigest ?? null };
+  } else if (acquisition.kind === 'polyskill') {
+    physical = { kind: 'polyskill', name: acquisition.name, version: acquisition.version, contentDigest: acquisition.contentDigest };
+  } else if (acquisition.kind === 'clawhub') {
+    physical = { kind: 'clawhub', owner: acquisition.owner, slug: acquisition.slug, version: acquisition.version, files: acquisition.files, artifactDigest: acquisition.artifactDigest ?? null };
+  } else {
+    physical = { kind: 'registry', baseUrl: acquisition.baseUrl, package: acquisition.package, version: acquisition.version, artifactDigest: acquisition.artifactDigest ?? null };
+  }
+  const digest = await digestBytes(new TextEncoder().encode(stableStringify(physical)));
+  return `0.0.0+source.${digest.slice('sha256:'.length, 'sha256:'.length + 48)}`;
+}
+
+function sourceCatalogNamespace(principal: Principal): string {
+  const candidate = principal.namespaces?.find((value) => typeof value === 'string' && /^@?[a-z0-9][a-z0-9._-]{0,63}$/u.test(value));
+  return (candidate ?? 'sources').replace(/^@/u, '').toLowerCase();
+}
+
+async function queueSourceCatalogImport(
+  mapping: SourceCatalogMapping,
+  resolution: SourceResolution,
+  refresh: boolean,
+  principal: Principal,
+  deps: RegistryHandlerDependencies,
+  config: Required<RegistryConfiguration>,
+  requestId: string,
+): Promise<SourceCatalogQueueResult> {
+  const sourceCatalog = deps.sourceCatalog;
+  if (!sourceCatalog) throw new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is not configured for this registry', 503, { retryable: true });
+  const committed = await deps.repository.transaction<SourceCatalogQueueResult>(config.organizationId, (state) => {
+    const mutable = ensureState(state, defaultPolicy());
+    if (sourceCatalog.configRevision(mapping.sourceId) !== mapping.importRequest.sourceCatalogConfigRevision) {
+      throw new RegistryApiError('SOURCE_CONFIGURATION_CHANGED', 'Source configuration changed while this import was being queued', 409, { retryable: true });
+    }
+    const sameSource = (job: Job): boolean => {
+      const request = job.import;
+      return job.organizationId === config.organizationId &&
+        job.kind === 'import' &&
+        !!request &&
+        request.sourceCatalogId === mapping.sourceId &&
+        request.sourceCatalogConfigRevision === mapping.importRequest.sourceCatalogConfigRevision &&
+        request.sourceReference === mapping.reference &&
+        request.externalId === mapping.externalId &&
+        request.name === mapping.importRequest.name &&
+        request.version === mapping.importRequest.version &&
+        !!job.upstream &&
+        sameUpstreamOrigin(job.upstream, mapping.upstream) &&
+        stableStringify(job.sourceAcquisition) === stableStringify(mapping.acquisition);
+    };
+    const candidates = mutable.jobs
+      .filter(sameSource)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
+    if (active) return { status: 202, job: active, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+    for (const candidate of candidates) {
+      if (candidate.state !== 'completed' || !candidate.resourceId) continue;
+      const skill = mutable.skills.find((entry) => entry.id === candidate.resourceId && entry.organizationId === config.organizationId);
+      if (skill && skillCurrentlyApproved(mutable, skill) && canReadNamespace(principal, skill.name)) {
+        return { status: 200, job: candidate, resolution: skillResolution(skill), reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+      }
+    }
+    // One physical source may be discovered through more than one catalog.
+    // Reuse the approved release only after the current adapter supplied and
+    // revalidated the same canonical source reference, while retaining the
+    // current adapter revision as a durable access alias.
+    const physicalCandidates = mutable.jobs
+      .filter((job) => sourceCatalogPhysicalJobMatches(job, mapping))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    const physicalActive = physicalCandidates.find((job) => job.state === 'queued' || job.state === 'running');
+    if (physicalActive) {
+      addSourceCatalogAlias(physicalActive, mapping);
+      return { status: 202, job: physicalActive, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+    }
+    for (const candidate of physicalCandidates) {
+      if (candidate.state !== 'completed' || !candidate.resourceId) continue;
+      const skill = mutable.skills.find((entry) => entry.id === candidate.resourceId && entry.organizationId === config.organizationId);
+      if (skill && skillCurrentlyApproved(mutable, skill) && canReadNamespace(principal, skill.name)) {
+        addSourceCatalogAlias(candidate, mapping);
+        return { status: 200, job: candidate, resolution: skillResolution(skill), reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+      }
+    }
+    let importRequest = mapping.importRequest;
+    const conflicting = mutable.skills.find((skill) => skill.organizationId === config.organizationId && skill.name === importRequest.name && skill.version === importRequest.version);
+    if (conflicting) {
+      const conflictingJob = mutable.jobs.find((job) => job.resourceId === conflicting.id && job.kind === 'import' && job.organizationId === config.organizationId);
+      const sameCatalogPriorRevision = conflictingJob?.import?.sourceCatalogId === mapping.sourceId &&
+        conflictingJob.import?.sourceCatalogConfigRevision !== mapping.importRequest.sourceCatalogConfigRevision;
+      if ((conflicting.state === 'approved' || conflicting.state === 'pending') && !sameCatalogPriorRevision) {
+        throw new RegistryApiError('PROVENANCE_CONFLICT', 'The source identity is already bound to a different release state', 409);
+      }
+      // A failed scan is retryable. Preserve the provider identity in the
+      // request while giving the new durable attempt a distinct registry
+      // SemVer so the immutable release record can be created safely.
+      importRequest = { ...importRequest, version: sourceCatalogRetryVersion() };
+    }
+    const job: Job = {
+      id: randomId('job'),
+      organizationId: config.organizationId,
+      kind: 'import',
+      state: 'queued',
+      policyRevision: mutable.policy.revision,
+      policy: clonePolicy(mutable.policy),
+      import: importRequest,
+      upstream: mapping.upstream,
+      sourceAcquisition: mapping.acquisition,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      attempts: 0,
+    };
+    mutable.jobs.push(job);
+    appendAudit(mutable, audit(principal, 'source.import.queued', job.id, {
+      sourceId: mapping.sourceId,
+      externalId: mapping.externalId,
+      reference: mapping.reference,
+      refresh,
+      requestId,
+    }, config.organizationId));
+    return { status: 202, job, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+  });
+  return committed;
+}
+
+function sourceCatalogPhysicalJobMatches(job: Job, mapping: SourceCatalogMapping): boolean {
+  const request = job.import;
+  // A revision change on the same catalog is an explicit access/configuration
+  // change. It must create a fresh durable import rather than reuse the prior
+  // revision through the cross-catalog alias path.
+  if (request?.sourceCatalogId === mapping.sourceId) return false;
+  if (job.organizationId !== mapping.upstream.organizationId || job.kind !== 'import' || !request ||
+    request.sourceReference !== mapping.reference || request.name !== mapping.importRequest.name || !job.upstream ||
+    !sameUpstreamPhysical(job.upstream, mapping.upstream)) return false;
+  if (job.sourceAcquisition !== undefined) {
+    return stableStringify(sourceCatalogPhysicalAcquisition(job.sourceAcquisition)) === stableStringify(sourceCatalogPhysicalAcquisition(mapping.acquisition));
+  }
+  return request.repository === mapping.importRequest.repository && request.path === mapping.importRequest.path && request.ref === mapping.importRequest.ref;
+}
+
+function sameUpstreamPhysical(left: Upstream, right: Upstream): boolean {
+  return left.kind === right.kind &&
+    left.baseUrl === right.baseUrl &&
+    stableStringify([...(left.repositories ?? [])].sort()) === stableStringify([...(right.repositories ?? [])].sort());
+}
+
+function sourceCatalogPhysicalAcquisition(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const acquisition = value as Record<string, unknown>;
+  switch (acquisition.kind) {
+    case 'github': return { kind: 'github', repository: acquisition.repository, path: acquisition.path, ref: acquisition.ref };
+    case 'openclaw': {
+      const source = acquisition.source;
+      if (source && typeof source === 'object' && (source as Record<string, unknown>).kind === 'public-github') {
+        const github = source as Record<string, unknown>;
+        return { kind: 'github', repository: github.repo, path: github.path, ref: github.commit };
+      }
+      return { kind: 'openclaw', source };
+    }
+    case 'tessl': return { kind: 'tessl', workspace: acquisition.workspace, tile: acquisition.tile, version: acquisition.version, skillPath: acquisition.skillPath, fingerprint: acquisition.fingerprint };
+    case 'polyskill': return { kind: 'polyskill', name: acquisition.name, version: acquisition.version, contentDigest: acquisition.contentDigest };
+    case 'clawhub': return { kind: 'clawhub', owner: acquisition.owner, slug: acquisition.slug, version: acquisition.version, files: acquisition.files };
+    case 'registry': return { kind: 'registry', baseUrl: acquisition.baseUrl, package: acquisition.package, version: acquisition.version, artifactDigest: acquisition.artifactDigest ?? null };
+    default: return value;
+  }
+}
+
+function addSourceCatalogAlias(job: Job, mapping: SourceCatalogMapping): void {
+  const aliases = job.sourceCatalogAliases ?? [];
+  if (aliases.some((candidate) => candidate.sourceId === mapping.sourceId && candidate.externalId === mapping.externalId && candidate.configRevision === mapping.importRequest.sourceCatalogConfigRevision)) return;
+  if (aliases.length >= 32) aliases.shift();
+  aliases.push({
+    sourceId: mapping.sourceId,
+    externalId: mapping.externalId,
+    configRevision: mapping.importRequest.sourceCatalogConfigRevision ?? 'unknown',
+  });
+  job.sourceCatalogAliases = aliases;
+}
+
+function sourceCatalogRetryVersion(): string {
+  const suffix = randomId('source-retry').replace(/[^0-9A-Za-z-]/gu, '').toLowerCase().slice(-48);
+  return `0.0.0+source-retry.${suffix || 'attempt'}`;
+}
+
 async function handleDirectoryRoute(
   method: HttpMethod,
   segments: string[],
@@ -5309,6 +5912,8 @@ function importCacheKey(organizationId: string, request: ImportRequest): string 
     feedName: request.feedName ?? null,
     feedConfigRevision: request.feedConfigRevision ?? null,
     sourceReference: request.sourceReference ?? null,
+    sourceCatalogId: request.sourceCatalogId ?? null,
+    sourceCatalogConfigRevision: request.sourceCatalogConfigRevision ?? null,
   });
 }
 
@@ -5358,6 +5963,10 @@ function importProvenanceMatches(skill: SkillVersion, request: ImportRequest, up
   if (request.feedName !== undefined && provenance.feedName !== request.feedName) return false;
   if (request.feedConfigRevision !== undefined && provenance.feedConfigRevision !== request.feedConfigRevision) return false;
   if (request.sourceReference !== undefined && provenance.sourceReference !== request.sourceReference) return false;
+  if (request.sourceCatalogId !== undefined && (
+    provenance.externalSource !== request.sourceCatalogId ||
+    provenance.externalId !== request.externalId
+  )) return false;
   if (upstream.kind === 'skills-sh') {
     if (!request.externalId || provenance.externalId !== request.externalId || provenance.path !== request.externalId) return false;
     if (request.externalSourceType !== undefined && provenance.externalSourceType !== request.externalSourceType) return false;
@@ -5907,14 +6516,19 @@ function normalizeProvenance(
   const kind = raw.kind;
   const suppliedUpstreamId = stringValue(raw.upstreamId);
   const suppliedRepository = stringValue(raw.repository);
-  const suppliedPath = stringValue(raw.path);
+  // An explicitly empty path is the canonical GitHub repository-root path.
+  // Preserve the distinction between an omitted path (invalid) and `path: ''`
+  // (valid only when the server-owned job is itself bound to that root).
+  const allowsExplicitRootPath = upstream.kind === 'github' && request.path === '' &&
+    typeof request.repository === 'string' && request.repository.length > 0;
+  const suppliedPath = raw.path === '' && allowsExplicitRootPath ? '' : stringValue(raw.path);
   const suppliedRevision = stringValue(raw.revision);
   if (
     !normalizeProvenanceKind(kind) ||
     kind !== upstream.kind ||
     !suppliedUpstreamId ||
     !suppliedRepository ||
-    !suppliedPath ||
+    (suppliedPath === undefined || (!suppliedPath && !allowsExplicitRootPath)) ||
     !suppliedRevision
   ) {
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is incomplete or does not match its upstream', 409);
@@ -5935,6 +6549,10 @@ function normalizeProvenance(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance is not pinned to a valid immutable revision', 409);
   }
   const suppliedExternalId = stringValue(raw.externalId);
+  const sourceCatalogExternalId = request.sourceCatalogId === undefined ? undefined : request.externalId;
+  if (sourceCatalogExternalId !== undefined && suppliedExternalId !== undefined && suppliedExternalId !== sourceCatalogExternalId) {
+    throw new RegistryApiError('PROVENANCE_CONFLICT', 'Imported artifact provenance names a different source catalog identity', 409);
+  }
   const suppliedFeedId = optionalProvenanceString(raw.feedId, 'feedId', 256);
   const suppliedFeedName = optionalProvenanceString(raw.feedName, 'feedName', 128);
   const suppliedFeedConfigRevision = optionalProvenanceString(raw.feedConfigRevision, 'feedConfigRevision', 256);
@@ -6015,13 +6633,14 @@ function normalizeProvenance(
     repository: suppliedRepository,
     path: suppliedPath,
     revision: suppliedRevision,
-    ...(suppliedExternalId ? { externalId: suppliedExternalId } : {}),
+    ...((sourceCatalogExternalId ?? suppliedExternalId) ? { externalId: sourceCatalogExternalId ?? suppliedExternalId } : {}),
     ...(suppliedExternalSourceType ? { externalSourceType: suppliedExternalSourceType as Provenance['externalSourceType'] } : {}),
     ...(raw.externalSnapshotHash !== undefined ? { externalSnapshotHash: suppliedExternalSnapshotHash } : {}),
     ...(request.feedId ? { feedId: request.feedId } : {}),
     ...(request.feedName ? { feedName: request.feedName } : {}),
     ...(request.feedConfigRevision ? { feedConfigRevision: request.feedConfigRevision } : {}),
     ...(request.sourceReference ? { sourceReference: request.sourceReference } : {}),
+    ...(request.sourceCatalogId ? { externalSource: request.sourceCatalogId } : {}),
     ...(suppliedSourceProviderOrigin ? { sourceProviderOrigin: suppliedSourceProviderOrigin } : {}),
     ...(suppliedFetchedAt === undefined ? {} : { fetchedAt: suppliedFetchedAt }),
     ...(suppliedSourceResolutionKind ? { sourceResolutionKind: suppliedSourceResolutionKind as Provenance['sourceResolutionKind'] } : {}),

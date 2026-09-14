@@ -12,6 +12,7 @@ import { DirectoryView } from './DirectoryView'
 import { OfficialView } from './OfficialView'
 import { TopicsView } from './TopicsView'
 import { DirectoryAuditsView } from './DirectoryAuditsView'
+import { SourceDiscoveryView } from './SourceDiscoveryView'
 import type { AppSectionSearch } from '../routes/app.$section'
 
 export function SectionView({ section, draftSearch }: { section: string; draftSearch?: AppSectionSearch }) {
@@ -20,6 +21,7 @@ export function SectionView({ section, draftSearch }: { section: string; draftSe
     case 'catalog': return <CatalogView draftSearch={draftSearch} />
     case 'packs': return <PacksView />
     case 'directory': return <DirectoryView />
+    case 'source-discovery': return <SourceDiscoveryView />
     case 'official': return <OfficialView />
     case 'topics': return <TopicsView />
     case 'cloud-audits': return <DirectoryAuditsView />

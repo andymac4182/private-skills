@@ -32,6 +32,13 @@ import type {
   V1Skill as V1SkillBase,
 } from '../../../../packages/directory/src/index'
 import type { SkillsPackManifest, SkillsPackMember } from '../../../../packages/directory-packs/src/index'
+import type {
+  SourceDescriptor as SourceDescriptorBase,
+  SourceSearchResult as SourceSearchResultBase,
+  SourceSearchResponse as SourceSearchResponseBase,
+  SourceSearchSourceStatus,
+  SourceCatalogListResponse,
+} from '../../../../packages/source-catalog/src/types'
 
 export type {
   AuditEvent,
@@ -40,6 +47,7 @@ export type {
   PackVersion,
   Policy,
   Principal,
+  Resolution,
   ScanResult,
   SkillBundle,
   SkillVersion,
@@ -131,6 +139,27 @@ export interface DirectoryFeed {
 export interface FeedListResponse { feeds: DirectoryFeed[] }
 export interface ProxyResolveResponse {
   feed: string
+  externalId: string
+  reference?: string
+  operation?: Job
+  resolution?: Resolution
+}
+
+/**
+ * A source descriptor is a server-owned capability record.  It tells the
+ * discovery UI whether a provider can be queried or resolved for this
+ * organization; it never contains a browser credential or a direct artifact
+ * URL.
+ */
+export type SourceDescriptor = SourceDescriptorBase
+export type SourceSearchResult = SourceSearchResultBase
+export type SourceSearchStatus = SourceSearchSourceStatus
+export type SourceStatus = SourceDescriptorBase['availability']['state']
+export type SourceCapability = SourceDescriptorBase['capabilities'][number]
+export interface SourceListResponse extends SourceCatalogListResponse {}
+export interface SourceSearchResponse extends SourceSearchResponseBase {}
+export interface SourceResolveResponse {
+  sourceId: string
   externalId: string
   reference?: string
   operation?: Job

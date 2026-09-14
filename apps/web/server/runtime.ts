@@ -24,6 +24,8 @@ import {
 import { createSkillsPackClient } from '../../../packages/directory-packs/src/index';
 import { createBuilderBffRuntime } from './builder-runtime';
 import { openClawConsumerRefreshResult } from './openclaw-runtime';
+import { shouldDrainHostedWorker } from './hosted-worker';
+import { createSourceCatalogClientFromEnv } from '../../../packages/source-catalog/src/runtime.js';
 import {
   createOpenClawCandidateProvider,
   OpenClawPublicationManager,
@@ -65,6 +67,10 @@ async function createRuntime(env: RuntimeEnvironment) {
     ])],
   };
   const infrastructure = await createInfrastructure(env);
+  // Source discovery is server-owned. The catalog receives only this host's
+  // environment snapshot; provider credentials are retained by adapters and
+  // are never serialized into RegistryHandlerDependencies or browser data.
+  const sourceCatalog = createSourceCatalogClientFromEnv({ env });
   const directoryForBase = createSkillsDirectoryClientResolver({
     gateways: directoryGateways,
     officialAvailable: infrastructure.directoryOfficialAvailable,
@@ -200,6 +206,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     ...baseInfrastructure,
     auth,
     config,
+    sourceCatalog,
     directory,
     directoryPacks,
     directoryForBase,
@@ -251,8 +258,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     const intelligenceResponse = await intelligence(request);
     if (intelligenceResponse) return intelligenceResponse;
     const response = await registry(request);
-    if (infrastructure.hostedWorker && env.CRON_SECRET && (response.status === 201 || response.status === 202) && request.method === 'POST' &&
-        (path === '/v1/publish' || path === '/v1/imports' || path === '/v1/directory/import' || path === '/v1/proxy/resolve' || path === '/v1/feeds/skills/import' || /^\/v1\/skills\/[^/]+\/rescan$/.test(path) || /^\/v1\/drafts\/[^/]+\/publish$/.test(path))) {
+    if (infrastructure.hostedWorker && env.CRON_SECRET && shouldDrainHostedWorker(request, response)) {
       // Nitro forwards the platform waitUntil hook on the Web Request. On
       // hosts without that hook, await the bounded drain before returning.
       const drain = async () => {
