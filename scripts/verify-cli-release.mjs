@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
-const DEFAULT_VERSION = '0.3.0';
+const DEFAULT_VERSION = '0.4.0';
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 const ARCHIVES = new Map([
@@ -25,7 +25,7 @@ function usage() {
     'Usage: node scripts/verify-cli-release.mjs [options]',
     '',
     'Options:',
-    '  --version=X.Y.Z       Release version (default: 0.3.0)',
+    '  --version=X.Y.Z       Release version (default: 0.4.0)',
     '  --artifact-dir=DIR    Directory containing all release archives',
     '  --binary=PATH         Smoke one extracted binary for its CLI contract',
     '  --target=TARGET       Target triple for the binary smoke (optional)',
@@ -117,6 +117,12 @@ function assertRegularFile(path, label) {
 
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function assertHelpMarkers(output, markers, label) {
+  for (const marker of markers) {
+    if (!output.includes(marker)) throw new Error(`${label} is missing ${marker}`);
+  }
 }
 
 function assertSafeMemberName(name, expectedMember) {
@@ -227,12 +233,28 @@ function verifyBinary(binaryPath, version, target) {
   }
 
   const help = run(binaryPath, ['--help']);
-  for (const marker of ['--feed', '--directory', '--agent', 'directory']) {
-    if (!help.includes(marker)) throw new Error(`binary help is missing ${marker}`);
-  }
+  assertHelpMarkers(help, ['--feed', '--directory', '--agent', 'directory', 'sources'], 'binary help');
 
   const directoryHelp = run(binaryPath, ['directory', '--help']);
-  if (!directoryHelp.includes('search')) throw new Error('directory help is incomplete');
+  assertHelpMarkers(directoryHelp, ['search'], 'directory help');
+
+  const sourcesHelp = run(binaryPath, ['sources', '--help']);
+  assertHelpMarkers(sourcesHelp, ['list', 'search'], 'sources help');
+
+  // `source` is the supported short alias. Smoke it separately so a command
+  // that only appears in top-level help cannot pass release verification while
+  // the alias is broken.
+  const sourceAliasHelp = run(binaryPath, ['source', '--help']);
+  assertHelpMarkers(sourceAliasHelp, ['list', 'search'], 'source alias help');
+
+  const sourcesSearchHelp = run(binaryPath, ['sources', 'search', '--help']);
+  assertHelpMarkers(sourcesSearchHelp, ['--source', '--limit'], 'sources search help');
+
+  const installHelp = run(binaryPath, ['install', '--help']);
+  assertHelpMarkers(installHelp, ['--source'], 'install help');
+
+  const updateHelp = run(binaryPath, ['update', '--help']);
+  assertHelpMarkers(updateHelp, ['--source'], 'update help');
 
   const isolatedDirectory = mkdtempSync(join(tmpdir(), 'pskills-release-smoke-'));
   const isolatedList = run(binaryPath, [

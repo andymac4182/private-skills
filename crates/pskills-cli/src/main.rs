@@ -73,6 +73,12 @@ enum Command {
     Search {
         query: String,
     },
+    /// Discover server-configured external skill sources.
+    #[command(alias = "source")]
+    Sources {
+        #[command(subcommand)]
+        command: SourcesCommand,
+    },
     /// Discover registry-approved entries from the directory index.
     Directory {
         #[command(subcommand)]
@@ -93,9 +99,7 @@ enum Command {
     Remove {
         reference: String,
     },
-    Update {
-        reference: Option<String>,
-    },
+    Update(UpdateArgs),
     Doctor,
     Scan {
         #[command(subcommand)]
@@ -148,6 +152,39 @@ struct ProxyArgs {
 #[derive(Debug, Args)]
 struct InstallArgs {
     reference: String,
+    /// Exact source adapter id returned by `pskills sources list` or search.
+    /// When present, `reference` is the source's exact external id.
+    #[arg(long)]
+    source: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum SourcesCommand {
+    /// List source adapters and their server-owned availability state.
+    List,
+    /// Search enabled source adapters for metadata-only results.
+    Search(SourcesSearchArgs),
+}
+
+#[derive(Debug, Args)]
+struct SourcesSearchArgs {
+    /// At least two non-whitespace characters.
+    query: String,
+    /// Restrict the query to one source adapter id from `sources list`.
+    #[arg(long)]
+    source: Option<String>,
+    /// Number of records to request, bounded to 1..100.
+    #[arg(long, default_value_t = 50)]
+    limit: u32,
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    /// Existing native, skills.sh, or source external identity to refresh.
+    reference: Option<String>,
+    /// Exact source adapter id returned by `pskills sources list` or search.
+    #[arg(long)]
+    source: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -263,6 +300,10 @@ enum InstallReference {
     SkillsSh {
         external_id: String,
     },
+    Source {
+        source: String,
+        external_id: String,
+    },
 }
 
 impl InstallReference {
@@ -270,13 +311,21 @@ impl InstallReference {
         match self {
             Self::Native { reference, .. } => reference,
             Self::SkillsSh { external_id } => external_id,
+            Self::Source { external_id, .. } => external_id,
         }
     }
 
     fn external_id(&self) -> Option<&str> {
         match self {
             Self::Native { .. } => None,
-            Self::SkillsSh { external_id } => Some(external_id),
+            Self::SkillsSh { external_id } | Self::Source { external_id, .. } => Some(external_id),
+        }
+    }
+
+    fn source(&self) -> Option<&str> {
+        match self {
+            Self::Source { source, .. } => Some(source),
+            Self::Native { .. } | Self::SkillsSh { .. } => None,
         }
     }
 }
@@ -343,16 +392,21 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Command::Logout => logout(&context),
         Command::Whoami => whoami(&context),
         Command::Search { query } => search(&context, &query),
+        Command::Sources { command } => sources(&context, command),
         Command::Directory { command } => directory(&context, command),
         Command::Show { reference } => show(&context, &reference),
         Command::Versions { reference } => versions(&context, &reference),
         Command::Publish(args) => publish(&context, &args),
         Command::Proxy(args) => proxy(&context, &args),
-        Command::Install(args) => install_skill(&context, &args.reference, "direct"),
+        Command::Install(args) => {
+            validate_source_feed(args.source.as_deref(), context.feed.as_deref())?;
+            let parsed = parse_install_args(&args)?;
+            install_parsed_skill(&context, parsed, "direct", false)
+        }
         Command::List => list_local(&context),
         Command::Verify => verify_local(&context),
         Command::Remove { reference } => remove_local(&context, &reference, "direct"),
-        Command::Update { reference } => update(&context, reference.as_deref()),
+        Command::Update(args) => update(&context, &args),
         Command::Doctor => doctor(&context),
         Command::Scan { command } => scan(&context, command),
         Command::Pack { command } => pack(&context, command),
@@ -432,6 +486,105 @@ fn search(context: &Context, query: &str) -> Result<(), CliError> {
         serde_json::to_value(client.search(query)?)
             .map_err(|e| CliError::Message(e.to_string()))?,
     )
+}
+
+fn sources(context: &Context, command: SourcesCommand) -> Result<(), CliError> {
+    let client = client(context)?;
+    match command {
+        SourcesCommand::List => emit(context.json, client.sources()?),
+        SourcesCommand::Search(args) => {
+            let query = source_query(&args.query)?;
+            if args.limit == 0 || args.limit > 100 {
+                return Err(CliError::Message(
+                    "sources search --limit must be between 1 and 100".into(),
+                ));
+            }
+            let source = args.source.as_deref().map(source_identifier).transpose()?;
+            emit(
+                context.json,
+                client.source_search(&query, source.as_deref(), args.limit)?,
+            )
+        }
+    }
+}
+
+fn source_query(value: &str) -> Result<String, CliError> {
+    let value = value.trim();
+    let length = value.chars().count();
+    if length < 2 || value.chars().any(char::is_control) {
+        return Err(CliError::Message(
+            "sources search query must contain at least two non-control characters".into(),
+        ));
+    }
+    if length > 200 {
+        return Err(CliError::Message(
+            "sources search query must not exceed 200 characters".into(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn source_identifier(value: &str) -> Result<String, CliError> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit()
+            } else {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            }
+        });
+    if !valid {
+        return Err(CliError::Message(
+            "source id must match [a-z0-9][a-z0-9._-]* and be at most 128 characters".into(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn source_external_id(value: &str) -> Result<String, CliError> {
+    if value.is_empty()
+        || value != value.trim()
+        || value.len() > 1024
+        || value
+            .chars()
+            .any(|character| character.is_control() || character == '\\')
+        || value.split('/').any(|part| part == "." || part == "..")
+    {
+        return Err(CliError::Message(
+            "source externalId must be the bounded exact identity returned by source search".into(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_install_args(args: &InstallArgs) -> Result<InstallReference, CliError> {
+    parse_reference_with_source(&args.reference, args.source.as_deref())
+}
+
+fn parse_reference_with_source(
+    reference: &str,
+    source: Option<&str>,
+) -> Result<InstallReference, CliError> {
+    match source {
+        Some(source) => Ok(InstallReference::Source {
+            source: source_identifier(source)?,
+            external_id: source_external_id(reference)?,
+        }),
+        None => parse_install_reference(reference),
+    }
+}
+
+fn validate_source_feed(source: Option<&str>, feed: Option<&str>) -> Result<(), CliError> {
+    if source.is_some() && feed.is_some() {
+        return Err(CliError::Message(
+            "a source selector cannot be combined with the skills.sh --feed selector".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn directory(context: &Context, command: DirectoryCommand) -> Result<(), CliError> {
@@ -590,6 +743,13 @@ fn show(context: &Context, reference: &str) -> Result<(), CliError> {
         InstallReference::SkillsSh { external_id } => emit(
             context.json,
             client.directory_detail_with_feed(&external_id, context.feed.as_deref())?,
+        ),
+        InstallReference::Source {
+            source,
+            external_id,
+        } => emit(
+            context.json,
+            client.source_search(&external_id, Some(&source), 1)?,
         ),
         InstallReference::Native { reference, version } => emit(
             context.json,
@@ -760,6 +920,15 @@ fn install_skill_with_refresh(
     refresh_external: bool,
 ) -> Result<(), CliError> {
     let parsed = parse_install_reference(raw_reference)?;
+    install_parsed_skill(context, parsed, owner_prefix, refresh_external)
+}
+
+fn install_parsed_skill(
+    context: &Context,
+    parsed: InstallReference,
+    owner_prefix: &str,
+    refresh_external: bool,
+) -> Result<(), CliError> {
     let registry = context
         .registry
         .as_ref()
@@ -772,6 +941,10 @@ fn install_skill_with_refresh(
             InstallReference::SkillsSh { external_id } => {
                 frozen_external_skill_entry(context, registry, external_id)?
             }
+            InstallReference::Source {
+                source,
+                external_id,
+            } => frozen_source_skill_entry(context, registry, source, external_id)?,
         })
     } else {
         None
@@ -790,6 +963,7 @@ fn install_skill_with_refresh(
             }
         }
         InstallReference::Native { .. } => None,
+        InstallReference::Source { .. } => None,
     };
     let client = client(context)?;
     let (mut resolution, response_reference) = match &parsed {
@@ -824,6 +998,32 @@ fn install_skill_with_refresh(
                 (external.resolution, external.reference)
             }
         }
+        InstallReference::Source {
+            source,
+            external_id,
+        } => {
+            if let Some(entry) = frozen_entry.as_ref() {
+                let resolution = client.resolve(&ResolveRequest {
+                    kind: "skill".into(),
+                    reference: entry.reference.clone(),
+                    version: Some(entry.version.clone()),
+                })?;
+                (resolution, entry.provenance.source_reference.clone())
+            } else {
+                let resolved = client.resolve_source(
+                    source,
+                    external_id,
+                    refresh_external && !context.frozen,
+                )?;
+                if resolved.source_id != *source || resolved.external_id != *external_id {
+                    return Err(CliError::Message(
+                        "registry source resolution identity does not match the requested source and externalId"
+                            .into(),
+                    ));
+                }
+                (resolved.resolution, resolved.reference)
+            }
+        }
     };
     if let Some(reference) = response_reference.as_deref() {
         for member in &mut resolution.members {
@@ -848,6 +1048,8 @@ fn install_skill_with_refresh(
             "registry resolution did not contain a skill".into(),
         ));
     }
+    let source_id = parsed.source().map(str::to_owned);
+    let external_id = parsed.external_id().map(str::to_owned);
     let display_reference = parsed
         .external_id()
         .and_then(|_| {
@@ -856,10 +1058,12 @@ fn install_skill_with_refresh(
                 .first()
                 .and_then(|member| member.provenance.source_reference.clone())
         })
-        .or_else(|| parsed.external_id().map(str::to_string))
-        .unwrap_or_else(|| parsed.display().to_string());
+        .unwrap_or_else(|| match (source_id.as_deref(), external_id.as_deref()) {
+            (Some(source), Some(external_id)) => format!("{source}:{external_id}"),
+            (None, Some(external_id)) => external_id.to_owned(),
+            _ => parsed.display().to_owned(),
+        });
     let private_reference = resolution.name.clone();
-    let external_id = parsed.external_id().map(str::to_string);
     let skill = resolution.members.first().cloned();
     let skill_name = skill
         .as_ref()
@@ -899,7 +1103,7 @@ fn install_skill_with_refresh(
                     .first()
                     .and_then(|member| member.provenance.external_id.as_deref())
             });
-        if resolved_external_id != Some(external_id) {
+        if source_id.is_none() && resolved_external_id != Some(external_id) {
             return Err(CliError::Message(
                 "registry resolution provenance does not match the requested skills.sh identity"
                     .into(),
@@ -937,17 +1141,28 @@ fn install_skill_with_refresh(
     // Keep the journal owner stable across server-owned private reference
     // changes.  The generated registry name is an implementation detail; the
     // external identity is the lifecycle identity the user supplied.
-    let owner_reference = external_id
-        .as_deref()
-        .map(|external_id| {
+    let owner_reference = match (source_id.as_deref(), external_id.as_deref()) {
+        (Some(source), Some(external_id)) => source_owner_reference(source, external_id),
+        (None, Some(external_id)) => {
             let feed = skill
                 .as_ref()
                 .and_then(|member| member.provenance.feed_name.as_deref())
                 .or(selected_feed.as_deref());
             external_owner_reference(feed, external_id)
-        })
-        .unwrap_or_else(|| private_reference.clone());
+        }
+        _ => private_reference.clone(),
+    };
     let owner = owner_for_reference(owner_prefix, registry, &owner_reference);
+    let source_selector = match &parsed {
+        InstallReference::Source {
+            source,
+            external_id,
+        } => Some(SourceSelector {
+            source_id: source.clone(),
+            external_id: external_id.clone(),
+        }),
+        InstallReference::Native { .. } | InstallReference::SkillsSh { .. } => None,
+    };
     let plan = InstallPlan {
         root: root.clone(),
         skill_name: skill_name.clone(),
@@ -967,6 +1182,7 @@ fn install_skill_with_refresh(
         &resolution,
         &bundle,
         &owner,
+        source_selector.as_ref(),
     )?;
     let result = state
         .install_many_with_lock(&[plan], Some(&old_lock), Some(&new_lock))?
@@ -986,7 +1202,9 @@ fn install_skill_with_refresh(
     if let Some(external_id) = external_id {
         output["externalId"] = Value::String(external_id);
         output["privateReference"] = Value::String(private_reference);
-        if let Some(feed) = selected_feed {
+        if let Some(source) = source_id {
+            output["sourceId"] = Value::String(source);
+        } else if let Some(feed) = selected_feed {
             output["feed"] = Value::String(feed);
         }
     }
@@ -1187,6 +1405,7 @@ fn install_pack(context: &Context, raw_reference: &str) -> Result<(), CliError> 
             },
             bundle,
             &owner,
+            None,
         )?;
     }
     // A pack is one logical activation.  Preflight all members and hand the
@@ -1403,8 +1622,25 @@ fn decorate_local_value(
         "privateReference".into(),
         Value::String(skill.reference.clone()),
     );
-    if let Some(external_id) = &skill.provenance.external_id {
-        object.insert("externalId".into(), Value::String(external_id.clone()));
+    if let Some(selectors) = (!skill.source_selectors.is_empty()).then_some(&skill.source_selectors)
+    {
+        if let Some(selector) = selectors.first() {
+            object.insert(
+                "externalId".into(),
+                Value::String(selector.external_id.clone()),
+            );
+            object.insert("sourceId".into(), Value::String(selector.source_id.clone()));
+        }
+        if let Ok(value) = serde_json::to_value(selectors) {
+            object.insert("sourceSelectors".into(), value);
+        }
+    } else {
+        if let Some(external_id) = &skill.provenance.external_id {
+            object.insert("externalId".into(), Value::String(external_id.clone()));
+        }
+        if let Some(source_id) = &skill.provenance.external_source {
+            object.insert("sourceId".into(), Value::String(source_id.clone()));
+        }
     }
     if let Some(source_reference) = &skill.provenance.source_reference {
         object.insert(
@@ -1580,12 +1816,20 @@ fn remove_external_local(
     )
 }
 
-fn update(context: &Context, reference: Option<&str>) -> Result<(), CliError> {
-    if let Some(reference) = reference {
-        return install_skill_with_refresh(context, reference, "direct", true);
+fn update(context: &Context, args: &UpdateArgs) -> Result<(), CliError> {
+    validate_source_feed(args.source.as_deref(), context.feed.as_deref())?;
+    if let Some(reference) = args.reference.as_deref() {
+        let parsed = parse_reference_with_source(reference, args.source.as_deref())?;
+        return install_parsed_skill(context, parsed, "direct", true);
+    }
+    if args.source.is_some() {
+        return Err(CliError::Message(
+            "update --source requires an exact externalId argument".into(),
+        ));
     }
     let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
     let lock = local_state(&root, context.scope).read_lock()?;
+    let registry = context.registry.as_ref();
     let mut references = lock
         .skills
         .iter()
@@ -1600,21 +1844,57 @@ fn update(context: &Context, reference: Option<&str>) -> Result<(), CliError> {
                     .iter()
                     .any(|owner| owner.starts_with("direct:"))
         })
-        .map(|skill| {
-            skill
-                .provenance
-                .external_id
-                .clone()
-                .unwrap_or_else(|| skill.reference.clone())
+        .flat_map(|skill| {
+            if !skill.source_selectors.is_empty() {
+                return skill
+                    .source_selectors
+                    .iter()
+                    .filter(|selector| {
+                        registry.is_some_and(|registry| {
+                            source_selector_owner(skill, registry, selector)
+                        })
+                    })
+                    .cloned()
+                    .map(|selector| InstallReference::Source {
+                        source: selector.source_id,
+                        external_id: selector.external_id,
+                    })
+                    .collect::<Vec<_>>();
+            }
+            let external_id = skill.provenance.external_id.clone();
+            let source = skill.provenance.external_source.clone();
+            match (source, external_id) {
+                (Some(source), Some(external_id)) => {
+                    let selector = SourceSelector {
+                        source_id: source.clone(),
+                        external_id: external_id.clone(),
+                    };
+                    if registry
+                        .is_some_and(|registry| source_selector_owner(skill, registry, &selector))
+                    {
+                        vec![InstallReference::Source {
+                            source,
+                            external_id,
+                        }]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                (None, Some(external_id)) => vec![InstallReference::SkillsSh { external_id }],
+                (_, None) => vec![InstallReference::Native {
+                    reference: skill.reference.clone(),
+                    version: None,
+                }],
+            }
         })
         .collect::<Vec<_>>();
-    references.sort();
+    references.sort_by(|left, right| left.display().cmp(right.display()));
     references.dedup();
     if references.is_empty() {
         return emit(context.json, json!({ "ok": true, "updated": [] }));
     }
     for reference in references {
-        install_skill_with_refresh(context, &reference, "direct", true)?;
+        install_parsed_skill(context, reference, "direct", true)?;
     }
     Ok(())
 }
@@ -1742,6 +2022,34 @@ fn external_owner_reference(feed: Option<&str>, external_id: &str) -> String {
     }
 }
 
+fn source_owner_reference(source: &str, external_id: &str) -> String {
+    format!("source={source}\u{1f}{external_id}")
+}
+
+fn source_selector_matches(skill: &LockSkill, selector: &SourceSelector) -> bool {
+    if skill.source_selectors.is_empty() {
+        return skill.provenance.external_source.as_deref() == Some(selector.source_id.as_str())
+            && skill.provenance.external_id.as_deref() == Some(selector.external_id.as_str());
+    }
+    skill
+        .source_selectors
+        .iter()
+        .any(|candidate| candidate == selector)
+}
+
+fn source_selector_owner(
+    skill: &LockSkill,
+    registry: &RegistryConfig,
+    selector: &SourceSelector,
+) -> bool {
+    let owner = owner_for_reference(
+        "direct",
+        registry,
+        &source_owner_reference(&selector.source_id, &selector.external_id),
+    );
+    skill.owners.iter().any(|candidate| candidate == &owner)
+}
+
 fn stored_external_feed(
     context: &Context,
     registry: &RegistryConfig,
@@ -1780,6 +2088,7 @@ fn update_lock_for_skill(
     resolution: &Resolution,
     bundle: &SkillBundle,
     owner: &str,
+    source_selector: Option<&SourceSelector>,
 ) -> Result<(), CliError> {
     let tree = tree_digest(bundle).map_err(|e| CliError::Message(e.to_string()))?;
     lock.registries.insert(
@@ -1808,6 +2117,8 @@ fn update_lock_for_skill(
     let resolved_member = resolution.members.first();
     let resolved_external_id =
         resolved_member.and_then(|member| member.provenance.external_id.as_deref());
+    let resolved_external_source =
+        resolved_member.and_then(|member| member.provenance.external_source.as_deref());
     let resolved_feed_name =
         resolved_member.and_then(|member| member.provenance.feed_name.as_deref());
     if let Some(external_id) = resolved_external_id {
@@ -1825,6 +2136,7 @@ fn update_lock_for_skill(
                     .external_id
                     .as_deref()
                     .is_some_and(|value| value == external_id)
+                && existing.provenance.external_source.as_deref() == resolved_external_source
                 && existing.provenance.feed_name.as_deref() == resolved_feed_name
                 && existing.key != key
             {
@@ -1863,6 +2175,15 @@ fn update_lock_for_skill(
             .first()
             .map(|member| member.provenance.clone())
             .unwrap_or_default();
+        if let Some(source_selector) = source_selector {
+            if !existing.source_selectors.contains(source_selector) {
+                existing.source_selectors.push(source_selector.clone());
+                existing.source_selectors.sort_by(|left, right| {
+                    (&left.source_id, &left.external_id)
+                        .cmp(&(&right.source_id, &right.external_id))
+                });
+            }
+        }
     } else {
         lock.skills.push(LockSkill {
             key,
@@ -1878,6 +2199,7 @@ fn update_lock_for_skill(
                 .first()
                 .map(|member| member.provenance.clone())
                 .unwrap_or_default(),
+            source_selectors: source_selector.cloned().into_iter().collect(),
         });
     }
     Ok(())
@@ -1956,6 +2278,41 @@ fn frozen_external_skill_entry(
         ))),
         _ => Err(CliError::Message(format!(
             "frozen lockfile has multiple entries for skills.sh identity {external_id}"
+        ))),
+    }
+}
+
+fn frozen_source_skill_entry(
+    context: &Context,
+    registry: &RegistryConfig,
+    source: &str,
+    external_id: &str,
+) -> Result<LockSkill, CliError> {
+    let root = resolve_directory(context.directory.as_deref(), context.agent, context.scope)?;
+    let lock = local_state(&root, context.scope).read_lock()?;
+    validate_frozen_target(&lock, context)?;
+    validate_frozen_registry(&lock, registry)?;
+    let selector = SourceSelector {
+        source_id: source.to_owned(),
+        external_id: external_id.to_owned(),
+    };
+    let matches = lock
+        .skills
+        .iter()
+        .filter(|skill| {
+            lock_registry_matches(&lock, &skill.registry, registry)
+                && source_selector_matches(skill, &selector)
+                && source_selector_owner(skill, registry, &selector)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [entry] => Ok(entry.clone()),
+        [] => Err(CliError::Message(format!(
+            "frozen lockfile has no entry for source {source} externalId {external_id}"
+        ))),
+        _ => Err(CliError::Message(format!(
+            "frozen lockfile has multiple entries for source {source} externalId {external_id}"
         ))),
     }
 }
@@ -2060,6 +2417,14 @@ fn same_resolution(left: &Resolution, right: &Resolution) -> bool {
                 && a.skill_name == b.skill_name
                 && a.version == b.version
                 && a.artifact.digest == b.artifact.digest
+                && a.provenance.external_id == b.provenance.external_id
+                // The source id is authoritative in the source-resolve
+                // envelope. Older registry resolutions do not yet expose it
+                // in member provenance, so compare it when both sides carry
+                // the additive field while still rejecting substitution.
+                && (a.provenance.external_source.is_none()
+                    || b.provenance.external_source.is_none()
+                    || a.provenance.external_source == b.provenance.external_source)
         })
 }
 
@@ -2545,9 +2910,110 @@ mod tests {
         assert!(matches!(cli.agent, AgentArg::Universal));
         assert!(matches!(
             cli.command,
-            Command::Install(InstallArgs { reference })
+            Command::Install(InstallArgs { reference, source: None })
                 if reference == "vercel-labs/skills/find-skills"
         ));
+    }
+
+    #[test]
+    fn source_install_requires_an_exact_server_identity_and_preserves_directory_options() {
+        let cli = Cli::try_parse_from([
+            "pskills",
+            "--json",
+            "--directory",
+            "/tmp/private-skills",
+            "--agent",
+            "claude",
+            "install",
+            "skillsmp:owner/skill@1",
+            "--source",
+            "skillsmp",
+        ])
+        .expect("source install arguments");
+        let Command::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.source.as_deref(), Some("skillsmp"));
+        assert_eq!(args.reference, "skillsmp:owner/skill@1");
+        assert_eq!(
+            parse_install_args(&args).expect("source install reference"),
+            InstallReference::Source {
+                source: "skillsmp".into(),
+                external_id: "skillsmp:owner/skill@1".into(),
+            }
+        );
+        assert!(parse_install_args(&InstallArgs {
+            reference: "../artifact.zip".into(),
+            source: Some("skillsmp".into()),
+        })
+        .is_err());
+        let conflict = Cli::try_parse_from([
+            "pskills",
+            "--feed",
+            "community",
+            "install",
+            "owner/skill",
+            "--source",
+            "skillsmp",
+        ])
+        .expect("source/feed syntax remains parseable");
+        let Command::Install(args) = conflict.command else {
+            panic!("expected install command");
+        };
+        assert!(validate_source_feed(args.source.as_deref(), Some("community")).is_err());
+    }
+
+    #[test]
+    fn sources_discovery_commands_parse_source_filter_and_alias() {
+        let cli = Cli::try_parse_from([
+            "pskills",
+            "source",
+            "search",
+            "database",
+            "--source",
+            "skillhub-pro",
+            "--limit",
+            "12",
+        ])
+        .expect("source discovery arguments");
+        assert!(matches!(
+            cli.command,
+            Command::Sources {
+                command: SourcesCommand::Search(SourcesSearchArgs { query, source, limit })
+            } if query == "database" && source.as_deref() == Some("skillhub-pro") && limit == 12
+        ));
+
+        let cli = Cli::try_parse_from(["pskills", "update", "owner/skill", "--source", "skillsmp"])
+            .expect("source update arguments");
+        assert!(matches!(
+            cli.command,
+            Command::Update(UpdateArgs { reference, source })
+                if reference.as_deref() == Some("owner/skill")
+                    && source.as_deref() == Some("skillsmp")
+        ));
+    }
+
+    #[test]
+    fn source_input_validation_rejects_path_traversal_and_unbounded_values() {
+        assert_eq!(
+            source_identifier(" skillhub-pro ").expect("source"),
+            "skillhub-pro"
+        );
+        assert_eq!(source_query("  database ").expect("query"), "database");
+        assert!(source_identifier("skillhub/pro").is_err());
+        assert!(source_identifier("SkillHub").is_err());
+        assert!(source_identifier("~skillhub").is_err());
+        assert!(source_identifier("1skillhub").is_ok());
+        assert!(source_external_id("owner/../skill").is_err());
+        assert!(source_external_id("\u{0000}skill").is_err());
+        assert!(source_external_id(" owner/skill").is_err());
+        assert_eq!(
+            source_external_id("https://provider.example/items/a?ref=1").expect("opaque id"),
+            "https://provider.example/items/a?ref=1"
+        );
+        assert!(source_query("a").is_err());
+        assert!(source_query("sk\u{0000}ll").is_err());
+        assert!(source_query(&"q".repeat(201)).is_err());
     }
 
     #[test]

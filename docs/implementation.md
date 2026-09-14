@@ -1,6 +1,6 @@
 # Implementation status
 
-This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.3.0 checkpoint in [`verification-v0.3.0.md`](verification-v0.3.0.md) and the historical v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
+This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. The local multi-source proxy contract, source inventory, and acceptance boundary are in [`source-catalog.md`](source-catalog.md). Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.3.0 checkpoint in [`verification-v0.3.0.md`](verification-v0.3.0.md) and the historical v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
 
 ## Implemented baseline
 
@@ -14,6 +14,7 @@ This document describes the code that exists in the repository now. The earlier 
 | Metadata | `packages/database/src` | Memory, atomic file, PostgreSQL JSONB transaction, and authenticated HTTP CAS repositories | The production registry is connected to Neon PostgreSQL; file and authenticated HTTP remain the other deployment profiles |
 | Artifacts | `packages/storage/src` | Canonical bundle encoding/validation, SHA-256 digesting, random sealed object keys, read-back integrity, and transfer gateway | Provider credentials and backend conformance remain deployment work |
 | Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | Existing generic sources use approved mappings; the transparent `skills-sh` feed adapter and representative cold/warm pullthrough are follow-up acceptance work. An optional per-feed source policy may restrict the built-in adapter but is not its prerequisite |
+| Multi-source catalog contract | `packages/source-catalog/src`, `packages/core/src/index.ts`, `apps/web/server/runtime.ts`, `apps/web/src/lib/api.ts`, `crates/pskills-core/src/client.rs` | Host-neutral source descriptors, bounded metadata search with optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition identities, availability/error states, trust checks, server-owned configuration revisions, core handler routes, the server-only 13-adapter runtime factory, and local worker/import/scanner handoff | The local route/type/client/runtime seams, configuration checks, and 3/3 full required-scan transfer fixture are present. Local public search/resolve smoke evidence covers five provider adapters plus four curated GitHub adapters; the four conditional sources still need deployment inputs, and hosted authenticated source acceptance remains pending. See [`source-catalog.md`](source-catalog.md) |
 | Scanners | `packages/scanners/src` | Cisco, NVIDIA, and SkillsGuard adapter contracts, normalized reports, coverage, policy modes, and executors | Installed scanner images and live findings are environment-specific |
 | Worker | `workers/runner/src` | Claims scan/import jobs, verifies artifact digests, materializes a bounded bundle, executes scanners, and completes with fencing data | Run as a separate worker with a worker token |
 | Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
@@ -70,6 +71,49 @@ The implemented public surface is:
 | `GET /internal/worker/run` | CRON_SECRET-protected one-shot hosted scanner invocation |
 | `GET /v1/transfers/:grant` | Serve a short-lived authorized artifact transfer |
 | `/internal/jobs/*` | Worker claim, artifact download, and fenced completion |
+
+### Multi-source catalog contract
+
+The local source-catalog package, core handler, runtime factory, and current
+web/CLI client seams define the following v1 routes. They are kept separate
+from the implemented public-surface table until provider configuration and
+authenticated hosted evidence are recorded.
+
+| Route | Contract |
+| --- | --- |
+| `GET /v1/sources` | Returns `{ protocolVersion: 1, sources: descriptors }`, where each descriptor has `id`, `label`, `capabilities`, `availability`, and `configRevision`. |
+| `GET /v1/sources/search?q=<query>&source=<optional-id>&limit=20` | Returns `{ protocolVersion, query, data, sources }`. `source` is optional; omission fans out to all configured adapters. Rows contain `sourceId`, `externalId`, `title`, `installable`, and bounded optional description/version/provider metadata. Source statuses include `resultCount` and a safe adapter error when applicable. |
+| `POST /v1/sources/:sourceId/resolve` | Accepts `{ externalId, refresh? }` and returns `{ sourceId, externalId, reference, operation?, resolution? }`. The server owns `reference`; a queued operation or the existing registry resolution may be returned. |
+
+The source query requires at least two characters. Defaults are 20 results per
+source, a 200-character query maximum, 50 results per source, 200 total rows,
+and a 15-second adapter timeout; configuration can change these within the
+client's hard bounds. Search is metadata-only. Resolve accepts only an exact,
+control-free external identity and validates the typed acquisition before an
+existing import/scanner/policy path can use it. Provider URLs never become
+client-selected artifact targets. The runtime factory reads
+`PSKILLS_SOURCES_ENABLED` (default `true`), `PSKILLS_SOURCES_JSON` (an envelope
+or direct source map), and `PSKILLS_GITHUB_CUSTOM_REPOSITORIES` (exact,
+bounded repository specs); malformed or out-of-bound settings fail closed.
+Full request, source inventory, configuration, error, and safety details are in
+[`source-catalog.md`](source-catalog.md).
+
+The local source-proxy fixture now passes 3/3 full required-scan and transfer
+cases through the core/worker path. The full shipping gate also passed with
+110 Vitest files and 852 tests (7 opt-in tests skipped), plus `pnpm typecheck`
+and `pnpm build`. Local public search/resolve succeeded for `skillsmp`,
+`clawhub`, `skillhub-public`, `polyskill`, `tessl`, and all four curated GitHub
+adapters. Native bytes were acquired locally for a Tessl one-file release, a
+three-file ClawHub release, and a three-file PolySkill release. This establishes
+component handoff and public metadata/native acquisition evidence; it does not
+establish a new hosted provider launch or authenticated deployed acceptance.
+The four conditional sources are `skills-directory` and `skillhub-pro` (API
+keys), `github-code-search` (a server-owned GitHub token), and `github-custom`
+(an administrator repository/ref allowlist). See [`source-catalog.md`](source-catalog.md)
+for the exact identities and ClawHub `_meta.json` wrapper boundary. Native
+ClawHub accepts one bounded root wrapper only as validated provider metadata;
+the version manifest still controls every skill file and any other extra
+member fails closed.
 
 Publishing accepts a `SkillBundle` record in the canonical JSON format. A publish response is a queued operation; approval occurs only after a worker returns valid evidence and the core re-evaluates the saved policy and digest. Pack creation resolves members and records their exact resource IDs, versions, and digests; a revoked or policy-stale member prevents a new approved pack.
 
@@ -232,6 +276,23 @@ remain separately bounded in [`verification-current.md`](verification-current.md
 OIDC/device authentication for primary user login, if required, remains a
 separate feature rather than an implied capability of bootstrap-token
 authentication.
+
+The current checkpoint supersedes the older deployment notes above: the owner
+lifted the deployment pause, and at HEAD `768b330` on 13 September 2026 the
+registry deployment `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder deployment
+`dpl_69oE9jmPj4dBvjGTNrWKLYnzxWHC`, and upload-reviewer deployment
+`dpl_6rytYNV5cameBRGyrNt4Y3KECmqb` were READY/PROMOTED. An unauthenticated
+browser health check was healthy. No new authenticated mutation proof is
+recorded. These reachability results do not make the new source providers live
+or close the C1, M6, or M7 acceptance gates.
+
+The source-capable web/API revision `fd5c5799f0b52246536e3dc726dd6ec1112dec27`
+has since produced READY Git-linked deployments for registry
+(`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
+(`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
+(`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`). All three report health 200. The
+authenticated source GET/resolve check remains pending, so these deployments
+do not establish hosted source acceptance.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence

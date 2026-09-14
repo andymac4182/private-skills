@@ -93,6 +93,10 @@ pub struct Provenance {
     /// Optional identity supplied by an external directory/catalog adapter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Server-owned source adapter identity for multi-source catalog entries.
+    /// This remains separate from the provider's external item identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_source_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,6 +154,7 @@ impl Default for Provenance {
             revision: None,
             source_digest: None,
             external_id: None,
+            external_source: None,
             external_source_type: None,
             external_snapshot_hash: None,
             feed_id: None,
@@ -363,6 +368,15 @@ pub struct LockPack {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct SourceSelector {
+    /// The server-owned source adapter selected by the user.
+    pub source_id: String,
+    /// The exact external identity returned by source search.
+    pub external_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct LockSkill {
     pub key: String,
     pub registry: String,
@@ -374,6 +388,11 @@ pub struct LockSkill {
     pub tree_digest: Digest,
     pub owners: Vec<String>,
     pub provenance: Provenance,
+    /// Requested source identities used to acquire this physical release.
+    /// The member provenance above remains the immutable physical source
+    /// returned by the registry; aliases can therefore share one lock entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_selectors: Vec<SourceSelector>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -476,6 +495,30 @@ pub struct ExternalResolveRequest {
     pub external_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh: Option<bool>,
+}
+
+/// A source-catalog resolution request.  The source id is a server-owned
+/// adapter identifier returned by `/v1/sources`; `external_id` is an opaque
+/// provider identity returned by source search.  The CLI never treats either
+/// value as an artifact URL or contacts the provider directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceResolveRequest {
+    pub external_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<bool>,
+}
+
+/// A source-catalog resolution envelope.  The registry returns the existing
+/// private `Resolution` after its source adapter, scanner, policy, and cache
+/// gates complete.  The echoed source and external identity are retained so
+/// callers can reject provider substitution before downloading bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceResolution {
+    pub source_id: String,
+    pub external_id: String,
+    pub resolution: Resolution,
+    pub reference: Option<String>,
 }
 
 /// Public feed metadata returned by the registry discovery endpoint.

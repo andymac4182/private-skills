@@ -8,6 +8,8 @@ The explicitly requested skills.sh catalog, source pullthrough, and cloud-view
 delivery is tracked separately from the Tessl comparison in
 [`skills-sh.md`](skills-sh.md). That review used the current skills.sh site,
 its documented API, and the official `vercel-labs/skills` repository.
+The separate multi-source catalog proxy contract, source inventory, and
+provider acceptance boundary are in [`source-catalog.md`](source-catalog.md).
 The current delivery baseline and its remaining production gates are recorded in
 [`verification-current.md`](verification-current.md), with the historical v0.3.0
 and v0.2.0 checkpoints retained separately. The measurable exit gates for this
@@ -36,12 +38,14 @@ amount of user value they add to a private registry and by their dependency on
 new content and execution boundaries.
 
 - **Now: refine locally and prepare the remaining C1/M6/M7 evidence.**
-  Work is directly on local `main`; pushes and deployments are paused at the
-  owner's request. Subsequent [local checks](evidence/local-refinement-20260913.md)
-  remain separate from hosted acceptance. At the last remote checkpoint, main was
-  `499b64fd22ab2ab149a6bf51f77949c0ed004934`, including PR48 (`fa56c21`),
-  PR49, and PR50. The latest production READY source is PR48 `fa56c21`; Vercel
-  rate limiting delayed deployments containing PR49 and PR50. C1
+  Work remains directly on local `main`, and the owner has lifted the prior
+  deployment pause. At the 13 September 2026 checkpoint, HEAD was `768b330`;
+  registry `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder
+  `dpl_69oE9jmPj4dBvjGTNrWKLYnzxWHC`, and upload-reviewer
+  `dpl_6rytYNV5cameBRGyrNt4Y3KECmqb` were READY/PROMOTED. An unauthenticated
+  browser health check was healthy, while no new authenticated mutation proof
+  has been recorded. Subsequent [local checks](evidence/local-refinement-20260913.md)
+  remain separate from hosted acceptance. C1
   telemetry/parser implementation is shipped in PR42/43; the root-reviewed
   snapshot warm-cache proof records same-resource/digest reuse with zero
   catalog/source upstream requests, and PR48 adds scoped v0.2 composed-fixture
@@ -56,6 +60,13 @@ new content and execution boundaries.
   are not native CI. The isolated hosted-edge proof passed separately with its
   disposable resources cleaned up; it does not close the remaining product
   gates.
+  The source-capable web/API revision
+  `fd5c5799f0b52246536e3dc726dd6ec1112dec27` subsequently produced READY
+  Git-linked registry (`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
+  (`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
+  (`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`) deployments, all with health 200.
+  Authenticated source GET/resolve proof remains pending, so these are
+  reachability results rather than hosted source acceptance.
 - **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,
   on-demand catalog adapter, identity-preserving pullthrough, approved-cache
   behavior, and Packs, Topics, Official, and external Audits views remain the
@@ -66,6 +77,32 @@ new content and execution boundaries.
   source resolution, concurrent cold deduplication, and tenant/secrecy
   acceptance remain open. Existing private-pack management is in scope; external
   batch migration remains future work.
+- **Active implementation, incomplete: multi-source catalog proxy.** The local
+  v1 contract defines server-owned source descriptors, bounded metadata search
+  with optional all-source fanout, and exact `sourceId`/`externalId` resolution
+  to a typed acquisition plus a server-owned reference or existing registry
+  operation/resolution. The frozen inventory covers six additional registry
+  providers (`skillsmp`, `skillhub-public`, `tessl`, `polyskill`,
+  `skills-directory`, and `skillhub-pro`), native ClawHub version manifests
+  alongside the existing `clawhub` OpenClaw path, GitHub-wide search, four
+  curated GitHub sources, and `github-custom`. Public research reads and the
+  pinned Universal Skill Finder fixture
+  (`bibryam/universal-skill-finder` at `18161beadeeda90d99abd75dd573b47a99ac49e8`)
+  inform the local adapter scope. Local runtime public search/resolve smoke
+  evidence covers five provider adapters (`skillsmp`, `clawhub`,
+  `skillhub-public`, `polyskill`, and `tessl`) plus all four curated GitHub
+  adapters. Native bytes were also acquired locally for one Tessl release, one
+  ClawHub release, and one PolySkill release. The runtime adapter factory and
+  its fail-closed configuration contract are present locally, and the
+  core/worker fixture passes 3/3 full required-scan transfer cases. The four
+  remaining sources are conditional deployment inputs:
+  `skills-directory`/`skillhub-pro` require API keys, `github-code-search`
+  requires a server-owned GitHub token, and `github-custom` requires an
+  administrator repository/ref allowlist. Hosted authenticated acceptance
+  remains open; these conditional sources do not block the verified public
+  adapters. The
+  full contract, trust limits, error states, and acceptance gates are in
+  [`source-catalog.md`](source-catalog.md).
 - **M6 authoring source shipped; composed browser/review evidence remains active and incomplete.**
   The current READY service set and historic [hosted read-only viewer evidence](evidence/production-m6-hosted-viewer-34e4f56.json)
   establish the viewer boundary only. The [local synthetic editor/browser
@@ -84,9 +121,10 @@ new content and execution boundaries.
   passed isolated login, released `SKILL.md` content, full scan, upload-review
   state, and the exact publish-draft URL's revision-2 file/review browser
   readback. The pre-fix Eve panel reported `revision and digest are required for
-  the selected draft`; post-fix panel validation is blocked while Vercel
-  rate-limits deployment of PR49 and PR50. Full hosted builder UI and post-fix
-  Eve-panel validation remain pending. The
+  the selected draft`; post-fix panel validation remains pending because no new
+  authenticated mutation proof is recorded for the current deployment
+  checkpoint. Full hosted builder UI and post-fix Eve-panel validation remain
+  pending. The
   upload-origin editor route remains unverified because this draft has no
   release base. Its verifier diff (`verify-m6-post-proposal-reviewed.diff`)
   binds required scan evidence to approved skill IDs and scanner
@@ -105,8 +143,8 @@ new content and execution boundaries.
   candidates failed closed on artifact digest mismatches. The public-GitHub M7
   candidate failure was diagnosed as a PAX parser issue. PAX validation and
   cached-source composition are integrated on local `main` (`485b1d8`,
-  `7b4227f`); they have not been deployed during the pause. No hosted feed import
-  or publication is claimed. The later **M7** milestone below covers the versioned producer/consumer
+  `7b4227f`); hosted source acceptance for that work is not recorded at the
+  current checkpoint. No hosted feed import or publication is claimed. The later **M7** milestone below covers the versioned producer/consumer
   contract, exact source/digest mapping, bounded refresh, tenant-safe
   publication, local scanner admission, and fixtures. It remains an
   interoperability milestone, not a requirement to mirror the public catalog or
@@ -206,6 +244,73 @@ observations, not roadmap constants. A live API total must never be confused
 with the homepage’s aggregate install headline. Full coverage means every
 enumerated row is represented with a status; it does not mean a refresh stores
 every artifact.
+
+## Multi-source catalog proxy
+
+The multi-source catalog is an additive registry boundary beside the skills.sh
+C1 delivery and the OpenClaw M7 feed. Its local v1 contract defines source
+descriptors, bounded metadata search, source-level availability/error states,
+and exact resolution to a typed acquisition identity. The complete route shape,
+validation rules, source inventory, and safety limits are in
+[`source-catalog.md`](source-catalog.md).
+Built-in registry and GitHub adapter implementations, the core handler route,
+and the server-only 13-adapter runtime factory are present locally. The runtime
+configuration contract is checked locally; provider credentials, configured
+availability, and hosted acceptance remain separate gates.
+
+| Capability | Local implementation | Acceptance boundary |
+| --- | --- | --- |
+| List and status | `GET /v1/sources` returns protocol version and server-owned descriptors with capabilities, availability, and `configRevision`; the runtime factory composes the frozen 13-adapter set. | Prove available, unavailable, disabled, and missing-credential states in the deployed runtime without exposing secrets. |
+| Search | `GET /v1/sources/search?q=...&source=optional-id&limit=20` returns metadata-only rows with `sourceId` and `externalId`; omission of `source` fans out to all configured adapters and isolates per-source failures. | Prove bounded query/limit/timeout behavior, deterministic source status reporting, rate/error handling, and tenant/principal isolation. |
+| Resolve | `POST /v1/sources/:sourceId/resolve` accepts `{ externalId, refresh? }` and returns the echoed identity, a server-owned `reference`, and an operation or existing registry `resolution`. The local core/worker fixture passes 3/3 full required-scan transfer cases; local public search/resolve smoke covers five provider adapters plus four curated GitHub adapters. | Deploy the composed path and record authenticated import, canonical bundle, scanner, policy, authorization, and immutable artifact evidence for representative identities. |
+
+The frozen inventory includes six additional registry sources (`skillsmp`,
+`skillhub-public`, `tessl`, `polyskill`, `skills-directory`, and
+`skillhub-pro`), the existing `clawhub` OpenClaw source, GitHub-wide search
+(`github-code-search`), four curated GitHub sources
+(`github-openai-skills`, `github-anthropics-skills`, `github-google-skills`,
+and `github-vercel-agent-skills`), and an administrator-configured
+`github-custom` source. Public provider reads and the pinned research fixture
+`bibryam/universal-skill-finder` at commit
+`18161beadeeda90d99abd75dd573b47a99ac49e8` inform this scope. They do not
+establish a live provider, successful hosted import, or completion of C1/M6/M7.
+
+The configuration shape supports global/source enablement, exact trusted
+origins, query/result/total bounds, request timeout, and an effective revision
+used for cache invalidation. The runtime factory accepts
+`PSKILLS_SOURCES_ENABLED` (default `true`), `PSKILLS_SOURCES_JSON` as either an
+`{ enabled, sources }` envelope or direct source map, and
+`PSKILLS_GITHUB_CUSTOM_REPOSITORIES` for exact bounded `{ repository, ref? }`
+specs. Trusted origins are fixed per provider and may only be narrowed by
+configuration; malformed or out-of-bound settings fail closed. Public adapters
+may be enabled by default when registered, while missing key-only credentials
+remain unavailable. No client supplies provider credentials or turns a
+search-row URL into an artifact destination.
+
+Typed acquisition is deliberately limited to GitHub repository/path/ref,
+trusted package registry base URL/package/version, public OpenClaw source,
+Tessl workspace/tile/version/fingerprint/path, native PolySkill
+name/version/content digest, and native ClawHub owner/slug/version plus its
+complete version-file manifest. PolySkill conversion emits the supported
+original native files and a generated `SKILL.md` wrapper; tool definitions stay
+in `tools.json` as data and adapter declarations are omitted from the bundle.
+Native ClawHub identity is bound to per-file `path`/`size`/`sha256` entries,
+separate from the OpenClaw feed/archive hash. The documented download may add
+one root `_meta.json` member; the worker bounds and validates that member as
+identity metadata, strips only that exact reserved member, and rejects any
+duplicate, identity-less, malformed, mismatched, or other extra member. HTTPS
+origin checks, bounded identities and metadata, digest verification, required
+scanner evidence, and the existing no-execution boundary remain authoritative.
+A generic URL/bundle source is out of scope.
+
+The next delivery slices are conditional-provider configuration and
+authenticated deployed search/resolve/install evidence. The local
+worker/import/scanner path is exercised by the passing 3/3 fixture, and the
+source runtime tests cover bounds, timeout, configuration revision, trust, and
+failure isolation. Repeat changed, deleted, unauthorized, cross-tenant, and
+digest-mismatch checks at the hosted target. Until hosted source acceptance is
+recorded, this remains local implementation and contract work rather than a new
+hosted provider launch. C1, M6, and M7 remain separate incomplete milestones.
 
 ## M6 — Diffs editor and upload/edit review (active implementation, incomplete)
 

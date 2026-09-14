@@ -142,6 +142,72 @@ impl ApiClient {
         extract(value, "feeds")
     }
 
+    /// List the registry's server-owned source adapters.  The response is
+    /// intentionally kept as JSON so newer descriptor fields can pass
+    /// through without requiring a CLI release; the registry still owns
+    /// source availability and credentials.
+    pub fn sources(&self) -> Result<Value, ApiError> {
+        self.get_json(&self.endpoint(&["v1", "sources"])?, true)
+    }
+
+    /// Search the registry's configured source adapters.  Search results are
+    /// metadata only; the CLI never follows provider URLs or treats a result
+    /// URL as an artifact location.
+    pub fn source_search(
+        &self,
+        query: &str,
+        source: Option<&str>,
+        limit: u32,
+    ) -> Result<Value, ApiError> {
+        let query = query.trim();
+        if query.chars().count() < 2 || query.chars().any(char::is_control) {
+            return Err(ApiError::Response(
+                "source search query must contain at least two non-control characters".into(),
+            ));
+        }
+        if query.chars().count() > 200 {
+            return Err(ApiError::Response(
+                "source search query must not exceed 200 characters".into(),
+            ));
+        }
+        if limit == 0 || limit > 100 {
+            return Err(ApiError::Response(
+                "source search limit must be between 1 and 100".into(),
+            ));
+        }
+        let mut url = self.endpoint(&["v1", "sources", "search"])?;
+        url.query_pairs_mut().append_pair("q", query);
+        if let Some(source) = source {
+            let source = validate_source_id(source)?;
+            url.query_pairs_mut().append_pair("source", &source);
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        self.get_json(&url, true)
+    }
+
+    /// Resolve one exact source adapter identity through the registry.  The
+    /// server performs provider lookup, scanner admission, and cache
+    /// selection; this client receives the existing private resolution only.
+    pub fn resolve_source(
+        &self,
+        source: &str,
+        external_id: &str,
+        refresh: bool,
+    ) -> Result<SourceResolution, ApiError> {
+        let source = validate_source_id(source)?;
+        let external_id = validate_source_external_id(external_id)?;
+        let request = SourceResolveRequest {
+            external_id,
+            refresh: refresh.then_some(true),
+        };
+        self.resolve_source_until(
+            &source,
+            &request,
+            std::time::Instant::now() + Duration::from_secs(60),
+        )
+    }
+
     pub fn search(&self, query: &str) -> Result<Vec<SkillVersion>, ApiError> {
         let mut url = self.endpoint(&["v1", "skills"])?;
         url.query_pairs_mut().append_pair("q", query);
@@ -461,6 +527,40 @@ impl ApiClient {
         parse_external_resolution_response(&value, request)
     }
 
+    fn resolve_source_until(
+        &self,
+        source: &str,
+        request: &SourceResolveRequest,
+        deadline: std::time::Instant,
+    ) -> Result<SourceResolution, ApiError> {
+        let url = self.endpoint(&["v1", "sources", source, "resolve"])?;
+        let response = self.send(
+            self.http
+                .post(url)
+                .header(CONTENT_TYPE, "application/json")
+                .json(request),
+            true,
+        )?;
+        if response.status == 202 {
+            let operation_value = parse_json(response.body)?;
+            // A queued response must echo the route source and exact
+            // external identity before the client accepts its operation id.
+            parse_source_identity(&operation_value, source, &request.external_id, true)?;
+            let reference = parse_source_reference_value(&operation_value)?;
+            let operation_id = extract_operation_id(&operation_value)?;
+            return self.wait_for_source_resolution(
+                source,
+                &operation_id,
+                request,
+                reference,
+                deadline,
+            );
+        }
+        ensure_success(&response)?;
+        let value = parse_json(response.body)?;
+        parse_source_resolution_response(&value, source, request, true, None)
+    }
+
     fn resolve_until(
         &self,
         request: &ResolveRequest,
@@ -753,6 +853,151 @@ impl ApiClient {
         }
     }
 
+    fn wait_for_source_resolution(
+        &self,
+        source: &str,
+        operation_id: &str,
+        request: &SourceResolveRequest,
+        reference: Option<String>,
+        deadline: std::time::Instant,
+    ) -> Result<SourceResolution, ApiError> {
+        loop {
+            let value: Value =
+                self.get_json(&self.endpoint(&["v1", "operations", operation_id])?, true)?;
+            let action = inspect_operation(&value, "source resolution operation failed")?;
+            match action {
+                OperationPollAction::Resolution(_) => {
+                    return parse_source_resolution_response(
+                        &value,
+                        source,
+                        request,
+                        false,
+                        reference.as_deref(),
+                    );
+                }
+                OperationPollAction::Completed => {
+                    return self.resolve_completed_source_operation(
+                        &value,
+                        source,
+                        request,
+                        reference.as_deref(),
+                        deadline,
+                    );
+                }
+                OperationPollAction::Pending => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ApiError::OperationTimeout(operation_id.into()));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(250)));
+        }
+    }
+
+    fn resolve_completed_source_operation(
+        &self,
+        operation_value: &Value,
+        source: &str,
+        request: &SourceResolveRequest,
+        reference: Option<&str>,
+        deadline: std::time::Instant,
+    ) -> Result<SourceResolution, ApiError> {
+        // Some registries expose a completed operation before exposing the
+        // final resolution.  Pin that operation to its server-owned private
+        // resource and reuse the normal resolution endpoint; never derive a
+        // name or version from the provider identity locally.
+        let operation = operation_value.get("operation").unwrap_or(operation_value);
+        let import = operation.get("import").unwrap_or(operation);
+        let response_source = parse_source_identity_value(import, "sourceId")?;
+        if let Some(response_source) = response_source {
+            if response_source != source {
+                return Err(ApiError::OperationFailed(
+                    "completed source operation source does not match the requested source".into(),
+                ));
+            }
+        }
+        let response_external_id = parse_source_identity_value(import, "externalId")?;
+        if let Some(response_external_id) = response_external_id {
+            if response_external_id != request.external_id {
+                return Err(ApiError::OperationFailed(
+                    "completed source operation externalId does not match the requested externalId"
+                        .into(),
+                ));
+            }
+        }
+        let operation_reference = parse_source_identity_value(import, "sourceReference")?;
+        if let (Some(operation_reference), Some(reference)) =
+            (operation_reference.as_deref(), reference)
+        {
+            if operation_reference != reference {
+                return Err(ApiError::OperationFailed(
+                    "completed source operation reference does not match the requested source reference"
+                        .into(),
+                ));
+            }
+        }
+        let expected_reference = operation_reference.as_deref().or(reference);
+        let resource_id = operation
+            .get("resourceId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ApiError::OperationFailed(
+                    "completed source operation did not include its resourceId".into(),
+                )
+            })?;
+        let skill = self.skill_by_id(resource_id)?;
+        let physical_identity_matches = skill.provenance.external_id.as_deref()
+            == Some(request.external_id.as_str())
+            && skill
+                .provenance
+                .external_source
+                .as_deref()
+                .map(|member_source| member_source == source)
+                .unwrap_or(true);
+        let reference_matches = expected_reference
+            .is_some_and(|expected| skill.provenance.source_reference.as_deref() == Some(expected));
+        if !physical_identity_matches && !reference_matches {
+            return Err(ApiError::OperationFailed(
+                "completed source operation resource identity does not match the requested source and externalId"
+                    .into(),
+            ));
+        }
+        if let (Some(expected), Some(actual)) = (
+            expected_reference,
+            skill.provenance.source_reference.as_deref(),
+        ) {
+            if actual != expected {
+                return Err(ApiError::OperationFailed(
+                    "completed source operation resource sourceReference does not match the server-owned reference"
+                        .into(),
+                ));
+            }
+        }
+        let resolution = self.resolve_until(
+            &ResolveRequest {
+                kind: "skill".into(),
+                reference: skill.name.clone(),
+                version: Some(skill.version.clone()),
+            },
+            deadline,
+        )?;
+        verify_source_resolution(&resolution, source, request, expected_reference)?;
+        Ok(SourceResolution {
+            source_id: source.into(),
+            external_id: request.external_id.clone(),
+            reference: operation_reference
+                .or_else(|| reference.map(str::to_owned))
+                .or_else(|| {
+                    resolution
+                        .members
+                        .first()
+                        .and_then(|member| member.provenance.source_reference.clone())
+                }),
+            resolution,
+        })
+    }
+
     fn resolve_completed_external_operation(
         &self,
         operation_value: &Value,
@@ -991,6 +1236,244 @@ fn extract_resolution(value: Value) -> Result<Resolution, ApiError> {
         return Ok(resolution);
     }
     extract(value, "resolution")
+}
+
+fn parse_source_reference_value(value: &Value) -> Result<Option<String>, ApiError> {
+    let operation = value.get("operation");
+    let candidates = [
+        Some(value),
+        operation,
+        value.get("import"),
+        operation.and_then(|operation| operation.get("import")),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        for field in ["reference", "sourceReference"] {
+            let Some(raw) = candidate.get(field) else {
+                continue;
+            };
+            let reference = raw
+                .as_str()
+                .filter(|reference| {
+                    !reference.is_empty()
+                        && reference.len() <= 2_048
+                        && !reference
+                            .chars()
+                            .any(|character| character.is_control() || character == '\\')
+                })
+                .ok_or_else(|| {
+                    ApiError::OperationFailed(
+                        "source resolution response reference is invalid".into(),
+                    )
+                })?;
+            return Ok(Some(reference.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_source_resolution_response(
+    value: &Value,
+    source: &str,
+    request: &SourceResolveRequest,
+    require_identity: bool,
+    reference_hint: Option<&str>,
+) -> Result<SourceResolution, ApiError> {
+    let response_source = parse_source_identity_value(value, "sourceId")?;
+    let response_external_id = parse_source_identity_value(value, "externalId")?;
+    if require_identity && response_source.is_none() {
+        return Err(ApiError::OperationFailed(
+            "source resolution response did not identify its source".into(),
+        ));
+    }
+    if require_identity && response_external_id.is_none() {
+        return Err(ApiError::OperationFailed(
+            "source resolution response did not identify its externalId".into(),
+        ));
+    }
+    if let Some(response_source) = response_source.as_deref() {
+        if response_source != source {
+            return Err(ApiError::OperationFailed(
+                "source resolution response source does not match the requested source".into(),
+            ));
+        }
+    }
+    if let Some(response_external_id) = response_external_id.as_deref() {
+        if response_external_id != request.external_id {
+            return Err(ApiError::OperationFailed(
+                "source resolution response externalId does not match the requested externalId"
+                    .into(),
+            ));
+        }
+    }
+    let response_reference = parse_source_reference_value(value)?;
+    let reference = response_reference.or_else(|| reference_hint.map(str::to_owned));
+    let mut resolution = extract_resolution(value.clone())?;
+    verify_source_resolution(&resolution, source, request, reference.as_deref())?;
+    // Preserve the server echo in the resolution's provenance even when an
+    // older registry only put it in the response envelope.  This lets the
+    // installer and lockfile retain the exact source+externalId identity.
+    for member in &mut resolution.members {
+        if member.provenance.external_id.is_none() {
+            member.provenance.external_id = Some(request.external_id.clone());
+        }
+        if member.provenance.external_source.is_none() {
+            member.provenance.external_source = Some(source.to_owned());
+        }
+    }
+    if require_identity && reference.is_none() {
+        return Err(ApiError::OperationFailed(
+            "source resolution response did not include its server-owned reference".into(),
+        ));
+    }
+    let reference = reference.or_else(|| {
+        resolution
+            .members
+            .first()
+            .and_then(|member| member.provenance.source_reference.clone())
+    });
+    Ok(SourceResolution {
+        source_id: response_source.unwrap_or_else(|| source.to_owned()),
+        external_id: response_external_id.unwrap_or_else(|| request.external_id.clone()),
+        resolution,
+        reference,
+    })
+}
+
+fn verify_source_resolution(
+    resolution: &Resolution,
+    source: &str,
+    request: &SourceResolveRequest,
+    expected_reference: Option<&str>,
+) -> Result<(), ApiError> {
+    if resolution.kind != "skill" || resolution.members.is_empty() {
+        return Err(ApiError::OperationFailed(
+            "source resolution response did not include a skill member".into(),
+        ));
+    }
+    for member in &resolution.members {
+        let member_reference = member.provenance.source_reference.as_deref();
+        if let Some(external_id) = member.provenance.external_id.as_deref() {
+            if external_id != request.external_id
+                && !expected_reference.is_some_and(|reference| member_reference == Some(reference))
+            {
+                return Err(ApiError::OperationFailed(
+                    "source resolution member externalId does not match the requested externalId"
+                        .into(),
+                ));
+            }
+        }
+        if let Some(member_source) = member.provenance.external_source.as_deref() {
+            if member_source != source
+                && !expected_reference.is_some_and(|reference| member_reference == Some(reference))
+            {
+                return Err(ApiError::OperationFailed(
+                    "source resolution member source does not match the requested source".into(),
+                ));
+            }
+        }
+        if let (Some(expected_reference), Some(member_reference)) =
+            (expected_reference, member_reference)
+        {
+            if member_reference != expected_reference {
+                return Err(ApiError::OperationFailed(
+                    "source resolution member sourceReference does not match the server-owned reference"
+                        .into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_source_identity(
+    value: &Value,
+    source: &str,
+    external_id: &str,
+    required: bool,
+) -> Result<(), ApiError> {
+    let response_source = parse_source_identity_value(value, "sourceId")?;
+    let response_external_id = parse_source_identity_value(value, "externalId")?;
+    if required && response_source.is_none() {
+        return Err(ApiError::OperationFailed(
+            "source response did not identify its source".into(),
+        ));
+    }
+    if required && response_external_id.is_none() {
+        return Err(ApiError::OperationFailed(
+            "source response did not identify its externalId".into(),
+        ));
+    }
+    if response_source
+        .as_deref()
+        .is_some_and(|value| value != source)
+    {
+        return Err(ApiError::OperationFailed(
+            "source response source does not match the requested source".into(),
+        ));
+    }
+    if response_external_id
+        .as_deref()
+        .is_some_and(|value| value != external_id)
+    {
+        return Err(ApiError::OperationFailed(
+            "source response externalId does not match the requested externalId".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_source_identity_value(value: &Value, field: &str) -> Result<Option<String>, ApiError> {
+    let candidates = [Some(value), value.get("operation"), value.get("import")];
+    for candidate in candidates.into_iter().flatten() {
+        let Some(raw) = candidate.get(field) else {
+            continue;
+        };
+        let value = raw
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ApiError::OperationFailed(format!("source response {field} is invalid"))
+            })?;
+        return Ok(Some(value.to_owned()));
+    }
+    Ok(None)
+}
+
+fn validate_source_id(value: &str) -> Result<String, ApiError> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.trim() != value
+        || !value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit()
+            } else {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            }
+        })
+    {
+        return Err(ApiError::Response(
+            "source id must match [a-z0-9][a-z0-9._-]* and be at most 128 characters".into(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_source_external_id(value: &str) -> Result<String, ApiError> {
+    if value.is_empty()
+        || value.len() > 1024
+        || value.trim() != value
+        || value
+            .chars()
+            .any(|character| character.is_control() || character == '\\')
+        || value.split('/').any(|part| part == "." || part == "..")
+    {
+        return Err(ApiError::Response(
+            "source externalId must be a bounded server-returned identity".into(),
+        ));
+    }
+    Ok(value.to_owned())
 }
 
 fn parse_external_resolution_response(
@@ -1482,6 +1965,327 @@ mod tests {
             request.starts_with("GET /v1/directory/skills?view=hot&page=2&per_page=25 HTTP/1.1")
         );
         assert!(!request.contains("feed="));
+    }
+
+    #[test]
+    fn source_list_and_search_use_registry_owned_metadata_routes() {
+        let (base, handle) = loopback_response(
+            200,
+            r#"{"sources":[{"id":"skillsmp","label":"SkillsMP","capabilities":["search"]}]}"#,
+        );
+        let client = ApiClient::new(&base, None).expect("client");
+        assert_eq!(
+            client.sources().expect("source list")["sources"][0]["id"],
+            "skillsmp"
+        );
+        let request = handle.join().expect("server thread");
+        assert!(request.starts_with("GET /v1/sources HTTP/1.1"));
+
+        let (base, handle) = loopback_response(
+            200,
+            r#"{"data":[{"sourceId":"skillsmp","externalId":"owner/skill","title":"Skill"}],"sources":[]}"#,
+        );
+        let client = ApiClient::new(&base, None).expect("client");
+        let value = client
+            .source_search("  skill  ", Some("skillsmp"), 12)
+            .expect("source search");
+        assert_eq!(value["data"][0]["externalId"], "owner/skill");
+        let request = handle.join().expect("server thread");
+        assert!(
+            request.starts_with("GET /v1/sources/search?q=skill&source=skillsmp&limit=12 HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn source_resolve_posts_exact_identity_and_reuses_resolution_contract() {
+        let external_id = "owner/skill";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": "skill-1",
+            "organizationId": "org-1",
+            "name": "@sources/skill-1",
+            "version": "0.0.0+source.1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": "skill-1",
+                "organizationId": "org-1",
+                "name": "@sources/skill-1",
+                "skillName": "skill-1",
+                "version": "0.0.0+source.1",
+                "description": "",
+                "artifact": { "key": "blob-1", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 1 },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": { "kind": "source", "externalId": external_id, "externalSource": "skillsmp", "sourceReference": "@source/owner/skill" },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/sources/skillsmp/resolve",
+                Some(serde_json::json!({ "externalId": external_id })),
+                200,
+                serde_json::json!({
+                    "sourceId": "skillsmp",
+                    "externalId": external_id,
+                    "reference": "@source/owner/skill",
+                    "resolution": resolution
+                }),
+            )],
+        )
+        .expect("mock client");
+        let result = client
+            .resolve_source("skillsmp", external_id, false)
+            .expect("source resolution");
+        assert_eq!(result.source_id, "skillsmp");
+        assert_eq!(result.external_id, external_id);
+        assert_eq!(result.reference.as_deref(), Some("@source/owner/skill"));
+        assert_eq!(result.resolution.name, "@sources/skill-1");
+        assert_eq!(
+            result.resolution.members[0]
+                .provenance
+                .external_source
+                .as_deref(),
+            Some("skillsmp")
+        );
+    }
+
+    #[test]
+    fn source_resolve_accepts_catalog_alias_with_physical_provenance() {
+        let requested_external_id = "alias/owner-skill";
+        let physical_external_id = "owner/skill";
+        let physical_source = "github-code-search";
+        let source_reference = "@github/owner/repository/skills/skill";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": "skill-1",
+            "organizationId": "org-1",
+            "name": "@sources/skill-1",
+            "version": "0.0.0+source.1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": "skill-1",
+                "organizationId": "org-1",
+                "name": "@sources/skill-1",
+                "skillName": "skill-1",
+                "version": "0.0.0+source.1",
+                "description": "",
+                "artifact": { "key": "blob-1", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 1 },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "source",
+                    "externalId": physical_external_id,
+                    "externalSource": physical_source,
+                    "sourceReference": source_reference
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/sources/skillhub-public/resolve",
+                Some(serde_json::json!({ "externalId": requested_external_id })),
+                200,
+                serde_json::json!({
+                    "sourceId": "skillhub-public",
+                    "externalId": requested_external_id,
+                    "reference": source_reference,
+                    "resolution": resolution
+                }),
+            )],
+        )
+        .expect("mock client");
+        let result = client
+            .resolve_source("skillhub-public", requested_external_id, false)
+            .expect("catalog alias resolution");
+        assert_eq!(result.source_id, "skillhub-public");
+        assert_eq!(result.external_id, requested_external_id);
+        assert_eq!(result.reference.as_deref(), Some(source_reference));
+        assert_eq!(
+            result.resolution.members[0]
+                .provenance
+                .external_source
+                .as_deref(),
+            Some(physical_source)
+        );
+        assert_eq!(
+            result.resolution.members[0]
+                .provenance
+                .external_id
+                .as_deref(),
+            Some(physical_external_id)
+        );
+    }
+
+    #[test]
+    fn queued_source_alias_pins_operation_to_server_reference() {
+        let requested_external_id = "alias/owner-skill";
+        let source_reference = "@github/owner/repository/skills/skill";
+        let resolution = serde_json::json!({
+            "kind": "skill",
+            "resourceId": "skill-1",
+            "organizationId": "org-1",
+            "name": "@sources/skill-1",
+            "version": "0.0.0+source.1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "members": [{
+                "id": "skill-1",
+                "organizationId": "org-1",
+                "name": "@sources/skill-1",
+                "skillName": "skill-1",
+                "version": "0.0.0+source.1",
+                "description": "",
+                "artifact": { "key": "blob-1", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 1 },
+                "state": "approved",
+                "policyRevision": "policy-1",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "provenance": {
+                    "kind": "source",
+                    "externalId": "owner/skill",
+                    "externalSource": "github-code-search",
+                    "sourceReference": source_reference
+                },
+                "fileCount": 1,
+                "scanIds": []
+            }]
+        });
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![
+                mock_exchange(
+                    "POST",
+                    "/v1/sources/skillhub-public/resolve",
+                    Some(serde_json::json!({ "externalId": requested_external_id })),
+                    202,
+                    serde_json::json!({
+                        "sourceId": "skillhub-public",
+                        "externalId": requested_external_id,
+                        "reference": source_reference,
+                        "operation": { "id": "source-op-1", "state": "queued" }
+                    }),
+                ),
+                mock_exchange(
+                    "GET",
+                    "/v1/operations/source-op-1",
+                    None,
+                    200,
+                    serde_json::json!({
+                        "operation": {
+                            "id": "source-op-1",
+                            "kind": "import",
+                            "state": "completed",
+                            "resourceId": "skill-1",
+                            "import": {
+                                "sourceId": "skillhub-public",
+                                "externalId": requested_external_id,
+                                "sourceReference": source_reference
+                            }
+                        }
+                    }),
+                ),
+                mock_exchange(
+                    "GET",
+                    "/v1/skills/skill-1",
+                    None,
+                    200,
+                    serde_json::json!({ "skill": resolution["members"][0].clone() }),
+                ),
+                mock_exchange(
+                    "POST",
+                    "/v1/resolve",
+                    Some(serde_json::json!({
+                        "kind": "skill",
+                        "ref": "@sources/skill-1",
+                        "version": "0.0.0+source.1"
+                    })),
+                    200,
+                    serde_json::json!({ "resolution": resolution }),
+                ),
+            ],
+        )
+        .expect("mock client");
+        let result = client
+            .resolve_source("skillhub-public", requested_external_id, false)
+            .expect("queued catalog alias resolution");
+        assert_eq!(result.reference.as_deref(), Some(source_reference));
+        assert_eq!(
+            result.resolution.members[0]
+                .provenance
+                .external_source
+                .as_deref(),
+            Some("github-code-search")
+        );
+    }
+
+    #[test]
+    fn source_resolve_rejects_server_identity_substitution() {
+        let client = ApiClient::with_mock_exchanges(
+            "https://registry.example",
+            vec![mock_exchange(
+                "POST",
+                "/v1/sources/skillsmp/resolve",
+                Some(serde_json::json!({ "externalId": "owner/skill" })),
+                200,
+                serde_json::json!({
+                    "sourceId": "other-source",
+                    "externalId": "owner/skill",
+                    "resolution": {
+                        "kind": "skill",
+                        "resourceId": "skill-1",
+                        "name": "@sources/skill-1",
+                        "version": "1.0.0",
+                        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "members": []
+                    }
+                }),
+            )],
+        )
+        .expect("mock client");
+        let error = client
+            .resolve_source("skillsmp", "owner/skill", false)
+            .expect_err("identity substitution must fail");
+        assert!(
+            matches!(error, ApiError::OperationFailed(message) if message.contains("source does not match"))
+        );
+    }
+
+    #[test]
+    fn source_inputs_use_bounded_exact_contract() {
+        let client = ApiClient::new("https://registry.example", None).expect("client");
+        assert!(matches!(
+            client.source_search(&"q".repeat(201), None, 1),
+            Err(ApiError::Response(message)) if message.contains("200")
+        ));
+        assert!(matches!(
+            client.source_search("skill", None, 101),
+            Err(ApiError::Response(message)) if message.contains("100")
+        ));
+        assert!(matches!(
+            client.source_search("sk\u{0000}ll", None, 1),
+            Err(ApiError::Response(message)) if message.contains("non-control")
+        ));
+        assert!(matches!(
+            client.source_search("skill", Some("SkillHub"), 1),
+            Err(ApiError::Response(message)) if message.contains("source id")
+        ));
+        assert!(matches!(
+            client.resolve_source("skillsmp", " owner/skill", false),
+            Err(ApiError::Response(message)) if message.contains("externalId")
+        ));
+        let exact = "https://provider.example/items/a?ref=1";
+        assert!(matches!(
+            client.resolve_source("skillsmp", &format!("{exact}\n"), false),
+            Err(ApiError::Response(message)) if message.contains("externalId")
+        ));
     }
 
     #[test]
@@ -2094,6 +2898,7 @@ mod tests {
             revision: Some("sha256:source".into()),
             source_digest: Some("sha256:bundle".into()),
             external_id: Some("vercel-labs/skills/find-skills".into()),
+            external_source: None,
             external_source_type: Some("github".into()),
             external_snapshot_hash: Some("snapshot-1".into()),
             feed_id: Some("feed-1".into()),
@@ -2151,6 +2956,7 @@ mod tests {
             tree_digest: "sha256:tree".into(),
             owners: vec!["direct".into()],
             provenance,
+            source_selectors: Vec::new(),
         };
         let value = serde_json::to_value(lock).expect("lock JSON");
         assert_eq!(
@@ -2208,6 +3014,7 @@ mod tests {
         }))
         .expect("legacy provenance");
         assert_eq!(legacy.external_id, None);
+        assert_eq!(legacy.external_source, None);
         assert_eq!(legacy.external_source_type, None);
         assert_eq!(legacy.external_snapshot_hash, None);
         assert_eq!(legacy.feed_name, None);
