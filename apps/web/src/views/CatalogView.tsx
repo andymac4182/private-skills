@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
+import { admissionBadgeValue, admissionReasonText, admissionRefreshDelay, admissionSummary, isDraftCallbackCurrent, releaseActionsAllowed } from '../lib/catalogAdmission'
 import { formatBytes, formatDate, shortDigest } from '../lib/format'
 import { quotePosix, quotePowerShell } from '../lib/shell'
-import type { DraftView, Policy, Principal, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
+import type { CatalogSkillVersion, DraftView, Principal, ScanResult, SearchStatusResponse, SemanticSearchResult, SkillVersion } from '../lib/types'
 import type { AppSectionSearch } from '../routes/app.$section'
 import { useAuth } from '../lib/auth'
 import { Badge, Button, DisconnectedState, EmptyState, ErrorState, LoadingState, Notice, Panel } from '../components/Primitives'
@@ -12,10 +13,9 @@ import { ReleaseViewer } from '../components/ReleaseViewer'
 export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch }) {
   const [query, setQuery] = useState('')
   const [submittedQuery, setSubmittedQuery] = useState('')
-  const [skills, setSkills] = useState<SkillVersion[] | null>(null)
+  const [skills, setSkills] = useState<CatalogSkillVersion[] | null>(null)
   const [semanticResults, setSemanticResults] = useState<SemanticSearchResult[] | null>(null)
   const [mode, setMode] = useState<'catalog' | 'semantic'>('catalog')
-  const [policy, setPolicy] = useState<Policy | null>(null)
   const [searchStatus, setSearchStatus] = useState<SearchStatusResponse | null>(null)
   const [searchStatusError, setSearchStatusError] = useState<string | null>(null)
   const [reindexing, setReindexing] = useState(false)
@@ -25,6 +25,8 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(draftSearch?.skill ?? null)
   const [draftDirty, setDraftDirty] = useState(false)
+  const selectedIdRef = useRef<string | null>(draftSearch?.skill ?? null)
+  const draftIdRef = useRef<string | undefined>(draftSearch?.draft)
   const searchInput = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
@@ -39,6 +41,8 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
   const selectSkill = useCallback((nextId: string) => {
     if (nextId === selectedId) return
     if (draftDirty && !window.confirm('Discard unsaved changes and inspect another skill? Saved draft revisions are not affected.')) return
+    selectedIdRef.current = nextId
+    draftIdRef.current = undefined
     if (draftSearch?.draft) updateDraftSearch({ draft: undefined, skill: undefined, version: undefined, digest: undefined })
     setSelectedId(nextId)
   }, [draftDirty, draftSearch?.draft, selectedId, updateDraftSearch])
@@ -47,12 +51,20 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
     ? { draftId: draftSearch.draft }
     : undefined
 
-  const handleDraftChange = useCallback((next: DraftView) => {
-    const selected = skills?.find((skill) => skill.id === selectedId)
-    updateDraftSearch({ draft: next.id, skill: selectedId ?? undefined, version: selected?.version, digest: selected?.artifact.digest })
-  }, [selectedId, skills, updateDraftSearch])
+  selectedIdRef.current = selectedId
+  draftIdRef.current = draftSearch?.draft
 
-  const handleDraftClose = useCallback(() => {
+  const handleDraftChange = useCallback((originSkillId: string, originDraftId: string | undefined, next: DraftView) => {
+    if (!isDraftCallbackCurrent(selectedIdRef.current, draftIdRef.current, originSkillId, originDraftId)) return
+    const selected = skills?.find((skill) => skill.id === originSkillId)
+    if (!selected) return
+    draftIdRef.current = next.id
+    updateDraftSearch({ draft: next.id, skill: originSkillId, version: selected.version, digest: selected.artifact.digest })
+  }, [skills, updateDraftSearch])
+
+  const handleDraftClose = useCallback((originSkillId: string) => {
+    if (selectedIdRef.current !== originSkillId) return
+    draftIdRef.current = undefined
     updateDraftSearch({ draft: undefined, skill: undefined, version: undefined, digest: undefined })
   }, [updateDraftSearch])
 
@@ -61,15 +73,13 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
     try {
       const semanticActive = mode === 'semantic' && submittedQuery.length > 0
       if (semanticActive) {
-        const [response, policyResponse] = await Promise.all([api.search(submittedQuery), api.policy()])
+        const response = await api.search(submittedQuery)
         setSemanticResults(response.results ?? [])
         setSkills(null)
-        setPolicy(policyResponse.policy)
       } else {
-        const [response, policyResponse] = await Promise.all([api.skills(submittedQuery), api.policy()])
+        const response = await api.skills(submittedQuery)
         setSkills(response.skills ?? [])
         setSemanticResults(null)
-        setPolicy(policyResponse.policy)
         setSelectedId((current) => response.skills?.some((skill) => skill.id === current)
           ? current
           : response.skills?.find((skill) => skill.id === draftSearch?.skill)?.id ?? response.skills?.[0]?.id ?? null)
@@ -80,6 +90,19 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
   }
 
   useEffect(() => { void load() }, [submittedQuery, mode])
+  useEffect(() => {
+    if (mode !== 'catalog' || !skills) return
+    const expiryTimes = skills
+      .filter((skill) => skill.currentAdmission?.allowed === true && skill.currentAdmission.expiresAt)
+      .map((skill) => Date.parse(skill.currentAdmission!.expiresAt!))
+      .filter((value) => Number.isFinite(value))
+    const nextExpiry = Math.min(...expiryTimes)
+    if (!Number.isFinite(nextExpiry)) return
+    const delay = admissionRefreshDelay(new Date(nextExpiry).toISOString())
+    if (delay === undefined) return
+    const timer = window.setTimeout(() => { void load() }, delay)
+    return () => window.clearTimeout(timer)
+  }, [mode, skills, submittedQuery])
   useEffect(() => {
     void api.searchStatus().then((status) => { setSearchStatus(status); setSearchStatusError(null) }).catch((cause) => { setSearchStatus(null); setSearchStatusError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Search status is unavailable.') })
   }, [])
@@ -150,18 +173,19 @@ export function CatalogView({ draftSearch }: { draftSearch?: AppSectionSearch })
           {semanticResults.length === 0 ? <EmptyState title="No semantic matches" description="Try describing the outcome you need or switch back to the catalog search." /> : <div className="catalog-grid">{semanticResults.map((result) => <SemanticCard key={`${result.resourceId}:${result.version}`} result={result} onOpen={() => { setMode('catalog'); setQuery(result.name); setSubmittedQuery(result.name) }} />)}</div>}
         </Panel>
       )}
-      {!semanticActive && skills !== null && policy !== null && !error && (
+      {!semanticActive && skills !== null && !error && (
         <Panel title={`${skills.length} release${skills.length === 1 ? '' : 's'}`} description={submittedQuery ? `Matching “${submittedQuery}”` : 'Every row is scoped to the signed-in organization.'}>
-          {skills.length === 0 ? <EmptyState title="No skills in the catalog yet" description="Publish a complete skill folder or import one from an approved source to make it available here." action={<Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>} /> : <div className="catalog-grid">{skills.map((skill) => <SkillCard key={skill.id} skill={skill} needsRescan={needsRescan(skill, policy)} selected={selectedId === skill.id} onSelect={() => selectSkill(skill.id)} />)}</div>}
+          {skills.length === 0 ? <EmptyState title="No skills in the catalog yet" description="Publish a complete skill folder or import one from an approved source to make it available here." action={<Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>} /> : <div className="catalog-grid">{skills.map((skill) => <SkillCard key={skill.id} skill={skill} selected={selectedId === skill.id} onSelect={() => selectSkill(skill.id)} />)}</div>}
         </Panel>
       )}
-      {selectedId && skills?.some((skill) => skill.id === selectedId) && <SkillDetail currentPolicyRevision={policy?.revision ?? null} skillId={selectedId} fallback={skills.find((skill) => skill.id === selectedId)!} resumeDraftId={draftRoute?.draftId} onDraftDirty={setDraftDirty} onDraftChange={handleDraftChange} onDraftClose={handleDraftClose} onChanged={() => void load()} />}
+      {selectedId && skills?.some((skill) => skill.id === selectedId) && <SkillDetail key={selectedId} skillId={selectedId} fallback={skills.find((skill) => skill.id === selectedId)!} resumeDraftId={draftRoute?.draftId} onDraftDirty={setDraftDirty} onDraftChange={handleDraftChange} onDraftClose={handleDraftClose} onChanged={() => void load()} />}
     </div>
   )
 }
 
-function needsRescan(skill: SkillVersion, policy: Policy): boolean {
-  return skill.state === 'approved' && skill.policyRevision !== policy.revision
+function admissionTone(skill: CatalogSkillVersion): 'warn' | 'bad' | undefined {
+  if (skill.currentAdmission?.allowed === true) return undefined
+  return skill.currentAdmission?.status === 'unavailable' ? 'bad' : 'warn'
 }
 
 function canAuthorDraft(principal: Principal | null | undefined): boolean {
@@ -186,11 +210,11 @@ function installTarget(skill: SkillVersion): string {
   return quotePosix(`${skill.name}@${skill.version}`)
 }
 
-function SkillCard({ skill, needsRescan: releaseNeedsRescan, selected, onSelect }: { skill: SkillVersion; needsRescan: boolean; selected: boolean; onSelect: () => void }) {
+function SkillCard({ skill, selected, onSelect }: { skill: CatalogSkillVersion; selected: boolean; onSelect: () => void }) {
   const identity = displaySkillIdentity(skill)
   const initial = identity.replace(/^@/, '').split(/[\/_-]/)[0]?.slice(0, 1).toUpperCase() || 'S'
   const fileLabel = `${skill.fileCount} file${skill.fileCount === 1 ? '' : 's'}`
-  return <article className={`skill-card ${selected ? 'skill-card-selected' : ''}`.trim()}><button aria-label={`Inspect ${identity} ${skill.version}`} aria-pressed={selected} className="skill-card-trigger" type="button" onClick={onSelect}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{identity}</strong><span>{skill.version}</span></span><span aria-hidden="true" className="skill-card-dots">···</span></div><p className="skill-card-description">{skill.description || 'No description supplied.'}</p><div className="skill-card-tags"><span className="skill-tag">Skill</span><span className="skill-tag">{skill.provenance.kind}</span></div><div className="skill-card-footer"><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /><span>{fileLabel}</span></div></button></article>
+  return <article className={`skill-card ${selected ? 'skill-card-selected' : ''}`.trim()}><button aria-label={`Inspect ${identity} ${skill.version}`} aria-pressed={selected} className="skill-card-trigger" type="button" onClick={onSelect}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{identity}</strong><span>{skill.version}</span></span><span aria-hidden="true" className="skill-card-dots">···</span></div><p className="skill-card-description">{skill.description || 'No description supplied.'}</p><div className="skill-card-tags"><span className="skill-tag">Skill</span><span className="skill-tag">{skill.provenance.kind}</span></div><div className="skill-card-footer"><Badge tone={admissionTone(skill)} value={admissionBadgeValue(skill)} /><span>{fileLabel}</span></div></button></article>
 }
 
 function SemanticCard({ result, onOpen }: { result: SemanticSearchResult; onOpen: () => void }) {
@@ -198,9 +222,9 @@ function SemanticCard({ result, onOpen }: { result: SemanticSearchResult; onOpen
   return <article className="skill-card semantic-card"><button aria-label={`Open ${result.name} ${result.version} in the catalog`} className="skill-card-trigger" type="button" onClick={onOpen}><div className="skill-card-top"><span aria-hidden="true" className="skill-avatar">{initial}</span><span className="skill-card-identity"><strong>{result.name}</strong><span>{result.version}</span></span><span className="skill-card-dots">{Math.round(result.score * 100)}%</span></div><p className="skill-card-description">{result.description || result.text}</p><div className="skill-card-tags"><span className="skill-tag">Semantic match</span><span className="skill-tag">Open release</span></div><div className="skill-card-footer"><span className="badge badge-good">{Math.round(result.score * 100)}% match</span><span>Inspect catalog</span></div></button></article>
 }
 
-function SkillDetail({ currentPolicyRevision, skillId, fallback, resumeDraftId, onDraftChange, onDraftDirty, onDraftClose, onChanged }: { currentPolicyRevision: string | null; skillId: string; fallback: SkillVersion; resumeDraftId?: string; onDraftChange: (draft: DraftView) => void; onDraftDirty: (dirty: boolean) => void; onDraftClose: () => void; onChanged: () => void }) {
+function SkillDetail({ skillId, fallback, resumeDraftId, onDraftChange, onDraftDirty, onDraftClose, onChanged }: { skillId: string; fallback: CatalogSkillVersion; resumeDraftId?: string; onDraftChange: (originSkillId: string, originDraftId: string | undefined, draft: DraftView) => void; onDraftDirty: (dirty: boolean) => void; onDraftClose: (originSkillId: string) => void; onChanged: () => void }) {
   const { principal } = useAuth()
-  const [skill, setSkill] = useState<SkillVersion>(fallback)
+  const [skill, setSkill] = useState<CatalogSkillVersion>(fallback)
   const [scans, setScans] = useState<ScanResult[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<'rescan' | 'revoke' | null>(null)
@@ -227,6 +251,14 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, resumeDraftId, 
   }
 
   useEffect(() => { void load() }, [skillId])
+  useEffect(() => {
+    const expiresAt = skill.currentAdmission?.expiresAt
+    if (skill.currentAdmission?.allowed !== true || !expiresAt) return
+    const delay = admissionRefreshDelay(expiresAt)
+    if (delay === undefined) return
+    const timer = window.setTimeout(() => { void load() }, delay)
+    return () => window.clearTimeout(timer)
+  }, [skill.currentAdmission?.allowed, skill.currentAdmission?.expiresAt, skillId])
 
   async function action(kind: 'rescan' | 'revoke') {
     setBusy(kind)
@@ -235,6 +267,7 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, resumeDraftId, 
       if (kind === 'rescan') {
         const response = await api.rescan(skill.id)
         setMessage({ kind: 'success', text: response.operation ? `Rescan queued as ${response.operation.id}.` : 'Rescan requested.' })
+        onChanged()
       } else {
         const response = await api.revoke(skill.id)
         setSkill(response.skill ?? { ...skill, state: 'revoked' })
@@ -260,10 +293,13 @@ function SkillDetail({ currentPolicyRevision, skillId, fallback, resumeDraftId, 
   }
 
   const provenance = skill.provenance.kind === 'native' ? 'Native publish' : `${skill.provenance.kind}${skill.provenance.repository ? ` · ${skill.provenance.repository}` : ''}`
-  const releaseNeedsRescan = skill.state === 'approved' && currentPolicyRevision !== null && skill.policyRevision !== currentPolicyRevision
-  const canDraft = canAuthorDraft(principal) && skill.state === 'approved' && !releaseNeedsRescan
+  const releaseAllowed = releaseActionsAllowed(skill)
+  const canDraft = canAuthorDraft(principal) && skill.state === 'approved' && releaseAllowed
+  const admission = skill.currentAdmission
+  const admissionMessage = admissionReasonText(admission)
+  const admissionKind = admission?.status === 'unavailable' ? 'error' : 'warning'
   return <Panel title="Release details" description="Release information and security checks for this version." action={(canRescan || canRevoke) && <div className="row-actions">{canRescan && <Button kind="secondary" busy={busy === 'rescan'} onClick={() => void action('rescan')}>Rescan</Button>}{canRevoke && <Button kind="danger" busy={busy === 'revoke'} onClick={() => { if (window.confirm(`Revoke ${skill.name}@${skill.version}?`)) void action('revoke') }}>Revoke</Button>}</div>}>
     {message && <div style={{ padding: '16px 22px 0' }}><Notice kind={message.kind}>{message.text}</Notice></div>}
-    {loading ? <LoadingState label="Loading release details…" /> : <><div className="detail-grid"><div><div className="detail-heading"><div><h2>{identity}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={releaseNeedsRescan ? 'warn' : undefined} value={releaseNeedsRescan ? 'needs rescan' : skill.state} /></div>{releaseNeedsRescan && <Notice kind="warning">Current review rules changed after this release was approved. It remains stored as approved, but it needs a new security scan before installation.</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div>{sourceReference && <div className="meta-row"><span>Canonical source</span><code>{sourceReference}</code></div>}<div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div><div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><span className="helper">POSIX (bash/zsh)</span><pre className="code-block">{installCommand}</pre><span className="helper">PowerShell</span><pre className="code-block">{installPowerShellCommand}</pre></div></div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div><ReleaseViewer key={skill.id} resourceId={skill.id} baseDigest={skill.artifact.digest} baseVersion={skill.version} canEdit={canDraft} resumeDraftId={resumeDraftId} onDraftChange={onDraftChange} onDraftDirty={onDraftDirty} onDraftClose={onDraftClose} /></>}
+    {loading ? <LoadingState label="Loading release details…" /> : <><div className="detail-grid"><div><div className="detail-heading"><div><h2>{identity}<span className="muted">@{skill.version}</span></h2><p>{skill.description || 'No description supplied.'}</p></div><Badge tone={admissionTone(skill)} value={admissionBadgeValue(skill)} /></div>{admissionMessage && <Notice kind={admissionKind}>{admissionMessage}</Notice>}<div className="detail-meta"><div className="meta-row"><span>Stored state</span><span><Badge value={skill.state} /></span></div><div className="meta-row"><span>Admission</span><span>{admissionSummary(admission)}</span></div><div className="meta-row"><span>Package</span><span title={skill.artifact.digest}>{shortDigest(skill.artifact.digest)} · {formatBytes(skill.artifact.size)}</span></div><div className="meta-row"><span>Source</span><span>{provenance}</span></div>{sourceReference && <div className="meta-row"><span>Canonical source</span><code>{sourceReference}</code></div>}<div className="meta-row"><span>Review rules</span><span>{skill.policyRevision}</span></div><div className="meta-row"><span>Created</span><span>{formatDate(skill.createdAt)}</span></div></div>{releaseAllowed ? <div className="install-block"><div className="install-header"><h3 className="subheading">Install command</h3><Button kind="quiet" type="button" onClick={() => void copyInstallCommand()}>{copied ? 'Copied' : 'Copy command'}</Button></div><span className="helper">POSIX (bash/zsh)</span><pre className="code-block">{installCommand}</pre><span className="helper">PowerShell</span><pre className="code-block">{installPowerShellCommand}</pre></div> : <div className="install-block"><h3 className="subheading">Install command unavailable</h3><Notice kind={admissionKind}>{admissionMessage}</Notice></div>}</div><div><h3 className="subheading">Security checks</h3>{scans.length === 0 ? <p className="helper">No security checks are attached to this release yet.</p> : <div className="scan-list">{scans.map((scan) => <div className="scan-item" key={scan.id}><div className="scan-item-top"><strong>{scan.scannerId}</strong><Badge value={scan.status} /></div><small>{scan.findings.length} finding{scan.findings.length === 1 ? '' : 's'} · {scan.coverage.filesAnalyzed}/{scan.coverage.filesEnumerated} files analyzed</small></div>)}</div>}</div></div>{releaseAllowed ? <ReleaseViewer key={skill.id} resourceId={skill.id} baseDigest={skill.artifact.digest} baseVersion={skill.version} canEdit={canDraft} resumeDraftId={resumeDraftId} onDraftChange={(next) => onDraftChange(skillId, resumeDraftId, next)} onDraftDirty={onDraftDirty} onDraftClose={() => onDraftClose(skillId)} /> : <section aria-label="Release files unavailable" className="release-viewer release-viewer-unavailable"><div className="release-viewer-header"><div><span className="eyebrow">Release files</span><h3 className="subheading">Files unavailable</h3></div></div><Notice kind={admissionKind}>{admissionMessage}</Notice></section>}</>}
   </Panel>
 }

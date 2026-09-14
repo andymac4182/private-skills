@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   type AuditEvent,
   type Authenticator,
+  type CurrentSkillAdmission,
   type Digest,
   type DistributionState,
   type ExternalProvenance,
@@ -1439,7 +1440,7 @@ async function handleSkillsRoute(
       return [skill.name, skill.skillName, skill.description, skill.version]
         .some((value) => value.toLowerCase().includes(q));
     });
-    return jsonResponse({ skills });
+    return jsonResponse({ skills: skills.map((skill) => withCurrentSkillAdmission(state, skill)) });
   }
 
   if (segments.length === 3) {
@@ -1450,7 +1451,7 @@ async function handleSkillsRoute(
       const skill = state.skills.find((candidate) => candidate.id === id && canReadNamespace(principal, candidate.name));
       if (!skill) throw unavailable();
       assertKnownDistributionState(skill.state);
-      return jsonResponse({ skill });
+      return jsonResponse({ skill: withCurrentSkillAdmission(state, skill) });
     }
     return methodNotAllowed(['GET']);
   }
@@ -2996,6 +2997,58 @@ function skillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now =
 /** Shared admission predicate for durable source-proof projections. */
 export function isSkillCurrentlyApproved(state: RegistryState, skill: SkillVersion, now = Date.now()): boolean {
   return skillCurrentlyApproved(state, skill, now);
+}
+
+/**
+ * Compute the current policy/evidence admission for an authorized catalog row.
+ * The result is deliberately response-only metadata; all artifact reads,
+ * resolutions, and install grants continue to call their own admission gate.
+ */
+export function getCurrentSkillAdmission(
+  state: RegistryState,
+  skill: SkillVersion,
+  now = Date.now(),
+): CurrentSkillAdmission {
+  const policyRevision = state.policy.revision;
+  if (skill.state !== 'approved') {
+    return {
+      allowed: false,
+      status: skill.state === 'scan-error' ? 'needs-rescan' : 'unavailable',
+      reason: skill.state,
+      policyRevision,
+    };
+  }
+  if (skill.policyRevision !== policyRevision) {
+    return {
+      allowed: false,
+      status: 'needs-rescan',
+      reason: 'policy-changed',
+      policyRevision,
+    };
+  }
+  const scans = state.scans.filter((scan) => skill.scanIds.includes(scan.id));
+  const evaluation = evaluatePolicy(state.policy, scans, skill.artifact.digest, skill.fileCount, now);
+  if (evaluation.state === 'approved') {
+    return {
+      allowed: true,
+      status: 'current',
+      reason: 'current',
+      policyRevision,
+      ...(evaluation.expiresAt ? { expiresAt: evaluation.expiresAt } : {}),
+    };
+  }
+  return {
+    allowed: false,
+    status: evaluation.state === 'quarantined' ? 'unavailable' : 'needs-rescan',
+    reason: evaluation.reason ?? 'evidence-missing',
+    policyRevision,
+    ...(evaluation.scannerId ? { scannerId: evaluation.scannerId } : {}),
+    ...(evaluation.expiresAt ? { expiresAt: evaluation.expiresAt } : {}),
+  };
+}
+
+function withCurrentSkillAdmission(state: RegistryState, skill: SkillVersion): SkillVersion & { currentAdmission: CurrentSkillAdmission } {
+  return { ...skill, currentAdmission: getCurrentSkillAdmission(state, skill) };
 }
 
 /** Shared namespace predicate for adapter-owned candidate providers. */
@@ -6437,39 +6490,56 @@ function parseFinding(raw: unknown): Finding {
   };
 }
 
+type PolicyEvaluation = {
+  state: DistributionState;
+  error?: string;
+  reason?: CurrentSkillAdmission['reason'];
+  scannerId?: ScannerId;
+  expiresAt?: string;
+};
+
 function evaluatePolicy(
   policy: Policy,
   results: ScanResult[],
   digest: Digest,
   fileCount: number,
   now = Date.now(),
-): { state: DistributionState; error?: string } {
+): PolicyEvaluation {
   const scanners = Array.isArray(policy.scanners) ? policy.scanners : [];
   const relevant = results.filter((result) => result.artifactDigest === digest && result.policyRevision === policy.revision);
   const required = scanners.filter((scanner) => scanner.mode === 'required');
   const enabled = scanners.filter((scanner) => scanner.mode !== 'disabled');
+  let earliestRequiredExpiry: string | undefined;
+  const rememberExpiry = (expiresAt: string | undefined) => {
+    if (!expiresAt) return;
+    if (!earliestRequiredExpiry || Date.parse(expiresAt) < Date.parse(earliestRequiredExpiry)) {
+      earliestRequiredExpiry = expiresAt;
+    }
+  };
   for (const scanner of required) {
     const result = latestScanForScanner(relevant, scanner.id);
-    if (!result) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not return evidence` };
-    if (result.status !== 'completed') return { state: 'scan-error', error: `Required scanner ${scanner.id} returned ${result.status}` };
-    if (evidenceExpired(result, policy.evidenceMaxAgeSeconds, now)) return { state: 'scan-error', error: `Required scanner ${scanner.id} evidence is stale` };
-    if (result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not analyze any files` };
+    if (!result) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not return evidence`, reason: 'evidence-missing', scannerId: scanner.id };
+    const expiresAt = evidenceExpiresAt(result, policy.evidenceMaxAgeSeconds);
+    rememberExpiry(expiresAt);
+    if (result.status !== 'completed') return { state: 'scan-error', error: `Required scanner ${scanner.id} returned ${result.status}`, reason: 'scan-failed', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
+    if (evidenceExpired(result, policy.evidenceMaxAgeSeconds, now)) return { state: 'scan-error', error: `Required scanner ${scanner.id} evidence is stale`, reason: 'evidence-stale', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
+    if (result.coverage.filesEnumerated <= 0 || result.coverage.filesAnalyzed <= 0) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not analyze any files`, reason: 'evidence-incomplete', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
     if (
       result.coverage.filesSkipped > 0 ||
       result.coverage.filesUnsupported > 0 ||
       result.coverage.filesAnalyzed !== result.coverage.filesEnumerated
-    ) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not cover every file` };
-    if (result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return { state: 'quarantined', error: `Required scanner ${scanner.id} reported a blocking finding` };
-    if (result.coverage.filesEnumerated !== fileCount) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not enumerate every artifact file` };
+    ) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not cover every file`, reason: 'evidence-incomplete', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
+    if (result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) return { state: 'quarantined', error: `Required scanner ${scanner.id} reported a blocking finding`, reason: 'blocking-finding', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
+    if (result.coverage.filesEnumerated !== fileCount) return { state: 'scan-error', error: `Required scanner ${scanner.id} did not enumerate every artifact file`, reason: 'evidence-incomplete', scannerId: scanner.id, ...(expiresAt ? { expiresAt } : {}) };
   }
-  if (required.length > 0) return { state: 'approved' };
+  if (required.length > 0) return { state: 'approved', reason: 'current', ...(earliestRequiredExpiry ? { expiresAt: earliestRequiredExpiry } : {}) };
   if (enabled.length === 0) {
     return policy.allowUnscanned
-      ? { state: 'approved' }
-      : { state: 'scan-error', error: 'No scanner evidence is configured and unscanned distribution is disabled' };
+      ? { state: 'approved', reason: 'current' }
+      : { state: 'scan-error', error: 'No scanner evidence is configured and unscanned distribution is disabled', reason: 'evidence-missing' };
   }
-  const missingAdvisory = enabled.some((scanner) => !relevant.some((result) => result.scannerId === scanner.id));
-  if (missingAdvisory && !policy.allowUnscanned) return { state: 'scan-error', error: 'Scanner evidence is incomplete and unscanned distribution is disabled' };
+  const missingAdvisory = enabled.find((scanner) => !relevant.some((result) => result.scannerId === scanner.id));
+  if (missingAdvisory && !policy.allowUnscanned) return { state: 'scan-error', error: 'Scanner evidence is incomplete and unscanned distribution is disabled', reason: 'evidence-missing', scannerId: missingAdvisory.id };
   for (const scanner of enabled) {
     const result = latestScanForScanner(relevant, scanner.id);
     if (result && result.status === 'completed' && result.findings.some((finding) => scanner.blockSeverities.includes(finding.severity))) {
@@ -6477,7 +6547,7 @@ function evaluatePolicy(
       continue;
     }
   }
-  return { state: 'approved' };
+  return { state: 'approved', reason: 'current' };
 }
 
 function latestScanForScanner(results: ScanResult[], scannerId: ScannerId): ScanResult | undefined {
@@ -6493,6 +6563,16 @@ function evidenceExpired(result: ScanResult, maxAgeSeconds: number, now = Date.n
   if (!Number.isFinite(createdAt)) return true;
   if (createdAt > now) return true;
   return maxAgeSeconds >= 0 && now - createdAt > maxAgeSeconds * 1000;
+}
+
+function evidenceExpiresAt(result: ScanResult, maxAgeSeconds: number): string | undefined {
+  if (!Number.isFinite(maxAgeSeconds) || maxAgeSeconds < 0) return undefined;
+  const createdAt = Date.parse(result.createdAt);
+  if (!Number.isFinite(createdAt)) return undefined;
+  const expiresAt = createdAt + maxAgeSeconds * 1000;
+  if (!Number.isFinite(expiresAt)) return undefined;
+  const date = new Date(expiresAt);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 function timestampExpired(value: string | undefined, now = Date.now()): boolean {

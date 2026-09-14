@@ -8,6 +8,30 @@ interface AuthContextValue { principal: Principal | null; status: AuthStatus; er
 const AuthContext = createContext<AuthContextValue | null>(null)
 function getErrorMessage(error: unknown) { return error instanceof ApiError || error instanceof Error ? error.message : 'The registry could not be reached.' }
 
+const RETURN_TO_MAX_LENGTH = 2048
+const RETURN_TO_BASE_ORIGIN = 'https://private-skills.invalid'
+
+/**
+ * Keep authentication return destinations inside the app. The login route is
+ * public, so this value is deliberately a small, same-origin app path rather
+ * than an arbitrary URL that could become an open redirect.
+ */
+export function safeAppReturnTo(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > RETURN_TO_MAX_LENGTH || !value.startsWith('/') || value.startsWith('//')) return undefined
+  if (/[\u0000-\u001f\u007f]/u.test(value) || value.includes('\\')) return undefined
+
+  const baseOrigin = typeof window === 'undefined' ? RETURN_TO_BASE_ORIGIN : window.location.origin
+  let target: URL
+  try {
+    target = new URL(value, baseOrigin)
+  } catch {
+    return undefined
+  }
+
+  if (target.origin !== baseOrigin || target.username || target.password || !/^\/app(?:\/|$)/u.test(target.pathname)) return undefined
+  return `${target.pathname}${target.search}${target.hash}`
+}
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [principal, setPrincipal] = useState<Principal | null>(null)
   const [status, setStatus] = useState<AuthStatus>('loading')

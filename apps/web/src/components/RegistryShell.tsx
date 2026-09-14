@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { useAuth } from '../lib/auth'
+import { safeAppReturnTo, useAuth } from '../lib/auth'
 import { DirectoryFeedProvider } from '../lib/directoryFeed'
 import { CommandPalette, registrySections } from './CommandPalette'
 import { HealthStatus } from './HealthStatus'
@@ -12,11 +12,12 @@ export function RegistryShell() {
   const location = useLocation()
   const [routeIsEntering, setRouteIsEntering] = useState(false)
 
+  const returnTo = safeAppReturnTo(`${location.pathname}${location.searchStr}${location.hash ? (location.hash.startsWith('#') ? location.hash : `#${location.hash}`) : ''}`)
+
   useEffect(() => {
-    if (status !== 'loading' && (status !== 'signed-in' || !principal)) {
-      void navigate({ to: '/login', replace: true })
-    }
-  }, [navigate, principal, status])
+    if (!returnTo || status === 'loading' || (status === 'signed-in' && principal)) return
+    void navigate({ to: '/login', search: { returnTo }, replace: true })
+  }, [navigate, principal, returnTo, status])
 
   useEffect(() => {
     if (typeof window === 'undefined') return

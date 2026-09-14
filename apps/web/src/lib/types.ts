@@ -1,5 +1,6 @@
 import type {
   AuditEvent,
+  CurrentSkillAdmission,
   InstallAnalytics,
   Job,
   PackVersion,
@@ -42,6 +43,7 @@ import type {
 
 export type {
   AuditEvent,
+  CurrentSkillAdmission,
   InstallAnalytics,
   Job,
   PackVersion,
@@ -110,8 +112,9 @@ export interface ApiErrorShape {
   retryable?: boolean
 }
 
-export interface SkillListResponse { skills: SkillVersion[] }
-export interface SkillResponse { skill: SkillVersion }
+export type CatalogSkillVersion = SkillVersion & { currentAdmission?: CurrentSkillAdmission }
+export interface SkillListResponse { skills: CatalogSkillVersion[] }
+export interface SkillResponse { skill: CatalogSkillVersion }
 export interface PackListResponse { packs: PackVersion[] }
 export interface OperationListResponse { operations: Job[] }
 export interface ScanListResponse { scans: ScanResult[] }

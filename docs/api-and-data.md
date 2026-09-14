@@ -18,7 +18,7 @@ Errors have stable `code`, readable `message`, `requestId`, optional `details`, 
 | `GET /v1/feeds` | Readable organization feed metadata: id, unique name, kind, enabled state, configured prefix metadata, trusted-origin summary, and configuration revision |
 | `POST /auth/device` and `POST /auth/token` | Standards-based browser/device login; expiring codes and prescribed polling |
 | `POST /auth/revoke` | Revoke the caller's CLI session/token |
-| `GET /v1/skills?q=...` | Search accessible skills, cursor pagination |
+| `GET /v1/skills?q=...` | Search accessible skills, cursor pagination; each authorized row includes response-only `currentAdmission` metadata (`allowed`, status/reason, current policy revision, and optional scanner/expiry details) computed from the same current policy/evidence gate used for resolution and file access |
 | `GET /v1/skills/{id}/versions` | Authorized version/provenance metadata |
 | `GET /v1/skills/{resourceId}/files` | Authorized immutable release digest and canonical file manifest with per-file content digests and explicit binary/unsupported/oversize preview states; metadata-only and scanner/policy gated |
 | `GET /v1/skills/{resourceId}/file?path=...` | Authorized exact file read for one canonical relative path; repeats the release/digest binding and returns full bounded UTF-8 text only for that selected file |

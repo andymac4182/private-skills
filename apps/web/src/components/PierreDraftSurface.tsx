@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import { EditProvider, File as PierreFile, FileDiff } from '@pierre/diffs/react'
 import { Editor, type EditorFactory } from '@pierre/diffs/edit'
 import { parseDiffFromFile, type DiffLineAnnotation, type FileContents, type LineAnnotation } from '@pierre/diffs'
@@ -109,6 +109,21 @@ function previewReason(state: ReleaseFilePreviewState | null, maxPreviewBytes: n
 
 const createEditor: EditorFactory<undefined, undefined> = (editorType, options, editStateKey) => new Editor(editorType, options, editStateKey)
 
+const DRAFT_FILE_TREE_STYLE = {
+  height: '100%',
+  minHeight: 220,
+  '--trees-accent-override': 'var(--accent, #175ce6)',
+  '--trees-bg-override': 'var(--surface-soft, #f8faff)',
+  '--trees-bg-muted-override': 'var(--surface-muted, #eef3fb)',
+  '--trees-fg-override': 'var(--ink-soft, #33415e)',
+  '--trees-fg-muted-override': 'var(--muted, #64708a)',
+  '--trees-input-bg-override': 'var(--surface, #fff)',
+  '--trees-border-color-override': 'var(--line, #e1e7f1)',
+  '--trees-selected-bg-override': 'var(--accent-soft, #eaf0ff)',
+  '--trees-selected-fg-override': 'var(--accent-strong, #1248b8)',
+  '--trees-focus-ring-color-override': 'var(--accent, #175ce6)',
+} as CSSProperties
+
 function renderFindingAnnotation(annotation: LineAnnotation<FindingAnnotationMetadata> | DiffLineAnnotation<FindingAnnotationMetadata>): ReactNode {
   return <span className="draft-finding-annotation" data-line-number={annotation.lineNumber} role="note" tabIndex={-1}>{annotation.metadata.label}</span>
 }
@@ -211,6 +226,10 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
   const placeholderSize = currentPreviewSize ?? basePreviewSize
   const showEditor = mode === 'edit' && editable && current !== null && !baseLoading && baseError === null
   const showFindingFile = mode === 'diff' && findingFileAnnotations.length > 0 && current !== null && !baseLoading && baseError === null
+  const showUnchangedFile = mode === 'diff' && canShowDiff && base !== null && current !== null && base.contents === current.contents && !baseLoading && baseError === null && !showFindingFile
+  const showCurrentOnlyFile = mode === 'diff' && baseFile === null && basePreviewState === 'text' && currentFile !== null && currentPreviewState === 'text' && current !== null && !baseLoading && baseError === null && !showFindingFile
+  const selectedEntry = selectedPath ? entries.find((entry) => entry.path === selectedPath) ?? null : null
+  const changedCount = entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length
   const renderedCode = baseLoading ? <LoadingState label="Loading the release baseline…" /> : baseError ? <div className="release-file-placeholder"><Badge tone="muted" value="Baseline unavailable" /><p>{baseError}</p></div> : showEditor ? <EditProvider createEditor={createEditor}><PierreFile<FindingAnnotationMetadata>
     key={`edit:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
     className="draft-pierre-file"
@@ -231,7 +250,19 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
     lineAnnotations={findingFileAnnotations}
     renderAnnotation={renderFindingAnnotation}
     disableWorkerPool
-  /> : canShowDiff && diff ? <FileDiff<FindingAnnotationMetadata>
+  /> : showUnchangedFile ? <div className="draft-pierre-unchanged"><div className="draft-pierre-no-change" role="status"><strong>No changes from release</strong><span>The current file matches the selected release baseline.</span></div><PierreFile<FindingAnnotationMetadata>
+    key={`unchanged:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
+    className="draft-pierre-file"
+    file={current}
+    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onSurfacePostRender }}
+    disableWorkerPool
+  /></div> : showCurrentOnlyFile ? <div className="draft-pierre-unchanged draft-pierre-current-only"><div className="draft-pierre-no-change draft-pierre-current-only-note" role="status"><strong>Current file preview</strong><span>No comparable release baseline bytes are available for this path.</span></div><PierreFile<FindingAnnotationMetadata>
+    key={`current-only:${draftId}:${draftRevision}:${draftDigest}:${current.name}:${current.cacheKey ?? ''}`}
+    className="draft-pierre-file"
+    file={current}
+    options={{ overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onSurfacePostRender }}
+    disableWorkerPool
+  /></div> : canShowDiff && diff ? <FileDiff<FindingAnnotationMetadata>
     key={`diff:${diff.name}:${diff.cacheKey ?? ''}:${diff.type}:${diffStyle}`}
     className="draft-pierre-file"
     fileDiff={diff}
@@ -243,8 +274,8 @@ export const PierreDraftSurface = forwardRef<DraftSurfaceHandle, PierreDraftSurf
 
   return <div className="draft-surface">
     <div className="draft-surface-tree" aria-label="Draft files">
-      <FileTree aria-label="Draft files" header={<strong>Files</strong>} model={model} style={{ height: '100%', minHeight: 220 }} />
-      {entries.length > 0 && <div className="draft-surface-tree-status" role="status" aria-live="polite"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${entries.filter((entry) => entry.status === 'changed' || entry.status === 'added' || entry.status === 'removed').length} changed`}</span><span>{busy ? 'Saving is in progress' : 'Select a file to continue'}</span></div>}
+      <FileTree aria-label="Draft files" header={<strong>Files</strong>} model={model} style={DRAFT_FILE_TREE_STYLE} />
+      {entries.length > 0 && <div className="draft-surface-tree-status" role="status" aria-live="polite"><span>{entries.filter((entry) => entry.status === 'checking').length > 0 ? `${entries.filter((entry) => entry.status === 'checking').length} checking` : `${changedCount} changed`}</span><span className="draft-surface-tree-selection">{selectedEntry ? `${selectedEntry.path} · ${selectedEntry.status}` : 'Select a file to continue'}</span>{busy && <span className="draft-surface-tree-saving">Saving is in progress</span>}</div>}
     </div>
     <div ref={codeRegionRef} className="draft-surface-code" role="region" tabIndex={-1} aria-describedby={showEditor ? keyboardHelpId : undefined} aria-label={findingAnnotation ? `Review location in ${current?.name ?? 'draft file'}` : mode === 'edit' ? `Draft editor${current?.name ? ` for ${current.name}` : ''}` : `${diffStyle === 'unified' ? 'Unified' : 'Split'} file diff${current?.name ? ` for ${current.name}` : ''}`}>
       {findingAnnotation && <div className="draft-surface-location"><span aria-live="polite" role="status">Review location at line {findingAnnotation.lineNumber}. Read-only inspection.</span>{onClearFindingAnnotation && <button type="button" onClick={onClearFindingAnnotation}>Return to diff</button>}</div>}

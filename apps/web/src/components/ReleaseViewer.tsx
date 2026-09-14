@@ -66,10 +66,6 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit, re
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
 
-  useEffect(() => {
-    if (resumeDraftId) setDraftOpen(true)
-  }, [resumeDraftId])
-
   async function loadManifest() {
     const generation = ++requestGeneration.current
     setManifestLoading(true)
@@ -105,6 +101,13 @@ export function ReleaseViewer({ resourceId, baseDigest, baseVersion, canEdit, re
     setFileLoading(false)
     setError(null)
   }, [resourceId])
+
+  // The resource reset runs first on mount. Keep a deep-link draft open after
+  // that reset, and reopen it when navigation selects a different release.
+  // Omitting the id does not reopen an editor the user explicitly closed.
+  useEffect(() => {
+    if (resumeDraftId) setDraftOpen(true)
+  }, [resourceId, resumeDraftId])
 
   useEffect(() => {
     if (!open || !manifest || !selectedPath) return

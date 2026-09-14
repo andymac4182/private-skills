@@ -103,6 +103,20 @@ export interface ExternalProvenance {
 }
 export interface SkillReleaseAuthoring { baseResourceId: string; baseDigest: Digest; draftId: string; draftRevision: number; actor: string; }
 export interface SkillVersion { id: string; organizationId: string; name: string; skillName: string; version: string; description: string; artifact: StoredBlob; state: DistributionState; policyRevision: string; createdAt: string; approvedAt?: string; provenance: Provenance; fileCount: number; scanIds: string[]; authoring?: SkillReleaseAuthoring; }
+/**
+ * Server-computed admission for a catalog row. This is response metadata,
+ * never persisted release state, and does not widen any file or install gate.
+ */
+export type CurrentSkillAdmissionStatus = 'current' | 'needs-rescan' | 'unavailable';
+export type CurrentSkillAdmissionReason = 'current' | 'policy-changed' | 'evidence-missing' | 'evidence-stale' | 'evidence-incomplete' | 'scan-failed' | 'blocking-finding' | Exclude<DistributionState, 'approved'>;
+export interface CurrentSkillAdmission {
+  allowed: boolean;
+  status: CurrentSkillAdmissionStatus;
+  reason: CurrentSkillAdmissionReason;
+  policyRevision: string;
+  scannerId?: ScannerId;
+  expiresAt?: string;
+}
 export type SkillDraftStatus = 'open' | 'publishing' | 'published' | 'discarded';
 export interface SkillDraftIdempotencyRecord {
   key: string;

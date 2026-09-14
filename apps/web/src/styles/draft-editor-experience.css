@@ -1,0 +1,175 @@
+/*
+ * Draft file surfaces are loaded with DraftEditor so both the Pierre surface
+ * and its read-only fallback share the light Cobalt shell. Keep these rules
+ * scoped to the editor; release browsing and the app shell own their layouts.
+ */
+.draft-editor {
+  background: var(--surface, #fff);
+  color: var(--ink, #16213b);
+}
+
+.draft-editor .draft-surface,
+.draft-editor .draft-surface-tree,
+.draft-editor .draft-surface-code {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.draft-editor .draft-surface-tree {
+  background: var(--surface-soft, #f8faff);
+  color: var(--ink-soft, #33415e);
+}
+
+.draft-editor .draft-surface-tree > file-tree-container {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.draft-editor .draft-surface-tree-status {
+  min-width: 0;
+  background: var(--surface, #fff);
+  color: var(--muted, #64708a);
+}
+
+.draft-editor .draft-surface-tree-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.draft-editor .draft-surface-tree-selection {
+  color: var(--ink-soft, #33415e);
+  font-weight: 650;
+}
+
+.draft-editor .draft-surface-tree-saving {
+  color: var(--accent-strong, #1248b8);
+  font-weight: 650;
+}
+
+.draft-editor .draft-surface-code {
+  overflow: hidden;
+  background: var(--surface, #fff);
+}
+
+.draft-editor .draft-pierre-file {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 390px;
+  overflow: auto;
+}
+
+.draft-editor .draft-pierre-unchanged {
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--surface, #fff);
+}
+
+.draft-editor .draft-native-unchanged .release-code-fallback,
+.draft-editor .draft-native-current-only .release-code-fallback {
+  min-height: 340px;
+  border-top: 0;
+  background: var(--surface, #fff);
+  color: var(--ink-soft, #33415e);
+}
+
+.draft-editor .draft-pierre-no-change {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 11px;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--line, #e1e7f1);
+  background: var(--accent-soft, #eaf0ff);
+}
+
+.draft-editor .draft-pierre-no-change strong {
+  color: var(--accent-strong, #1248b8);
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+
+.draft-editor .draft-pierre-no-change span {
+  color: var(--muted, #64708a);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.draft-editor .draft-editor-actions {
+  border-top-color: var(--line, #e1e7f1);
+  background: var(--surface-soft, #f8faff);
+  color: var(--ink-soft, #33415e);
+}
+
+.draft-editor .draft-editor-actions .draft-version-field {
+  color: var(--muted, #64708a);
+}
+
+.draft-editor .draft-version-field input {
+  border-color: var(--line-strong, #cbd5e4);
+  background: var(--surface, #fff);
+  color: var(--ink, #16213b);
+}
+
+.draft-editor .draft-editor-footer {
+  background: var(--surface, #fff);
+  color: var(--muted, #64708a);
+}
+
+/* Pierre keeps code whitespace intact; the bounded host supplies the one
+ * horizontal scroll area needed for long lines. */
+.draft-editor .draft-pierre-file,
+.draft-editor .draft-native-diff,
+.draft-editor .draft-native-diff > div,
+.draft-editor .draft-native-diff pre {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.draft-editor .draft-native-diff pre {
+  overflow: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+@media (max-width: 760px) {
+  .draft-editor .draft-surface {
+    grid-template-columns: 1fr;
+  }
+
+  .draft-editor .draft-surface-tree {
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line, #e1e7f1);
+  }
+
+  .draft-editor .draft-surface-tree > file-tree-container {
+    min-height: 190px;
+    max-height: 280px;
+  }
+
+  .draft-editor .draft-surface-code,
+  .draft-editor .draft-pierre-file {
+    min-height: 300px;
+  }
+
+  .draft-editor .draft-pierre-no-change {
+    padding-inline: 12px;
+  }
+}
+
+@media (max-width: 420px) {
+  .draft-editor .draft-surface-tree-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .draft-editor .draft-editor-actions > .button {
+    min-width: 0;
+  }
+}

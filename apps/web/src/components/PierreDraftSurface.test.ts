@@ -183,6 +183,21 @@ describe('Pierre draft editor identity', () => {
       await act(async () => { root.unmount() })
     }
   })
+
+  it('identifies the selected file in the tree status', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps())
+
+    try {
+      await act(async () => {})
+      const status = container.querySelector('.draft-surface-tree-status')
+      expect(status?.textContent).toContain('SKILL.md · unchanged')
+      expect(status?.textContent).not.toContain('Select a file to continue')
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
 })
 
 describe('Pierre draft diff layout', () => {
@@ -268,6 +283,43 @@ describe('Pierre draft diff layout', () => {
 
       expect(container.querySelector('[data-testid="diff"]')?.getAttribute('data-diff-style')).toBe('unified')
       expect(treeModels[0]?.resets).toEqual([])
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
+  it('shows the full current file when the release baseline has no textual changes', async () => {
+    const contents = 'name: example\nversion: 1.0.0\n'
+    const baseFile = { path: 'SKILL.md', content: btoa(contents) }
+    const currentFile = { path: 'SKILL.md', size: contents.length, digest, content: btoa(contents), previewState: 'text' as const }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ baseFile, currentFile, currentPreviewState: 'text', basePreviewState: 'text' }))
+
+    try {
+      await act(async () => {})
+      expect(container.querySelector('[data-testid="diff"]')).toBeNull()
+      expect(container.querySelector('.draft-pierre-no-change strong')?.textContent).toBe('No changes from release')
+      expect(container.querySelector('.draft-pierre-no-change')?.textContent).toContain('matches the selected release baseline')
+      expect(container.querySelector('[data-testid="file"]')?.getAttribute('data-file-contents')).toBe(contents)
+    } finally {
+      await act(async () => { root.unmount() })
+    }
+  })
+
+  it('shows a metadata-only current file without claiming a textual diff', async () => {
+    const contents = '# Upload draft\n'
+    const currentFile = { path: 'SKILL.md', size: contents.length, digest, content: btoa(contents), previewState: 'text' as const }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = mountSurface(container, surfaceProps({ currentFile, currentPreviewState: 'text', basePreviewState: 'text' }))
+
+    try {
+      await act(async () => {})
+      expect(container.querySelector('[data-testid="diff"]')).toBeNull()
+      expect(container.querySelector('.draft-pierre-current-only-note strong')?.textContent).toBe('Current file preview')
+      expect(container.querySelector('.draft-pierre-current-only-note')?.textContent).toContain('No comparable release baseline bytes')
+      expect(container.querySelector('[data-testid="file"]')?.getAttribute('data-file-contents')).toBe(contents)
     } finally {
       await act(async () => { root.unmount() })
     }

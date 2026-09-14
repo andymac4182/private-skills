@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createEmptyRegistryState,
   createRegistryHandler,
+  getCurrentSkillAdmission,
   isSkillCurrentlyApproved,
 } from '../src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
@@ -294,6 +295,63 @@ describe('registry core handler', () => {
     test.setPrincipal(principalFor('role-only', ['publisher'], ['@team']));
     const roleOnlyList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
     expect(roleOnlyList.status).toBe(200);
+  });
+
+  it('reports current admission metadata while keeping stale files inaccessible', async () => {
+    const test = setup({ allowUnscanned: false });
+    test.repository.state.policy = requiredFilePolicy('policy-admission');
+    const skill = await seedApprovedSkill(test, 'admission-metadata', bundleWithTwoFiles('admission-metadata'), 2);
+    const storedScan = test.repository.state.scans.find((scan) => scan.id === skill.scanIds[0]);
+    expect(storedScan).toBeDefined();
+    storedScan!.createdAt = '2026-09-10T00:00:00.000Z';
+    test.setPrincipal(principalFor('reader', ['reader'], ['@team']));
+
+    const staleList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect(staleList.status).toBe(200);
+    const staleListed = (await json(staleList)).skills[0];
+    expect(staleListed.currentAdmission).toEqual({
+      allowed: false,
+      status: 'needs-rescan',
+      reason: 'evidence-stale',
+      policyRevision: 'policy-admission',
+      scannerId: 'skillsguard',
+      expiresAt: '2026-09-10T01:00:00.000Z',
+    });
+    expect(isSkillCurrentlyApproved(test.repository.state, skill)).toBe(false);
+    expect(getCurrentSkillAdmission(test.repository.state, skill).allowed).toBe(false);
+
+    const staleDetail = await test.handler(new Request(`${ORIGIN}/v1/skills/${skill.id}`));
+    expect(staleDetail.status).toBe(200);
+    expect((await json(staleDetail)).skill.currentAdmission).toEqual(staleListed.currentAdmission);
+
+    const staleFiles = await test.handler(new Request(`${ORIGIN}/v1/skills/${skill.id}/files`));
+    expect(staleFiles.status).toBe(404);
+
+    storedScan!.createdAt = new Date(Date.now() - 1_000).toISOString();
+    const currentList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    const currentAdmission = (await json(currentList)).skills[0].currentAdmission;
+    expect(currentAdmission).toMatchObject({
+      allowed: true,
+      status: 'current',
+      reason: 'current',
+      policyRevision: 'policy-admission',
+      expiresAt: new Date(Date.parse(storedScan!.createdAt) + 3_600_000).toISOString(),
+    });
+    expect(isSkillCurrentlyApproved(test.repository.state, skill)).toBe(true);
+
+    skill.state = 'quarantined';
+    const quarantinedList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect((await json(quarantinedList)).skills[0].currentAdmission).toEqual({
+      allowed: false,
+      status: 'unavailable',
+      reason: 'quarantined',
+      policyRevision: 'policy-admission',
+    });
+
+    test.setPrincipal(principalFor('other-namespace', ['reader'], ['@other']));
+    const hiddenList = await test.handler(new Request(`${ORIGIN}/v1/skills`));
+    expect((await json(hiddenList)).skills).toEqual([]);
+    expect((await test.handler(new Request(`${ORIGIN}/v1/skills/${skill.id}`))).status).toBe(404);
   });
 
   it('exposes only the authenticated principal scopes through me and session metadata', async () => {
