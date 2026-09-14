@@ -299,23 +299,40 @@ The shipping gate records the following local evidence for this source feature:
   Git-linked deployments for registry (`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`),
   builder (`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
   (`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`); all three reported health 200. This
-  proves deployment reachability only. Authenticated source GET/resolve,
-  including hosted ClawHub proof, and hosted source acceptance remain pending.
+  proves deployment reachability only; the authenticated source preflight and
+  hosted import/scanner outcome are recorded below. Approved source acceptance
+  remains pending.
 
 ## Remaining hosted and conditional acceptance
 
 The following are still deployment or scope boundaries, rather than missing
 local source-contract work:
 
-- Run authenticated search, resolve, and install checks through the composed
-  target runtime. The source-capable READY deployments and the Sep13 healthy
-  unauthenticated browser check establish reachability only; they do not
-  provide this new authenticated mutation proof.
-- Hosted ClawHub proof is currently blocked: an approved production environment
-  export completed, but `PSKILLS_BOOTSTRAP_TOKEN` was empty. The full export and
-  temporary files were removed; no authenticated source request or import
-  occurred. Supported credential retrieval did not yield a usable bootstrap
-  token, so hosted import remains unverified.
+- Complete an approved authenticated import/install path with warm resolve,
+  cache, approved transfer, and CLI install checks through the composed target
+  runtime. The stable activation deployment's ClawHub discovery, cold
+  deduplication, import, and required-scan quarantine are verified below; the
+  unauthenticated browser check remains reachability evidence only.
+- Hosted ClawHub import proof is recorded: an approved production environment
+  export completed. Following the request for a new private registry token, the
+  singular production bootstrap credential was rotated; list and service
+  tokens were unchanged. Activation redeploy `dpl_EAtUaxegz1HHgakkR3R2Lz8kc9WS`
+  is READY at the stable registry, whose `/health` returned 200 for version
+  `0.4.0`. Its authenticated preflight, using the default owner principal,
+  passed with policy revision `policy_44f241a8-2e94-4380-b5f2-55078b71deb0`,
+  `allowUnscanned=false`, and SkillsGuard required: `GET /v1/sources` reported
+  ClawHub available, exact search for `wpank/e2e-testing-patterns` returned an
+  installable row, and resolve succeeded. Cold deduplication and the import job
+  `job_bbcb1982-a6e5-4771-8e62-8e43fc708784` completed with artifact digest
+  `sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78`,
+  but `@clawhub/wpank/e2e-testing-patterns@1.0.0` was quarantined. Required
+  SkillsGuard scan `dd0501b4-b2f1-4ec1-aaf2-b24f6cf33aa3` covered all 3/3 files,
+  skipped/unsupported 0, and reported 7 CI-004 high-severity command-injection
+  findings; these are scanner flags, not independently validated
+  vulnerabilities. The policy remained `allowUnscanned=false`. No warm resolve,
+  approved transfer, or CLI install was attempted; approved-cache and install
+  acceptance for an allowed representative skill remain unproven. Operation
+  completion does not imply approval.
 - Configure and exercise the four conditional sources when their deployment
   inputs are available: `skills-directory` (`SKILLS_DIRECTORY_API_KEY`),
   `skillhub-pro` (`SKILLHUB_API_KEY`), `github-code-search` (`GITHUB_TOKEN` or

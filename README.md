@@ -15,10 +15,29 @@ revision has READY Git-linked deployments for registry
 (`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`), builder
 (`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
 (`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`); all three report health 200. The owner
-lifted the prior deployment pause. Authenticated source GET/resolve proof is
-still pending, so these results establish release/deployment reachability only
-and do not establish hosted source acceptance. Current local checks are in
+lifted the prior deployment pause. These results establish release/deployment
+reachability only. An authenticated ClawHub list/search/resolve preflight on the
+activation redeploy and its hosted import/scanner outcome are recorded below;
+approved-cache, transfer, and install acceptance remain unproven. Current local
+checks are in
 [`docs/evidence/local-refinement-20260913.md`](docs/evidence/local-refinement-20260913.md).
+Following the request for a new private registry token, the singular production
+bootstrap credential was rotated while list and service tokens were unchanged.
+Activation redeploy `dpl_EAtUaxegz1HHgakkR3R2Lz8kc9WS` is READY at the stable
+registry; `/health` returned 200 for version `0.4.0`. Authenticated source proof
+preflight passed with the default owner principal: `GET /v1/sources` reported
+ClawHub available, exact search for `wpank/e2e-testing-patterns` returned an
+installable row, and resolve succeeded under policy revision
+`policy_44f241a8-2e94-4380-b5f2-55078b71deb0` with `allowUnscanned=false` and
+SkillsGuard required. The authenticated source discovery, cold deduplication,
+and import path completed `job_bbcb1982-a6e5-4771-8e62-8e43fc708784` with
+artifact digest `sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78`,
+but `@clawhub/wpank/e2e-testing-patterns@1.0.0` was quarantined. Required
+SkillsGuard covered all 3/3 files with 0 skipped or unsupported and reported 7
+findings; `allowUnscanned=false` remained in force. No warm resolve, approved
+transfer, or CLI install was attempted, so approved-cache and install acceptance
+for an allowed representative skill remain unproven. Operation completion does
+not imply skill approval.
 
 Native CI was waived by explicit repository-owner instruction on 13 September
 2026 for this delivery/review scope. Workflows remain enabled and no native
@@ -43,7 +62,7 @@ deployment, scanner, schedule, and restore evidence is kept in
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| Multi-source catalog proxy | Local v1 source descriptors, bounded metadata search, optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition contracts, a server-only 13-adapter runtime factory wired into the core handler, a passing local 3/3 full required-scan transfer fixture, and local public search/resolve evidence for five providers plus four curated GitHub sources | No new provider is claimed live in the hosted registry. `skills-directory` and `skillhub-pro` require API keys; GitHub-wide search requires `GITHUB_TOKEN`/`GH_TOKEN`; `github-custom` requires an administrator repository/ref allowlist. Hosted authenticated source acceptance remains pending. See [`docs/source-catalog.md`](docs/source-catalog.md) |
+| Multi-source catalog proxy | Local v1 source descriptors, bounded metadata search, optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition contracts, a server-only 13-adapter runtime factory wired into the core handler, a passing local 3/3 full required-scan transfer fixture, local public search/resolve evidence for five providers plus four curated GitHub sources, and an authenticated ClawHub list/search/resolve preflight plus cold-dedup/import and required-scan quarantine on the stable v0.4.0 deployment | No new provider is claimed generally live in the hosted registry. ClawHub authenticated discovery, cold deduplication, import, and fail-closed scanner denial are verified; the representative skill was quarantined. Approved cache, transfer, and install acceptance remain unproven. `skills-directory` and `skillhub-pro` require API keys; GitHub-wide search requires `GITHUB_TOKEN`/`GH_TOKEN`; `github-custom` requires an administrator repository/ref allowlist. See [`docs/source-catalog.md`](docs/source-catalog.md) |
 | CLI | Implemented Rust package and binary named `pskills`; the published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0) passed fresh-download checksum/member-shape verification for all four assets, release verification, and the Mac arm64 smoke check. A separate local Mac source-selector alias install/update/verify fixture preserved physical provenance and `sourceSelectors` | Linux QEMU and Windows Wine checks remain nonnative; native CI is waived for this delivery/review scope and no native Linux or Windows CI pass is claimed. The v0.4.0 package's source-selector behavior does not establish hosted provider acceptance; skills.sh/feed compatibility remains separately bounded |
 | skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | C1 telemetry/parser implementation is shipped in PR42/43; snapshot warm-cache reuse and source-scoped upstream fixtures are recorded, while hosted physical source resolution, concurrent cold deduplication, and tenant/secrecy acceptance remain open. Detailed deployment and evidence limits are in [`docs/verification-current.md`](docs/verification-current.md). |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
@@ -101,7 +120,7 @@ The web surface calls the same-origin API and exposes the implemented registry a
 - authorization-aware semantic search under `/v1/search`, `/v1/search/status`, and `/v1/search/reindex`;
 - client-confirmed install telemetry under `/v1/install-authorizations`, `/v1/install-receipts`, and the admin-only `/v1/analytics` report;
 - human review proposals under `/v1/reviews`; the separate Eve app calls only the fixed `/internal/reviewer/prepare` and `/internal/reviewer/complete` routes;
-- source catalog contract routes under `/v1/sources`, `/v1/sources/search`, and `/v1/sources/:sourceId/resolve`; local core/runtime/client wiring exists, while hosted provider acceptance remains pending;
+- source catalog contract routes under `/v1/sources`, `/v1/sources/search`, and `/v1/sources/:sourceId/resolve`; local core/runtime/client wiring exists, while hosted ClawHub discovery, cold-dedup/import, and required-scan quarantine are verified; approved cache, transfer, and install acceptance remain pending;
 - worker-only claim, artifact, and completion routes under `/internal/jobs`.
 
 Source catalog configuration is server-only: `PSKILLS_SOURCES_ENABLED` defaults

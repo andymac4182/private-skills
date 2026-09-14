@@ -14,7 +14,7 @@ This document describes the code that exists in the repository now. The earlier 
 | Metadata | `packages/database/src` | Memory, atomic file, PostgreSQL JSONB transaction, and authenticated HTTP CAS repositories | The production registry is connected to Neon PostgreSQL; file and authenticated HTTP remain the other deployment profiles |
 | Artifacts | `packages/storage/src` | Canonical bundle encoding/validation, SHA-256 digesting, random sealed object keys, read-back integrity, and transfer gateway | Provider credentials and backend conformance remain deployment work |
 | Acquisition | `packages/upstreams/src` and `workers/runner/src/acquisition.ts` | GitHub and registry acquisition with immutable identity checks, bounded reads, redirects, retries, and provenance | Existing generic sources use approved mappings; the transparent `skills-sh` feed adapter and representative cold/warm pullthrough are follow-up acceptance work. An optional per-feed source policy may restrict the built-in adapter but is not its prerequisite |
-| Multi-source catalog contract | `packages/source-catalog/src`, `packages/core/src/index.ts`, `apps/web/server/runtime.ts`, `apps/web/src/lib/api.ts`, `crates/pskills-core/src/client.rs` | Host-neutral source descriptors, bounded metadata search with optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition identities, availability/error states, trust checks, server-owned configuration revisions, core handler routes, the server-only 13-adapter runtime factory, and local worker/import/scanner handoff | The local route/type/client/runtime seams, configuration checks, and 3/3 full required-scan transfer fixture are present. Local public search/resolve smoke evidence covers five provider adapters plus four curated GitHub adapters; the four conditional sources still need deployment inputs, and hosted authenticated source acceptance remains pending. See [`source-catalog.md`](source-catalog.md) |
+| Multi-source catalog contract | `packages/source-catalog/src`, `packages/core/src/index.ts`, `apps/web/server/runtime.ts`, `apps/web/src/lib/api.ts`, `crates/pskills-core/src/client.rs` | Host-neutral source descriptors, bounded metadata search with optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition identities, availability/error states, trust checks, server-owned configuration revisions, core handler routes, the server-only 13-adapter runtime factory, and local worker/import/scanner handoff | The local route/type/client/runtime seams, configuration checks, and 3/3 full required-scan transfer fixture are present. Local public search/resolve smoke evidence covers five provider adapters plus four curated GitHub adapters; authenticated ClawHub discovery, cold deduplication, import, and required-scan quarantine are verified on the stable v0.4.0 deployment. The four conditional sources still need deployment inputs; approved cache, transfer, and install acceptance remain pending. See [`source-catalog.md`](source-catalog.md) |
 | Scanners | `packages/scanners/src` | Cisco, NVIDIA, and SkillsGuard adapter contracts, normalized reports, coverage, policy modes, and executors | Installed scanner images and live findings are environment-specific |
 | Worker | `workers/runner/src` | Claims scan/import jobs, verifies artifact digests, materializes a bounded bundle, executes scanners, and completes with fencing data | Run as a separate worker with a worker token |
 | Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
@@ -290,9 +290,24 @@ The current source-capable release is v0.4.0 at tag
 `dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`, builder deployment
 `dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`, and upload-reviewer deployment
 `dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J` are READY and report health 200. The owner
-lifted the prior deployment pause. Authenticated source GET/resolve proof,
-including the hosted ClawHub check, remains pending; these reachability results
-do not establish hosted source acceptance or close the C1, M6, or M7 gates.
+lifted the prior deployment pause. Following the request for a new private
+registry token, the singular production bootstrap credential was rotated while
+list and service tokens were unchanged. Activation redeploy
+`dpl_EAtUaxegz1HHgakkR3R2Lz8kc9WS` is READY at the stable registry, whose
+`/health` returned 200 for version `0.4.0`. Its authenticated ClawHub preflight,
+using the default owner principal, passed with policy revision
+`policy_44f241a8-2e94-4380-b5f2-55078b71deb0`, `allowUnscanned=false`, and
+SkillsGuard required: `GET /v1/sources` reported ClawHub available, exact search
+for `wpank/e2e-testing-patterns` returned an installable row, and resolve
+succeeded. Cold deduplication and import job
+`job_bbcb1982-a6e5-4771-8e62-8e43fc708784` completed with artifact digest
+`sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78`,
+but `@clawhub/wpank/e2e-testing-patterns@1.0.0` was quarantined. Required
+SkillsGuard covered all 3/3 files with 0 skipped or unsupported and reported 7
+findings. The policy remained `allowUnscanned=false`. No warm resolve, approved
+transfer, or CLI install was attempted; approved-cache and install acceptance
+for an allowed representative skill remain unproven. These results do not close
+the C1, M6, or M7 gates.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence

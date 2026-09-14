@@ -40,7 +40,7 @@ release. The later milestones below are ordered by the amount of user value
 they add to a private registry and by their dependency on new content and
 execution boundaries.
 
-- **Now: verify hosted source paths and the remaining C1/M6/M7 evidence.**
+- **Now: complete hosted source import and the remaining C1/M6/M7 evidence.**
   Work remains directly on local `main`, and the owner has lifted the prior
   deployment pause. At the 13 September 2026 checkpoint, HEAD was `768b330`;
   registry `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder
@@ -72,8 +72,21 @@ execution boundaries.
   (`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`), builder
   (`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
   (`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`) deployments, all with health 200.
-  Authenticated source GET/resolve proof remains pending, so these are
-  reachability results rather than hosted source acceptance.
+  Following the request for a new private registry token, the singular
+  production bootstrap credential was rotated while list and service tokens
+  were unchanged. Activation redeploy
+  `dpl_EAtUaxegz1HHgakkR3R2Lz8kc9WS` is READY at the stable registry, whose
+  `/health` returned 200 for version `0.4.0`. Its authenticated ClawHub
+  list/search/resolve preflight passed with the default owner principal, policy
+  revision `policy_44f241a8-2e94-4380-b5f2-55078b71deb0`, `allowUnscanned=false`,
+  and SkillsGuard required. Cold deduplication and import job
+  `job_bbcb1982-a6e5-4771-8e62-8e43fc708784` completed with artifact digest
+  `sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78`,
+  but `@clawhub/wpank/e2e-testing-patterns@1.0.0` was quarantined. Required
+  SkillsGuard covered all 3/3 files with 0 skipped or unsupported and reported 7
+  findings; `allowUnscanned=false` remained in force. No warm resolve, approved
+  transfer, or CLI install was attempted; approved-cache and install acceptance
+  for an allowed representative skill remain unproven.
 - **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,
   on-demand catalog adapter, identity-preserving pullthrough, approved-cache
   behavior, and Packs, Topics, Official, and external Audits views remain the
@@ -267,9 +280,9 @@ availability, and hosted acceptance remain separate gates.
 
 | Capability | Local implementation | Acceptance boundary |
 | --- | --- | --- |
-| List and status | `GET /v1/sources` returns protocol version and server-owned descriptors with capabilities, availability, and `configRevision`; the runtime factory composes the frozen 13-adapter set. | Prove available, unavailable, disabled, and missing-credential states in the deployed runtime without exposing secrets. |
+| List and status | `GET /v1/sources` returns protocol version and server-owned descriptors with capabilities, availability, and `configRevision`; the runtime factory composes the frozen 13-adapter set. The authenticated stable v0.4.0 preflight reports ClawHub available. | Prove the remaining available, unavailable, disabled, and missing-credential states in the deployed runtime without exposing secrets. |
 | Search | `GET /v1/sources/search?q=...&source=optional-id&limit=20` returns metadata-only rows with `sourceId` and `externalId`; omission of `source` fans out to all configured adapters and isolates per-source failures. | Prove bounded query/limit/timeout behavior, deterministic source status reporting, rate/error handling, and tenant/principal isolation. |
-| Resolve | `POST /v1/sources/:sourceId/resolve` accepts `{ externalId, refresh? }` and returns the echoed identity, a server-owned `reference`, and an operation or existing registry `resolution`. The local core/worker fixture passes 3/3 full required-scan transfer cases; local public search/resolve smoke covers five provider adapters plus four curated GitHub adapters. | Deploy the composed path and record authenticated import, canonical bundle, scanner, policy, authorization, and immutable artifact evidence for representative identities. |
+| Resolve | `POST /v1/sources/:sourceId/resolve` accepts `{ externalId, refresh? }` and returns the echoed identity, a server-owned `reference`, and an operation or existing registry `resolution`. The local core/worker fixture passes 3/3 full required-scan transfer cases; local public search/resolve smoke covers five provider adapters plus four curated GitHub adapters. The stable v0.4.0 deployment also passed an authenticated ClawHub list/search/resolve preflight and recorded cold deduplication, import, and required-scan quarantine. | Complete an approved composed-path import and record warm resolve, approved-cache, transfer, and install evidence for a representative identity. |
 
 The frozen inventory includes six additional registry sources (`skillsmp`,
 `skillhub-public`, `tessl`, `polyskill`, `skills-directory`, and
@@ -280,7 +293,9 @@ and `github-vercel-agent-skills`), and an administrator-configured
 `github-custom` source. Public provider reads and the pinned research fixture
 `bibryam/universal-skill-finder` at commit
 `18161beadeeda90d99abd75dd573b47a99ac49e8` inform this scope. They do not
-establish a live provider, successful hosted import, or completion of C1/M6/M7.
+establish a broad hosted provider launch or an approved hosted import. The
+authenticated ClawHub preflight, cold deduplication, import, and required-scan
+quarantine are bounded results and do not complete C1/M6/M7.
 
 The configuration shape supports global/source enablement, exact trusted
 origins, query/result/total bounds, request timeout, and an effective revision
@@ -310,14 +325,16 @@ origin checks, bounded identities and metadata, digest verification, required
 scanner evidence, and the existing no-execution boundary remain authoritative.
 A generic URL/bundle source is out of scope.
 
-The next delivery slices are conditional-provider configuration and
-authenticated deployed search/resolve/install evidence. The local
+The next delivery slices are conditional-provider configuration and completion
+of the authenticated deployed ClawHub approved-cache, transfer, and CLI-install
+evidence for an allowed representative skill. The local
 worker/import/scanner path is exercised by the passing 3/3 fixture, and the
 source runtime tests cover bounds, timeout, configuration revision, trust, and
 failure isolation. Repeat changed, deleted, unauthorized, cross-tenant, and
-digest-mismatch checks at the hosted target. Until hosted source acceptance is
-recorded, this remains local implementation and contract work rather than a new
-hosted provider launch. C1, M6, and M7 remain separate incomplete milestones.
+digest-mismatch checks at the hosted target. Until full hosted source acceptance
+is recorded, this remains local implementation and contract work rather than a
+new broad hosted provider launch. C1, M6, and M7 remain separate incomplete
+milestones.
 
 ## M6 — Diffs editor and upload/edit review (active implementation, incomplete)
 
