@@ -21,6 +21,7 @@ import {
   scannerResult,
   type LocalRegistryHarness,
 } from './harness.js';
+import { SERVICE_VERSION } from '../../packages/contracts/src/version.js';
 
 const strictScannerPolicy: Policy = {
   revision: 'required-scanner-policy',
@@ -73,7 +74,7 @@ describe('registry HTTP protocol', () => {
     await expect(jsonResponse(health)).resolves.toMatchObject({
       ok: true,
       service: 'private-skills',
-      version: '0.3.0',
+      version: SERVICE_VERSION,
     });
 
     const unauthenticatedCapabilities = await request(handler, origin, '/v1/capabilities');

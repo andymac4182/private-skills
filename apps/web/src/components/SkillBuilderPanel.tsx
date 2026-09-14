@@ -3,6 +3,7 @@ import { FileDiff } from '@pierre/diffs/react'
 import { parseDiffFromFile, type FileContents, type FileDiffMetadata } from '@pierre/diffs'
 import type { DraftView } from '../lib/types'
 import styles from './SkillBuilderPanel.module.css'
+import '../styles/editor-experience.css'
 import { onPierrePostRender, PIERRE_ACCESSIBLE_CSS } from './pierreAccessibility'
 
 /**
@@ -157,6 +158,12 @@ export interface SkillBuilderPanelProps {
 const MAX_PROMPT_LENGTH = 8_000
 const MAX_DISPLAYED_TURNS = 200
 
+const EVE_PROMPT_SUGGESTIONS = [
+  { label: 'Clarify this skill', prompt: 'Explain the purpose of this skill and point out any instructions that are unclear.' },
+  { label: 'Review edge cases', prompt: 'Review this draft for missing edge cases and suggest focused improvements.' },
+  { label: 'Tighten the instructions', prompt: 'Make the instructions more precise and concise while preserving their intent.' },
+] as const
+
 function requestId(prefix: string): string {
   const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -275,6 +282,7 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   const restartPending = useRef(false)
   const proposalRequestIds = useRef(new Map<string, string>())
   const stopRequestIds = useRef(new Map<string, string>())
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
   const draftRef = useRef<SkillBuilderDraftContext | null>(draft)
   draftRef.current = draft
 
@@ -285,6 +293,41 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
   const effectiveProposal = proposal ?? session?.proposal ?? null
   const canStartNewConversation = terminalSession && effectiveProposal?.state !== 'pending'
   const busy = loading || sessionPolling || sending || refreshing || stopping || restarting || proposalAction !== null || sessionActive
+  const generationActive = sending || sessionActive
+  const statusLabel = generationActive
+    ? 'Working'
+    : session?.state === 'failed'
+      ? 'Needs attention'
+      : session?.state === 'completed'
+        ? 'Complete'
+        : session?.state === 'stopped'
+          ? 'Stopped'
+          : 'Ready'
+  const statusDetail = generationActive
+    ? progress?.message ?? 'Eve is preparing a reviewable proposal'
+    : effectiveProposal?.state === 'pending'
+      ? 'Proposal ready for review'
+      : session?.state === 'completed'
+        ? 'Conversation complete'
+        : session?.state === 'failed'
+          ? 'Review the error and retry'
+          : session?.state === 'stopped'
+            ? 'Request cancelled'
+            : 'Ready for a focused request'
+
+  function usePromptSuggestion(value: string): void {
+    if (busy || terminalSession) return
+    setPrompt(value)
+    const focus = () => {
+      const input = promptInputRef.current
+      if (!input) return
+      input.focus()
+      const end = input.value.length
+      input.setSelectionRange(end, end)
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(focus)
+    else focus()
+  }
 
   useEffect(() => {
     if (enabled === false) {
@@ -586,39 +629,59 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
     void sendPrompt()
   }
 
-  if (!draft) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Choose a draft to build with Eve" message="Open a saved draft to give the builder a revision and digest to work against." /></section>
-  if (availability?.enabled === false) return <section className={styles.panel} aria-label="Skill builder"><DisabledState title="Skill builder unavailable" message={availability.reason ?? 'The skill builder is disabled for this registry.'} /></section>
-  if (availability === null || (loading && !session)) return <section className={styles.panel} aria-label="Skill builder" aria-busy="true"><div aria-atomic="true" aria-live="polite" className={styles.liveRegion} role="status">Loading the builder conversation.</div><div className={styles.loading}><span className={styles.spinner} aria-hidden="true" />Loading the builder conversation…</div></section>
-  if (!session) return <section className={styles.panel} aria-label="Skill builder"><div className={styles.errorBlock} role={error ? 'alert' : undefined}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
+  if (!draft) return <section className={`${styles.panel} eve-panel`} aria-label="Skill builder"><DisabledState title="Choose a draft to build with Eve" message="Open a saved draft to give the builder a revision and digest to work against." /></section>
+  if (availability?.enabled === false) return <section className={`${styles.panel} eve-panel`} aria-label="Skill builder"><DisabledState title="Skill builder unavailable" message={availability.reason ?? 'The skill builder is disabled for this registry.'} /></section>
+  if (availability === null || (loading && !session)) return <section className={`${styles.panel} eve-panel`} aria-label="Skill builder" aria-busy="true"><div aria-atomic="true" aria-live="polite" className={styles.liveRegion} role="status">Loading the builder conversation.</div><div className={`${styles.loading} eve-loading`}><span className={`${styles.spinner} eve-spinner`} aria-hidden="true" />Loading the builder conversation…</div></section>
+  if (!session) return <section className={`${styles.panel} eve-panel`} aria-label="Skill builder"><div className={`${styles.errorBlock} eve-error-block`} role={error ? 'alert' : undefined}><strong>Conversation unavailable</strong><span>{error ?? 'The builder conversation could not be loaded.'}</span><button className={styles.secondaryButton} type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</button></div></section>
 
-  return <section className={styles.panel} aria-busy={busy} aria-label="Skill builder">
+  return <section className={`${styles.panel} eve-panel${generationActive ? ' eve-panel-generating' : ''}`} aria-busy={busy} aria-label="Skill builder">
     <div aria-atomic="true" aria-live="polite" className={styles.liveRegion} role="status">{builderLiveMessage(session, effectiveProposal, stopped)}</div>
-    <header className={styles.header}>
-      <div>
-        <span className={styles.eyebrow}>Eve builder</span>
+    <header className={`${styles.header} eve-header`}>
+      <div className="eve-heading-copy">
+        <div className="eve-heading-kicker"><span className={styles.eyebrow}>Eve builder</span><span className="eve-heading-divider" aria-hidden="true" /><span className="eve-heading-context">Private draft workspace</span></div>
         <h2>Shape this draft with a conversation.</h2>
         <p className={styles.subtle}>Eve can suggest bounded file changes. You review and apply every proposal.</p>
       </div>
-      <span className={`${styles.status} ${sending || sessionActive ? styles.statusBusy : session.state === 'failed' ? styles.statusError : styles.statusReady}`}>{sending || sessionActive ? 'Working' : session.state}</span>
+      <div className="eve-status-stack">
+        <span className={`${styles.status} eve-status ${generationActive ? `${styles.statusBusy} eve-status-busy` : session.state === 'failed' ? `${styles.statusError} eve-status-error` : `${styles.statusReady} eve-status-ready`}`}><span className="eve-status-dot" aria-hidden="true" />{generationActive && <span className="eve-generation-orb" aria-hidden="true" />}{statusLabel}</span>
+        <span className="eve-status-detail">{statusDetail}</span>
+      </div>
     </header>
-    <div className={styles.contextBar}>
-      <span><strong>Draft</strong> {draft.draftId}</span>
-      <span><strong>Revision</strong> {draft.revision}</span>
-      <code title={draft.digest}>{shortDigest(draft.digest)}</code>
-      {draft.selectedPath && <span className={styles.selectedFile}>Selected file · <code>{draft.selectedPath}</code></span>}
+    <div className={`${styles.contextBar} eve-context`} aria-label="Selected draft context">
+      <div className="eve-context-heading"><span className="eve-context-kicker">Selected draft</span><span className="eve-context-note">Eve is scoped to this saved revision</span></div>
+      <div className="eve-context-values">
+        <span className="eve-context-value eve-context-value-wide"><span>Draft</span><strong title={draft.draftId}>{draft.draftId}</strong></span>
+        <span className="eve-context-value"><span>Revision</span><strong>{draft.revision}</strong></span>
+        <span className="eve-context-value eve-context-digest"><span>Digest</span><code title={draft.digest}>{shortDigest(draft.digest)}</code></span>
+        {draft.selectedPath && <span className={`${styles.selectedFile} eve-context-value eve-context-selected`}><span>Selected file</span><code title={draft.selectedPath}>{draft.selectedPath}</code></span>}
+      </div>
     </div>
-    <div className={styles.transcript} aria-live="polite">
-      {turns.length === 0 && <div className={styles.emptyTranscript}><span aria-hidden="true">✦</span><p>Ask for a focused change, explanation, or review of this draft.</p></div>}
-      {turns.map((turn) => <article className={`${styles.turn} ${turn.role === 'user' ? styles.turnUser : styles.turnAssistant}`} key={turn.id}><div className={styles.turnMeta}><span>{turn.role === 'assistant' ? 'Eve' : turn.role === 'user' ? 'You' : 'Registry'}</span><time dateTime={turn.createdAt}>{formatTime(turn.createdAt)}</time></div><p>{turn.content}</p></article>)}
-      {progress && <div className={styles.progress} role="status"><span className={styles.progressDot} aria-hidden="true" /><span>{progress.message}</span></div>}
-      {stopped && <div className={styles.stopped} role="status">This request was cancelled in the browser. The server may finish it without applying changes; you can retry when ready.</div>}
+    <div className={`${styles.transcript} eve-transcript`} aria-label="Eve conversation" aria-live="polite">
+      {turns.length === 0 && <div className={`${styles.emptyTranscript} eve-empty-transcript`}>
+        <div className="eve-empty-art" aria-hidden="true"><span>✦</span></div>
+        <div className="eve-empty-copy"><span className="eve-empty-kicker">Start with a clear next step</span><p>Ask for a focused change, explanation, or review of this draft.</p></div>
+        <div className="eve-suggestions" role="group" aria-label="Prompt suggestions">
+          {EVE_PROMPT_SUGGESTIONS.map((suggestion) => <button className="eve-suggestion-chip" disabled={busy || terminalSession} key={suggestion.label} title={suggestion.prompt} type="button" onClick={() => usePromptSuggestion(suggestion.prompt)}><span>{suggestion.label}</span><span className="eve-chip-arrow" aria-hidden="true">↗</span></button>)}
+        </div>
+      </div>}
+      {turns.map((turn) => {
+        const label = turn.role === 'assistant' ? 'Eve' : turn.role === 'user' ? 'You' : 'Registry'
+        const icon = turn.role === 'assistant' ? 'E' : turn.role === 'user' ? 'Y' : 'R'
+        const roleClass = turn.role === 'user' ? styles.turnUser : turn.role === 'assistant' ? styles.turnAssistant : ''
+        return <article className={`${styles.turn} ${roleClass} eve-turn eve-turn-${turn.role}`} key={turn.id}>
+          <div className="eve-turn-header"><span className="eve-turn-avatar" aria-hidden="true">{icon}</span><div className={`${styles.turnMeta} eve-turn-meta`}><span className="eve-turn-author">{label}</span><time dateTime={turn.createdAt}>{formatTime(turn.createdAt)}</time></div></div>
+          <p>{turn.content}</p>
+        </article>
+      })}
+      {progress && <div className={`${styles.progress} eve-progress`} role="status"><span className={`${styles.progressDot} eve-progress-dot`} aria-hidden="true" /><span>{progress.message}</span></div>}
+      {stopped && <div className={`${styles.stopped} eve-stopped`} role="status">This request was cancelled in the browser. The server may finish it without applying changes; you can retry when ready.</div>}
     </div>
     {effectiveProposal && <ProposalCard proposal={effectiveProposal} busy={proposalAction !== null} canApply={canApply} applyDisabledReason={applyDisabledReason} onApply={() => void applyProposal()} onReject={() => void rejectProposal()} />}
-    {error && <div className={styles.errorNotice} role="alert"><span>{error}</span>{lastRequest && !sending && !sessionActive && !sessionPolling && !refreshing && <button className={styles.retryButton} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
-    <form className={styles.composer} onSubmit={submit}>
-      <label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label>
-      <textarea id="skill-builder-prompt" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
-      <div className={styles.composerFooter}><span>{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={styles.composerActions}>{canStartNewConversation && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={startNewConversation}>{restarting ? 'Starting…' : 'Start new conversation'}</button>}{(sending || stopping || sessionActive) && <button className={styles.secondaryButton} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={styles.secondaryButton} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={styles.primaryButton} disabled={busy || terminalSession || prompt.trim().length === 0} title={terminalSession ? 'Start a new conversation before sending another prompt.' : undefined} type="submit">{sending || sessionActive ? 'Working…' : terminalSession ? 'Start a new conversation first' : 'Send prompt'}</button></div></div>
+    {error && <div className={`${styles.errorNotice} eve-error-notice`} role="alert"><span>{error}</span>{lastRequest && !sending && !sessionActive && !sessionPolling && !refreshing && <button className={`${styles.retryButton} eve-button eve-retry-button`} type="button" onClick={() => void sendPrompt(lastRequest.prompt, lastRequest.requestId)}>Retry</button>}</div>}
+    <form className={`${styles.composer} eve-composer`} onSubmit={submit}>
+      <div className="eve-composer-heading"><div><label className={styles.promptLabel} htmlFor="skill-builder-prompt">Prompt Eve</label><p className="eve-composer-help" id="skill-builder-prompt-help">One focused request at a time. Eve returns a bounded proposal for you to review.</p></div><span className="eve-key-hint"><kbd>⌘</kbd><span aria-hidden="true">+</span><kbd>↵</kbd><span>to send</span></span></div>
+      <textarea ref={promptInputRef} id="skill-builder-prompt" aria-describedby="skill-builder-prompt-help" aria-keyshortcuts="Meta+Enter Control+Enter" maxLength={MAX_PROMPT_LENGTH} disabled={busy} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt() } }} placeholder="Describe one change you want to review…" rows={3} value={prompt} />
+      <div className={`${styles.composerFooter} eve-composer-footer`}><span className="eve-composer-count">{prompt.length.toLocaleString()} / {MAX_PROMPT_LENGTH.toLocaleString()}</span><div className={`${styles.composerActions} eve-composer-actions`}>{canStartNewConversation && <button className={`${styles.secondaryButton} eve-button eve-secondary-button`} type="button" disabled={busy} onClick={startNewConversation}>{restarting ? 'Starting…' : 'Start new conversation'}</button>}{(sending || stopping || sessionActive) && <button className={`${styles.secondaryButton} eve-button eve-secondary-button`} type="button" disabled={stopping} onClick={() => void stopPrompt()}>{stopping ? 'Stopping…' : 'Stop'}</button>}{sessionActive && !session.proposal && !sessionPolling && !sending && adapter.refreshSession && <button className={`${styles.secondaryButton} eve-button eve-secondary-button`} type="button" disabled={refreshing || stopping || proposalAction !== null} onClick={() => void refreshStatus()}>{refreshing ? 'Refreshing…' : 'Refresh status'}</button>}<button className={`${styles.primaryButton} eve-button eve-primary-button`} disabled={busy || terminalSession || prompt.trim().length === 0} title={terminalSession ? 'Start a new conversation before sending another prompt.' : undefined} type="submit">{sending || sessionActive ? 'Working…' : terminalSession ? 'Start a new conversation first' : 'Send prompt'}</button></div></div>
     </form>
   </section>
 }
@@ -626,20 +689,20 @@ export function SkillBuilderPanel({ draft, adapter, enabled, disabledReason, can
 function ProposalCard({ proposal, busy, canApply, applyDisabledReason, onApply, onReject }: { proposal: SkillBuilderProposal; busy: boolean; canApply: boolean; applyDisabledReason?: string; onApply: () => void; onReject: () => void }) {
   const isPending = proposal.state === 'pending'
   const digest = proposal.proposedDigest ?? proposal.diffDigest
-  return <section className={styles.proposal} aria-label="Eve proposal">
-    <header className={styles.proposalHeader}><div><span className={styles.proposalEyebrow}>Proposed change</span><h3>{proposal.operations.length} file change{proposal.operations.length === 1 ? '' : 's'}</h3>{digest ? <p>Base revision {proposal.baseRevision} · {proposal.proposedDigest ? 'proposed digest' : 'diff digest'} <code title={digest}>{shortDigest(digest)}</code></p> : <p>Base revision {proposal.baseRevision}</p>}</div><span className={`${styles.proposalState} ${proposal.state === 'pending' ? styles.proposalPending : proposal.state === 'applied' ? styles.proposalApplied : proposal.state === 'stale' ? styles.proposalStale : styles.proposalRejected}`}>{proposal.state}</span></header>
-    <div className={styles.operations}>{proposal.operations.map((operation, index) => <ProposalOperation key={`${operation.op}:${operation.path}:${index}`} operation={operation} />)}</div>
-    {isPending ? <footer className={styles.proposalActions}><span className={styles.proposalHint}>{canApply ? 'Review each diff before applying this revision.' : applyDisabledReason ?? 'Save or discard local changes before applying this proposal.'}</span><div><button className={styles.secondaryButton} disabled={busy} type="button" onClick={onReject}>Reject</button><button className={styles.primaryButton} aria-describedby={!canApply ? 'skill-builder-apply-disabled' : undefined} disabled={busy || !canApply} type="button" onClick={onApply}>{busy ? 'Saving…' : 'Apply proposal'}</button></div>{!canApply && <span id="skill-builder-apply-disabled" className={styles.proposalHint}>{applyDisabledReason ?? 'The editor has unsaved local changes.'}</span>}</footer> : <footer className={styles.proposalFooter}>This proposal is {proposal.state}. The editor remains the source of truth for the draft.</footer>}
+  return <section className={`${styles.proposal} eve-proposal`} aria-label="Eve proposal">
+    <header className={`${styles.proposalHeader} eve-proposal-header`}><div><span className={`${styles.proposalEyebrow} eve-proposal-eyebrow`}>Proposed change</span><h3>{proposal.operations.length} file change{proposal.operations.length === 1 ? '' : 's'}</h3>{digest ? <p>Base revision {proposal.baseRevision} · {proposal.proposedDigest ? 'proposed digest' : 'diff digest'} <code title={digest}>{shortDigest(digest)}</code></p> : <p>Base revision {proposal.baseRevision}</p>}</div><span className={`${styles.proposalState} eve-proposal-state eve-proposal-${proposal.state} ${proposal.state === 'pending' ? styles.proposalPending : proposal.state === 'applied' ? styles.proposalApplied : proposal.state === 'stale' ? styles.proposalStale : styles.proposalRejected}`}>{proposal.state}</span></header>
+    <div className={`${styles.operations} eve-operations`}>{proposal.operations.map((operation, index) => <ProposalOperation key={`${operation.op}:${operation.path}:${index}`} operation={operation} />)}</div>
+    {isPending ? <footer className={`${styles.proposalActions} eve-proposal-actions`}><span className={styles.proposalHint}>{canApply ? 'Review each diff before applying this revision.' : applyDisabledReason ?? 'Save or discard local changes before applying this proposal.'}</span><div><button className={`${styles.secondaryButton} eve-button eve-secondary-button`} disabled={busy} type="button" onClick={onReject}>Reject</button><button className={`${styles.primaryButton} eve-button eve-button-primary eve-primary-button`} aria-describedby={!canApply ? 'skill-builder-apply-disabled' : undefined} disabled={busy || !canApply} type="button" onClick={onApply}>{busy ? 'Saving…' : 'Apply proposal'}</button></div>{!canApply && <span id="skill-builder-apply-disabled" className={styles.proposalHint}>{applyDisabledReason ?? 'The editor has unsaved local changes.'}</span>}</footer> : <footer className={`${styles.proposalFooter} eve-proposal-footer`}>This proposal is {proposal.state}. The editor remains the source of truth for the draft.</footer>}
   </section>
 }
 
 function ProposalOperation({ operation }: { operation: SkillBuilderProposalOperation }) {
   const diff = useMemo(() => proposalDiff(operation), [operation])
-  return <article className={styles.operation}><div className={styles.operationHeading}><span className={`${styles.operationKind} ${styles[`operation${operation.op[0].toUpperCase()}${operation.op.slice(1)}`]}`}>{operation.op}</span><code>{proposalSummary(operation)}</code>{operation.contentBytes !== undefined && <span className={styles.operationBytes}>{operation.contentBytes.toLocaleString()} bytes</span>}</div>{diff ? <div className={styles.diffSurface}><FileDiff fileDiff={diff} disableWorkerPool options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }} /></div> : <p className={styles.noPreview}>The server returned a bounded summary for this operation. Open the draft file to inspect the resulting bytes before applying.</p>}</article>
+  return <article className={`${styles.operation} eve-operation eve-operation-${operation.op}`}><div className={`${styles.operationHeading} eve-operation-heading`}><span className={`${styles.operationKind} eve-operation-kind ${styles[`operation${operation.op[0].toUpperCase()}${operation.op.slice(1)}`]}`}>{operation.op}</span><code>{proposalSummary(operation)}</code>{operation.contentBytes !== undefined && <span className={styles.operationBytes}>{operation.contentBytes.toLocaleString()} bytes</span>}</div>{diff ? <div className={`${styles.diffSurface} eve-diff-surface`}><FileDiff fileDiff={diff} disableWorkerPool options={{ diffStyle: 'split', overflow: 'scroll', themeType: 'light', theme: 'github-light', stickyHeader: true, unsafeCSS: PIERRE_ACCESSIBLE_CSS, onPostRender: onPierrePostRender }} /></div> : <p className={styles.noPreview}>The server returned a bounded summary for this operation. Open the draft file to inspect the resulting bytes before applying.</p>}</article>
 }
 
 function DisabledState({ title, message }: { title: string; message: string }) {
-  return <div className={styles.disabled}><span className={styles.disabledMark} aria-hidden="true">✦</span><div><strong>{title}</strong><p>{message}</p></div></div>
+  return <div className={`${styles.disabled} eve-disabled`}><span className={`${styles.disabledMark} eve-disabled-mark`} aria-hidden="true">✦</span><div><strong>{title}</strong><p>{message}</p></div></div>
 }
 
 function formatTime(value: string): string {
