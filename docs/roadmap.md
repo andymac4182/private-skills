@@ -11,9 +11,11 @@ its documented API, and the official `vercel-labs/skills` repository.
 The separate multi-source catalog proxy contract, source inventory, and
 provider acceptance boundary are in [`source-catalog.md`](source-catalog.md).
 The current delivery baseline and its remaining production gates are recorded in
-[`verification-current.md`](verification-current.md), with the historical v0.3.0
-and v0.2.0 checkpoints retained separately. The measurable exit gates for this
-roadmap are in [`completion-criteria.md`](completion-criteria.md).
+[`verification-current.md`](verification-current.md). The published
+[v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0)
+is the current CLI release; the historical v0.3.0 and v0.2.0 checkpoints are
+retained separately. The measurable exit gates for this roadmap are in
+[`completion-criteria.md`](completion-criteria.md).
 The Private Skills status column is based on [`README.md`](../README.md),
 [`implementation.md`](implementation.md), the CLI and pack contract
 ([`cli-and-packs.md`](cli-and-packs.md)), semantic search
@@ -31,13 +33,14 @@ their evidence passes. The concise M6 authoring contract is in
 
 ## Ordering
 
-The v0.2.0 shipment remains the first priority. It is complete only when the
-production gates in the verification record pass; Tessl parity work does not
-silently expand that release. The later milestones below are ordered by the
-amount of user value they add to a private registry and by their dependency on
-new content and execution boundaries.
+The v0.4.0 shipment is published and its release verification is recorded in
+the current status documents. The remaining C1/M6/M7 work and hosted source
+acceptance are separate gates; Tessl parity work does not silently expand the
+release. The later milestones below are ordered by the amount of user value
+they add to a private registry and by their dependency on new content and
+execution boundaries.
 
-- **Now: refine locally and prepare the remaining C1/M6/M7 evidence.**
+- **Now: verify hosted source paths and the remaining C1/M6/M7 evidence.**
   Work remains directly on local `main`, and the owner has lifted the prior
   deployment pause. At the 13 September 2026 checkpoint, HEAD was `768b330`;
   registry `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder
@@ -53,18 +56,22 @@ new content and execution boundaries.
   hosted physical source pullthrough, concurrent cold deduplication, and
   tenant/secrecy acceptance remain open. Native CI was waived by explicit
   repository-owner instruction on 13 September 2026 for this delivery/review
-  scope; workflows remain enabled and no native target pass is claimed. The
-  published v0.2.0 CLI package lacks feed, directory, and current pullthrough
-  support. The private v0.3.0 release at PR46 (`973b34a`) is published with
-  archive/fresh-download verification; Linux-container and Windows-Wine checks
-  are not native CI. The isolated hosted-edge proof passed separately with its
-  disposable resources cleaned up; it does not close the remaining product
-  gates.
-  The source-capable web/API revision
-  `fd5c5799f0b52246536e3dc726dd6ec1112dec27` subsequently produced READY
-  Git-linked registry (`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
-  (`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
-  (`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`) deployments, all with health 200.
+  scope; workflows remain enabled and no native Linux or Windows CI pass is
+  claimed. The
+  The historical v0.2.0 CLI package lacks feed, directory, and current
+  pullthrough support. The published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0)
+  at tag `84f712720dba74508d56f0bcb532393dad24324d` passed fresh-download
+  checksum/member-shape verification for all four assets, the release verifier,
+  and the Mac arm64 smoke check. Linux QEMU and Windows Wine evidence remain
+  nonnative; native CI is waived and no native Linux or Windows CI pass is
+  claimed. The separate local Mac source-selector alias install/update/verify
+  fixture preserved physical provenance and `sourceSelectors`. The
+  isolated hosted-edge proof passed separately with its disposable resources
+  cleaned up; it does not close the remaining product gates. The v0.4.0
+  source-capable release produced READY Git-linked registry
+  (`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`), builder
+  (`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
+  (`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`) deployments, all with health 200.
   Authenticated source GET/resolve proof remains pending, so these are
   reachability results rather than hosted source acceptance.
 - **Current follow-up delivery: skills.sh cloud catalog.** The authenticated,

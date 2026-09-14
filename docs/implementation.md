@@ -1,6 +1,6 @@
 # Implementation status
 
-This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. The local multi-source proxy contract, source inventory, and acceptance boundary are in [`source-catalog.md`](source-catalog.md). Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the current v0.3.0 checkpoint in [`verification-v0.3.0.md`](verification-v0.3.0.md) and the historical v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
+This document describes the code that exists in the repository now. The earlier [architecture document](architecture.md) remains the original design intent and portability target; its former planning statements should not be read as a description of the current checkout. The local multi-source proxy contract, source inventory, and acceptance boundary are in [`source-catalog.md`](source-catalog.md). Command, browser, deployment, and recovery evidence is kept in [`verification.md`](verification.md), with the published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0), the historical v0.3.0 checkpoint in [`verification-v0.3.0.md`](verification-v0.3.0.md), and the historical v0.2.0 checkpoint in [`verification-v0.2.0.md`](verification-v0.2.0.md).
 
 ## Implemented baseline
 
@@ -20,7 +20,7 @@ This document describes the code that exists in the repository now. The earlier 
 | Intelligence and analytics | `packages/intelligence/src`, `packages/search/src`, `packages/core/src/index.ts`, `crates/pskills-cli/src` | Authorization-aware semantic search, rebuildable embeddings, digest rechecks, review routes, and client-confirmed install analytics | AI Gateway credentials and the selected PostgreSQL/state index are deployment inputs |
 | Eve reviewer | `apps/reviewer`, `packages/reviews` | Separate bounded Eve reviewer records proposals and human decisions through fixed internal routes | Production evidence completed one run, accepted one suggestion, and preserved both artifact digests; it cannot publish, merge, edit source, authorize installs, or execute candidate content |
 | Hosted worker | `workers/runner/src/hosted.ts`, `packages/scanners/src/sandbox-executor.ts` | Authenticated one-shot Node/Vercel Sandbox execution with immutable image or snapshot provenance | Production evidence approved two fixtures with SkillsGuard required and `allowUnscanned=false`; edge builds do not run it |
-| CLI | `crates/pskills-core`, `crates/pskills-cli` | Rust package and binary `pskills` for login, health, catalog, publish, install, verify, remove, update, scans, and packs | Private v0.2.0 archives exist for Linux, macOS Apple Silicon, and Windows; the macOS archive was downloaded and SHA-verified |
+| CLI | `crates/pskills-core`, `crates/pskills-cli` | Rust package and binary `pskills` for login, health, catalog, publish, install, verify, remove, update, scans, packs, and source selectors | Published v0.4.0 all-four-asset fresh-download checksum/member-shape verification, release verifier, and Mac arm64 smoke passed; Linux QEMU and Windows Wine evidence remain nonnative, and native CI is waived |
 
 The Node production runtime factory starts Cisco (`cisco-skill-scanner`) as
 `required`, NVIDIA Skillspector as `advisory`, and SkillsGuard as `advisory`,
@@ -252,10 +252,18 @@ and its limits.
 The production CLI installed a two-member pack, verified both member trees,
 and repeated the install without changes. Its analytics delta was two
 operations: zero direct skill installs, one pack install, and one up-to-date
-check. The private v0.2.0 release contains Linux x86_64, macOS Apple Silicon,
-and Windows x86_64 archives plus `SHA256SUMS`; the downloaded macOS archive
-passed checksum verification. The separate member records keep per-skill
-counts distinct from the pack count.
+check. The historical private v0.2.0 release contains Linux x86_64, macOS
+Apple Silicon, and Windows x86_64 archives plus `SHA256SUMS`; the downloaded
+macOS archive passed checksum verification. The separate member records keep
+per-skill counts distinct from the pack count.
+
+The published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0)
+at tag `84f712720dba74508d56f0bcb532393dad24324d` passed fresh-download
+checksum/member-shape verification for all four assets, the release verifier,
+and the Mac arm64 smoke check. The separate local Mac source-selector alias
+install/update/verify fixture preserved physical provenance and
+`sourceSelectors`. Linux QEMU and Windows Wine evidence remain nonnative; native
+CI is waived and no native Linux or Windows CI pass is claimed.
 
 Vercel registered the reviewer cron at 22:00 UTC. The authenticated route
 check requires `x-vercel-cron-schedule` and returned `200`; the unauthenticated
@@ -277,22 +285,14 @@ OIDC/device authentication for primary user login, if required, remains a
 separate feature rather than an implied capability of bootstrap-token
 authentication.
 
-The current checkpoint supersedes the older deployment notes above: the owner
-lifted the deployment pause, and at HEAD `768b330` on 13 September 2026 the
-registry deployment `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder deployment
-`dpl_69oE9jmPj4dBvjGTNrWKLYnzxWHC`, and upload-reviewer deployment
-`dpl_6rytYNV5cameBRGyrNt4Y3KECmqb` were READY/PROMOTED. An unauthenticated
-browser health check was healthy. No new authenticated mutation proof is
-recorded. These reachability results do not make the new source providers live
-or close the C1, M6, or M7 acceptance gates.
-
-The source-capable web/API revision `fd5c5799f0b52246536e3dc726dd6ec1112dec27`
-has since produced READY Git-linked deployments for registry
-(`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
-(`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
-(`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`). All three report health 200. The
-authenticated source GET/resolve check remains pending, so these deployments
-do not establish hosted source acceptance.
+The current source-capable release is v0.4.0 at tag
+`84f712720dba74508d56f0bcb532393dad24324d`. Its registry deployment
+`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`, builder deployment
+`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`, and upload-reviewer deployment
+`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J` are READY and report health 200. The owner
+lifted the prior deployment pause. Authenticated source GET/resolve proof,
+including the hosted ClawHub check, remains pending; these reachability results
+do not establish hosted source acceptance or close the C1, M6, or M7 gates.
 
 The old broad M0–M5 list in the architecture planning material remains design
 intent. This file distinguishes implemented source and checkpoint evidence

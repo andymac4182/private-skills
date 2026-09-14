@@ -287,13 +287,20 @@ The shipping gate records the following local evidence for this source feature:
   supported original files plus the generated `SKILL.md` wrapper, retains tools
   as JSON data, and omits adapter declarations. The ClawHub worker verifies its
   version manifest and the bounded `_meta.json` exception above.
+- The published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0)
+  at tag `84f712720dba74508d56f0bcb532393dad24324d` passed fresh-download
+  checksum/member-shape verification for all four assets, the release verifier,
+  and the Mac arm64 smoke check. Linux QEMU and Windows Wine evidence remain
+  nonnative; native CI is waived and no native Linux or Windows CI pass is
+  claimed. The separate local Mac source-selector alias install/update/verify
+  fixture preserved physical provenance and `sourceSelectors`.
 - The source-capable web/API revision
-  `fd5c5799f0b52246536e3dc726dd6ec1112dec27` produced READY Git-linked
-  deployments for registry (`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
-  (`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
-  (`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`); all three reported health 200. This
-  proves deployment reachability only. Authenticated source GET/resolve and
-  hosted source acceptance remain pending.
+  v0.4.0 at tag `84f712720dba74508d56f0bcb532393dad24324d` produced READY
+  Git-linked deployments for registry (`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`),
+  builder (`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
+  (`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`); all three reported health 200. This
+  proves deployment reachability only. Authenticated source GET/resolve,
+  including hosted ClawHub proof, and hosted source acceptance remain pending.
 
 ## Remaining hosted and conditional acceptance
 
@@ -304,6 +311,11 @@ local source-contract work:
   target runtime. The source-capable READY deployments and the Sep13 healthy
   unauthenticated browser check establish reachability only; they do not
   provide this new authenticated mutation proof.
+- Hosted ClawHub proof is currently blocked: an approved production environment
+  export completed, but `PSKILLS_BOOTSTRAP_TOKEN` was empty. The full export and
+  temporary files were removed; no authenticated source request or import
+  occurred. Supported credential retrieval did not yield a usable bootstrap
+  token, so hosted import remains unverified.
 - Configure and exercise the four conditional sources when their deployment
   inputs are available: `skills-directory` (`SKILLS_DIRECTORY_API_KEY`),
   `skillhub-pro` (`SKILLHUB_API_KEY`), `github-code-search` (`GITHUB_TOKEN` or

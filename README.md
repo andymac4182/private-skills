@@ -4,31 +4,27 @@ Private Skills is a registry, pull-through proxy, and cross-platform installer f
 
 ## Current status
 
-The private [v0.3.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.3.0)
-is published, with independent archive/fresh-download verification for four
-assets, all three target builds, and a Mac two-member inert fixture
-install/verify/warm repeat. At the 13 September 2026 checkpoint, HEAD was
-`768b330` and the three Git-triggered production deployments were
-READY/PROMOTED: registry `dpl_BLU3JG29ftjS56Nobqb6QJx5FEqB`, builder
-`dpl_69oE9jmPj4dBvjGTNrWKLYnzxWHC`, and upload-reviewer
-`dpl_6rytYNV5cameBRGyrNt4Y3KECmqb`. An unauthenticated browser health check
-was healthy. This is deployment reachability evidence; no new authenticated
-mutation proof has been recorded. The owner lifted the prior deployment pause,
-so local refinement and hosted acceptance proceed as separate tracks. Current
-local checks are in
+The private [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0)
+is published at tag `84f712720dba74508d56f0bcb532393dad24324d`. Fresh downloads
+of all four assets passed checksum and member-shape verification, the release
+verifier, and the Mac arm64 smoke check. Linux QEMU and Windows Wine evidence
+remain nonnative; native CI was waived by explicit repository-owner
+instruction, so no native Linux or Windows CI pass is claimed. The
+source-capable v0.4.0
+revision has READY Git-linked deployments for registry
+(`dpl_BZ16uezNRrXDVyQgK8uRqvbtvPHh`), builder
+(`dpl_3uZbigT5xiku53WYMsMxYoXhx7r3`), and upload-reviewer
+(`dpl_3CSVps6nbgFeMb4tG2bnZdw7g64J`); all three report health 200. The owner
+lifted the prior deployment pause. Authenticated source GET/resolve proof is
+still pending, so these results establish release/deployment reachability only
+and do not establish hosted source acceptance. Current local checks are in
 [`docs/evidence/local-refinement-20260913.md`](docs/evidence/local-refinement-20260913.md).
-The source-capable web/API revision `fd5c5799f0b52246536e3dc726dd6ec1112dec27`
-has since produced READY Git-linked deployments for registry
-(`dpl_84Ym9C6Wu7uqSPSeKNJdk5gzm3gC`), builder
-(`dpl_LN1fj2Mpw6hDLC1t7rGkZSLToNQj`), and upload-reviewer
-(`dpl_D7DqQaiQ6jueTZCyitqKyBAZEWr2`). All three reported health 200; an
-authenticated source GET/resolve check is still pending, so this does not
-establish hosted source acceptance.
 
 Native CI was waived by explicit repository-owner instruction on 13 September
 2026 for this delivery/review scope. Workflows remain enabled and no native
-target pass is claimed; the verification record covers the local Mac package,
-Linux-container, and Windows-Wine evidence and their compatibility limits.
+Linux or Windows CI pass is claimed; the v0.4.0 verification covers the local
+Mac package, Linux QEMU, and Windows Wine evidence and their compatibility
+limits.
 
 M6 and M7 remain incomplete, and the future MCP/context and other product work
 is tracked in [`docs/roadmap.md`](docs/roadmap.md). Detailed C1, M6, M7,
@@ -47,8 +43,8 @@ deployment, scanner, schedule, and restore evidence is kept in
 | Semantic search | Implemented authorization-aware embedding search, rebuildable indexes, and catalog search/status controls | Opt-in model credentials and the selected PostgreSQL/state index require deployment configuration |
 | Install analytics | Implemented client-confirmed install receipts, bounded retention, and an admin report | Counts are best-effort telemetry; failed receipt delivery is not an install failure |
 | Eve reviewer | Implemented a separate bounded Eve 0.52.3 reviewer that records human-review proposals | Eve cannot publish, merge, edit source, authorize installs, or run candidate content |
-| Multi-source catalog proxy | Local v1 source descriptors, bounded metadata search, optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition contracts, a server-only 13-adapter runtime factory wired into the core handler, a passing local 3/3 full required-scan transfer fixture, and local public search/resolve evidence for five providers plus four curated GitHub sources | No new provider is claimed live in the hosted registry. `skills-directory` and `skillhub-pro` require API keys; GitHub-wide search requires `GITHUB_TOKEN`/`GH_TOKEN`; `github-custom` requires an administrator repository/ref allowlist. Hosted deployment and authenticated source acceptance remain pending. See [`docs/source-catalog.md`](docs/source-catalog.md) |
-| CLI | Implemented Rust package and binary named `pskills`; the published [v0.3.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.3.0) passed archive/fresh-download verification and the Mac two-member inert fixture install/verify/warm repeat | The v0.2.0 package lacks feed, directory, and current pullthrough support; the v0.3.0 release evidence covers packaged loopback install/verify/warm behavior, not those compatibility surfaces or native CI. Linux-container and Windows-Wine checks are not native CI; native CI is waived for this delivery/review scope and no native target pass is claimed |
+| Multi-source catalog proxy | Local v1 source descriptors, bounded metadata search, optional all-source fanout, exact `sourceId`/`externalId` resolution, typed acquisition contracts, a server-only 13-adapter runtime factory wired into the core handler, a passing local 3/3 full required-scan transfer fixture, and local public search/resolve evidence for five providers plus four curated GitHub sources | No new provider is claimed live in the hosted registry. `skills-directory` and `skillhub-pro` require API keys; GitHub-wide search requires `GITHUB_TOKEN`/`GH_TOKEN`; `github-custom` requires an administrator repository/ref allowlist. Hosted authenticated source acceptance remains pending. See [`docs/source-catalog.md`](docs/source-catalog.md) |
+| CLI | Implemented Rust package and binary named `pskills`; the published [v0.4.0 release](https://github.com/andymac4182/private-skills/releases/tag/v0.4.0) passed fresh-download checksum/member-shape verification for all four assets, release verification, and the Mac arm64 smoke check. A separate local Mac source-selector alias install/update/verify fixture preserved physical provenance and `sourceSelectors` | Linux QEMU and Windows Wine checks remain nonnative; native CI is waived for this delivery/review scope and no native Linux or Windows CI pass is claimed. The v0.4.0 package's source-selector behavior does not establish hosted provider acceptance; skills.sh/feed compatibility remains separately bounded |
 | skills.sh directory | Directory routes, source mapping, Topics parser, bounded cache, enumeration, multi-feed selection, and security checks are implemented in the current source | C1 telemetry/parser implementation is shipped in PR42/43; snapshot warm-cache reuse and source-scoped upstream fixtures are recorded, while hosted physical source resolution, concurrent cold deduplication, and tenant/secrecy acceptance remain open. Detailed deployment and evidence limits are in [`docs/verification-current.md`](docs/verification-current.md). |
 | Sandbox providers | ComputeSDK abstraction with a tested Vercel adapter | Additional providers remain disabled until they pass the scanner isolation contract |
 
