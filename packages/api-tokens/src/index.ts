@@ -175,6 +175,8 @@ export interface ApiTokenRepository {
   findById(organizationId: string, tokenId: string): Promise<ApiTokenRecord | null>;
   list(organizationId: string, options?: { subject?: string; limit?: number }): Promise<ApiTokenRecord[]>;
   revoke(organizationId: string, tokenId: string, revokedAt: string): Promise<ApiTokenRecord | null>;
+  /** Optional durable-adapter hook for an explicit reviewed DDL run. */
+  runMigrations?(): Promise<void>;
 }
 
 export class ApiTokenError extends Error {
@@ -1116,24 +1118,41 @@ export const createMemoryServiceTokenRepository = createMemoryApiTokenRepository
 
 // ---------------------------------------------------------------------------
 // PostgreSQL adapter. Better Auth owns identity/membership migration; this
-// adapter exposes service-token DDL and CRUD only. `autoMigrate` is opt-in.
+// adapter exposes service-token DDL and CRUD. `autoMigrate` is opt-in, while
+// `runMigrations()` is the explicit deployment hook.
 // ---------------------------------------------------------------------------
 
 export interface ApiTokenPgQueryResult<Row = Record<string, unknown>> { rows: Row[]; rowCount?: number; }
 export interface ApiTokenPgExecutor { query<Row = Record<string, unknown>>(text: string, parameters?: readonly unknown[]): Promise<ApiTokenPgQueryResult<Row>>; }
 export interface ApiTokenPgPool extends ApiTokenPgExecutor { connect(): Promise<ApiTokenPgExecutor & { release?: () => void | Promise<void> }>; }
-export interface PostgresApiTokenRepositoryOptions { tableName?: string; autoMigrate?: boolean; }
+export interface PostgresApiTokenRepositoryOptions {
+  tableName?: string;
+  /** PostgreSQL schema used for the service-token table. */
+  schemaName?: string;
+  autoMigrate?: boolean;
+}
 
 function quoteIdentifier(identifier: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(identifier)) throw new ApiTokenConfigurationError('API token PostgreSQL table name is invalid');
   return `"${identifier}"`;
 }
 
-export function postgresApiTokenSchemaSql(tableName = DEFAULT_API_TOKEN_TABLE): string {
-  const table = quoteIdentifier(tableName);
+function qualifiedTable(tableName: string, schemaName?: string): string {
+  const tableIdentifier = quoteIdentifier(tableName);
+  const normalizedSchema = schemaName?.trim();
+  return normalizedSchema === undefined || normalizedSchema === ''
+    ? tableIdentifier
+    : `${quoteIdentifier(normalizedSchema)}.${tableIdentifier}`;
+}
+
+export function postgresApiTokenSchemaSql(tableName = DEFAULT_API_TOKEN_TABLE, schemaName?: string): string {
+  const table = qualifiedTable(tableName, schemaName);
   const index = quoteIdentifier(`${tableName}_org_created_idx`);
   const hashIndex = quoteIdentifier(`${tableName}_hash_idx`);
+  const schema = schemaName?.trim();
+  const schemaStatement = schema === undefined || schema === '' ? '' : `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)};\n`;
   return `
+${schemaStatement}
 CREATE TABLE IF NOT EXISTS ${table} (
   id text PRIMARY KEY,
   organization_id text NOT NULL,
@@ -1194,6 +1213,8 @@ const TOKEN_COLUMNS = 'id, organization_id, user_id, name, token_hash, role_ceil
 export class PostgresApiTokenRepository implements ApiTokenRepository {
   private readonly pool: ApiTokenPgPool;
   private readonly table: string;
+  private readonly tableName: string;
+  private readonly schemaName?: string;
   private readonly autoMigrate: boolean;
   private migration?: Promise<void>;
 
@@ -1202,13 +1223,20 @@ export class PostgresApiTokenRepository implements ApiTokenRepository {
   constructor(poolOrOptions: ApiTokenPgPool | (PostgresApiTokenRepositoryOptions & { pool: ApiTokenPgPool }), options: PostgresApiTokenRepositoryOptions = {}) {
     const supplied = 'pool' in poolOrOptions ? poolOrOptions : options;
     this.pool = 'pool' in poolOrOptions ? poolOrOptions.pool : poolOrOptions;
-    this.table = quoteIdentifier(supplied.tableName ?? DEFAULT_API_TOKEN_TABLE);
+    this.tableName = supplied.tableName ?? DEFAULT_API_TOKEN_TABLE;
+    this.schemaName = supplied.schemaName?.trim() || undefined;
+    this.table = qualifiedTable(this.tableName, this.schemaName);
     this.autoMigrate = supplied.autoMigrate ?? false;
   }
 
   private async ensureSchema(): Promise<void> {
     if (!this.autoMigrate) return;
-    this.migration ??= this.pool.query(postgresApiTokenSchemaSql(this.table.slice(1, -1))).then(() => undefined);
+    await this.runMigrations();
+  }
+
+  /** Run the reviewed service-token migration explicitly at deployment startup. */
+  async runMigrations(): Promise<void> {
+    this.migration ??= this.pool.query(postgresApiTokenSchemaSql(this.tableName, this.schemaName)).then(() => undefined);
     await this.migration;
   }
 

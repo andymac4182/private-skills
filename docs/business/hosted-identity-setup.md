@@ -88,17 +88,23 @@ Node profile, and verify that the existing production value is compatible
 before changing it. `PSKILLS_BETTER_AUTH_SCHEMA` is optional; if it is set,
 use the same validated schema for the Better Auth and membership lookups.
 `PSKILLS_BETTER_AUTH_AUTO_MIGRATE=false` is the multi-instance default. The
-controlled migration job should call `runtime.runMigrations()` once and record
-the plan and resulting schema readback.
+controlled migration job should call the web host's
+`IdentityInfrastructure.runMigrations()` once and record the Better Auth plan,
+dependent schema names, and resulting schema readback. That host entrypoint
+runs Better Auth, company SSO, and persisted API-token migrations in order.
+Call the lower-level `runtime.runMigrations()` only when the package runtime is
+being used without the web host composition.
 
-The PostgreSQL service-token table is separate from Better Auth's tables. Run
-the reviewed `API_TOKEN_SCHEMA_SQL`/`postgresApiTokenSchemaSql()` migration
-before exposing `/v1/tokens`. Keep `PSKILLS_API_TOKEN_AUTO_MIGRATE` (or its
-`API_TOKEN_AUTO_MIGRATE` alias) false unless a single controlled process is
-intentionally responsible for the DDL. The company SSO table is likewise an
-explicit `companySsoSchemaSql()` migration; when the bridge is used, its
-Better Auth `ssoProvider` mirror must be migrated and reconciled with the
-private row.
+The PostgreSQL service-token table is separate from Better Auth's tables and
+uses the configured Better Auth schema when one is selected. Its reviewed
+`API_TOKEN_SCHEMA_SQL`/`postgresApiTokenSchemaSql()` plan is included in the
+web host entrypoint above; the lower-level repository also exposes
+`runMigrations()` for a deployment runner. Keep
+`PSKILLS_API_TOKEN_AUTO_MIGRATE` (or its `API_TOKEN_AUTO_MIGRATE` alias) false
+unless a single controlled process is intentionally responsible for startup
+DDL. The company SSO table is likewise included through
+`companySsoSchemaSql()`; when the bridge is used, its Better Auth `ssoProvider`
+mirror must be migrated and reconciled with the private row.
 
 The current invitation mode is `copy-link` and requires a verified email. It
 does not send email. Set
