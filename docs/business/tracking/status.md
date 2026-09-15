@@ -64,3 +64,9 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - Root ran multi-tenant-postgres-acceptance.test.ts against disposable loopback PostgreSQL after integration b5d48b8: 1 broad scenario passed with populated tenant records. Covers fixed-handler core registry isolation; it does not prove Better Auth live membership or the outer tenant router. Those remain L10 work.
 
 - Root browser on fixed 65c5637 fixture: owner successfully created a reader invitation and UI showed copyable link plus one pending invite. Owner denial B12 fixed in integrated668f53e; invitee browser acceptance remains pending.
+
+## Integration evidence — 15 September, recovery and hosting
+
+- `da2606b`: PostgreSQL recovery rehearsal integrated. Root independently ran `tests/operations-postgres-rehearsal.test.ts` against disposable loopback PostgreSQL: 1 passed. Covers restored identity/session/membership, SSO records, revoked tokens, billing mappings/reservations, and cross-company route denial. Blob copying still uses a provider double; real Files SDK object restore is assigned separately.
+- `b15ed1b`: current hosting review and executable cost scenarios integrated. Root checked JavaScript syntax and regenerated CSV equality. Pro Sandbox allocation and shared-credit assumptions corrected; scenario totals remain planning estimates, not capacity acceptance.
+- Release remains held for persisted token browser exchange and live use/revocation verification. Copy-only explanation does not close that requirement. Company SSO admin runtime is under integration review; company login discovery remains in implementation.
