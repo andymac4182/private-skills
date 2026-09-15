@@ -23,18 +23,37 @@ customer-portal sessions. Missing Stripe credentials do not activate a local
 paid mode. This package makes no external Stripe calls during tests and does
 not contain production account credentials.
 
-## Company-admin console handoff
+## Company-admin console
 
-The host application can build a company billing view from `status()`,
-`publicPlans()`, `entitlement()`, and `usageSnapshot()`, and can use the
-checkout and portal methods when their readiness flags are true. The host must
-derive the organization from the authenticated company session, authorize a
-company billing role on the server, and never accept a customer or
-subscription identifier from the browser as a tenant selector. Disabled,
-unconfigured, and local test-mode states should be rendered as explicit
-read-only status. This package has no React or route code and does not yet
-persist invoice history; the integration owner must provide a mapped-provider
-invoice read model or show invoices as unavailable until that seam exists.
+The bounded host seam is `createBillingRoutes()` in
+`apps/web/server/routes/billing.ts`. It exposes the company snapshot at
+`GET /v1/billing`, invoice history at `GET /v1/billing/invoices`, and POST
+checkout, portal, and raw-body webhook paths. The route factory authenticates
+the request, requires an `owner` or `admin` role, derives the organization from
+the server principal, and never accepts a browser organization, customer, or
+subscription selector. Hosted actions are closed unless the service reports a
+provider, a configured recurring Price ID, trusted return URLs, and verified
+webhook signing.
+
+`apps/web/src/views/BillingView.tsx` renders the current plan and status,
+enforced usage and limits, invoice history, and checkout/subscription controls.
+Disabled, unconfigured, and local test-mode states are explicit in the view;
+test mode is labeled as fixtures or test transactions and does not imply a
+live charge. The view sends only a selected server-known plan ID for checkout
+and an empty body for portal creation.
+
+Invoice history is a server-side read-model callback supplied to
+`createBillingRoutes()`. It receives only the organization and customer
+mapping read from billing state, and the route validates provider, tenant,
+customer, amounts, timestamps, statuses, and document URLs before projecting
+rows to the browser without provider or customer IDs. If the runtime has no
+verified provider invoice adapter, the console reports invoice history as
+unavailable. This package does not make live Stripe calls or persist provider
+invoice rows.
+
+The bounded patch leaves shared registry route composition and company nav
+selection to the host integration owner; mounting this factory and selecting
+`BillingView` are explicit handoff seams.
 
 ## PostgreSQL state
 
@@ -50,6 +69,14 @@ unit. Customer and subscription provider identifiers have database-wide
 unique constraints, and webhook `(provider, event_id)` claims are unique. A
 losing concurrent event claim aborts before any entitlement mutation and is
 reported as a duplicate after the durable row is re-read.
+
+`packages/billing/test/postgres.integration.test.ts` is skipped unless
+`PSKILLS_BILLING_POSTGRES_URL` is supplied. With a disposable PostgreSQL
+instance it runs two independent repository/service instances concurrently to
+prove one usage reservation wins a finite limit, retries are idempotent, one
+signed webhook delivery is durably claimed, and an older out-of-order event
+cannot replace newer subscription state. The normal unit suite uses the
+provider-neutral fake repository and is not presented as this database proof.
 
 ## Webhooks
 
