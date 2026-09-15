@@ -1,26 +1,50 @@
 {
-  "schemaVersion": 1,
-  "status": "prepared-local-only",
-  "sourceRevision": "f4eea80d4d9ffa228c9e450fa53ae5942cfb383c",
-  "execution": {
-    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=f4eea80d4d9ffa228c9e450fa53ae5942cfb383c pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
-    "databaseTarget": "loopback PostgreSQL only; unique state and billing tables are dropped after the run",
+  "schemaVersion": 2,
+  "status": "prepared-local-and-guarded-hosted-executor",
+  "sourceRevision": "pending-hosted-executor-commit",
+  "localExecution": {
+    "script": "scripts/storage-receipt-recovery-rehearsal.ts",
+    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=<reviewed-source-sha> pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
+    "databaseTarget": "loopback PostgreSQL only; unique state and billing tables are verified and dropped after the local run",
     "storageTarget": "temporary Files SDK filesystem root only",
     "credentials": "provided in process; never logged or written to evidence"
   },
-  "hostedTarget": {
-    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
-    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+  "hostedExecution": {
+    "script": "scripts/hosted-storage-receipt-recovery-rehearsal.ts",
+    "planCommand": "pnpm exec tsx scripts/hosted-storage-receipt-recovery-rehearsal.ts --source-sha <reviewed-source-sha> --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json",
+    "executeCommand": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_ALLOW_HOSTED_STORAGE_RECEIPT_REHEARSAL=I_UNDERSTAND_NEW_PREFIX_ONLY vercel env run -e production -- /absolute/path/to/worktree/node_modules/.bin/tsx /absolute/path/to/worktree/scripts/hosted-storage-receipt-recovery-rehearsal.ts --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-<date>.json",
+    "runFrom": "the linked Vercel project directory so the production Blob credential is injected only into the child process",
+    "databaseTarget": "loopback PostgreSQL only; the production registry database is refused",
+    "providerSwitch": {
+      "provider": "vercel-blob",
+      "access": "private",
+      "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+      "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+      "providerBinding": "files-sdk:vercel-blob:store_C0EMhnU7DH3uSMaw"
+    },
+    "planInvariants": [
+      "fresh rehearsal/tenant-runtime/<uuid>/ prefix",
+      "exact sealed/<48-lowercase-hex> object key inside that prefix",
+      "canonical fixture digest and size are re-derived before upload",
+      "exact prefix is read with a bounded list and must be empty before upload",
+      "no existing object or default registry state is addressed"
+    ],
+    "writeFinality": "the private Files SDK adapter mints the verified receipt only after upload and exact object readback; no receipt means no destructive cleanup",
+    "recoveryAssertions": [
+      "a fresh Vercel Blob client sees the same provider binding after restart",
+      "the verified receipt allows deletion of only the planned object",
+      "the provider reports that exact object absent after delete",
+      "the PostgreSQL BillingService reports zero storage after the exact generation is reconciled",
+      "unknown outcome without receipt and provider-binding mismatch remain retained and charged"
+    ],
+    "failureHandling": "on upload, metadata, recovery, or cleanup failure, retain the generated local tables and emit mode hosted-recovery-failure with exact table names, organization, prefix, object key, provider binding, and next action; never emit credentials or raw provider/database errors",
+    "acknowledgement": "I_UNDERSTAND_NEW_PREFIX_ONLY",
+    "recoveryExecutionPrepared": true,
     "recoveryExecuted": false,
     "mutationPerformed": false,
-    "readOnlyProbe": {
-      "required": true,
-      "scope": "fresh inert exact prefix only",
-      "output": "counts and bounded metadata; no keys, credentials, or object bytes"
-    },
-    "prefixRule": "rehearsal/<fresh-cryptographic-nonce>/",
     "productionAcceptanceClaim": false
   },
+  "readOnlyHostedEvidence": "docs/evidence/hosted-storage-receipt-readonly-20260916.json",
   "localScenarioManifest": [
     {
       "name": "metadata-failure-with-verified-receipt-after-client-restart",
@@ -70,10 +94,10 @@
     }
   ],
   "externalInputsBeforeAnyHostedMutation": [
-    "fresh read-only production Blob prefix inventory",
-    "provider-authoritative writer termination/finality record for the exact key",
-    "targeted production database/object mapping readback",
-    "explicit operator authorization for exact object deletion and billing release",
-    "rollback/recovery operator path if a response is uncertain"
+    "fresh production Blob metadata and exact-prefix read-only probe",
+    "loopback PostgreSQL URL for disposable local state and billing tables",
+    "the reviewed fresh plan file",
+    "the explicit I_UNDERSTAND_NEW_PREFIX_ONLY acknowledgement",
+    "operator ability to inspect the emitted failure manifest before any retry"
   ]
 }

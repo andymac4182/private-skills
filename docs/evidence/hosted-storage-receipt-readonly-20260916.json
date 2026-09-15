@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-15T22:43:19Z",
+  "sourceOperation": "read-only metadata and fresh exact-prefix probe",
+  "target": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "storeName": "private-skills-artifacts",
+    "access": "private",
+    "region": "syd1",
+    "billingState": "Active",
+    "blobCount": 27,
+    "reportedSize": "7.77MB",
+    "metadataUpdatedAt": "09/09/2026 21:35:44.88"
+  },
+  "freshInertPrefixProbe": {
+    "prefix": "rehearsal/tenant-runtime/ccd57459-a52e-4175-a317-4503e557d726/",
+    "matches": 0,
+    "hasMore": false,
+    "foldersReturned": 0,
+    "keysEmitted": false,
+    "credentialsEmitted": false
+  },
+  "safety": {
+    "readOnly": true,
+    "mutationPerformed": false,
+    "uploadAttempted": false,
+    "deleteAttempted": false,
+    "recoveryExecuted": false,
+    "productionAcceptanceClaim": false
+  },
+  "boundary": "This verifies current store metadata and that one newly generated prefix is empty. It does not prove hosted upload receipts, provider finality, deletion, billing reconciliation, or the production recovery route."
+}
