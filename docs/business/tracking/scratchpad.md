@@ -50,3 +50,9 @@ Working hypothesis to test: an approachable company skills platform for engineer
 - Candidate 5404 (`acca451`): actual Acme fixture login and explicit company selection pass. Company administration correctly separates accepted Ben invitation into history and pending invitation into pending list. SSO settings fails with "Company SSO operation failed"; editor_test_stability is investigating actual runtime/PG failure. This is an open acceptance failure, not a completed SSO setup journey.
 - Candidate 5405 (`89ef195`): actual UI-issued Reader token with seven-day expiry, hide-secret, identity sign-out, token sign-in and company overview read pass. Existing-session revocation remains pending; native CLI proof assigned separately. Token session currently shows internal user/company identifiers instead of display names; queued for correction. No secret recorded.
 - Foundation reports isolated frozen install, 1,098 passing tests with 20 skipped, typecheck and production build for 5405. These do not replace the pending browser/CLI or hosted provider gates.
+
+### 5405 browser revocation completed
+
+On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting the same token again returned "Session token is invalid" and cleared the input. The temporary browser variable was discarded. This closes the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI, display-name correction, SSO settings failure and hosted acceptance remain separate. No production state changed.
+
+Review follow-ups: billing count reconciliation needs a stale-read/after-hook barrier test in addition to concurrent reservation tests; Eve dispatcher needs current lease timestamps and bounded invocation continuation under slow providers. Owners are implementing and verifying these before integration.
