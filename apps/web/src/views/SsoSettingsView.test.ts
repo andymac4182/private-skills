@@ -103,8 +103,8 @@ describe('SsoSettingsView', () => {
 
     const container = await renderView()
 
-    expect(container.textContent).toContain('Company SSO settings are not available on this deployment yet.')
-    expect(container.textContent).toContain('Provider configuration is disabled')
+    expect(container.textContent).toContain('Company SSO is not enabled for this deployment. Contact your registry administrator to enable it.')
+    expect(container.textContent).not.toContain('runtime route')
     expect(container.querySelector('fieldset')?.hasAttribute('disabled')).toBe(true)
     expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
