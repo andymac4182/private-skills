@@ -1,6 +1,6 @@
 import { APIError, betterAuth, type BetterAuthOptions, type Auth } from 'better-auth';
 import { genericOAuth, organization } from 'better-auth/plugins';
-import { memberAc } from 'better-auth/plugins/organization/access';
+import { adminAc, memberAc, ownerAc } from 'better-auth/plugins/organization/access';
 import type { GenericOAuthConfig } from 'better-auth/plugins/generic-oauth';
 import { getMigrations } from 'better-auth/db/migration';
 import { PostgresJSDialect } from 'kysely-postgres-js';
@@ -696,6 +696,8 @@ function buildAuthOptions(
       requireEmailVerificationOnInvitation: config.invitations.requireVerifiedEmail,
       cancelPendingInvitationsOnReInvite: true,
       roles: {
+        owner: ownerAc,
+        admin: adminAc,
         reader: memberAc,
         publisher: memberAc,
       },
