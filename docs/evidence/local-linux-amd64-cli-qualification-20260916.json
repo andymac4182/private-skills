@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-linux-amd64-cli-qualification",
+  "observedAtUtc": "2026-09-15T21:12:14Z",
+  "artifact": {
+    "releaseTag": "v0.4.0",
+    "target": "x86_64-unknown-linux-gnu",
+    "filename": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+    "size": 2922162,
+    "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+    "expectedDigestSource": "docs/evidence/local-cli-v0.4.0-assets-staging-20260916.json",
+    "provisionSource": "docs/evidence/local-cli-v0.4.0-private-provision-20260916.json",
+    "archiveMember": "pskills",
+    "memberDescription": "ELF 64-bit LSB pie executable, x86-64, dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID e5db3781149db6c05a4224576160e39ce1740ad5"
+  },
+  "host": {
+    "dockerClientVersion": "20.10.16",
+    "dockerDesktop": "4.9.1 (81317)",
+    "hostArchitecture": "arm64",
+    "dockerServerArchitecture": "arm64",
+    "dockerServerOs": "linux",
+    "dockerKernel": "5.10.104-linuxkit",
+    "emulation": "The linux/amd64 container ran on the arm64 Docker host; this is emulated Linux x86_64 coverage, not native hardware or native CI."
+  },
+  "container": {
+    "image": "python:3.12-slim-bookworm",
+    "imageDigest": "sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254",
+    "imageId": "sha256:59bf1d95c965f12dfc14afaf5af778fc1dbe5b372bd5c281645fc34d4c75d4e7",
+    "architecture": "amd64",
+    "os": "linux",
+    "unameMachine": "x86_64",
+    "libc": "Debian GLIBC 2.36-9+deb12u14",
+    "runtimeCommand": "docker run --platform linux/amd64 --rm python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+  },
+  "checks": [
+    {
+      "name": "release archive digest and size",
+      "command": "shasum -a 256 <staged>/pskills-x86_64-unknown-linux-gnu.tar.gz; stat size",
+      "result": "passed",
+      "actualDigest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+      "actualSize": 2922162,
+      "matchesPinnedManifest": true
+    },
+    {
+      "name": "binary extraction and architecture",
+      "command": "tar -xzf <archive>; file pskills",
+      "result": "passed",
+      "observed": "ELF 64-bit LSB pie executable, x86-64, dynamically linked"
+    },
+    {
+      "name": "released binary version",
+      "command": "pskills --version",
+      "result": "passed",
+      "stdout": "pskills 0.4.0"
+    },
+    {
+      "name": "released binary help",
+      "command": "pskills --help",
+      "result": "passed",
+      "observedCommands": ["health", "login", "whoami", "search", "sources", "directory", "show", "versions", "publish", "proxy", "install", "list", "verify", "remove", "update", "doctor", "scan", "pack"]
+    },
+    {
+      "name": "controlled registry install",
+      "command": "pskills --registry http://127.0.0.1:<ephemeral-port> --directory /fixture/install --agent universal --json install @fixture/linux-demo@1.0.0",
+      "result": "passed",
+      "stdout": {
+        "ok": true,
+        "changed": true,
+        "reference": "@fixture/linux-demo",
+        "version": "1.0.0",
+        "digest": "sha256:c48e662dabd29676ca6e84c9b382ebd40422fb7efe0264a7b933cd249331e263",
+        "destination": "/fixture/install/linux-demo"
+      },
+      "bundle": {
+        "format": "pskills-bundle-v1",
+        "size": 201,
+        "digest": "sha256:c48e662dabd29676ca6e84c9b382ebd40422fb7efe0264a7b933cd249331e263",
+        "installedFile": "linux-demo/SKILL.md",
+        "installedFileSize": 96,
+        "installedFileDigest": "sha256:c5e38f9a368030a17d6e06d5c06e626d051036d4620f435ad961bfb026b6afcb",
+        "treeDigest": "sha256:89a88642b36c029b8283ae975cbc421acfb2054822b10fd3699fb7e3f480c9e8"
+      },
+      "requestSequence": [
+        "POST /v1/resolve -> 200",
+        "POST /v1/install-authorizations -> 201",
+        "POST /v1/artifacts/<digest>/download -> 200",
+        "GET /v1/transfers/linux-demo -> 200",
+        "POST /v1/install-authorizations/auth-linux-demo/validate -> 200",
+        "POST /v1/install-receipts -> 201"
+      ],
+      "fixture": "stdlib Python HTTP server in the same container; one deterministic approved bundle; no upstream or production service"
+    }
+  ],
+  "limits": [
+    "Docker host is arm64, so linux/amd64 execution uses emulation and does not establish native Linux hardware or native CI coverage.",
+    "The runtime check used Debian GLIBC 2.36 in one pinned Python slim container; older glibc, musl, distro, kernel, and filesystem variants were not tested.",
+    "The install used a controlled loopback registry fixture with a synthetic approved bundle; it does not establish hosted identity, scanners, provider callbacks, tenant isolation, or production registry behavior.",
+    "No Windows execution result is claimed."
+  ],
+  "redaction": {
+    "rawTokensIncluded": false,
+    "productionCredentialsIncluded": false,
+    "productionUrlsIncluded": false,
+    "privateStorageKeysIncluded": false,
+    "archiveBytesIncluded": false
+  }
+}
