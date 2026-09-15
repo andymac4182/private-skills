@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-09-15T14:56:31Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "e32161a9b1da3fcf682b6e463204b5a6962d285b",
+    "trigger": "Git",
+    "pullRequest": 52,
+    "releaseHeadSha": "3809277089b61b8dbeee7dd55a0a26fea11c18b8"
+  },
+  "localGates": {
+    "install": {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed"
+    },
+    "typecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed"
+    },
+    "tests": {
+      "command": "CI=true pnpm test -- --reporter=dot",
+      "result": "passed",
+      "passed": 1098,
+      "skipped": 20,
+      "testedExecutableSnapshot": "89ef1956c0cd797edce317fa22d6c8843737fb6c",
+      "releaseSnapshotNote": "3809277 and the merged release contain the same executable source as the tested snapshot; the release increment is documentation-only."
+    },
+    "build": {
+      "command": "CI=true pnpm build",
+      "result": "passed",
+      "testedExecutableSnapshot": "89ef1956c0cd797edce317fa22d6c8843737fb6c"
+    }
+  },
+  "nativeCi": {
+    "status": "blocked_before_runner",
+    "reason": "GitHub Actions jobs were not started because recent account payments failed or the spending limit needed to be increased.",
+    "userWaiver": true,
+    "qualification": "This is not a passing native-platform result; the billing admission limitation was explicitly waived for this incremental release."
+  },
+  "deployments": [
+    {
+      "service": "app",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "deploymentId": "dpl_6RkHLiZ3SWFuhGSzNFCKcXYfYXKy",
+      "deploymentUrl": "private-skills-ofqo9vr8i-andrewmcclenaghan-6046s-projects.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "e32161a9b1da3fcf682b6e463204b5a6962d285b",
+      "sourceRef": "main"
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "deploymentId": "dpl_CakU7TQyso4YGFG8tGL7ugDR7R6A",
+      "deploymentUrl": "private-skills-builder-hwfj18m94.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "e32161a9b1da3fcf682b6e463204b5a6962d285b",
+      "sourceRef": "main"
+    },
+    {
+      "service": "marketing",
+      "project": "private-skills-marketing",
+      "alias": "private-skills-marketing.vercel.app",
+      "deploymentId": "dpl_4fY8caqCVs4VsjB8tvq41DbtAcWK",
+      "deploymentUrl": "private-skills-marketing-3ybiftidu.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "e32161a9b1da3fcf682b6e463204b5a6962d285b",
+      "sourceRef": "main"
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "deploymentId": "dpl_C6iiCVmSxfCzMtCwk8yXNqG62qBG",
+      "deploymentUrl": "private-skills-upload-reviewer-qbfde6y15.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "e32161a9b1da3fcf682b6e463204b5a6962d285b",
+      "sourceRef": "main"
+    }
+  ],
+  "appChecks": {
+    "health": {
+      "path": "/health",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "service": "private-skills",
+        "version": "0.4.0"
+      }
+    },
+    "identityConfig": {
+      "path": "/auth/identity/config",
+      "status": 200,
+      "enabled": false,
+      "basePath": "/api/auth",
+      "providers": [],
+      "organizationEnabled": false,
+      "bootstrapEnabled": false,
+      "invitationMode": "copy-link",
+      "emailDelivery": "disabled",
+      "qualification": "Production Better Auth remains opt-in and disabled; this confirms the legacy-safe boundary, not hosted identity acceptance."
+    }
+  },
+  "marketingChecks": {
+    "deploymentUrl": "private-skills-marketing-3ybiftidu.vercel.app",
+    "anonymousRoutes": {
+      "/": 200,
+      "/product": 200,
+      "/demo": 200,
+      "/pricing": 200,
+      "/docs": 200,
+      "/docs/getting-started": 200,
+      "/faq": 200,
+      "/contact": 200,
+      "/legal": 200
+    },
+    "allRoutesReturned": 200
+  },
+  "localProof": {
+    "fixture": "Disposable PostgreSQL with synthetic Acme and Globex issuers",
+    "browser": "Scoped Reader token create, use, revoke, sign-out, and fresh sign-in passed",
+    "nativeCli": "Token metadata and revocation proof passed",
+    "qualification": "Local fixture evidence only; hosted provider configuration, positive hosted CLI installation, and full launch acceptance remain unverified."
+  },
+  "qualifications": {
+    "productionConfigChanged": false,
+    "environmentChanged": false,
+    "secretsExported": false,
+    "fullLaunch": false,
+    "laterIntegrationNotDeployed": "Integration changes after e32161a, including fd4757e, are outside this production evidence record."
+  }
+}

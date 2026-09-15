@@ -2,7 +2,7 @@
 
 Billing runtime integrated `7860d16`: company-bound routes, raw webhook dispatch, durable PostgreSQL service and customer-validated invoice adapter. Root isolated rerun: 33 focused runtime/billing/UI tests passed. Navigation mount assigned tenant_ui; billing_finish now owns actual scan/storage/seat quota callers, coordinating Eve cost reservations with runtime_finish. This is not live Stripe activation or completed usage enforcement.
 
-CLI token console integrated `d30fcc8`: create scoped expiring tokens, reveal once with copy fallback, list lifecycle metadata, revoke and clear secret on company switch. Root isolated focused rerun: 20 tests passed. foundation_release preparing PostgreSQL fixture for actual browser-to-token-use/revocation proof; that journey remains open.
+CLI token console integrated `d30fcc8`: create scoped expiring tokens, reveal once with copy fallback, list lifecycle metadata, revoke and clear secret on company switch. Root isolated focused rerun: 20 tests passed. The disposable PostgreSQL browser journey and native CLI metadata/revocation proof passed; hosted provider and hosted CLI installation proof remain open.
 
 Root independent clean verification at `91023f6` passed frozen offline install, typecheck and full suite (1,052 tests passed, 17 skipped). A prior shared-checkout run failed to load samlify because another worktree replaced dependency links; isolate dependency installs per worktree. Do not reuse that failed run as release evidence.
 
@@ -10,9 +10,9 @@ Latest SSO protocol snapshot `fea919d`: signed local OIDC and SAML callbacks plu
 
 Corrected 5402 fixture uses PostgreSQL (initial test adapter intentionally disabled identity). Root browser passed Acme login/company selection, compact overview rendering and company SSO unavailable state. Root created a synthetic reader invitation and clicked Copy; UI reported copied and retained the visible manual-selection link. Browser clipboard contents were not independently read back. Pending-invitation list currently includes accepted entries; label/filter polish remains open.
 
-Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency through 20 September. Overall: implementation in progress, not launched.
+Last reconciled: 16 September 2026, Brisbane. Target: 18 September; contingency through 20 September. Overall: implementation in progress, not launched.
 
-Latest published increment: origin/main `668f53e6420419eda6aef0d0d73385da3af280cc`, independently confirmed by root with git ls-remote. Release agent reports Git-triggered app `dpl_BvgT5TSCPRUM5zXfzXkthniKzWyA` and marketing `dpl_ArrxaeUqYmABC8uWDWtCGRLKU1SX` READY for this SHA; frozen install, typecheck, 1,031 tests passed / 11 skipped, app/marketing/all Eve builds passed. Root independently observed anonymous marketing homepage and app `/health` HTTP 200. Identity remains opt-in and unconfigured in production; no authenticated hosted tenant acceptance is implied. Native CI remains explicitly waived.
+Latest published increment: origin/main `e32161a9b1da3fcf682b6e463204b5a6962d285b`, merged from PR #52 (`3809277`). The Git-triggered app, builder, marketing, and upload-reviewer production deployments are all READY for this SHA; exact IDs and URLs are recorded in [production-release-e32161a.json](../../evidence/production-release-e32161a.json). Frozen install, typecheck, 1,098 tests passed / 20 skipped, and build passed against the same executable snapshot. App `/health` returned 200 and `/auth/identity/config` returned 200 with identity disabled, no providers, and organization/bootstrap disabled. Nine anonymous marketing routes returned 200. Native CI jobs were blocked before runner execution by the account billing admission message and are explicitly waived; this is an incremental release record, not a full launch or hosted identity proof.
 
 Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar purchase-availability/price checks remain active; no brand selection or domain purchase made.
 
@@ -22,7 +22,7 @@ Public marketing browser check on published 668f53e: root clicked release-path I
 
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
-| L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous homepage HTTP 200 and rendered content verified by root; full interactive/mobile review remains open |
+| L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing production deployment `dpl_4fY8caqCVs4VsjB8tvq41DbtAcWK` is READY from `e32161a`; nine public routes returned 200 and root verified anonymous homepage content; full interactive/mobile review remains open |
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Navigation integrated d529e42, four focused tests pass; browser proof pending; compact overview integrated 491ddc7 (11 related tests pass); visual proof pending |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
@@ -35,6 +35,7 @@ Public marketing browser check on published 668f53e: root clicked release-path I
 
 ## Verified evidence
 
+- Release `e32161a`: PR #52 merged from `3809277`; all four Git-triggered Vercel production deployments are READY at the exact source SHA. Frozen install, typecheck, 1,098 tests passed / 20 skipped, and build passed against the same executable snapshot. Disposable Acme/Globex PostgreSQL browser token create/use/revoke and native CLI metadata/revocation proof passed. App `/health` returned 200; identity config is explicitly disabled with no providers; nine anonymous marketing routes returned 200. Native GitHub CI was blocked before runner execution by the documented billing admission message and is recorded as waived, not passed. See [sanitized evidence](../../evidence/production-release-e32161a.json).
 - Remote main was verified at `6c8b958a088c6924c6c204aae530c41ce5d0c05c`. Release agent confirmed Git-triggered Vercel production deployment `dpl_9fXQEjtsWrM6epgXVVMeTFGh9DRM` READY and aliased to private-skills-theta.vercel.app.
 - Integration `2211bdd`: typecheck and app build passed; 946 tests passed, 8 skipped. Subsequent main merge was whitespace-only; logout fix dc836e7 passed five API tests. Full browser logout proof remains open.
 - Marketing a6d1cda: separate build passed; seven built public routes returned 200 with configured app login links.
