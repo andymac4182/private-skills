@@ -40,5 +40,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [ ] B18 — Company CLI token console: create scoped expiring tokens, reveal secret once with copy/manual fallback, list metadata and revoke, clear secret on company switch, enforce server role/company checks. Root found no token management entry in CompanyView/command navigation; tenant_ui owns current API contract audit and complete connected UI, not just a visual mockup.
 
+  Browser follow-up on 5403 / candidate 205a28e: scoped seven-day Reader token creation and hide-secret pass. After identity sign-out, the generic token sign-in rejects that exact newly issued token with “Session token is invalid”. tenant_ui owns persisted-token/BFF exchange investigation and actual use/revoke proof. Release is held; no raw token recorded here.
+
 - [ ] B19 — Restore rehearsal must include Better Auth organizations/memberships, token revocations, both company SSO configuration and mirrored provider rows, billing mappings/reservations/webhook state, and registry/blob consistency. Existing registry-only restore is insufficient. tenant_eve owns isolated local PostgreSQL rehearsal and post-restore tenant boundary checks; hosted proof remains separate.
 - [ ] B20 — Signed SAML callback currently rejects issuer because the provider SP entityID is compared with the IdP entityID. oauth_demo_finish owns protocol trust-anchor correction and wrong-issuer/audience negative tests; editor_test_stability owns runtime mounting. Do not claim SAML works before the signed round trip passes.
