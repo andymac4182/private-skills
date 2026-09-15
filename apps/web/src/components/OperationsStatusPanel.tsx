@@ -84,15 +84,15 @@ export function OperationsStatusPanel() {
   const eveTotal = eve.consolidationRuns.total + eve.uploadReviews.total
   const billingNote = billing.usageState === 'available' && billing.usage
     ? `${billing.usage.seats} seats · ${billing.usage.scans} scans this period`
-    : billing.reason
+    : billing.state === 'unavailable' ? 'Billing is temporarily unavailable.' : 'Billing failure history is not available yet.'
 
-  return <Panel title="Company operations status" description="Bounded operational signals for the active company. Failure history stays unavailable when the backing service does not persist it." action={<Button kind="quiet" onClick={() => void reload()}>Refresh</Button>}>
+  return <Panel title="Company operations status" description="Queue, scans, reviews and usage for this company. Some failure history is not available yet." action={<Button kind="quiet" onClick={() => void reload()}>Refresh</Button>}>
     <div className="grid-4 operations-status-grid" aria-label="Company operations status">
       <StatusCard label="Queue" value={`${active} active`} state={queue.state} note={`${queue.queued} queued · ${queue.running} running · ${queue.failed} failed · ${activeAge(queue.oldestActiveAgeSeconds)}`} />
       <StatusCard label="Scan freshness" value={scans.state === 'empty' ? 'No releases' : `${scans.skills.current}/${scans.skills.total} current`} state={scans.state} note={`${scanAttention} needing attention · ${scans.enabledScannerCount} enabled scanner${scans.enabledScannerCount === 1 ? '' : 's'}`} />
       <StatusCard label="Eve reviews" value={eve.state === 'unavailable' ? 'Unavailable' : eve.state === 'empty' ? 'No runs' : `${eveAttention} attention`} state={eve.state} note={`${eveTotal} retained run${eveTotal === 1 ? '' : 's'} · ${eve.uploadReviews.pending + eve.uploadReviews.running} upload reviews active`} />
       <StatusCard label="Billing" value={billingLabel(billing)} state={billing.state} note={billingNote} />
-      <StatusCard label="Auth/callback history" value="Unavailable" state={status.auth.state} note="No durable sign-in or callback failure metric is connected" />
+      <StatusCard label="Sign-in and callback history" value="Not available" state={status.auth.state} note="Sign-in and callback history is not available yet." />
     </div>
     {queue.oldestActiveAt && <p className="muted operations-status-footnote">Oldest active work started {formatDate(queue.oldestActiveAt)}. Latest completed scan: {formatDate(scans.latestCompletedAt)}.</p>}
   </Panel>
