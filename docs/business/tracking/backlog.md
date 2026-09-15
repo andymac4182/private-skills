@@ -44,3 +44,10 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [ ] B19 — Restore rehearsal must include Better Auth organizations/memberships, token revocations, both company SSO configuration and mirrored provider rows, billing mappings/reservations/webhook state, and registry/blob consistency. Existing registry-only restore is insufficient. tenant_eve owns isolated local PostgreSQL rehearsal and post-restore tenant boundary checks; hosted proof remains separate.
 - [ ] B20 — Signed SAML callback currently rejects issuer because the provider SP entityID is compared with the IdP entityID. oauth_demo_finish owns protocol trust-anchor correction and wrong-issuer/audience negative tests; editor_test_stability owns runtime mounting. Do not claim SAML works before the signed round trip passes.
+
+## Research follow-through
+
+- Initial market desk research and dated naming/domain screens are integrated in `d02b1ae`; B14–B16 remain open for positioning application, brand selection and further validation.
+- MR01–MR07 in [market research](../market-research.md) track buyer, onboarding, evidence comprehension, repeat use, ownership, packaging and deployment hypotheses. These are unvalidated research plans, not customer evidence.
+- A1–A7 in that document track content/onboarding experiments with measurable acceptance criteria. No external outreach or publication is authorized by those experiment descriptions.
+- Keep research identifiers separate from implementation B17–B20. Recheck shortlisted domains immediately before selection; retain Private Skills until a brand is chosen.
