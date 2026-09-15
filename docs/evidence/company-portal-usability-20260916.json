@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-company-portal-usability-acceptance",
+  "capturedAt": "2026-09-15T22:59:00Z",
+  "source": {
+    "sourceHead": "4c51d269a779a265427bc7e8e93d6618d04484cc",
+    "checkout": "/private/tmp/private-skills-company-portal-usability",
+    "origin": "http://127.0.0.1:5308",
+    "identityFixture": "disposable local identity fixture",
+    "persistence": "disposable loopback PostgreSQL",
+    "billingAdapter": "deterministic local test adapter",
+    "stripeAccount": false,
+    "liveCharges": false
+  },
+  "runtime": {
+    "browser": "headless agent-browser",
+    "viewports": {
+      "desktop": "1440x900",
+      "mobile": "390x844"
+    },
+    "localOnly": true,
+    "externalLLM": false,
+    "scannerJobs": false,
+    "fixtureLeftRunning": false
+  },
+  "flows": {
+    "ownerDesktop": {
+      "passed": true,
+      "routes": [
+        "/app",
+        "/app/company",
+        "/app/billing",
+        "/app/catalog",
+        "/app/packs",
+        "/app/directory",
+        "/app/source-discovery",
+        "/app/official",
+        "/app/topics",
+        "/app/cloud-audits",
+        "/app/analytics",
+        "/app/reviews",
+        "/app/publish",
+        "/app/operations",
+        "/app/audit"
+      ],
+      "observed": "Synthetic owner loaded the overview, company, billing, catalog, packs, discovery, activity, tools, and administrative sections. The local billing page exposed finite Team-plan usage and limits."
+    },
+    "ownerMobile": {
+      "passed": true,
+      "observed": "The owner drawer opened at 390x844, retained all company-admin destinations, scrolled within its bounded navigation region, and Escape closed it while restoring focus to Open navigation."
+    },
+    "ownerKeyboard": {
+      "passed": true,
+      "observed": "The desktop command palette found Billing & usage; Enter navigated to /app/billing, and browser Back returned to /app with the overview rendered."
+    },
+    "readerNavigation": {
+      "passed": true,
+      "observed": "A synthetic reader accepted an invitation and saw Company, CLI tokens, Settings, and Sources. SSO settings, Billing & usage, and the administrative Audit log were absent from the drawer and command palette."
+    },
+    "readerPolicy": {
+      "passed": true,
+      "observed": "Direct /app/policy remained readable, while policy controls and Save/Discard were disabled and the view-only guidance named the owner/admin boundary."
+    },
+    "readerSources": {
+      "passed": true,
+      "observed": "Direct /app/upstreams remained readable, while Add source was disabled for the reader; the fixture had no approved source to exercise an import request."
+    },
+    "readerBillingDenial": {
+      "passed": true,
+      "observed": "Direct /app/billing rendered the server denial 'Owner or admin access is required for company billing.' and exposed no checkout or portal control."
+    },
+    "accessibility": {
+      "passed": true,
+      "observed": "Headless axe checks on owner /app/company reported zero violations at both desktop and mobile viewports. The team access table is a keyboard-focusable labelled scroll region."
+    }
+  },
+  "screenshots": [
+    "/private/tmp/private-skills-company-portal-review-owner-company-desktop-after.png",
+    "/private/tmp/private-skills-company-portal-review-owner-company-mobile-after.png",
+    "/private/tmp/private-skills-company-portal-review-owner-mobile-nav-after.png",
+    "/private/tmp/private-skills-company-portal-review-reader-mobile-nav-after.png",
+    "/private/tmp/private-skills-company-portal-review-reader-billing-denial-after.png"
+  ],
+  "limits": [
+    "This was a local identity/PostgreSQL fixture with a deterministic test billing adapter; no Stripe account, product, price, customer, payment method, charge, or production system was used.",
+    "The fixture contained one active company, so company switching and multi-company selector behavior were observed only as a single-option state.",
+    "Cloud directory, official makers, topics, and external audit pages were checked for their configured disconnected/empty states; no external skills.sh source was contacted.",
+    "This record covers local usability and role-boundary evidence only and does not establish commercial launch readiness."
+  ]
+}

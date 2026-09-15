@@ -52,7 +52,15 @@ vi.mock('./CommandPalette', () => ({
       glyph: '◍',
       defaultSectionId: 'company',
       admin: true,
-      sections: [{ id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' }],
+      sections: [
+        { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
+        { id: 'company-sso', label: 'SSO settings', hint: 'Company sign-in', glyph: '⌁' },
+        { id: 'company-tokens', label: 'CLI tokens', hint: 'Scoped access', glyph: '⌘' },
+        { id: 'billing', label: 'Billing & usage', hint: 'Plan and invoices', glyph: '$' },
+        { id: 'policy', label: 'Settings', hint: 'Review rules', glyph: '⚙' },
+        { id: 'upstreams', label: 'Sources', hint: 'Approved sources', glyph: '⌘' },
+        { id: 'audit', label: 'Audit', hint: 'Change history', glyph: '◷' },
+      ],
     },
   ],
 }))
@@ -274,6 +282,23 @@ describe('RegistryShell auth return route', () => {
     expect(companyGroup?.querySelector('small')?.textContent).toBe('Team and access')
     expect(companyGroup?.classList.contains('nav-group-admin')).toBe(false)
     expect(container.textContent).not.toContain('Company admin')
+    expect(companyGroup?.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe('Company sections')
+    const companySections = [...companyGroup?.querySelectorAll<HTMLElement>('.nav-subitem strong') ?? []].map((item) => item.textContent)
+    expect(companySections).toEqual(['Company', 'CLI tokens', 'Settings', 'Sources'])
+    expect(container.textContent).not.toContain('SSO settings')
+    expect(container.textContent).not.toContain('Billing & usage')
+    expect(container.textContent).not.toContain('Audit')
+
+    authState.session = null
+    authState.principal = { subject: 'mixed-role', roles: ['reader', 'admin'], organizationId: 'org-1' }
+    await act(async () => {
+      root?.render(createElement(RouterProvider, { router: testRouter }))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+    expect(container.textContent).toContain('Company admin')
+    expect(container.textContent).toContain('SSO settings')
+    expect(container.textContent).toContain('Billing & usage')
+    expect(container.textContent).toContain('Audit')
   })
 
   it('opens a focus-trapped mobile drawer and restores the menu trigger on close', async () => {
