@@ -5989,6 +5989,13 @@ async function resolveOrQueueImport(
       const activeTarget = activeTargets.find((candidate) => sameJobSource(candidate));
       if (activeTarget && activeTargets.every((candidate) => sameJobSource(candidate))) {
         activeTarget.meteredReservationKey ??= reservationKey;
+        if (reservation) {
+          // Joining an existing job still acquires the same durable ownership
+          // fence as creating one. This keeps a late duplicate from releasing
+          // the reservation while the joined worker is running.
+          prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
+          claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, activeTarget.id);
+        }
         appendAudit(mutable, audit(principal, 'skill.import.joined', activeTarget.id, {
           cacheKey,
           upstreamId: importRequest.upstreamId,
@@ -6067,7 +6074,9 @@ async function resolveOrQueueImport(
       updatedAt: nowIso(),
       attempts: 0,
     };
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
     mutable.jobs.push(job);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
     appendAudit(mutable, audit(principal, 'skill.import.queued', job.id, {
       cacheKey,
       upstreamId: importRequest.upstreamId,
@@ -7799,13 +7808,14 @@ export async function releaseMeteredUsageIfUnowned(
       }
       const owner = findMeteredReservationOwner(mutable, reservationKey);
       if (owner?.state === 'releasing') {
-        // A non-idempotent admission may have arrived after another process
-        // completed its external correction but before that process persisted
-        // the terminal owner state. It is safe to correct this admission as
-        // well because the release fence still rejects queue ownership.
-        return reservationIdempotent
-          ? { kind: 'busy' as const }
-          : { kind: 'release' as const };
+        // A previous process may have completed the external correction but
+        // crashed before its terminal owner transaction committed. Reuse the
+        // durable fence token so the deterministic billing operation can be
+        // retried idempotently and this invocation can finish the owner
+        // transition. The fence continues to reject queue ownership until the
+        // terminal transaction succeeds.
+        if (!owner.releaseToken) return { kind: 'busy' as const };
+        return { kind: 'release' as const, token: owner.releaseToken };
       }
       const token = randomId('metered-release');
       if (owner) {

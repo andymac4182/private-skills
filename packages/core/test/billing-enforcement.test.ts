@@ -444,7 +444,15 @@ describe('runtime billing admission', () => {
     const firstOperation = (await json(first)).operation as { id: string };
     const secondOperation = (await json(second)).operation as { id: string };
     expect(secondOperation.id).toBe(firstOperation.id);
-    expect((await test.repository.read(ORGANIZATION)).jobs).toHaveLength(1);
+    const state = await test.repository.read(ORGANIZATION);
+    expect(state.jobs).toHaveLength(1);
+    expect(state.meteredReservationOwners).toEqual([
+      expect.objectContaining({
+        reservationKey: state.jobs[0]!.meteredReservationKey,
+        state: 'owned',
+        jobId: state.jobs[0]!.id,
+      }),
+    ]);
     await expect(test.billing.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { scans: 1 } });
   });
 
@@ -509,5 +517,13 @@ describe('runtime billing admission', () => {
       state: 'running',
       meteredReservationKey: expect.stringMatching(/^private-skills:scan:/u),
     });
+    const finalState = await test.repository.read(ORGANIZATION);
+    expect(finalState.meteredReservationOwners).toEqual([
+      expect.objectContaining({
+        reservationKey: finalState.jobs[0]!.meteredReservationKey,
+        state: 'owned',
+        jobId: finalState.jobs[0]!.id,
+      }),
+    ]);
   });
 });

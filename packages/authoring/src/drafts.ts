@@ -210,11 +210,15 @@ async function releaseDraftUsageIfUnowned(
       }
       const owner = draftReservationOwner(state, admission.reservationKey);
       if (owner?.state === 'releasing') {
-        // A non-idempotent admission may have arrived after another process
-        // completed its correction but before that process persisted the
-        // terminal owner state. The release fence still prevents queueing, so
-        // correcting this admission concurrently is safe.
-        return admission.idempotent ? 'busy' as const : 'release-unfenced' as const;
+        // A previous process may have completed the external correction but
+        // crashed before its terminal owner transaction committed. Reuse the
+        // durable fence token so the deterministic billing operation can be
+        // retried idempotently and this invocation can finish the owner
+        // transition. The fence continues to reject queue ownership until the
+        // terminal transaction succeeds.
+        if (!owner.releaseToken) return 'busy' as const;
+        token = owner.releaseToken;
+        return 'release' as const;
       }
       token = randomId('metered-release');
       if (owner) {
@@ -232,10 +236,6 @@ async function releaseDraftUsageIfUnowned(
       }
       return 'release' as const;
     });
-    if (decision === 'release-unfenced') {
-      await releaseDraftUsage(admission, deps.config.organizationId);
-      return;
-    }
     if (decision !== 'release' || !token) return;
   } catch {
     return;

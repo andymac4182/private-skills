@@ -70,9 +70,37 @@ class TransactionBarrierRepository implements StateRepository {
   }
 }
 
+/** A repository that commits the release fence, then loses the terminal commit. */
+class FinalTransitionFailureRepository implements StateRepository {
+  private state: RegistryState;
+  private transactionCount = 0;
+  private failTransaction = 2;
+
+  constructor(state: RegistryState) {
+    this.state = cloneRegistryState(state);
+  }
+
+  async read(_organizationId: string): Promise<RegistryState> {
+    return cloneRegistryState(this.state);
+  }
+
+  async transaction<T>(_organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
+    this.transactionCount += 1;
+    const working = cloneRegistryState(this.state);
+    const result = updater(working);
+    if (this.transactionCount === this.failTransaction) {
+      this.failTransaction = -1;
+      throw new Error('simulated process loss after external correction');
+    }
+    this.state = working;
+    return result;
+  }
+}
+
 class RecordingBilling implements BillingUsageAdmission {
   readonly reservations = new Set<string>();
   readonly reconciliations: Array<{ key: string; actual: MeteredUsageDelta }> = [];
+  readonly reconciliationOperationKeys: string[] = [];
 
   status(): { enabled: boolean } {
     return { enabled: true };
@@ -88,9 +116,10 @@ class RecordingBilling implements BillingUsageAdmission {
     _organizationId: string,
     key: string,
     actual: MeteredUsageDelta,
-    _operationKey: string,
+    operationKey: string,
   ): Promise<unknown> {
     this.reconciliations.push({ key, actual });
+    this.reconciliationOperationKeys.push(operationKey);
     if (actual.scans === 0) this.reservations.delete(key);
     return {};
   }
@@ -141,5 +170,53 @@ describe('durable metered reservation ownership', () => {
         state: 'released',
       }],
     });
+  });
+
+  it('replays a committed release fence after the terminal transaction is lost', async () => {
+    const repository = new FinalTransitionFailureRepository(defaultRegistryState({ production: false, allowUnscanned: true }));
+    const billing = new RecordingBilling();
+    await billing.reserveUsage(ORGANIZATION, { scans: 1 }, RESERVATION_KEY);
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+    );
+
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      meteredReservationOwners: [{
+        reservationKey: RESERVATION_KEY,
+        state: 'releasing',
+        releaseToken: expect.any(String),
+      }],
+    });
+    await expect(repository.transaction(ORGANIZATION, (state) => {
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-blocked');
+    })).rejects.toMatchObject({ code: 'METERED_RESERVATION_BUSY' });
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+    );
+
+    expect(billing.reconciliations).toHaveLength(2);
+    expect(billing.reconciliationOperationKeys).toEqual([
+      `${RESERVATION_KEY}:release`,
+      `${RESERVATION_KEY}:release`,
+    ]);
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      meteredReservationOwners: [{
+        reservationKey: RESERVATION_KEY,
+        state: 'released',
+      }],
+    });
+    await expect(repository.transaction(ORGANIZATION, (state) => {
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-recovered');
+    })).resolves.toBeUndefined();
   });
 });
