@@ -56,6 +56,7 @@ import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
+import { readSessionExchangeToken } from './session-exchange.js';
 import {
   looksLikeEveTenantDelegation,
   EVE_TENANT_ID_HEADER,
@@ -190,11 +191,26 @@ async function createRuntime(env: RuntimeEnvironment) {
       }
       return auth.authenticate(request);
     },
-    // Legacy `/auth/session` remains backed by the existing token
-    // authenticator. Better Auth owns `/api/auth/*` and never receives this
-    // token exchange callback.
-    ...(auth.createSession === undefined ? {} : { createSession: auth.createSession.bind(auth) }),
-    ...(auth.clearSessionCookie === undefined ? {} : { clearSessionCookie: auth.clearSessionCookie.bind(auth) }),
+    // Keep the established bootstrap-token exchange first, then accept a
+    // verified persisted API token. Both implementations issue the same
+    // configured cookie name, while API-token requests recheck their record
+    // and live membership on every subsequent request.
+    ...(auth.createSession === undefined && apiTokenRuntime?.authenticator.createSession === undefined ? {} : {
+      createSession: async (token: string) => {
+        if (auth.createSession) {
+          const legacySession = await auth.createSession(token);
+          if (legacySession) return legacySession;
+        }
+        return apiTokenRuntime?.authenticator.createSession
+          ? apiTokenRuntime.authenticator.createSession(token)
+          : null;
+      },
+    }),
+    ...(auth.clearSessionCookie === undefined && apiTokenRuntime?.authenticator.clearSessionCookie === undefined ? {} : {
+      clearSessionCookie: () => apiTokenRuntime?.authenticator.clearSessionCookie?.()
+        ?? auth.clearSessionCookie?.()
+        ?? `${env.PSKILLS_SESSION_COOKIE?.trim() || 'pskills_session'}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    }),
   };
   const bootstrapOwnerTokenIds = parseBootstrapTokenEnv(env)
     .filter((token) => token.kind !== 'worker' && token.worker !== true && token.organizationId === config.organizationId && token.roles.includes('owner'))
@@ -536,6 +552,30 @@ async function createRuntime(env: RuntimeEnvironment) {
     authenticator: requestAuthenticator,
     createHandler: createTenantHandler,
     defaultHandler,
+    ...(apiTokenRuntime === undefined ? {} : {
+      // `/auth/session` carries the credential in its JSON body, so the
+      // normal request authenticator cannot see it while the tenant router is
+      // choosing a fixed-org handler. Verify a clone with the API-token
+      // bearer path; core still receives the original body for the exchange.
+      resolveSessionTenant: async (request: Request) => {
+        const token = await readSessionExchangeToken(request);
+        if (token === undefined) return undefined;
+        const principal = await apiTokenRuntime.authenticator.authenticate(new Request(request.url, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${token}` },
+        }));
+        const tokenId = (principal as (Principal & { tokenId?: unknown }) | null)?.tokenId;
+        if (!principal || typeof tokenId !== 'string') return undefined;
+        return {
+          organizationId: principal.organizationId,
+          kind: 'scoped-api' as const,
+          roles: principal.roles,
+          ...(principal.namespaces === undefined ? {} : { namespaces: principal.namespaces }),
+          ...(principal.scopes === undefined ? {} : { scopes: principal.scopes }),
+          provisioned: principal.organizationId === defaultOrganizationId,
+        };
+      },
+    }),
   });
   return async (request: Request) => {
     const path = new URL(request.url).pathname;

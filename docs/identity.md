@@ -17,6 +17,17 @@ The runtime exposes three route families:
   The session view contains user, organization, and live membership data. It
   never contains a Better Auth session token or provider access/refresh token.
 
+The existing `POST /auth/session` route accepts either the configured legacy
+bootstrap token or a persisted company API token issued through `/v1/tokens`.
+The API-token path returns a v1 HMAC-signed reference cookie containing only
+the token, company, user, audience, version, and expiry claims; the raw secret
+is never placed in a cookie. Each request resolves the persisted token and the
+current company membership again, so expiry, revocation, removal, and role or
+scope changes take effect without waiting for a browser session refresh.
+`DELETE /auth/session` clears the shared cookie. A durable identity/session
+secret is required for this exchange; the legacy bootstrap path remains
+available for compatibility.
+
 `IdentityRuntime.handler` owns all three families. The host runtime only needs
 to pass a standard Fetch `Request` to it and return the `Response`; unrelated
 paths receive `404`. The identity BFF session response is `Cache-Control:
