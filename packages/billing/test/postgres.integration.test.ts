@@ -140,11 +140,17 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     expect(rows).toHaveLength(1)
     expect(rows[0]?.operation_key).toBe('pg-scan-a')
 
-    await expect(first.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')).resolves.toMatchObject({ idempotent: false })
-    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release')).resolves.toMatchObject({ idempotent: false })
-    await expect(second.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')).resolves.toMatchObject({ idempotent: false })
+    const firstReopen = await first.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')
+    expect(firstReopen).toMatchObject({ idempotent: false, reservationGeneration: 1 })
+    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release', firstReopen.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 1 })
+    const secondReopen = await second.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')
+    expect(secondReopen).toMatchObject({ idempotent: false, reservationGeneration: 2 })
     await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } })
-    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release')).resolves.toMatchObject({ idempotent: false })
+    const usageBeforeStale = await second.usageSnapshot('org-pg-reopen')
+    const staleCallback = Promise.resolve().then(() => first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release', firstReopen.reservationGeneration))
+    await expect(staleCallback).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+    await expect(second.usageSnapshot('org-pg-reopen')).resolves.toEqual(usageBeforeStale)
+    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release', secondReopen.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 2 })
     await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } })
   })
 
@@ -189,8 +195,9 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     const service = new BillingService({ repository, catalog, enabled: false, now: () => now })
     const organizationId = 'org-pg-aged-operation'
 
-    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: false })
-    await expect(service.reconcileUsage(organizationId, 'pg-aged-stable', { storageBytes: 0 }, 'pg-aged-release')).resolves.toMatchObject({ idempotent: false })
+    const firstAged = await service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')
+    expect(firstAged).toMatchObject({ idempotent: false, reservationGeneration: 1 })
+    await expect(service.reconcileUsage(organizationId, 'pg-aged-stable', { storageBytes: 0 }, 'pg-aged-release', firstAged.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 1 })
     now += 1_000
     await expect(service.reserveUsage(organizationId, { scans: 1 }, 'pg-aged-newer')).resolves.toMatchObject({ idempotent: false })
 
@@ -207,8 +214,13 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
       createdAt: new Date(NOW).toISOString(),
     })
     now += 1_000
-    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: false })
+    const secondAged = await service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')
+    expect(secondAged).toMatchObject({ idempotent: false, reservationGeneration: 2 })
     await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: true })
+    const agedBeforeStale = await service.usageSnapshot(organizationId)
+    await expect(service.reconcileUsage(organizationId, 'pg-aged-stable', { storageBytes: 0 }, 'pg-aged-release', firstAged.reservationGeneration)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+    await expect(service.usageSnapshot(organizationId)).resolves.toEqual(agedBeforeStale)
+    await expect(service.findUsageOperation(organizationId, 'pg-aged-stable')).resolves.toMatchObject({ operationKey: 'pg-aged-stable', status: 'reserved', reservationGeneration: 2 })
   })
 
   it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {

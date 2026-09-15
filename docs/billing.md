@@ -185,10 +185,17 @@ fenced to that exact job generation. A newer queued/running job reusing the
 canonical key keeps its charge. After a provider or blob write may have
 succeeded, the charged reservation remains held for durable object
 reconciliation. Release corrections are fenced by a durable per-generation
-token and use a token-specific billing operation key. If the correction result
-is uncertain, the owner remains `releasing` and queue admission stays blocked
-until the same token is replayed successfully; a stale completion can supply
-its expected job id so it cannot settle a newer owner generation. Better Auth organization hooks
+token and use a token-specific billing operation key. The billing ledger also
+assigns each usage reservation a finite numeric `reservationGeneration`,
+starting at `1` and increasing when a released operation key is admitted again.
+New reconciliation callers pass the generation returned by admission; a stale
+generation, or an omitted generation after reopening, returns a no-write `409`.
+Rows written before generation fencing are interpreted as generation `1`, so
+the four-argument reconciliation path remains compatible for that first
+lifecycle. If the correction result is uncertain, the owner remains
+`releasing` and queue admission stays blocked until the same token is replayed
+successfully; a stale completion can supply its expected job id so it cannot
+settle a newer owner generation. Better Auth organization hooks
 sync active members plus unexpired pending invitations and reserve a new seat
 before direct member or invitation writes. Seat holds are stored beside the
 locked usage row, and reconciliation preserves other requests' in-flight

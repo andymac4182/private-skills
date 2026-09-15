@@ -129,6 +129,11 @@ export interface BillingUsageOperation {
   status?: BillingUsageOperationStatus;
   /** Per-metric measured usage applied by a reconciliation, including zero. */
   reconciled?: Partial<Record<BillingMetric, number>>;
+  /**
+   * Exact reservation lifecycle that admitted this operation. Older rows
+   * omit it and are interpreted as generation 1 for compatibility.
+   */
+  reservationGeneration?: number;
 }
 
 /**
@@ -338,6 +343,8 @@ export interface UsageReservation {
   idempotent: boolean;
   delta: UsageDelta;
   snapshot: UsageSnapshot;
+  /** Exact lifecycle identity to carry into a later reconciliation. */
+  reservationGeneration?: number;
 }
 
 export interface UsageLimitDetails {

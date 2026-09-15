@@ -583,14 +583,35 @@ describe('transactional usage enforcement', () => {
 
   it('keeps explicit zero reconciliation and reopens the same released key', async () => {
     const service = serviceWith({ enabled: false });
-    await service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import');
+    const firstAdmission = await service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import');
+    expect(firstAdmission.reservationGeneration).toBe(1);
     await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
     await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
-    await expect(service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import')).resolves.toMatchObject({ idempotent: false, snapshot: { usage: { storageBytes: 40 } } });
+    const secondAdmission = await service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import');
+    expect(secondAdmission).toMatchObject({ idempotent: false, reservationGeneration: 2, snapshot: { usage: { storageBytes: 40 } } });
     await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } });
-    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release', secondAdmission.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 2 });
     await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
-    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: true });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release', secondAdmission.reservationGeneration)).resolves.toMatchObject({ idempotent: true, reservationGeneration: 2 });
+  });
+
+  it('fences a stale in-flight correction from a newly admitted generation', async () => {
+    const service = serviceWith({ enabled: false });
+    const firstAdmission = await service.reserveUsage('org-generation-fence', { scans: 1 }, 'scan-lifecycle');
+    expect(firstAdmission.reservationGeneration).toBe(1);
+    await expect(service.reconcileUsage('org-generation-fence', 'scan-lifecycle', { scans: 0 }, 'release-t1', firstAdmission.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 1 });
+
+    const secondAdmission = await service.reserveUsage('org-generation-fence', { scans: 1 }, 'scan-lifecycle');
+    expect(secondAdmission.reservationGeneration).toBe(2);
+    const usageBeforeStale = await service.usageSnapshot('org-generation-fence');
+    await expect(service.reconcileUsage('org-generation-fence', 'scan-lifecycle', { scans: 0 }, 'release-t1', firstAdmission.reservationGeneration)).rejects.toMatchObject({
+      code: 'STALE_RESERVATION_GENERATION',
+      status: 409,
+    });
+    await expect(service.usageSnapshot('org-generation-fence')).resolves.toEqual(usageBeforeStale);
+    await expect(service.reconcileUsage('org-generation-fence', 'scan-lifecycle', { scans: 0 }, 'release-t2', secondAdmission.reservationGeneration)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 2 });
+    await expect(service.usageSnapshot('org-generation-fence')).resolves.toMatchObject({ usage: { scans: 0 } });
   });
 
   it('releases a reserved metric when reconciliation explicitly reports zero', async () => {
@@ -681,9 +702,9 @@ describe('PostgreSQL repository contract', () => {
         return { rows: [row] as Row[], rowCount: 1 };
       }
       if (text.includes('INSERT INTO "billing_contract_usage_operations"')) {
-        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled] = parameters;
+        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled, reservationGeneration] = parameters;
         const key = `${organizationId}:${operationKey}`;
-        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null });
+        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null, reservation_generation: reservationGeneration ?? 1 });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id FROM "billing_contract_customers"')) {

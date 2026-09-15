@@ -32,6 +32,7 @@ export interface MemoryBillingRepositoryOptions extends BillingRepositoryFactory
 const MAX_ORGANIZATION_ID_BYTES = 256;
 const MAX_EVENT_ID_BYTES = 256;
 const MAX_OPERATION_KEY_BYTES = 256;
+const MIN_RESERVATION_GENERATION = 1;
 const MAX_PROVIDER_ID_BYTES = 64;
 const MAX_RETAINED_EVENTS = 2_000;
 const MAX_RETAINED_OPERATIONS = 20_000;
@@ -248,6 +249,7 @@ export function assertBillingState(state: BillingOrganizationState): void {
     operationKeys.add(operation.operationKey);
     if (!Number.isFinite(Date.parse(operation.createdAt))) throw new BillingRepositoryError('INVALID_STATE', 'usage operation createdAt is invalid');
     if (operation.status !== undefined && operation.status !== 'reserved' && operation.status !== 'committed' && operation.status !== 'released') throw new BillingRepositoryError('INVALID_STATE', 'usage operation status is invalid');
+    if (operation.reservationGeneration !== undefined && (!Number.isSafeInteger(operation.reservationGeneration) || operation.reservationGeneration < MIN_RESERVATION_GENERATION)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation reservation generation is invalid');
     validateUsage(operation.usage, organizationId);
     if (!operation.delta || typeof operation.delta !== 'object' || Array.isArray(operation.delta)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation delta is invalid');
     for (const [metric, value] of Object.entries(operation.delta)) {
@@ -550,6 +552,9 @@ export function billingPostgresSchemaSql(tablePrefix = 'private_skills_billing')
   if (typeof tablePrefix !== 'string') throw new BillingRepositoryError('INVALID_TABLE', 'billing table prefix is invalid');
   const normalizedPrefix = tablePrefix.trim();
   const tables = tableNames(normalizedPrefix);
+  // Keep the generated identifier below PostgreSQL's 63-byte identifier
+  // limit even when callers use the maximum accepted table prefix.
+  const generationConstraintName = `${normalizedPrefix}_op_generation_check`;
   return `
 CREATE TABLE IF NOT EXISTS ${tables.customers} (
   organization_id text PRIMARY KEY,
@@ -634,6 +639,7 @@ CREATE TABLE IF NOT EXISTS ${tables.operations} (
   created_at timestamptz NOT NULL,
   status text NOT NULL DEFAULT 'reserved',
   reconciled jsonb,
+  reservation_generation bigint NOT NULL DEFAULT 1,
   PRIMARY KEY (organization_id, operation_key)
 );
 
@@ -641,6 +647,8 @@ ALTER TABLE ${tables.operations}
   ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'reserved';
 ALTER TABLE ${tables.operations}
   ADD COLUMN IF NOT EXISTS reconciled jsonb;
+ALTER TABLE ${tables.operations}
+  ADD COLUMN IF NOT EXISTS reservation_generation bigint NOT NULL DEFAULT 1;
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -650,6 +658,17 @@ BEGIN
     ALTER TABLE ${tables.operations}
       ADD CONSTRAINT ${quoteIdentifier(`${normalizedPrefix}_operations_status_check`)}
       CHECK (status IN ('reserved', 'committed', 'released'));
+  END IF;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = '${generationConstraintName}'
+  ) THEN
+    ALTER TABLE ${tables.operations}
+      ADD CONSTRAINT ${quoteIdentifier(generationConstraintName)}
+      CHECK (reservation_generation >= 1);
   END IF;
 END $$;
 
@@ -817,6 +836,10 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
   }
   const status = row.status === null || row.status === undefined ? undefined : row.status;
   if (status !== undefined && status !== 'reserved' && status !== 'committed' && status !== 'released') throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation status is invalid');
+  const reservationGeneration = row.reservation_generation === null || row.reservation_generation === undefined
+    ? undefined
+    : asNumber(row.reservation_generation, 'operation.reservation_generation');
+  if (reservationGeneration !== undefined && reservationGeneration < MIN_RESERVATION_GENERATION) throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation reservation generation is invalid');
   return {
     organizationId,
     operationKey: asText(row.operation_key, 'operation.operation_key'),
@@ -825,6 +848,7 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
     createdAt: asIso(row.created_at, 'operation.created_at'),
     ...(status === undefined ? {} : { status }),
     ...(reconciled === undefined ? {} : { reconciled }),
+    ...(reservationGeneration === undefined ? {} : { reservationGeneration }),
   };
 }
 
@@ -912,12 +936,12 @@ export class PostgresBillingRepository implements BillingRepository {
     // Keep ordinary reads bounded. Transactions pass only the exact keys that
     // must be replayed into this window, avoiding an unbounded ledger scan
     // while retaining aged idempotency rows under the organization lock.
-    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
+    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled, reservation_generation FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
     const operationRows = [...operationsResult.rows];
     for (const normalizedOperationKey of normalizedOperationKeys) {
       if (operationRows.some((row) => row.operation_key === normalizedOperationKey)) continue;
       const requestedResult = await executor.query<Record<string, unknown>>(
-        `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2${suffix}`,
+        `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled, reservation_generation FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2${suffix}`,
         [normalized, normalizedOperationKey],
       );
       if (requestedResult.rows.length > 1) throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation is duplicated');
@@ -1014,10 +1038,10 @@ export class PostgresBillingRepository implements BillingRepository {
     // across PostgreSQL transactions.
     for (const operation of state.usageOperations) {
       await executor.query(
-        `INSERT INTO ${this.tables.operations} (organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, $9, $10::jsonb)
-         ON CONFLICT (organization_id, operation_key) DO UPDATE SET seats_delta = EXCLUDED.seats_delta, storage_bytes_delta = EXCLUDED.storage_bytes_delta, scans_delta = EXCLUDED.scans_delta, eve_cost_cents_delta = EXCLUDED.eve_cost_cents_delta, usage_snapshot = EXCLUDED.usage_snapshot, created_at = EXCLUDED.created_at, status = EXCLUDED.status, reconciled = EXCLUDED.reconciled`,
-        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, operation.usage, operation.createdAt, operation.status ?? 'reserved', operation.reconciled ?? null],
+        `INSERT INTO ${this.tables.operations} (organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled, reservation_generation)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, $9, $10::jsonb, $11)
+         ON CONFLICT (organization_id, operation_key) DO UPDATE SET seats_delta = EXCLUDED.seats_delta, storage_bytes_delta = EXCLUDED.storage_bytes_delta, scans_delta = EXCLUDED.scans_delta, eve_cost_cents_delta = EXCLUDED.eve_cost_cents_delta, usage_snapshot = EXCLUDED.usage_snapshot, created_at = EXCLUDED.created_at, status = EXCLUDED.status, reconciled = EXCLUDED.reconciled, reservation_generation = EXCLUDED.reservation_generation`,
+        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, operation.usage, operation.createdAt, operation.status ?? 'reserved', operation.reconciled ?? null, operation.reservationGeneration ?? MIN_RESERVATION_GENERATION],
       );
     }
   }
@@ -1116,8 +1140,8 @@ export class PostgresBillingRepository implements BillingRepository {
     await this.ensureSchema();
     const result = await this.pool.query<Record<string, unknown>>(
       second === undefined
-        ? `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE operation_key = $1 ORDER BY organization_id ASC LIMIT 2`
-        : `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2`,
+        ? `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled, reservation_generation FROM ${this.tables.operations} WHERE operation_key = $1 ORDER BY organization_id ASC LIMIT 2`
+        : `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled, reservation_generation FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2`,
       second === undefined ? [normalizedKey] : [validateBillingOrganizationId(first), normalizedKey],
     );
     if (second === undefined) {

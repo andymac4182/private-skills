@@ -85,6 +85,8 @@ const ACTIVE_SUBSCRIPTION_STATUSES = new Set<BillingSubscriptionStatus>(['active
 const SUBSCRIPTION_EVENTS = new Set(['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted']);
 const REFUND_EVENTS = new Set(['charge.refunded', 'refund.created', 'refund.updated']);
 const MAX_OPERATION_KEY_BYTES = 256;
+const INITIAL_RESERVATION_GENERATION = 1;
+const MAX_RESERVATION_GENERATION = Number.MAX_SAFE_INTEGER;
 export const MAX_WEBHOOK_BODY_BYTES = 10 * 1024 * 1024;
 const MAX_WEBHOOK_EVENTS = 2_000;
 
@@ -257,6 +259,44 @@ function normalizedDelta(input: UsageDelta): UsageDelta {
 
 function sameDelta(left: UsageDelta, right: UsageDelta): boolean {
   return (left.seats ?? 0) === (right.seats ?? 0) && (left.storageBytes ?? 0) === (right.storageBytes ?? 0) && (left.scans ?? 0) === (right.scans ?? 0) && (left.eveCostCents ?? 0) === (right.eveCostCents ?? 0);
+}
+
+function normalizeReservationGeneration(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < INITIAL_RESERVATION_GENERATION || (value as number) > MAX_RESERVATION_GENERATION) {
+    throw new BillingError('INVALID_USAGE', 'reservation generation is invalid', 400);
+  }
+  return value as number;
+}
+
+function operationReservationGeneration(operation: BillingUsageOperation): number {
+  // Rows written before generation fencing are the first lifecycle. Keep that
+  // interpretation stable so an upgrade does not reject a valid legacy retry.
+  return operation.reservationGeneration === undefined
+    ? INITIAL_RESERVATION_GENERATION
+    : normalizeReservationGeneration(operation.reservationGeneration);
+}
+
+function nextReservationGeneration(operation: BillingUsageOperation): number {
+  const current = operationReservationGeneration(operation);
+  if (current >= MAX_RESERVATION_GENERATION) throw new BillingError('BILLING_LEDGER_CORRUPT', 'reservation generation exhausted', 500, { retryable: false });
+  return current + 1;
+}
+
+function staleReservationGeneration(current: number, expected: number | undefined): BillingError {
+  return new BillingError(
+    'STALE_RESERVATION_GENERATION',
+    expected === undefined
+      ? 'A reservation generation is required after the lifecycle was reopened'
+      : 'The usage reservation lifecycle is no longer current',
+    409,
+    {
+      retryable: false,
+      details: {
+        currentGeneration: current,
+        ...(expected === undefined ? {} : { expectedGeneration: expected }),
+      },
+    },
+  );
 }
 
 function appendDurableUsageOperation(
@@ -947,17 +987,23 @@ export class BillingService {
    * Reconcile a pre-reserved estimate with measured usage in one transaction.
    * The reservation remains the fail-closed guard before work starts; this
    * correction records the difference after the worker reports actual cost.
+   * New callers should pass the generation returned by reserveUsage so a
+   * delayed callback cannot release a later admission with the same key.
    */
   async reconcileUsage(
     organizationId: string,
     reservationKey: string,
     actual: UsageDelta,
     operationKey: string,
+    reservationGeneration?: number,
   ): Promise<UsageReservation> {
     const normalized = validateBillingOrganizationId(organizationId);
     const normalizedReservationKey = validateBillingIdentifier(reservationKey, 'reservationKey', MAX_OPERATION_KEY_BYTES);
     const normalizedActual = nonnegativeDeltaInput(actual);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const expectedGeneration = reservationGeneration === undefined
+      ? undefined
+      : normalizeReservationGeneration(reservationGeneration);
     const nowMs = this.now();
     // Reload both the reservation and correction rows inside the organization
     // lock so a bounded snapshot cannot miss an aged operation or race a
@@ -965,6 +1011,16 @@ export class BillingService {
     return this.transactionWithUsageOperations(normalized, [normalizedReservationKey, normalizedKey], (state) => {
       const reservation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedReservationKey);
       if (!reservation) throw new BillingError('USAGE_RESERVATION_NOT_FOUND', 'The usage reservation does not exist', 404);
+      const currentGeneration = operationReservationGeneration(reservation);
+      // A four-argument reconciliation remains valid for the first lifecycle
+      // (including legacy rows). Once the reservation is reopened, omission is
+      // ambiguous and is rejected exactly like an explicitly stale token.
+      if (expectedGeneration === undefined && currentGeneration > INITIAL_RESERVATION_GENERATION) {
+        throw staleReservationGeneration(currentGeneration, expectedGeneration);
+      }
+      if (expectedGeneration !== undefined && expectedGeneration !== currentGeneration) {
+        throw staleReservationGeneration(currentGeneration, expectedGeneration);
+      }
       const reservationStatus = reservation.status ?? 'reserved';
       if (reservationStatus === 'released' && Object.values(normalizedActual).some((value) => value !== 0)) {
         throw new BillingError('USAGE_RESERVATION_CLOSED', 'A released usage reservation cannot be charged again', 409);
@@ -991,9 +1047,10 @@ export class BillingService {
           operationKey: normalizedKey,
           idempotent: !newMeasurement,
           delta: {},
+          reservationGeneration: currentGeneration,
           snapshot: { organizationId: normalized, limits: { ...entitlement.limits }, usage: { ...state.usage }, entitlement },
         }
-        : this.reserveUsageInState(state, normalized, correction, normalizedKey, nowMs);
+        : this.reserveUsageInState(state, normalized, correction, normalizedKey, nowMs, currentGeneration);
       if (newMeasurement) {
         const nextActual = { ...priorActual };
         for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
@@ -1015,6 +1072,7 @@ export class BillingService {
       // the current lifecycle remain idempotent.
       const correctionOperation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
       if (correctionOperation && correctionOperation !== reservation) {
+        correctionOperation.reservationGeneration = currentGeneration;
         correctionOperation.status = reservation.status === 'released'
           ? 'released'
           : reservation.status === 'committed'
@@ -1030,8 +1088,9 @@ export class BillingService {
     reservationKey: string,
     actual: UsageDelta,
     operationKey: string,
+    reservationGeneration?: number,
   ): Promise<UsageReservation> {
-    return this.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+    return this.reconcileUsage(organizationId, reservationKey, actual, operationKey, reservationGeneration);
   }
 
   /**
@@ -1045,6 +1104,7 @@ export class BillingService {
     delta: UsageDelta,
     operationKey: string,
     nowMs: number,
+    reservationGeneration?: number,
   ): UsageReservation {
     state.usage = periodUsage(state.usage, nowMs);
     const entitlement = entitlementFromState(this.catalog, state, this.usageEnabled);
@@ -1062,17 +1122,21 @@ export class BillingService {
         existing.status = 'reserved';
         delete existing.reconciled;
         existing.usage = { ...next };
+        existing.reservationGeneration = reservationGeneration ?? nextReservationGeneration(existing);
         return {
           operationKey,
           idempotent: false,
           delta: { ...delta },
+          reservationGeneration: operationReservationGeneration(existing),
           snapshot: { organizationId, limits: { ...entitlement.limits }, usage: { ...next }, entitlement },
         };
       }
+      const generation = operationReservationGeneration(existing);
       return {
         operationKey,
         idempotent: true,
         delta: { ...existing.delta },
+        reservationGeneration: generation,
         snapshot: { organizationId, limits: { ...entitlement.limits }, usage: { ...existing.usage }, entitlement },
       };
     }
@@ -1087,6 +1151,7 @@ export class BillingService {
       usage: { ...next },
       createdAt: new Date(nowMs).toISOString(),
       status: 'reserved',
+      reservationGeneration: reservationGeneration ?? INITIAL_RESERVATION_GENERATION,
     };
     state.usageOperations.push(operation);
     if (state.usageOperations.length > 20_000) state.usageOperations.splice(0, state.usageOperations.length - 20_000);
@@ -1094,6 +1159,7 @@ export class BillingService {
       operationKey,
       idempotent: false,
       delta: { ...delta },
+      reservationGeneration: operation.reservationGeneration,
       snapshot: { organizationId, limits: { ...entitlement.limits }, usage: { ...next }, entitlement },
     };
   }
