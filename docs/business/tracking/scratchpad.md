@@ -56,3 +56,9 @@ Working hypothesis to test: an approachable company skills platform for engineer
 On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting the same token again returned "Session token is invalid" and cleared the input. The temporary browser variable was discarded. This closes the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI, display-name correction, SSO settings failure and hosted acceptance remain separate. No production state changed.
 
 Review follow-ups: billing count reconciliation needs a stale-read/after-hook barrier test in addition to concurrent reservation tests; Eve dispatcher needs current lease timestamps and bounded invocation continuation under slow providers. Owners are implementing and verifying these before integration.
+
+### Second-provider browser onboarding
+
+Root verified Globex fixture login on 5405 (`89ef195`) as Carol, then created `Globex Browser Demo` / `globex-browser-demo` through the actual onboarding UI. The company selector contained only that company; Carol appeared as owner. Reload persisted the company and loaded its empty registry with three configured checks and unreviewed releases blocked. This supplements Acme login; it is local fixture evidence, not real GitHub/Google proof or populated cross-company artifact isolation.
+
+Foundation traced the 5404 SSO error to missing `private_skills_company_sso_providers` (42P01), explicitly applied the repository schema only to disposable local DB, and obtained authenticated HTTP 200 with an empty provider list. The old browser tab had closed, so no post-migration browser success is claimed yet. Launcher regression fix and fresh-instance proof remain assigned.
