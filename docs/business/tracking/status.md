@@ -7,7 +7,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L01 | Separate marketing deployment | foundation_release | Source merged; provision separate project and verify Git deployment, public routes and app links |
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Active; replace 16 equal menu items with task groups and accessible mobile drawer |
-| L04 | Invitations and member administration | editor_test_stability | Active; copy-link, authenticated acceptance, expired/wrong-email errors and role tests |
+| L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
 | L05 | Company-managed SSO | oauth_demo_finish | Active; pinned Better Auth SSO integration, company-bound configuration, OIDC/SAML proofs |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Active; explicit owner proof, atomic adoption and signed worker routing |
 | L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
