@@ -102,8 +102,8 @@ describe('OperationsStatusPanel', () => {
     expect(container.textContent).toContain('Company operations status')
     expect(container.textContent).toContain('1 active')
     expect(container.textContent).toContain('1/2 current')
-    expect(container.textContent).toContain('Auth/callback history')
-    expect(container.textContent).toContain('Unavailable')
+    expect(container.textContent).toContain('Sign-in and callback history')
+    expect(container.textContent).toContain('Not available')
     expect(container.textContent).not.toContain('No auth history')
   })
 
