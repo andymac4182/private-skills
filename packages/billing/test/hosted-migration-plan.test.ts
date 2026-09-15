@@ -55,7 +55,7 @@ describe('hosted billing migration plan', () => {
           name: index.name,
           unique: false,
           primary: false,
-          columns: index.columns.map((column) => index.descendingColumns?.includes(column) ? `${column} DESC` : column),
+          columns: index.columns,
           definition: `CREATE INDEX ${index.name} ON ${spec.name} (${index.columns.map((column) => index.descendingColumns?.includes(column) ? `${column} DESC` : column).join(', ')})`,
         })),
       ];

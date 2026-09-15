@@ -435,15 +435,10 @@ function normalizeSql(value: string): string {
   return value.replaceAll(/\s+/gu, ' ').replaceAll('::text', '').trim().toLowerCase();
 }
 
-function expectedIndexColumns(columns: readonly string[], descendingColumns: readonly string[] = []): readonly string[] {
-  const descending = new Set(descendingColumns);
-  return columns.map((column) => descending.has(column) ? `${column} DESC` : column);
-}
-
-function migrationIndexSpecsForTable(logicalName: BillingSchemaTableSpec['logicalName']): readonly { name: string; columns: readonly string[] }[] {
+function migrationIndexSpecsForTable(logicalName: BillingSchemaTableSpec['logicalName']): readonly { name: string; columns: readonly string[]; descendingColumns: readonly string[] }[] {
   return billingSchemaIndexSpecs()
     .filter((index) => index.table === logicalName)
-    .map((index) => ({ name: index.name, columns: expectedIndexColumns(index.columns, index.descendingColumns) }));
+    .map((index) => ({ name: index.name, columns: index.columns, descendingColumns: index.descendingColumns ?? [] }));
 }
 
 function checkDefinitionMatches(definition: string, expected: string): boolean {
@@ -478,9 +473,14 @@ export function validateBillingCreationReadback(target: BillingSchemaTargetReadb
         throw new Error(`billing table ${spec.name} column shape is incorrect`);
       }
     }
-    const actualChecks = table.constraints.filter((constraint) => constraint.type === 'check');
+    // Some PostgreSQL catalog versions expose implicit NOT NULL entries as
+    // pg_constraint rows (contype = 'n'). Nullability is checked from
+    // pg_attribute above; only user-defined keys and checks belong in this
+    // migration shape gate.
+    const actualConstraints = table.constraints.filter((constraint) => constraint.type !== 'n');
+    const actualChecks = actualConstraints.filter((constraint) => constraint.type === 'check');
     const expectedConstraintCount = 1 + spec.uniqueConstraints.length + spec.checks.length;
-    if (actualChecks.length !== spec.checks.length || table.constraints.length !== expectedConstraintCount) {
+    if (actualChecks.length !== spec.checks.length || actualConstraints.length !== expectedConstraintCount) {
       throw new Error(`billing table ${spec.name} constraint shape is incorrect`);
     }
     if (!actualChecks.every((constraint) => spec.checks.some((expected) => checkDefinitionMatches(constraint.definition, expected)))) {
@@ -511,7 +511,8 @@ export function validateBillingCreationReadback(target: BillingSchemaTargetReadb
       }
       const indexDefinition = normalizeSql(actualIndex.definition);
       if (!indexDefinition.startsWith(`create index ${expectedIndex.name.toLowerCase()}`)
-        || expectedIndex.columns.some((column) => !indexDefinition.includes(column.toLowerCase()))) {
+        || expectedIndex.columns.some((column) => !indexDefinition.includes(column.toLowerCase()))
+        || expectedIndex.descendingColumns.some((column) => !indexDefinition.includes(`${column.toLowerCase()} desc`))) {
         throw new Error(`billing table ${spec.name} secondary index definition is incorrect`);
       }
     }
