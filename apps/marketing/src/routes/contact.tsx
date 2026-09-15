@@ -2,13 +2,13 @@ import { createFileRoute } from '@tanstack/react-router'
 import { PublicLayout } from '../components/PublicLayout'
 import { appLoginHref } from '../lib/appHref'
 import { marketingContactUrl } from '../lib/contact'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/contact')({
-  head: () => ({
-    meta: [
-      { title: 'Launch contact · Private Skills' },
-      { name: 'description', content: 'Choose a real next step for evaluating Private Skills with your engineering team.' },
-    ],
+  head: () => marketingHead({
+    path: '/contact',
+    title: 'Launch contact · Private Skills',
+    description: 'Choose a real next step for evaluating Private Skills with your engineering team.',
   }),
   component: ContactPage,
 })

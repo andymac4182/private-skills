@@ -3,6 +3,7 @@ import { defineConfig, loadEnv } from 'vite'
 import { nitro } from 'nitro/vite'
 import viteReact from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+import { marketingIndexingForBuild, marketingOriginForBuild } from './src/lib/marketingConfig.ts'
 
 /**
  * The marketing app is intentionally a small static-facing TanStack/Nitro
@@ -60,12 +61,16 @@ export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, fileURLToPath(new URL('../../', import.meta.url)), '')
   const appOrigin = appOriginForBuild(process.env.APP_ORIGIN ?? environment.APP_ORIGIN, mode)
   const contactUrl = publicContactUrlForBuild(process.env.PUBLIC_CONTACT_URL ?? environment.PUBLIC_CONTACT_URL, mode)
+  const marketingOrigin = marketingOriginForBuild(process.env.MARKETING_ORIGIN ?? environment.MARKETING_ORIGIN, mode)
+  const marketingIndexing = marketingIndexingForBuild(process.env.MARKETING_INDEXING ?? environment.MARKETING_INDEXING, mode, marketingOrigin)
 
   return {
     root,
     define: {
       __MARKETING_APP_ORIGIN__: JSON.stringify(appOrigin),
       __MARKETING_CONTACT_URL__: JSON.stringify(contactUrl),
+      __MARKETING_ORIGIN__: JSON.stringify(marketingOrigin),
+      __MARKETING_INDEXING__: JSON.stringify(marketingIndexing),
     },
     plugins: [
       tanstackStart(),

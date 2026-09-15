@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { PublicLayout } from '../components/PublicLayout'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/faq')({
-  head: () => ({
-    meta: [
-      { title: 'FAQ · Private Skills' },
-      { name: 'description', content: 'Answers about Private Skills, its review workflow, source connections, installation, and launch status.' },
-    ],
+  head: () => marketingHead({
+    path: '/faq',
+    title: 'FAQ · Private Skills',
+    description: 'Answers about Private Skills, its review workflow, source connections, installation, and launch status.',
   }),
   component: FaqPage,
 })

@@ -1,13 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { CliReleaseChooser } from '../components/CliReleaseChooser'
 import { appLoginHref } from '../lib/appHref'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/docs/getting-started')({
-  head: () => ({
-    meta: [
-      { title: 'Getting started · Private Skills' },
-      { name: 'description', content: 'Set up a first Private Skills registry workflow, configure policy, and install an approved release.' },
-    ],
+  head: () => marketingHead({
+    path: '/docs/getting-started',
+    title: 'Getting started · Private Skills',
+    description: 'Set up a first Private Skills registry workflow, configure policy, and install an approved release.',
   }),
   component: GettingStartedPage,
 })

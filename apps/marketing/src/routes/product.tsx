@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { ProductFlowDemo, PublicLayout } from '../components/PublicLayout'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/product')({
-  head: () => ({
-    meta: [
-      { title: 'Product · Private Skills' },
-      { name: 'description', content: 'See how Private Skills connects source discovery, release checks, packs, and installation for engineering teams.' },
-    ],
+  head: () => marketingHead({
+    path: '/product',
+    title: 'Product · Private Skills',
+    description: 'See how Private Skills connects source discovery, release checks, packs, and installation for engineering teams.',
   }),
   component: ProductPage,
 })

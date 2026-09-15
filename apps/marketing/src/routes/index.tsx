@@ -1,13 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { InstallWalkthrough, ProductFlowDemo, PublicLayout } from '../components/PublicLayout'
 import { appLoginHref } from '../lib/appHref'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/')({
-  head: () => ({
-    meta: [
-      { title: 'Private Skills · A private registry for engineering teams' },
-      { name: 'description', content: 'Publish, review, and install AI agent skills through a private registry with policy-aware pull-through and repeatable packs.' },
-    ],
+  head: () => marketingHead({
+    path: '/',
+    title: 'Private Skills · A private registry for engineering teams',
+    description: 'Trace AI-agent skills from source to policy decision to repeatable install with a private registry for engineering teams.',
   }),
   component: HomePage,
 })
@@ -16,14 +16,14 @@ function HomePage() {
   return <PublicLayout current="home">
     <section className="marketing-hero" aria-labelledby="marketing-hero-title">
       <div className="marketing-hero-copy">
-        <span className="marketing-eyebrow">Private registry for engineering teams</span>
-        <h1 id="marketing-hero-title">Give your team control of <em>private AI agent skills.</em></h1>
-        <p className="marketing-hero-lede">Private Skills brings your team’s AI agent skills into one deliberate workflow: discover a source, review the release, pin the pack, and install a known release.</p>
+        <span className="marketing-eyebrow">Private AI-agent skills for engineering teams</span>
+        <h1 id="marketing-hero-title">Give your team control of <em>private AI-agent skills.</em></h1>
+        <p className="marketing-hero-lede">Private Skills brings source discovery, required checks, release decisions, and repeatable installs into one place, so every project can see what it is choosing and use the same skill version.</p>
         <div className="marketing-hero-actions">
-          <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the pilot guide <span aria-hidden="true">↗</span></a>
-          <a className="marketing-hero-link" href={appLoginHref()}>Sign in to registry <span aria-hidden="true">→</span></a>
+          <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Start with the pilot guide <span aria-hidden="true">↗</span></a>
+          <a className="marketing-hero-link" href={appLoginHref()}>Already have access? Sign in <span aria-hidden="true">→</span></a>
         </div>
-        <p className="marketing-hero-note"><span aria-hidden="true" className="marketing-status-dot" />Private by default <span aria-hidden="true">·</span> policy stays visible <span aria-hidden="true">·</span> review gates are configurable</p>
+        <p className="marketing-hero-note"><span aria-hidden="true" className="marketing-status-dot" />Private registry <span aria-hidden="true">·</span> source and policy visible <span aria-hidden="true">·</span> required checks before installation</p>
       </div>
       <div className="marketing-hero-art" role="img" aria-label="Illustrated example release moving through source, scan, pack, and install stages">
         <div className="marketing-product-window">
@@ -56,14 +56,14 @@ function HomePage() {
     <section className="marketing-section" id="product" aria-labelledby="product-title">
       <div className="marketing-section-heading">
         <span className="marketing-eyebrow">Product at a glance</span>
-        <h2 id="product-title">A registry around the agent stack you already have.</h2>
-        <p>Keep the team’s source choices, review evidence, and install decisions close enough to inspect. Private Skills is the layer between “someone found a skill” and “we are comfortable installing it.”</p>
+        <h2 id="product-title">One private place for the agent skills your team uses.</h2>
+        <p>Keep source choices, release evidence, and install decisions together, so a platform team can explain what a project is about to install.</p>
       </div>
       <div className="marketing-feature-grid">
         <article className="marketing-feature-card"><span className="marketing-feature-index">01 / CATALOG</span><h3>One private catalog</h3><p>Publish immutable releases into a workspace your team can search, inspect, and authorize by role.</p><span className="marketing-feature-tag">private by default</span></article>
-        <article className="marketing-feature-card"><span className="marketing-feature-index">02 / PULL-THROUGH</span><h3>Source pull-through</h3><p>Search configured catalogs, preserve the original identity, and bring a candidate through checks before it reaches the cache.</p><span className="marketing-feature-tag">provenance attached</span></article>
+        <article className="marketing-feature-card"><span className="marketing-feature-index">02 / PULL-THROUGH</span><h3>Keep the source trail</h3><p>Pull from a connected catalog, keep its source identity with the candidate, and apply the checks required by your policy before caching.</p><span className="marketing-feature-tag">source attached</span></article>
         <article className="marketing-feature-card"><span className="marketing-feature-index">03 / PACKS</span><h3>Repeatable packs</h3><p>Group approved releases into a versioned pack so a project can reproduce the same skill set.</p><span className="marketing-feature-tag">selected releases</span></article>
-        <article className="marketing-feature-card"><span className="marketing-feature-index">04 / EVE</span><h3>Review and author with Eve</h3><p>Eve can suggest a review decision or a draft change. A person chooses what to apply, while publishing and merging stay with the team.</p><span className="marketing-feature-tag">human decision</span></article>
+        <article className="marketing-feature-card"><span className="marketing-feature-index">04 / EVE</span><h3>Review suggestions from Eve</h3><p>Eve can prepare a review proposal or draft-change suggestion. A person chooses what to apply; publishing and merging remain team actions.</p><span className="marketing-feature-tag">human decision</span></article>
       </div>
     </section>
 
@@ -84,7 +84,7 @@ function HomePage() {
     <section className="marketing-section" aria-labelledby="principles-title">
       <div className="marketing-section-heading"><span className="marketing-eyebrow">Built for the team around the code</span><h2 id="principles-title">The useful part is the shared context.</h2></div>
       <div className="marketing-principles">
-        <article className="marketing-principle"><small>01 / OWNERSHIP</small><h3>Owners can see what changed.</h3><p>Release versions, source revisions, policy revisions, and audit activity stay alongside the artifact decision.</p></article>
+        <article className="marketing-principle"><small>01 / VISIBILITY</small><h3>Teams can see what changed.</h3><p>Release versions, source revisions, policy revisions, and audit activity stay alongside the artifact decision.</p></article>
         <article className="marketing-principle"><small>02 / REPEATABILITY</small><h3>Projects can install the same plan.</h3><p>Pack members and lock metadata preserve the selected releases and digests for another installation.</p></article>
         <article className="marketing-principle"><small>03 / BOUNDARIES</small><h3>Automation has a job description.</h3><p>Scanning and pull-through handle a defined job. Eve can suggest a review action or draft change; people still decide what to publish, merge, or install.</p></article>
       </div>
@@ -96,7 +96,8 @@ function HomePage() {
         <details><summary>Does Private Skills execute a skill while it is being imported?</summary><p>No. Uploaded and imported skill content is handled as data during ingestion, scanning, and installation. The registry does not run skill scripts or package lifecycle hooks.</p></details>
         <details><summary>What happens when a required scanner fails?</summary><p>The candidate stays unavailable or quarantined. A client-side flag cannot turn a failed required check into an approved release.</p></details>
         <details><summary>Can Eve publish or merge a change for us?</summary><p>No. Eve's review tool records a proposal for a person to decide. In the builder, a person can ask Eve to apply a chosen change to a draft; that authoring step is separate from publishing or merging.</p></details>
-        <details><summary>Is this a public marketplace?</summary><p>The product is designed around private, authorized registries. Configured external catalogs can be searched and resolved through source adapters, but discoverability does not make a release approved.</p></details>
+        <details><summary>Does every release need a human approval?</summary><p>Required checks can make the release available automatically. A human approval is part of the path only when your policy adds a review gate; Eve's proposals are advisory until then.</p></details>
+        <details><summary>Is this a public marketplace?</summary><p>The product is designed around private, authorized registries. Connected external catalogs can be searched and resolved through source adapters, but discoverability does not make a release approved.</p></details>
       </div>
     </section>
   </PublicLayout>
