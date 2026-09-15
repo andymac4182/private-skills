@@ -7955,6 +7955,11 @@ async function settleUnusedMeteredScanReservation(
       );
       if (newerActiveJob) return false;
       const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (
+        job.meteredReservationGeneration !== undefined &&
+        owner &&
+        (owner.reservationGeneration ?? 1) !== job.meteredReservationGeneration
+      ) return false;
       if (!owner || owner.state !== 'released' || owner.jobId !== job.id) return false;
       currentJob.meteredScanSettlement = 'released';
       currentJob.updatedAt = nowIso();
@@ -8015,8 +8020,7 @@ export async function releaseMeteredUsageIfUnowned(
       if (
         owner &&
         expectedReservationGeneration !== undefined &&
-        owner.reservationGeneration !== undefined &&
-        owner.reservationGeneration !== expectedReservationGeneration
+        (owner.reservationGeneration ?? 1) !== expectedReservationGeneration
       ) return { kind: 'keep' as const };
       if (expectedJobId !== undefined) {
         if (owner?.jobId !== undefined && owner.jobId !== expectedJobId) return { kind: 'keep' as const };
@@ -8083,7 +8087,7 @@ export async function releaseMeteredUsageIfUnowned(
       const mutable = ensureState(state, defaultPolicy());
       const owner = findMeteredReservationOwner(mutable, reservationKey);
       if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token) return;
-      if (decision.reservationGeneration !== undefined && owner.reservationGeneration !== decision.reservationGeneration) return;
+      if (decision.reservationGeneration !== undefined && (owner.reservationGeneration ?? 1) !== decision.reservationGeneration) return;
       if (expectedJobId !== undefined) {
         if (owner.jobId !== expectedJobId) return;
         const newerActiveJob = mutable.jobs.find((job) =>
@@ -8145,9 +8149,8 @@ function upsertMeteredReservationOwner(
   if (
     existing &&
     existing.state !== 'released' &&
-    existing.reservationGeneration !== undefined &&
     reservationGeneration !== undefined &&
-    existing.reservationGeneration !== reservationGeneration
+    (existing.reservationGeneration ?? 1) !== reservationGeneration
   ) {
     throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503, { retryable: true });
   }
@@ -8189,8 +8192,7 @@ function prepareMeteredReservationOwner(
   } else if (
     owner &&
     reservationGeneration !== undefined &&
-    owner.reservationGeneration !== undefined &&
-    owner.reservationGeneration !== reservationGeneration
+    (owner.reservationGeneration ?? 1) !== reservationGeneration
   ) {
     throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503, { retryable: true });
   } else if (owner && reservationGeneration !== undefined) {

@@ -177,8 +177,7 @@ function prepareDraftReservationOwner(
   } else if (
     owner &&
     admission.reservationGeneration !== undefined &&
-    owner.reservationGeneration !== undefined &&
-    owner.reservationGeneration !== admission.reservationGeneration
+    (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
   ) {
     throw new AuthoringApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503);
   } else if (owner && admission.reservationGeneration !== undefined) {
@@ -240,8 +239,7 @@ async function releaseDraftUsageIfUnowned(
       if (
         owner &&
         admission.reservationGeneration !== undefined &&
-        owner.reservationGeneration !== undefined &&
-        owner.reservationGeneration !== admission.reservationGeneration
+        (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
       ) return 'busy' as const;
       if (owner?.state === 'releasing') {
         // A previous process may have completed the external correction but
@@ -283,7 +281,7 @@ async function releaseDraftUsageIfUnowned(
       if (!owner || owner.state !== 'releasing' || owner.releaseToken !== token) return;
       if (
         admission.reservationGeneration !== undefined &&
-        owner.reservationGeneration !== admission.reservationGeneration
+        (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
       ) return;
       owner.updatedAt = new Date().toISOString();
       if (released) {
