@@ -101,6 +101,7 @@ class RecordingBilling implements BillingUsageAdmission {
   readonly reservations = new Set<string>();
   readonly reconciliations: Array<{ key: string; actual: MeteredUsageDelta }> = [];
   readonly reconciliationOperationKeys: string[] = [];
+  failReconciliation = false;
 
   status(): { enabled: boolean } {
     return { enabled: true };
@@ -120,8 +121,28 @@ class RecordingBilling implements BillingUsageAdmission {
   ): Promise<unknown> {
     this.reconciliations.push({ key, actual });
     this.reconciliationOperationKeys.push(operationKey);
+    if (this.failReconciliation) throw new Error('simulated uncertain billing correction');
     if (actual.scans === 0) this.reservations.delete(key);
     return {};
+  }
+}
+
+class MemoryRepository implements StateRepository {
+  private state: RegistryState;
+
+  constructor(state: RegistryState) {
+    this.state = cloneRegistryState(state);
+  }
+
+  async read(_organizationId: string): Promise<RegistryState> {
+    return cloneRegistryState(this.state);
+  }
+
+  async transaction<T>(_organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
+    const working = cloneRegistryState(this.state);
+    const result = updater(working);
+    this.state = working;
+    return result;
   }
 }
 
@@ -205,10 +226,12 @@ describe('durable metered reservation ownership', () => {
     );
 
     expect(billing.reconciliations).toHaveLength(2);
-    expect(billing.reconciliationOperationKeys).toEqual([
-      `${RESERVATION_KEY}:release`,
-      `${RESERVATION_KEY}:release`,
-    ]);
+    const releaseToken = (await repository.read(ORGANIZATION)).meteredReservationOwners?.[0]?.releaseToken;
+    expect(releaseToken).toBeUndefined();
+    const operationKeys = billing.reconciliationOperationKeys;
+    expect(operationKeys).toHaveLength(2);
+    expect(operationKeys[0]).toMatch(new RegExp(`^${RESERVATION_KEY}:release:metered-release_[0-9a-f-]+$`));
+    expect(operationKeys[1]).toBe(operationKeys[0]);
     await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
       meteredReservationOwners: [{
         reservationKey: RESERVATION_KEY,
@@ -218,5 +241,70 @@ describe('durable metered reservation ownership', () => {
     await expect(repository.transaction(ORGANIZATION, (state) => {
       claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-recovered');
     })).resolves.toBeUndefined();
+  });
+
+  it('keeps the durable fence after an uncertain correction until retry succeeds', async () => {
+    const repository = new MemoryRepository(defaultRegistryState({ production: false, allowUnscanned: true }));
+    const billing = new RecordingBilling();
+    billing.failReconciliation = true;
+    await billing.reserveUsage(ORGANIZATION, { scans: 1 }, RESERVATION_KEY);
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+    );
+
+    const fenced = await repository.read(ORGANIZATION);
+    const owner = fenced.meteredReservationOwners?.[0];
+    expect(owner).toMatchObject({
+      reservationKey: RESERVATION_KEY,
+      state: 'releasing',
+      releaseToken: expect.any(String),
+    });
+    await expect(repository.transaction(ORGANIZATION, (state) => {
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-must-wait');
+    })).rejects.toMatchObject({ code: 'METERED_RESERVATION_BUSY' });
+
+    billing.failReconciliation = false;
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+    );
+
+    expect(billing.reconciliationOperationKeys).toHaveLength(2);
+    expect(billing.reconciliationOperationKeys[1]).toBe(billing.reconciliationOperationKeys[0]);
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      meteredReservationOwners: [{ reservationKey: RESERVATION_KEY, state: 'released' }],
+    });
+  });
+
+  it('does not release a newer job generation through an old completion callback', async () => {
+    const repository = new MemoryRepository(defaultRegistryState({ production: false, allowUnscanned: true }));
+    const billing = new RecordingBilling();
+    await billing.reserveUsage(ORGANIZATION, { scans: 1 }, RESERVATION_KEY);
+    await repository.transaction(ORGANIZATION, (state) => {
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-new');
+    });
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+      false,
+      'job-old',
+    );
+
+    expect(billing.reconciliations).toHaveLength(0);
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      meteredReservationOwners: [{ reservationKey: RESERVATION_KEY, state: 'owned', jobId: 'job-new' }],
+    });
   });
 });

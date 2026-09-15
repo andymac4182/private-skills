@@ -120,6 +120,7 @@ async function reserveDraftUsage(
 async function releaseDraftUsage(
   admission: DraftUsageAdmission | undefined,
   organizationId: string,
+  releaseToken?: string,
 ): Promise<boolean> {
   if (!admission) return true;
   try {
@@ -127,7 +128,7 @@ async function releaseDraftUsage(
       organizationId,
       admission.reservationKey,
       Object.fromEntries(Object.keys(admission.delta).map((metric) => [metric, 0])) as DraftUsageAdmission['delta'],
-      `${admission.reservationKey}:release`,
+      `${admission.reservationKey}:release${releaseToken === undefined ? '' : `:${releaseToken}`}`,
     );
     return true;
   } catch {
@@ -240,14 +241,17 @@ async function releaseDraftUsageIfUnowned(
   } catch {
     return;
   }
-  const released = await releaseDraftUsage(admission, deps.config.organizationId);
+  const released = await releaseDraftUsage(admission, deps.config.organizationId, token);
   try {
     await deps.repository.transaction(deps.config.organizationId, (state) => {
       const owner = draftReservationOwner(state, admission.reservationKey);
       if (!owner || owner.state !== 'releasing' || owner.releaseToken !== token) return;
-      owner.state = released ? 'released' : 'owned';
-      owner.releaseToken = undefined;
       owner.updatedAt = new Date().toISOString();
+      if (released) {
+        owner.state = 'released';
+        owner.releaseToken = undefined;
+        owner.jobId = undefined;
+      }
     });
   } catch {
     // Keep the release fence if the final transition is uncertain.

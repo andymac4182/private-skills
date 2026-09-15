@@ -7790,6 +7790,7 @@ export async function releaseMeteredUsageIfUnowned(
   reservationKey: string,
   delta: MeteredUsageDelta,
   reservationIdempotent = false,
+  expectedJobId?: string,
 ): Promise<void> {
   if (!billing) return;
   let decision: { kind: 'keep' | 'busy' | 'release'; token?: string };
@@ -7802,11 +7803,20 @@ export async function releaseMeteredUsageIfUnowned(
         job.meteredReservationKey === reservationKey,
       );
       if (active) {
+        // A completion/recovery caller may be holding an older job lease. An
+        // active replacement owns the reservation generation and must fence
+        // that caller before it reaches billing.
+        if (expectedJobId !== undefined && active.id !== expectedJobId) return { kind: 'keep' as const };
         const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned');
         owner.jobId = active.id;
         return { kind: 'keep' as const };
       }
       const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (expectedJobId !== undefined && owner?.jobId !== expectedJobId) {
+        // The reservation key can be admitted again after a completed release.
+        // A stale terminal callback must never settle that newer generation.
+        return { kind: 'busy' as const };
+      }
       if (owner?.state === 'releasing') {
         // A previous process may have completed the external correction but
         // crashed before its terminal owner transaction committed. Reuse the
@@ -7822,13 +7832,14 @@ export async function releaseMeteredUsageIfUnowned(
         owner.state = 'releasing';
         owner.releaseToken = token;
         owner.updatedAt = nowIso();
-        owner.jobId = undefined;
+        if (expectedJobId !== undefined) owner.jobId = expectedJobId;
       } else {
         mutable.meteredReservationOwners!.push({
           reservationKey,
           state: 'releasing',
           releaseToken: token,
           updatedAt: nowIso(),
+          ...(expectedJobId === undefined ? {} : { jobId: expectedJobId }),
         });
       }
       return { kind: 'release' as const, token };
@@ -7845,7 +7856,7 @@ export async function releaseMeteredUsageIfUnowned(
       organizationId,
       reservationKey,
       delta,
-      `${reservationKey}:release`,
+      meteredReleaseOperationKey(reservationKey, decision.token),
     );
     return;
   }
@@ -7854,27 +7865,40 @@ export async function releaseMeteredUsageIfUnowned(
     organizationId,
     reservationKey,
     delta,
-    `${reservationKey}:release`,
+    meteredReleaseOperationKey(reservationKey, decision.token),
   );
   try {
     await repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
       const owner = findMeteredReservationOwner(mutable, reservationKey);
-      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token) return;
+      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token || (expectedJobId !== undefined && owner.jobId !== expectedJobId)) return;
       owner.updatedAt = nowIso();
       if (released) {
         owner.state = 'released';
         owner.releaseToken = undefined;
+        owner.jobId = undefined;
       } else {
-        // Permit a future correction attempt while retaining the durable
-        // owner row.  A failed correction never opens a queue race by itself.
-        owner.state = 'owned';
-        owner.releaseToken = undefined;
+        // The correction may have been accepted remotely even when this call
+        // failed locally. Keep the same durable fence token so a retry can
+        // replay one billing operation before a newer generation is admitted.
+        // Clearing it here would allow a stale correction to hit a new charge.
       }
     });
   } catch {
     // Keep the `releasing` fence if the final state transition is uncertain.
   }
+}
+
+/**
+ * Tie a release correction to the durable owner generation. Reusing the
+ * reservation key alone is unsafe after a released operation is admitted
+ * again: a delayed correction for the previous generation could otherwise
+ * release the new charge.
+ */
+function meteredReleaseOperationKey(reservationKey: string, releaseToken?: string): string {
+  return releaseToken === undefined
+    ? `${reservationKey}:release`
+    : `${reservationKey}:release:${releaseToken}`;
 }
 
 function findMeteredReservationOwner(

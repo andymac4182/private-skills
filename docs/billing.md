@@ -180,7 +180,11 @@ scanner execution, so queue admission and retries charge one operation. A
 definite no-write or pre-scanner failure may release its reservation with an
 explicit-zero reconciliation; after a provider or blob write may have
 succeeded, the charged reservation remains held for durable object
-reconciliation. Better Auth organization hooks
+reconciliation. Release corrections are fenced by a durable per-generation
+token and use a token-specific billing operation key. If the correction result
+is uncertain, the owner remains `releasing` and queue admission stays blocked
+until the same token is replayed successfully; a stale completion can supply
+its expected job id so it cannot settle a newer owner generation. Better Auth organization hooks
 sync active members plus unexpired pending invitations and reserve a new seat
 before direct member or invitation writes. Seat holds are stored beside the
 locked usage row, and reconciliation preserves other requests' in-flight
