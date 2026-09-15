@@ -43,6 +43,27 @@ Stripe onboarding, legal-entity selection, or other external account approval.
 
 ## Critical path to 18 September
 
+### Separate marketing site and application
+
+User requirement confirmed on 15 September: the public marketing site and the
+registry application must be independently deployable projects in the same
+monorepo. `apps/marketing` owns the homepage, product explanation, pricing,
+public documentation, FAQs, and legal pages. `apps/web` owns login, company
+onboarding, the registry/editor, analytics, and account billing.
+
+Acceptance requires separate build outputs and deployment configuration,
+independent environment variables, and browser verification of both sites.
+The marketing deployment must not require database, registry, identity-provider,
+Stripe-secret, or Eve credentials. Public sign-in and signup links use a
+configured application origin and enter the application's normal login and
+onboarding flow. Identity callbacks and session cookies remain on the app
+origin. Shared brand/design assets must not import app server code.
+
+The final brand and custom domains are not selected. Separate deployable
+projects are required now; inventing or purchasing domains is not part of this
+acceptance gate. This gate remains open until both projects build and their
+cross-site navigation is verified.
+
 | Date (Brisbane) | Owner | Concrete increment | Exit evidence |
 | --- | --- | --- | --- |
 | 15 Sep | Launch integration + Identity | Land the first working homepage/onboarding increment and compose the Better Auth identity seam with the tenant router. | Reviewable source diff, focused identity/tenant test output, and a public-page route readback. |
