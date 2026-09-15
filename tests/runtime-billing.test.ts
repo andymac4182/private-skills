@@ -11,11 +11,61 @@ import type { Principal } from '../packages/contracts/src/index.js';
 const SECRET = 'runtime_billing_test_secret';
 const principal: Principal = { organizationId: 'org-runtime', subject: 'owner-runtime', roles: ['owner'] };
 
+function recordingBillingPool(statements: string[]): BillingPgPoolLike {
+  return {
+    query: async (statement) => {
+      statements.push(statement);
+      return { rows: [], rowCount: 0 };
+    },
+    connect: async () => ({
+      query: async (statement) => {
+        statements.push(statement);
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => undefined,
+    }),
+  };
+}
+
 function json(response: Response): Promise<Record<string, unknown>> {
   return response.json() as Promise<Record<string, unknown>>;
 }
 
 describe('Node billing runtime composition', () => {
+  it('does not auto-migrate billing tables during hosted production startup by default', async () => {
+    const statements: string[] = [];
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'production',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+    }, recordingBillingPool(statements), 'https://private-skills.example');
+    await runtime.service['repository'].read('org-runtime-auto-migrate-default');
+    expect(statements.some((statement) => statement.includes('CREATE TABLE IF NOT EXISTS'))).toBe(false);
+  });
+
+  it('requires an explicit billing auto-migration opt-in for production startup', async () => {
+    const statements: string[] = [];
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'production',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+      PSKILLS_BILLING_AUTO_MIGRATE: 'true',
+    }, recordingBillingPool(statements), 'https://private-skills.example');
+    await runtime.service['repository'].read('org-runtime-auto-migrate-opt-in');
+    expect(statements.some((statement) => statement.includes('CREATE TABLE IF NOT EXISTS'))).toBe(true);
+  });
+
+  it('keeps local development/test startup convenience when the flag is absent', async () => {
+    const statements: string[] = [];
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+    }, recordingBillingPool(statements), 'http://localhost:5173');
+    await runtime.service['repository'].read('org-runtime-auto-migrate-test');
+    expect(statements.some((statement) => statement.includes('CREATE TABLE IF NOT EXISTS'))).toBe(true);
+  });
+
   it('mounts the local test checkout, portal, invoice, and signed webhook journey', async () => {
     const runtime = createBillingRuntime({
       PSKILLS_ENVIRONMENT: 'test',

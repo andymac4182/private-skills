@@ -93,6 +93,13 @@ PostgreSQL boundary is disabled. The edge runtime exposes a disabled billing
 service because it has no server-only provider adapter or durable billing
 repository.
 
+Billing schema application is controlled separately from billing enablement.
+`PostgresBillingRepository` defaults `autoMigrate` to `false`. The Node runtime
+defaults `PSKILLS_BILLING_AUTO_MIGRATE` to `false` in production and to `true`
+for development/test convenience; setting the flag to `true` is an explicit
+production migration-window opt-in. A hosted deployment should run the
+reviewed SQL once under a write fence and then keep the flag unset or false.
+
 `apps/web/src/views/BillingView.tsx` renders the current plan and status,
 enforced usage and limits, invoice history, and checkout/subscription controls.
 Disabled, unconfigured, and local test-mode states are explicit in the view;

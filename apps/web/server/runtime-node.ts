@@ -438,6 +438,12 @@ export function createBillingRuntime(
   const effectiveEnv = requested && (!durable || !providerAllowed || (meteredEvaluationRequested && !meteredEvaluationAllowed))
     ? { ...env, PSKILLS_BILLING_ENABLED: 'false' }
     : env;
+  // Hosted schema changes are an explicit migration-window concern. Keep the
+  // historical convenience default for local development/test, while making
+  // production startup read-only unless an operator deliberately opts in.
+  const billingAutoMigrate = env.PSKILLS_BILLING_AUTO_MIGRATE === undefined
+    ? !production
+    : billingEnvironmentBool(env.PSKILLS_BILLING_AUTO_MIGRATE);
   const testOrigin = trustedLocalBillingOrigin(env.PSKILLS_BILLING_LOCAL_BASE_URL ?? publicOrigin);
   const successUrl = optionalEnvironmentValue(env.PSKILLS_BILLING_SUCCESS_URL)
     ?? (localTest && !production ? `${testOrigin}/app/billing?billing=success` : undefined);
@@ -447,7 +453,7 @@ export function createBillingRuntime(
     ?? (localTest && !production ? `${testOrigin}/app/billing` : undefined);
   const repository = postgresPool === undefined
     ? createMemoryBillingRepository()
-    : createPostgresBillingRepository(postgresPool, { autoMigrate: true });
+    : createPostgresBillingRepository(postgresPool, { autoMigrate: billingAutoMigrate });
   let service: BillingService;
   try {
     service = createBillingServiceFromEnv({
