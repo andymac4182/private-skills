@@ -2,6 +2,10 @@
 
 Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency through 20 September. Overall: implementation in progress, not launched.
 
+Latest published increment: origin/main `668f53e6420419eda6aef0d0d73385da3af280cc`, independently confirmed by root with git ls-remote. Release agent reports Git-triggered app `dpl_BvgT5TSCPRUM5zXfzXkthniKzWyA` and marketing `dpl_ArrxaeUqYmABC8uWDWtCGRLKU1SX` READY for this SHA; frozen install, typecheck, 1,031 tests passed / 11 skipped, app/marketing/all Eve builds passed. Root independently observed anonymous marketing homepage and app `/health` HTTP 200. Identity remains opt-in and unconfigured in production; no authenticated hosted tenant acceptance is implied. Native CI remains explicitly waived.
+
+Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar purchase-availability/price checks remain active; no brand selection or domain purchase made.
+
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
 | L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous homepage HTTP 200 and rendered content verified by root; full interactive/mobile review remains open |
