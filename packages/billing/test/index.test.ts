@@ -10,11 +10,13 @@ import {
   createLocalBillingAdapter,
   createMemoryBillingRepository,
   createPlanCatalog,
+  createStripeBillingAdapter,
   createTestSubscriptionEvent,
   PostgresBillingRepository,
   signWebhookPayload,
   verifyWebhookSignature,
   type BillingProvider,
+  type BillingProviderInvoice,
   type BillingPgPoolLike,
   type BillingPgClientLike,
   type CreateCheckoutSessionInput,
@@ -293,6 +295,91 @@ describe('billing provider readiness', () => {
       body: new Uint8Array([0xff]),
     }));
     expect(malformedUtf8.status).toBe(400);
+  });
+});
+
+describe('provider invoice read model', () => {
+  it('reads and validates Stripe invoices through the server-only adapter', async () => {
+    let requestUrl = '';
+    let requestInit: RequestInit | undefined;
+    const adapter = createStripeBillingAdapter({
+      secretKey: 'sk_test_fixture',
+      apiBaseUrl: 'https://stripe.example.test',
+      fetch: async (input, init) => {
+        requestUrl = String(input);
+        requestInit = init;
+        return Response.json({
+          object: 'list',
+          data: [{
+            id: 'in_test_1',
+            customer: 'cus_company',
+            status: 'paid',
+            amount_due: 9900,
+            amount_paid: 9900,
+            currency: 'AUD',
+            number: 'INV-1',
+            created: NOW_SECONDS,
+            status_transitions: { paid_at: NOW_SECONDS + 60 },
+            period_start: NOW_SECONDS - 30 * 86_400,
+            period_end: NOW_SECONDS,
+            hosted_invoice_url: 'https://pay.stripe.example.test/invoices/in_test_1',
+            invoice_pdf: 'https://files.stripe.example.test/invoices/in_test_1.pdf',
+          }],
+          has_more: false,
+        });
+      },
+    });
+
+    await expect(adapter.listInvoices({ customerId: 'cus_company', limit: 10 })).resolves.toEqual([expect.objectContaining({
+      provider: 'stripe',
+      invoiceId: 'in_test_1',
+      customerId: 'cus_company',
+      status: 'paid',
+      amountDueCents: 9900,
+      amountPaidCents: 9900,
+      currency: 'aud',
+      number: 'INV-1',
+      createdAt: new Date(NOW * 1).toISOString(),
+    })]);
+    expect(requestUrl).toBe('https://stripe.example.test/v1/invoices?customer=cus_company&limit=10');
+    expect(requestInit?.method).toBe('GET');
+    expect(requestInit?.redirect).toBe('error');
+    expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer sk_test_fixture');
+    expect(new Headers(requestInit?.headers).get('stripe-version')).toBe(STRIPE_API_VERSION);
+  });
+
+  it('rejects a provider invoice that crosses the requested customer mapping', async () => {
+    const adapter = createStripeBillingAdapter({
+      secretKey: 'sk_test_fixture',
+      apiBaseUrl: 'https://stripe.example.test',
+      fetch: async () => Response.json({ data: [{ id: 'in_wrong', customer: 'cus_other', status: 'open', created: NOW_SECONDS }] }),
+    });
+    await expect(adapter.listInvoices({ customerId: 'cus_company' })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+  });
+
+  it('checks the durable customer mapping before invoking a provider invoice reader', async () => {
+    const { provider } = mockProvider();
+    let readCount = 0;
+    const invoice: BillingProviderInvoice = {
+      provider: 'local',
+      invoiceId: 'in_local_1',
+      customerId: 'cus_org-invoices',
+      status: 'paid',
+      createdAt: new Date(NOW).toISOString(),
+    };
+    const invoiceProvider: BillingProvider = {
+      ...provider,
+      async listInvoices(input) {
+        readCount += 1;
+        expect(input).toEqual({ customerId: 'cus_org-invoices', limit: 100 });
+        return [invoice];
+      },
+    };
+    const service = serviceWith({ provider: invoiceProvider });
+    await service.checkout({ organizationId: 'org-invoices', subject: 'owner', planId: 'team' });
+    await expect(service.listInvoices({ organizationId: 'org-invoices', provider: 'local', mode: 'test', customerId: 'cus_org-invoices' })).resolves.toEqual([invoice]);
+    await expect(service.listInvoices({ organizationId: 'org-invoices', provider: 'local', mode: 'test', customerId: 'cus-other' })).rejects.toMatchObject({ code: 'CUSTOMER_MAPPING_CONFLICT' });
+    expect(readCount).toBe(1);
   });
 });
 

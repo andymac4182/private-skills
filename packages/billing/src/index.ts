@@ -25,9 +25,11 @@ import {
   BILLING_PROTOCOL_VERSION,
   type BillingCustomer,
   type BillingEntitlement,
+  type BillingInvoiceLookup,
   type BillingMetric,
   type BillingMode,
   type BillingOrganizationState,
+  type BillingProviderInvoice,
   type BillingProvider,
   type BillingProviderId,
   type BillingRepository,
@@ -743,6 +745,44 @@ export class BillingService {
 
   portal(request: PortalRequest): Promise<HostedBillingSession> {
     return this.createCustomerPortalSession(request);
+  }
+
+  /**
+   * Read the most recent bounded provider invoices through the server-owned
+   * customer mapping. The browser never supplies the customer identifier; the
+   * lookup is checked against the durable organization mapping before the
+   * provider is called.
+   */
+  async listInvoices(input: BillingInvoiceLookup): Promise<readonly BillingProviderInvoice[]> {
+    if (!input || typeof input !== 'object') throw new BillingError('INVALID_REQUEST', 'Invoice lookup is required', 400);
+    const organizationId = validateBillingOrganizationId(input.organizationId);
+    const providerId = validateBillingProviderId(input.provider);
+    const customerId = validateBillingIdentifier(input.customerId, 'customerId', 256);
+    const provider = this.requireProvider();
+    if (providerId !== provider.id || input.mode !== provider.mode) {
+      throw new BillingError('CUSTOMER_MAPPING_CONFLICT', 'Organization billing provider does not match the configured provider', 409);
+    }
+    const state = await this.repository.read(organizationId);
+    if (!state.customer || state.customer.provider !== provider.id || state.customer.customerId !== customerId) {
+      throw new BillingError('CUSTOMER_MAPPING_CONFLICT', 'The requested provider customer is not mapped to this organization', 409);
+    }
+    const reader = provider.listInvoices;
+    if (!reader) throw new BillingError('INVOICE_HISTORY_UNAVAILABLE', 'Invoice history is not available for this billing provider', 503, { retryable: true });
+    let invoices: readonly BillingProviderInvoice[];
+    try {
+      invoices = await reader.call(provider, { customerId: state.customer.customerId, limit: 100 });
+    } catch (error) {
+      throw providerFailure(error);
+    }
+    if (!Array.isArray(invoices) || invoices.length > 100) {
+      throw new BillingError('INVOICE_PROVIDER_ERROR', 'Billing provider returned invalid invoice history', 502, { retryable: true });
+    }
+    for (const invoice of invoices) {
+      if (!invoice || typeof invoice !== 'object' || invoice.provider !== provider.id || invoice.customerId !== state.customer.customerId) {
+        throw new BillingError('INVOICE_MAPPING_CONFLICT', 'Billing provider returned an invoice for another customer', 409);
+      }
+    }
+    return invoices;
   }
 
   async usageSnapshot(organizationId: string): Promise<UsageSnapshot> {

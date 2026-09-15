@@ -179,12 +179,47 @@ export interface HostedBillingSession {
   expiresAt?: string;
 }
 
+export type BillingProviderInvoiceStatus = 'draft' | 'open' | 'paid' | 'uncollectible' | 'void' | 'unknown';
+
+/** Provider invoice data returned through the server-only invoice adapter. */
+export interface BillingProviderInvoice {
+  provider: BillingProviderId;
+  invoiceId: string;
+  customerId: string;
+  status: BillingProviderInvoiceStatus;
+  amountDueCents?: number;
+  amountPaidCents?: number;
+  currency?: string;
+  number?: string;
+  createdAt: string;
+  paidAt?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  hostedInvoiceUrl?: string;
+  invoicePdfUrl?: string;
+}
+
+export interface BillingInvoiceLookup {
+  organizationId: string;
+  provider: BillingProviderId;
+  mode: Exclude<BillingMode, 'disabled'>;
+  customerId: string;
+}
+
+export interface ListInvoicesInput {
+  customerId: string;
+  /** Providers may return at most this many rows. */
+  limit?: number;
+}
+
 export interface BillingProvider {
   readonly id: BillingProviderId;
   readonly mode: Exclude<BillingMode, 'disabled'>;
   createCustomer(input: CreateCustomerInput): Promise<ProviderCustomer>;
   createCheckoutSession(input: CreateCheckoutSessionInput): Promise<HostedBillingSession>;
   createCustomerPortalSession(input: CreateCustomerPortalSessionInput): Promise<HostedBillingSession>;
+  /** Optional server-only invoice reader; absence leaves invoice history unavailable. */
+  listInvoices?(input: ListInvoicesInput): Promise<readonly BillingProviderInvoice[]>;
 }
 
 export interface BillingEntitlement {

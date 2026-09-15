@@ -82,6 +82,7 @@ describe('BillingView', () => {
     expect(container.textContent).toContain('Team')
     expect(container.textContent).toContain('2 / 10')
     expect(container.textContent).toContain('INV-1')
+    expect(container.textContent).toContain('most recent 100 invoices')
     const checkout = [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Start checkout'))
     expect(checkout?.disabled).toBe(false)
 

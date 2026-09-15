@@ -31,6 +31,14 @@ import { createUploadReviewTrigger } from '../../../packages/upload-reviews/src/
 import { createDefaultOpenClawSourceConfiguration } from '../../../packages/upstreams/src/index';
 import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types';
 import {
+  BillingService,
+  createBillingServiceFromEnv,
+  createMemoryBillingRepository,
+  createPostgresBillingRepository,
+  type BillingInvoiceLookup,
+  type BillingProviderInvoice,
+} from '../../../packages/billing/src/index.js';
+import {
   createSkillsDirectoryGatewayTokenProvider,
   createUnavailableSkillsDirectoryTokenProvider,
   resolveSkillsDirectoryGateways,
@@ -58,6 +66,12 @@ export interface UploadReviewRuntime {
   httpHandler?: (request: Request) => Promise<Response | undefined>;
   configured: boolean;
 
+}
+
+export interface BillingRuntime {
+  service: BillingService;
+  /** Server-only provider read model; never returned to browser code. */
+  invoiceHistory: (lookup: BillingInvoiceLookup) => Promise<readonly BillingProviderInvoice[]>;
 }
 
 const OPENCLAW_SOURCE_CONFIG_MAX_BYTES = 512 * 1024;
@@ -318,7 +332,85 @@ function optionalEnvironmentValue(value: string | undefined): string | undefined
   return normalized === undefined || normalized === '' ? undefined : normalized;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+function billingEnvironmentBool(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true' || value?.trim() === '1';
+}
+
+function trustedLocalBillingOrigin(value: string | undefined): string {
+  if (value !== undefined) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'))) {
+        return parsed.origin;
+      }
+    } catch {
+      // Fall through to the fixed loopback origin used by the local adapter.
+    }
+  }
+  return 'http://localhost:5173';
+}
+
+export function createBillingRuntime(
+  env: RuntimeEnvironment,
+  postgresPool: PgPoolLike | undefined,
+  publicOrigin: string,
+): BillingRuntime {
+  const requested = billingEnvironmentBool(env.PSKILLS_BILLING_ENABLED);
+  const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
+  const localTest = requested && !production && env.PSKILLS_BILLING_PROVIDER === 'local'
+    && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
+  const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local'
+    && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
+  // Live billing must have the same durable PostgreSQL boundary as company
+  // mappings. An explicit local provider is allowed only in development/test
+  // and is visibly test mode; a file/HTTP production profile stays disabled.
+  const durable = postgresPool !== undefined || localTest;
+  const providerAllowed = !localProviderRequested || localTest;
+  const effectiveEnv = requested && (!durable || !providerAllowed)
+    ? { ...env, PSKILLS_BILLING_ENABLED: 'false' }
+    : env;
+  const testOrigin = trustedLocalBillingOrigin(env.PSKILLS_BILLING_LOCAL_BASE_URL ?? publicOrigin);
+  const successUrl = optionalEnvironmentValue(env.PSKILLS_BILLING_SUCCESS_URL)
+    ?? (localTest && !production ? `${testOrigin}/app/billing?billing=success` : undefined);
+  const cancelUrl = optionalEnvironmentValue(env.PSKILLS_BILLING_CANCEL_URL)
+    ?? (localTest && !production ? `${testOrigin}/app/billing?billing=cancelled` : undefined);
+  const portalReturnUrl = optionalEnvironmentValue(env.PSKILLS_BILLING_PORTAL_RETURN_URL)
+    ?? (localTest && !production ? `${testOrigin}/app/billing` : undefined);
+  const repository = postgresPool === undefined
+    ? createMemoryBillingRepository()
+    : createPostgresBillingRepository(postgresPool, { autoMigrate: true });
+  let service: BillingService;
+  try {
+    service = createBillingServiceFromEnv({
+      repository,
+      env: effectiveEnv,
+      ...(successUrl === undefined ? {} : { successUrl }),
+      ...(cancelUrl === undefined ? {} : { cancelUrl }),
+      ...(portalReturnUrl === undefined ? {} : { portalReturnUrl }),
+    });
+  } catch (error) {
+    // Invalid billing configuration must not take down the registry. Keep a
+    // read-only disabled service so the company console can explain state.
+    console.error('Billing configuration disabled:', error instanceof Error ? error.name : 'UnknownError');
+    service = new BillingService({ repository, enabled: false });
+  }
+  if (requested && !service.status().enabled) {
+    // Keep the registry available, but leave an operator-visible and
+    // credential-free reason when an enabled request could not be honoured.
+    const reason = !providerAllowed
+      ? 'the local billing provider is test-only'
+      : !durable
+        ? 'a durable PostgreSQL billing boundary is required'
+        : 'the provider configuration is unavailable or invalid';
+    console.error(`Billing configuration disabled: ${reason}`);
+  }
+  return {
+    service,
+    invoiceHistory: (lookup) => service.listInvoices(lookup),
+  };
+}
+
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -341,6 +433,8 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     if (needsIdentityDatabase) postgresPool = createPostgresPool(required(env, 'DATABASE_URL'));
     repository = new HttpStateRepository({ baseUrl: required(env, 'PSKILLS_STATE_ENDPOINT'), headers: { authorization: `Bearer ${required(env, 'PSKILLS_STATE_TOKEN')}` } });
   } else throw new Error('Unsupported PSKILLS_STATE_PROVIDER');
+
+  const billing = createBillingRuntime(env, postgresPool, env.PSKILLS_PUBLIC_ORIGIN ?? 'http://localhost:5173');
 
   const identitySchemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const identityInfrastructure = createIdentityInfrastructure(env, {
@@ -458,6 +552,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   return {
     repository,
     blobs,
+    billing,
     hostedWorker,
     ...(createHostedWorkerForTenant === undefined ? {} : { createHostedWorkerForTenant }),
     directoryTokenProvider,
