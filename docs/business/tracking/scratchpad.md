@@ -82,3 +82,11 @@ Reviewed billing635d112. Seat subject/revision reconciliation is implemented, bu
 The token-display browser owner reports CUA host locked with automatic unlock paused. User unlock requested asynchronously. This pauses the browser-dependent proof only; no fixture session or production configuration was changed.
 
 Root independently passed the composed Nitro/PostgreSQL/Files SDK worker acceptance at verification d11f6cb (1 test, 11.41 seconds). Integrated c17d113/0cf5440; sanitized evidence is `docs/evidence/local-composed-nitro-root-20260916.json`. Native CLI follow-through remains assigned to tenant_ui against the separately retained approved fixture.
+
+### Integrated token migration compatibility and local boundary checks
+
+Integrated e978ae3/aeb85a8: the explicit migration entrypoint covers Better Auth, company SSO and API tokens; token schema remains unchanged by default and a separate API-token schema is opt-in. Root verification cddf73a passed 17 focused tests across three files, including four actual PostgreSQL SSO/infrastructure cases, and TypeScript passed. A follow-up regression will strengthen existing-token survival evidence across rerunning the composed migration; B27 remains open until that case is recorded. No production DDL or identity activation occurred.
+
+At d11f6cb, root also reran populated PostgreSQL tenant acceptance, source tenant isolation, and live identity-route PostgreSQL integration: three files / three tests passed in 2.25 seconds. The populated matrix uses bootstrap identities/core composition, source catalog responses are fixtures, and hosted acceptance remains separate.
+
+Release owner is authorized to publish prepared37ddf6f while explicitly retaining the Reader friendly-label browser check as pending due the locked host. That local display check does not block the independently verified operations/copy increment while production identity remains disabled. Billing and newer migration candidates are excluded from that release.
