@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
-import type { MetaDescriptor } from '@tanstack/react-router'
 import { describe, expect, it } from 'vitest'
 import { marketingIndexingForBuild, marketingOriginForBuild } from '../apps/marketing/src/lib/marketingConfig'
 import {
@@ -12,10 +11,17 @@ import {
 } from '../apps/marketing/src/lib/marketingSeo'
 import type { MarketingSeoConfig } from '../apps/marketing/src/lib/marketingSeo'
 
-function metaAttributes(item: MetaDescriptor): Record<string, string> | undefined {
-  if ('charSet' in item) return { charSet: item.charSet }
-  if ('name' in item) return { name: item.name, content: item.content }
-  if ('property' in item) return { property: item.property, content: item.content }
+type RenderableMeta = {
+  charSet?: unknown
+  name?: unknown
+  property?: unknown
+  content?: unknown
+}
+
+function metaAttributes(item: RenderableMeta): Record<string, string> | undefined {
+  if (typeof item.charSet === 'string') return { charSet: item.charSet }
+  if (typeof item.name === 'string' && typeof item.content === 'string') return { name: item.name, content: item.content }
+  if (typeof item.property === 'string' && typeof item.content === 'string') return { property: item.property, content: item.content }
   return undefined
 }
 
