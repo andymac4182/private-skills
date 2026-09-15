@@ -8,6 +8,8 @@ Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar
 
 Company SSO settings UI integrated `cba7f63`; invitation clipboard/manual-selection fallback integrated `c7e4671`. Root verification: 16 SSO/client/command-palette/company tests plus 6 invitation acceptance tests passed, and typecheck passed. Runtime SSO mounting and actual browser verification of these latest screens remain open. These are local integration changes after the published foundation.
 
+Public marketing browser check on published 668f53e: root clicked release-path Install tab and CLI Install tab and observed both corresponding panels; Pilot guide navigation rendered getting-started content. Hosted-user onboarding currently leads with repository/local-demo instructions; marketing_finish is separating hosted customer onboarding from operator setup and checking CLI command examples. This is interaction evidence, not full responsive/accessibility acceptance.
+
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
 | L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous homepage HTTP 200 and rendered content verified by root; full interactive/mobile review remains open |
