@@ -6,6 +6,7 @@ import type {
   Digest,
   MeteredUsageDelta,
   MeteredUsageReservation,
+  MeteredUsageRestoration,
   RecoverableBlobStore,
   RegistryState,
   StorageAttempt,
@@ -146,12 +147,6 @@ class RecordingBilling implements BillingUsageAdmission {
   }
 }
 
-type BillingUsageRestorationResult = {
-  idempotent: boolean;
-  reservationGeneration: number;
-  restoredFromGeneration: number;
-};
-
 /** Small generation-aware ledger double for the storage recovery lifecycle. */
 class GenerationAwareBilling implements BillingUsageAdmission {
   readonly reconciliations: Array<{
@@ -167,7 +162,7 @@ class GenerationAwareBilling implements BillingUsageAdmission {
   generation = 1;
   lostRestoreResponse = true;
   onReconciled?: () => Promise<void>;
-  #restoration?: BillingUsageRestorationResult;
+  #restoration?: MeteredUsageRestoration;
 
   status(): { enabled: boolean } {
     return { enabled: true };
@@ -197,7 +192,7 @@ class GenerationAwareBilling implements BillingUsageAdmission {
     delta: { storageBytes: number },
     operationKey: string,
     reservationGeneration: number,
-  ): Promise<BillingUsageRestorationResult> {
+  ): Promise<MeteredUsageRestoration> {
     this.restorations.push({ operationKey, reservationGeneration });
     if (this.#restoration) {
       if (reservationGeneration !== this.#restoration.restoredFromGeneration) throw new Error("stale restoration generation");

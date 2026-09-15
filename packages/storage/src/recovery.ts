@@ -2,6 +2,7 @@ import type {
   BillingUsageAdmission,
   BlobStore,
   Digest,
+  MeteredUsageRestoration,
   RecoverableBlobStore,
   RegistryState,
   StateRepository,
@@ -142,30 +143,6 @@ interface FinalizeResult {
   referenced?: boolean;
 }
 
-interface BillingUsageRestoration extends BillingUsageAdmission {
-  /**
-   * Exact inverse of a previously released reservation; ledger-owned. The
-   * returned generation is a new lifecycle and replay must remain bound to
-   * the supplied source generation even after another admission advances the
-   * ledger.
-   */
-  restoreUsage(
-    organizationId: string,
-    reservationKey: string,
-    delta: { storageBytes: number },
-    operationKey: string,
-    reservationGeneration: number,
-  ): Promise<BillingUsageRestorationResult>;
-}
-
-interface BillingUsageRestorationResult {
-  idempotent: boolean;
-  /** Fresh lifecycle returned by the ledger after restoring the old release. */
-  reservationGeneration: number;
-  /** The exact lifecycle that was restored; must equal the request generation. */
-  restoredFromGeneration: number;
-}
-
 function storageRecoveryOperationKey(attemptId: string, generation?: number): string {
   return generation === undefined
     ? `private-skills:storage-recovery:${attemptId}`
@@ -176,7 +153,7 @@ function storageRecoveryRestoreOperationKey(attemptId: string, generation: numbe
   return `private-skills:storage-recovery-restore:${attemptId}:generation:${generation}`;
 }
 
-function validBillingRestorationResult(value: unknown, fromGeneration: number): value is BillingUsageRestorationResult {
+function validBillingRestorationResult(value: unknown, fromGeneration: number): value is MeteredUsageRestoration {
   return isRecord(value) &&
     typeof value.idempotent === "boolean" &&
     Number.isSafeInteger(value.reservationGeneration) &&
@@ -576,13 +553,13 @@ export class StorageRecoveryService {
     };
   }
 
-  async #restoreBilling(attempt: StorageAttempt): Promise<BillingUsageRestorationResult | undefined> {
+  async #restoreBilling(attempt: StorageAttempt): Promise<MeteredUsageRestoration | undefined> {
     const billing = this.#billing;
     if (!billing || attempt.reservationGeneration === undefined) return undefined;
     if (!Number.isSafeInteger(attempt.reservationGeneration) || attempt.reservationGeneration < 1) return undefined;
     try {
       if (billing.status().enabled !== true) return undefined;
-      const restoreUsage = (billing as Partial<BillingUsageRestoration>).restoreUsage;
+      const restoreUsage = billing.restoreUsage;
       // A positive reserveUsage would re-run the normal quota check and can
       // fail after another admission fills the cap. Restoration is a ledger
       // owned inverse of this exact released lifecycle; without that seam,
