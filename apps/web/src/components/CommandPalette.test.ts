@@ -57,6 +57,7 @@ describe('CommandPalette', () => {
       'Packs',
       'Discover',
       'Activity',
+      'Tools',
       'Company admin',
     ])
     expect(registryNavGroups.at(-1)?.admin).toBe(true)
@@ -65,6 +66,7 @@ describe('CommandPalette', () => {
     const paletteIds = registrySections.map((section) => section.id).sort()
     expect(groupedIds).toEqual(paletteIds)
     expect(registrySections.find((section) => section.id === 'overview')?.label).toBe('Overview')
+    expect(registryNavGroups.find((group) => group.id === 'tools')?.sections.map((section) => section.id)).toContain('cli')
     expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('company-sso')
     expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('company-tokens')
     expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('billing')

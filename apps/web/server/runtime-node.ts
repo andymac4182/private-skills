@@ -55,6 +55,10 @@ import {
   createPostgresBootstrapAdoptionStore,
   type BootstrapAdoptionStore,
 } from './bootstrap-adoption.js';
+import {
+  createNodeCliReleaseAssetProvider,
+} from '../../../packages/cli-release/src/node.js';
+import type { CliReleaseAssetProvider } from '../../../packages/cli-release/src/index.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -410,7 +414,7 @@ export function createBillingRuntime(
   };
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -483,6 +487,16 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
+  // Hosted deployments read registered release archives from the same private
+  // BlobStore used by the registry. A local fixture is available only in the
+  // explicit disposable profiles; production cannot depend on local disk.
+  const localCliReleaseRoot = env.PSKILLS_CLI_RELEASE_ROOT?.trim();
+  const cliReleaseProvider = createNodeCliReleaseAssetProvider({
+    store: blobs,
+    ...(localCliReleaseRoot && (env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test')
+      ? { localRoot: localCliReleaseRoot }
+      : {}),
+  });
   // The official skills.sh token provider is request-scoped. Keep the
   // resolver function in the long-lived runtime, never its token, and pass it
   // into hosted import jobs so each canonical catalog request obtains a fresh
@@ -572,6 +586,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
     ...(identityInfrastructure.companySso === null ? {} : { companySso: identityInfrastructure.companySso }),
     ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),
+    cliReleaseProvider,
     createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {
