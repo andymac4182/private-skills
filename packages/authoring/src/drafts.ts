@@ -321,7 +321,7 @@ function draftStorageAttemptRecord(input: {
 async function beginDraftStorageAttempt(
   deps: AuthoringHandlerDependencies,
   input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
-): Promise<StorageAttempt> {
+): Promise<{ attempt: StorageAttempt; ownsWrite: boolean }> {
   // Persist the provider object identity before the draft write so a lost
   // upload response can be reconciled without guessing a provider key.
   const attempt = draftStorageAttemptRecord({
@@ -329,11 +329,54 @@ async function beginDraftStorageAttempt(
     ...input,
     objectKey: allocateStorageObjectKey(deps.blobs),
   });
-  await deps.repository.transaction(deps.config.organizationId, (state) => {
+  return await deps.repository.transaction(deps.config.organizationId, (state) => {
     state.storageAttempts ??= [];
+    // The metered key is the lifecycle identity. Two requests can both pass
+    // the idempotency pre-read before either metadata transaction commits;
+    // only the first durable pending row may perform provider I/O. Returning
+    // the same attempt to both callers would still create two physical
+    // writers and make one caller's finality proof invalid for the other.
+    const existing = state.storageAttempts.find((candidate) =>
+      candidate.organizationId === deps.config.organizationId &&
+      candidate.reservationKey === input.reservationKey &&
+      candidate.reservationGeneration === input.reservationGeneration &&
+      candidate.objectKey !== undefined &&
+      attempt.objectKey !== undefined,
+    );
+    if (existing) {
+      if (existing.digest !== input.digest || existing.size !== input.size) {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the metered lifecycle', 409);
+      }
+      if (existing.state === 'orphaned') {
+        if (existing.billingCorrection === 'restore-pending') {
+          throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is settling; retry shortly', 503);
+        }
+        existing.state = 'pending';
+        existing.updatedAt = new Date().toISOString();
+        return { attempt: { ...existing }, ownsWrite: true };
+      }
+      if (existing.state === 'pending' || existing.state === 'recovering' || existing.state === 'releasing') {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+      }
+      if (existing.state === 'committed') return { attempt: { ...existing }, ownsWrite: false };
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    }
     state.storageAttempts.push(attempt);
+    return { attempt, ownsWrite: true };
   });
-  return attempt;
+}
+
+function committedDraftStorageBlob(attempt: StorageAttempt): StoredBlob {
+  if (!attempt.objectKey) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Committed storage ownership has no stable object key', 409);
+  }
+  return { key: attempt.objectKey, digest: attempt.digest, size: attempt.size };
+}
+
+function preservesDraftStorageAdmission(error: unknown): boolean {
+  return error instanceof AuthoringApiError && (
+    error.code === 'STORAGE_ATTEMPT_BUSY' || error.code === 'STORAGE_ATTEMPT_CONFLICT'
+  );
 }
 
 async function markDraftStorageAttemptOrphaned(
@@ -1194,17 +1237,20 @@ async function createDraft(
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
   try {
-    storageAttempt = await beginDraftStorageAttempt(deps, {
+    const storageClaim = await beginDraftStorageAttempt(deps, {
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
       digest: snapshot.release.artifact.digest,
       size: snapshot.bytes.byteLength,
       reservationGeneration: storageAdmission?.reservationGeneration,
     });
-    stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt);
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt)
+      : committedDraftStorageBlob(storageAttempt);
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
@@ -1242,7 +1288,7 @@ async function createDraft(
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
@@ -1345,17 +1391,20 @@ async function createUploadDraft(
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
   try {
-    storageAttempt = await beginDraftStorageAttempt(deps, {
+    const storageClaim = await beginDraftStorageAttempt(deps, {
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
       digest,
       size: encoded.byteLength,
       reservationGeneration: storageAdmission?.reservationGeneration,
     });
-    stored = await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt);
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt)
+      : committedDraftStorageBlob(storageAttempt);
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
@@ -1386,7 +1435,7 @@ async function createUploadDraft(
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
@@ -1642,17 +1691,20 @@ export async function writeDraftRevision(
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
   try {
-    storageAttempt = await beginDraftStorageAttempt(input.deps, {
+    const storageClaim = await beginDraftStorageAttempt(input.deps, {
       reservationKey: await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
       digest: digest!,
       size: encoded!.byteLength,
       reservationGeneration: storageAdmission?.reservationGeneration,
     });
-    stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt);
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt)
+      : committedDraftStorageBlob(storageAttempt);
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
     }
     throw error;
@@ -1724,7 +1776,7 @@ export async function writeDraftRevision(
   } catch (error) {
     if (storageAttempt) {
       await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
-    } else {
+    } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
     }
     throw error;
@@ -2657,8 +2709,11 @@ async function putVerifiedDraftBlob(
   deps: AuthoringHandlerDependencies,
   bytes: Uint8Array,
   digest: Digest,
-  attempt?: Pick<StorageAttempt, 'objectKey'>,
+  attempt?: Pick<StorageAttempt, 'objectKey' | 'state'>,
 ): Promise<StoredBlob> {
+  if (attempt && (attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released')) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  }
   let stored: StoredBlob;
   try {
     stored = await (attempt ? putStorageAttemptBlob(deps.blobs, attempt, bytes) : deps.blobs.put(bytes));

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDraftHandler, writeDraftRevision } from '../src/drafts.js';
 import type { AuthoringHandlerDependencies } from '../src/index.js';
+import { BillingService, createMemoryBillingRepository } from '../../billing/src/index.js';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 import { createUploadReviewPersistenceService, uploadReviewIdempotencyKey } from '../../upload-reviews/src/index.js';
@@ -13,6 +14,7 @@ import type {
   SkillBundle,
   SkillVersion,
   StateRepository,
+  StorageObjectInspection,
   StoredBlob,
 } from '../../contracts/src/index.js';
 import type {
@@ -68,6 +70,69 @@ class MemoryBlobs implements BlobStore {
 
   async remove(key: string): Promise<void> {
     this.values.delete(key);
+  }
+}
+
+class RecoverableMemoryBlobs extends MemoryBlobs {
+  private attemptSequence = 0;
+  readonly attemptWriteKeys: string[] = [];
+
+  allocateObjectKey(): string {
+    return `sealed-attempt-${++this.attemptSequence}`;
+  }
+
+  async putAtKey(key: string, bytes: Uint8Array): Promise<StoredBlob> {
+    this.attemptWriteKeys.push(key);
+    const copy = bytes.slice();
+    this.values.set(key, copy);
+    return { key, digest: await digestBytes(copy), size: copy.byteLength };
+  }
+
+  async inspectObject(key: string): Promise<StorageObjectInspection> {
+    const value = this.values.get(key);
+    if (!value) return { state: 'absent', key };
+    return { state: 'present', key, digest: await digestBytes(value), size: value.byteLength };
+  }
+
+  async confirmWriteTerminated(): Promise<boolean> {
+    return true;
+  }
+}
+
+class ReadBarrierRepository implements StateRepository {
+  private armed = false;
+  private reads = 0;
+  private release!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.release = resolve;
+  });
+
+  constructor(private readonly inner: StateRepository) {}
+
+  arm(): void {
+    this.armed = true;
+  }
+
+  get readCount(): number {
+    return this.reads;
+  }
+
+  disarm(): void {
+    this.armed = false;
+    if (this.reads < 2) this.release();
+  }
+
+  async read(organizationId: string): Promise<RegistryState> {
+    const snapshot = await this.inner.read(organizationId);
+    if (!this.armed || this.reads >= 2) return snapshot;
+    this.reads += 1;
+    if (this.reads === 2) this.release();
+    else await this.gate;
+    return snapshot;
+  }
+
+  transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
+    return this.inner.transaction(organizationId, updater);
   }
 }
 
@@ -169,6 +234,7 @@ interface Fixture {
   bundle: SkillBundle;
   deps: AuthoringHandlerDependencies;
   handler: ReturnType<typeof createDraftHandler>;
+  billing?: BillingService;
   setPrincipal(value: Principal | null): void;
   setAdmission(value: boolean): void;
   setCommitAdmission(value: boolean): void;
@@ -176,7 +242,7 @@ interface Fixture {
   reviewTriggerCalls: number;
 }
 
-async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } = {}): Promise<Fixture> {
+async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; recoverable?: boolean; withBilling?: boolean } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
@@ -187,7 +253,7 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } 
     ],
   };
   const bytes = encodeBundle(bundle);
-  const blobs = new MemoryBlobs();
+  const blobs = options.recoverable ? new RecoverableMemoryBlobs() : new MemoryBlobs();
   const stored = await blobs.put(bytes);
   const release: SkillVersion = {
     id: 'release-1',
@@ -207,6 +273,9 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } 
   };
   state.skills.push(release);
   const repository = createMemoryStateRepository({ initial: { [ORGANIZATION]: state } });
+  const billing = options.withBilling
+    ? new BillingService({ repository: createMemoryBillingRepository(), enabled: true, usageEnabled: true })
+    : undefined;
   let current: Principal | null = user();
   let admitted = true;
   let commitAdmitted = true;
@@ -218,6 +287,7 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } 
     blobs,
     auth,
     config: { organizationId: ORGANIZATION, maxBodyBytes: options.maxBodyBytes ?? 1024 * 1024 },
+    ...(billing ? { billing } : {}),
     releaseAdmission: () => admitted,
     releaseAdmissionAtCommit: () => commitAdmitted,
     ...(reviewService ? {
@@ -238,6 +308,7 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number } 
     bundle,
     deps,
     handler: createDraftHandler(deps),
+    billing,
     setPrincipal(value) {
       current = value;
     },
@@ -433,6 +504,58 @@ describe('durable skill drafts', () => {
       },
     });
     expect((await test.repository.read(ORGANIZATION)).skills[0]!.artifact).toEqual(test.release.artifact);
+  });
+
+  it('serializes concurrent idempotent writes behind one durable storage owner', async () => {
+    const test = await fixture({ recoverable: true, withBilling: true });
+    const created = await create(test);
+    const changedFiles = [
+      { ...test.bundle.files[0]!, content: base64('---\nname: demo\ndescription: Concurrent edit\n---\n# Concurrent\n') },
+      ...test.bundle.files.slice(1),
+    ];
+    const repository = new ReadBarrierRepository(test.repository);
+    test.deps.repository = repository;
+    repository.arm();
+
+    const [first, second] = await Promise.all([
+      test.handler(updateRequest(created.draft.id, 'concurrent-update', 1, changedFiles)),
+      test.handler(updateRequest(created.draft.id, 'concurrent-update', 1, changedFiles)),
+    ]);
+    repository.disarm();
+    expect(repository.readCount).toBe(2);
+
+    const bodies = await Promise.all([json(first), json(second)]);
+    const statuses = [first.status, second.status].sort();
+    if (statuses.includes(503)) {
+      expect(statuses).toEqual([200, 503]);
+      expect(bodies.find((body) => body.error?.code === 'STORAGE_ATTEMPT_BUSY')).toBeDefined();
+      const retry = await test.handler(updateRequest(created.draft.id, 'concurrent-update', 1, changedFiles));
+      expect(retry.status).toBe(200);
+      expect(await json(retry)).toMatchObject({ idempotent: true });
+    } else {
+      expect(statuses).toEqual([200, 200]);
+      expect(bodies.filter((body) => body.idempotent === false)).toHaveLength(1);
+      expect(bodies.filter((body) => body.idempotent === true)).toHaveLength(1);
+    }
+
+    const state = await test.repository.read(ORGANIZATION);
+    const draft = state.drafts!.find((candidate) => candidate.id === created.draft.id)!;
+    const updateAttempts = state.storageAttempts!.filter((attempt) => attempt.objectKey === draft.artifact.key);
+    expect(updateAttempts).toEqual([
+      expect.objectContaining({
+        state: 'committed',
+        reservationKey: expect.stringContaining('private-skills:draft-storage:'),
+        digest: draft.digest,
+        size: draft.artifact.size,
+      }),
+    ]);
+    const committedBytes = state.storageAttempts!
+      .filter((attempt) => attempt.state === 'committed')
+      .reduce((total, attempt) => total + attempt.size, 0);
+    await expect(test.billing!.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { storageBytes: committedBytes } });
+    const attemptWriteKeys = (test.blobs as RecoverableMemoryBlobs).attemptWriteKeys;
+    expect(attemptWriteKeys.filter((key) => key === draft.artifact.key)).toHaveLength(1);
+    expect(new Set(attemptWriteKeys).size).toBe(2); // the create and update artifacts have distinct stable keys
   });
 
   it('canonicalizes file order before sealing and replays idempotency from the verified blob', async () => {
