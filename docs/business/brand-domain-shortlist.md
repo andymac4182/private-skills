@@ -4,7 +4,9 @@
 **Registrar UI checked:** 15 September 2026, 13:18–13:20 UTC<br>
 **Live registrar recheck:** 15 September 2026, 14:00–14:01 UTC (16 September 2026, 00:00–00:01 AEST)
 
-**Latest registrar UI recheck:** 15 September 2026, 15:16–15:18 UTC (16 September 2026, 01:16–01:18 AEST)
+**Prior registrar UI recheck:** 15 September 2026, 15:16–15:18 UTC (16 September 2026, 01:16–01:18 AEST)
+
+**Latest registrar UI recheck:** 15 September 2026, 15:54–15:57 UTC (16 September 2026, 01:54–01:57 AEST)
 
 **Status:** exploratory naming work. No domain was purchased or registered. No registrar account was used, no contact was made, and no trademark clearance was performed.
 
@@ -91,7 +93,7 @@ On 15 September 2026 from 14:00 to 14:01 UTC (16 September 2026 from 00:00 to 00
 
 The leading `.com` pages continued to conflict with the earlier Verisign RDAP responses that returned an empty-body `404`. Keep those `.com` statuses **Unverified**, and treat the registrar pages as live UI indications only. Promotions, first-year pricing, premium status, and checkout eligibility can change between this check and any future decision. The `.ai` values in the RDAP table were not rechecked in this UI pass and must be checked again if `.ai` is part of the final choice.
 
-### Latest registrar UI recheck — 15 September 2026, 15:16–15:18 UTC
+### Prior registrar UI recheck — 15 September 2026, 15:16–15:18 UTC
 
 The two leading candidates were opened again in Namecheap's public results UI without signing in, opening a cart, or submitting a form. Each target card showed **Add to cart** and a first-year price. The target cards did not show **Registered**, **Make offer**, or a premium badge. The `.com` result cards also displayed Namecheap's new-customer `$6.79` promotion, whose explanatory text says it applies to non-premium domains; promotion eligibility was not tested.
 
@@ -103,6 +105,20 @@ The two leading candidates were opened again in Namecheap's public results UI wi
 | `vouchpack.dev` | UI-listed; **Add to cart**; no target-card premium badge | `$10.98/yr`, retail `$15.98/yr`; 31% off | UI-listed only; prior Google RDAP was “Unregistered at check”; checkout was not attempted |
 
 Evidence links: [ReleaseLoom `.com`](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.com), [ReleaseLoom `.dev`](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.dev), [Vouchpack `.com`](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.com), and [Vouchpack `.dev`](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.dev). These observations establish **registrar UI-listed** status only. No candidate is **confirmed purchasable** because checkout and registration were not attempted; no target card was marked premium or taken during this pass. `DraftCove.com` remains **registered / Make offer** as recorded above.
+
+### Latest registrar UI recheck — 15 September 2026, 15:54–15:57 UTC
+
+The two leading candidates and the DraftCove `.com` backup were inspected again in Namecheap's public results UI during the period above. The pages were read without signing in, opening a cart, checking out, or registering a domain. “UI-listed” means that the target card displayed **Add to cart** and a first-year price; it does not confirm registry availability, checkout eligibility, or future pricing.
+
+| Domain | Result visible during recheck | Price or status shown | Evidence |
+| --- | --- | --- | --- |
+| `releaseloom.com` | UI-listed; **Add to cart**; no target-card premium badge | `$11.28/yr`, retail `$14.98/yr`; `$6.79` `NEWCOM679` promotion shown | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.com) |
+| `releaseloom.dev` | UI-listed; **Add to cart**; no target-card premium badge | `$10.98/yr`, retail `$15.98/yr`; 31% off | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.dev) |
+| `vouchpack.com` | UI-listed; **Add to cart**; no target-card premium badge | `$11.28/yr`, retail `$14.98/yr`; `$6.79` `NEWCOM679` promotion shown | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.com) |
+| `vouchpack.dev` | UI-listed; **Add to cart**; no target-card premium badge | `$10.98/yr`, retail `$15.98/yr`; 31% off | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.dev) |
+| `draftcove.com` | **Registered in 2025**; **Make offer** | No normal annual registration price shown | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=draftcove.com) |
+
+No target renewal price was visible in this pass. The `.com` RDAP statuses for ReleaseLoom and Vouchpack remain **Unverified** under the earlier empty-body `404` result; the `.dev` RDAP results remain “Unregistered at check” from the earlier pass. No candidate is confirmed purchasable, no premium or reservation status was confirmed, and `.ai` was not rechecked. Repeat the registrar and registry checks immediately before any selection; no account, cart, checkout, purchase, or registration was used.
 
 ## Results
 
