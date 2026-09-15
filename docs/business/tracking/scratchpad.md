@@ -145,3 +145,7 @@ Integrated CLI candidate 572352a as 1b2671a. Root independently ran six focused 
 ### Identity operational events — 16 September, 01:50 AEST
 
 Integrated 4d62970 and 5bb67bd as 915d378 / 70f8a7f, preserving the CLI provider in the runtime return type. Root verification snapshot 91eb8d4 passed TypeScript and 9 tests across three files, including two disposable PostgreSQL cases. The PG evidence covers live-member role attribution, global-versus-tenant isolation, awaited handler failure capture, and expired-row cleanup during normal recording. This establishes local operational capture/retention behavior; production migration and full hosted observability remain open. Marketing SEO 180b30f is held for compatibility: omitted new indexing settings must safely build noindex rather than break existing production/preview build commands.
+
+### Combined CLI and identity regression checkpoint — 16 September, 01:52 AEST
+
+Root verification checkout 91eb8d4 passed the full Vitest run: 161 files passed / 16 skipped, 1,138 tests passed / 27 skipped (28.65 seconds). This default run does not activate opt-in PostgreSQL cases; identity operational events were run separately against disposable PostgreSQL in the preceding checkpoint. TypeScript and the production web Vite/Nitro build also passed. Build emitted an ineffective dynamic-import warning for scanner utilities; no build failure occurred. Source snapshot is a local verification composition, not production acceptance or a claim that skipped native/provider checks passed.
