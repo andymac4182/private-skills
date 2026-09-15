@@ -11,18 +11,18 @@ Observations are not completion evidence. Turn concrete next actions into backlo
 
 ## Next coordinator actions
 
-1. Keep the `c870985` production record, `2348002` candidate merge, focused
-   recovery candidate `05136ac`, and local platform evidence separated by
-   source and environment. The author reported 52 focused tests plus typecheck
-   for `05136ac`.
+1. Keep the `ef8922c` PR #58 production record, the unreleased runtime
+   candidate line `3713f14` / `59c8f69`, and local platform evidence separated
+   by source and environment. The recovery record distinguishes 86 focused
+   local tests, 49 mixed checks, and one PostgreSQL recovery test.
 2. Have `tenant_auth_backend` and Hosting/Operations review the committed
    hosted identity schema preparation and its 12 empty-table/registry
    readback. Keep Better Auth disabled with `providers: []` until separately
    approved migration, recovery, and customer IdP evidence exists.
 3. Have `billing_finish`, `business_billing`, and `runtime_finish` close the
-   restore/over-cap, known-completed-write, durable compensation, and
-   billing/finalization recovery cases before treating the candidate as a
-   billing release.
+   G1 measurement-fence, restore/over-cap, known-completed-write, durable
+   compensation, owned-PUT receipt, and billing/finalization recovery cases
+   before treating the candidate as a billing release.
 4. Complete the hosted browser archive install and worker/scanner acceptance;
    keep native Linux hardware/CI and Windows separate from the passing macOS
    and emulated Linux CLI checks.
@@ -243,21 +243,20 @@ The `40783cd` billing review found three additional B21/B28 gaps beyond that exe
 
 ### Current durable checkpoint — 16 September 2026
 
-The current shared documentation snapshot is `eb23f54`. Production `main`
-`c870985` is PR #57's merged source, and all four Git-triggered Vercel
+The current shared documentation snapshot is `c09a2d9`. Production `main`
+`ef8922c` is PR #58's merged source, and all four Git-triggered Vercel
 deployments are READY at that exact SHA. Its [sanitized production
-record](../../evidence/production-release-c870985-20260916.json) is the source
+record](../../evidence/production-release-ef8922c-20260916.json) is the source
 for deployment, public readback, and native-CI-waiver claims. The waiver records
 jobs blocked before runner execution; it is not a native test pass.
 
-Candidate merge `2348002` incorporates candidate source `a65c8a9`; focused
-recovery candidate `05136ac` is the latest author checkpoint, with 52 focused
-tests plus typecheck reported. The [local
-candidate record](../../evidence/local-final-candidate-a65c8a9-20260916.json)
-reports 173 files passed / 17 skipped and 1,240 tests passed / 40 skipped,
-with the focused billing, database, storage, and populated-tenant checks
-passing separately. These results are local and bounded; they do not establish
-hosted or commercial readiness.
+The unreleased runtime candidate line is `3713f14` with the atomic billing
+ledger `59c8f69`, authoring/core ownership fixes `17f0414`, `5e4268d`,
+`1ab98c2`, and `a223961`, and receipt/provider-binding work `f24813f` /
+`f3de225`. The [local recovery record](../../evidence/local-storage-billing-restoration-20260916.json)
+reports 86 focused local tests, 49 mixed checks, and one PostgreSQL recovery
+test. These results are local and bounded; they do not establish hosted or
+commercial readiness.
 
 The [native macOS CLI record](../../evidence/local-macos-arm64-cli-qualification-20260916.json)
 passes direct Apple Silicon version/help and isolated install → verify →
@@ -284,12 +283,14 @@ and [SQL manifest](../../evidence/hosted-identity-migration-review-20260916.sql-
 remain historical review artifacts.
 
 Billing restore/over-cap handling, known-completed-write recovery, and durable
-billing compensation remain active. The local PostgreSQL operator/recovery
-proof passed 16 tests, while the metered crash repro leaves a reservation in
-`releasing`. The storage provider review says an aborted or lost write response
-is not terminal proof for Vercel Blob or generic S3-compatible paths, so a
-charge must remain until provider finality or a durable reconciliation result
-exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
+billing compensation remain active. The [local billing demo](../../evidence/local-billing-console-demo-acceptance-20260916.json)
+passes checkout/portal completion, signed test billing, PostgreSQL readback,
+and Reader denial through `LocalBillingAdapter`; it has no Stripe account or
+live charge. The local recovery record reports one PostgreSQL test, 86 focused
+local tests, and 49 mixed checks. The storage provider review says an aborted or
+lost write response is not terminal proof for Vercel Blob or generic
+S3-compatible paths, so a charge must remain until provider finality or a
+durable reconciliation result exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
 [storage review](../../evidence/storage-recovery-finality-review.md), and
 [provider research](../../evidence/storage-provider-finality-research.md).
 
@@ -312,6 +313,10 @@ which orphan cleanup can zero the referenced artifact charge;
 pending. A reviewer reported 49 focused checks, including 35 billing units,
 plus typecheck, but those unit results do not close the executed races or the
 storage/billing acceptance gates.
+
+The local `9f46983` marketing follow-up records nine routes, axe cleanliness,
+and manual gradient contrast review, but it is not deployed; the PR #58
+production release carries the preceding comparison/mobile-copy increment.
 
 Brand selection, legal/entity and support details, real customer IdP setup,
 final commercial offer, and Stripe activation remain external inputs. B14–B16,
