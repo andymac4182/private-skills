@@ -46,8 +46,11 @@ import {
   type PlanCatalog,
 } from '../packages/billing/src/index.js';
 import {
+  HostedWorkerDispatchLeaseError,
   PostgresStateRepository,
   defaultRegistryState,
+  PostgresHostedWorkerDispatchStore,
+  hostedWorkerDispatchSchemaSql,
   postgresStateSchemaSql,
   type PgPoolLike,
 } from '../packages/database/src/index.js';
@@ -528,7 +531,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it('copies current identity, SSO, token, billing, registry, and sealed-object state through the Files SDK filesystem provider', async () => {
+  it('copies current identity, SSO, token, billing, registry, hosted-worker dispatch, and sealed-object state through the Files SDK filesystem provider', async () => {
     if (!DATABASE_URL) return;
     const runId = `${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const billingRunId = `${process.pid}_${randomUUID().slice(0, 8)}`;
@@ -542,6 +545,10 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const targetRegistry = name('ops_registry', runId, 'dst');
     const sourceIdentityEvents = name('opsid_events', runId, 'src');
     const targetIdentityEvents = name('opsid_events', runId, 'dst');
+    const sourceHostedWorkerDispatch = name('opsw_dispatch', runId, 'src');
+    const targetHostedWorkerDispatch = name('opsw_dispatch', runId, 'dst');
+    const sourceHostedWorkerRetry = name('opsw_retry', runId, 'src');
+    const targetHostedWorkerRetry = name('opsw_retry', runId, 'dst');
     const sourceBillingTable = name('opsbill', billingRunId, 'src');
     const targetBillingTable = name('opsbill', billingRunId, 'dst');
     const sql = postgres(DATABASE_URL, { max: 20, prepare: false });
@@ -552,6 +559,20 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const targetSsoAuth = ssoMirrorAuth(targetAuthSchema, sql);
     const sourceOperationsEvents = await identityOperationsEventStore(sql, sourceIdentityEvents, sourceAuthSchema);
     const targetOperationsEvents = await identityOperationsEventStore(sql, targetIdentityEvents, targetAuthSchema);
+    let sourceHostedLeaseSequence = 0;
+    let targetHostedLeaseSequence = 0;
+    const sourceHostedWorkerStore = new PostgresHostedWorkerDispatchStore({
+      pool,
+      tableName: sourceHostedWorkerDispatch,
+      retryTableName: sourceHostedWorkerRetry,
+      leaseTokenFactory: () => `operations-hosted-source-${++sourceHostedLeaseSequence}`,
+    });
+    const targetHostedWorkerStore = new PostgresHostedWorkerDispatchStore({
+      pool,
+      tableName: targetHostedWorkerDispatch,
+      retryTableName: targetHostedWorkerRetry,
+      leaseTokenFactory: () => `operations-hosted-target-${++targetHostedLeaseSequence}`,
+    });
     const storageRoot = await mkdtemp(join(tmpdir(), 'private-skills-operations-files-'));
     cleanups.push(async () => {
       await rm(storageRoot, { recursive: true, force: true });
@@ -572,7 +593,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       await targetIdentity.close().catch(() => undefined);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${identifier(sourceAuthSchema)} CASCADE`);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${identifier(targetAuthSchema)} CASCADE`);
-      await sql.unsafe(`DROP TABLE IF EXISTS ${[targetSso, sourceSso, targetTokens, sourceTokens, targetRegistry, sourceRegistry, targetIdentityEvents, sourceIdentityEvents, `${targetBillingTable}_usage_operations`, `${targetBillingTable}_webhook_events`, `${targetBillingTable}_subscriptions`, `${targetBillingTable}_customers`, `${targetBillingTable}_usage`, `${sourceBillingTable}_usage_operations`, `${sourceBillingTable}_webhook_events`, `${sourceBillingTable}_subscriptions`, `${sourceBillingTable}_customers`, `${sourceBillingTable}_usage`].map(identifier).join(', ')}`);
+      await sql.unsafe(`DROP TABLE IF EXISTS ${[targetSso, sourceSso, targetTokens, sourceTokens, targetRegistry, sourceRegistry, targetIdentityEvents, sourceIdentityEvents, targetHostedWorkerRetry, sourceHostedWorkerRetry, targetHostedWorkerDispatch, sourceHostedWorkerDispatch, `${targetBillingTable}_usage_operations`, `${targetBillingTable}_webhook_events`, `${targetBillingTable}_subscriptions`, `${targetBillingTable}_customers`, `${targetBillingTable}_usage`, `${sourceBillingTable}_usage_operations`, `${sourceBillingTable}_webhook_events`, `${sourceBillingTable}_subscriptions`, `${sourceBillingTable}_customers`, `${sourceBillingTable}_usage`].map(identifier).join(', ')}`);
       await sql.end({ timeout: 5 });
     });
 
@@ -590,6 +611,8 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await sql.unsafe(postgresStateSchemaSql(targetRegistry));
     await sql.unsafe(billingPostgresSchemaSql(sourceBillingTable));
     await sql.unsafe(billingPostgresSchemaSql(targetBillingTable));
+    await sql.unsafe(hostedWorkerDispatchSchemaSql(sourceHostedWorkerDispatch, sourceHostedWorkerRetry));
+    await sql.unsafe(hostedWorkerDispatchSchemaSql(targetHostedWorkerDispatch, targetHostedWorkerRetry));
     await sourceOperationsEvents.runMigrations();
     await targetOperationsEvents.runMigrations();
 
@@ -792,6 +815,12 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       blockedOrganizationIds: [ORG_B],
       updatedAt: recoveryUpdatedAt,
     } });
+    const sourceHostedLease = await sourceHostedWorkerStore.acquireLease(NOW, 5 * 60 * 1_000);
+    expect(sourceHostedLease).toMatchObject({ cursor: null, expiresAt: NOW + 5 * 60 * 1_000 });
+    if (!sourceHostedLease) throw new Error('operations rehearsal did not acquire the hosted worker dispatch lease');
+    await sourceHostedWorkerStore.advance(sourceHostedLease, ORG_A, NOW);
+    await sourceHostedWorkerStore.recordFailure(sourceHostedLease, ORG_B, ORG_A, 'tenant_worker_unavailable', NOW);
+    await expect(sourceHostedWorkerStore.isRetryReady(ORG_B, NOW)).resolves.toBe(false);
 
     const identitySourceManifest = await copyIdentitySchema(sql, sourceAuthSchema, targetAuthSchema);
     const publicSourceManifest = await copyPublicTables(sql, [
@@ -799,6 +828,8 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       [sourceTokens, targetTokens],
       [sourceRegistry, targetRegistry],
       [sourceIdentityEvents, targetIdentityEvents],
+      [sourceHostedWorkerDispatch, targetHostedWorkerDispatch],
+      [sourceHostedWorkerRetry, targetHostedWorkerRetry],
       [`${sourceBillingTable}_customers`, `${targetBillingTable}_customers`],
       [`${sourceBillingTable}_subscriptions`, `${targetBillingTable}_subscriptions`],
       [`${sourceBillingTable}_usage`, `${targetBillingTable}_usage`],
@@ -817,6 +848,8 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       [targetTokens, publicTable(targetTokens)],
       [targetRegistry, publicTable(targetRegistry)],
       [targetIdentityEvents, publicTable(targetIdentityEvents)],
+      [targetHostedWorkerDispatch, publicTable(targetHostedWorkerDispatch)],
+      [targetHostedWorkerRetry, publicTable(targetHostedWorkerRetry)],
       [`${targetBillingTable}_customers`, publicTable(`${targetBillingTable}_customers`)],
       [`${targetBillingTable}_subscriptions`, publicTable(`${targetBillingTable}_subscriptions`)],
       [`${targetBillingTable}_usage`, publicTable(`${targetBillingTable}_usage`)],
@@ -828,6 +861,54 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await expect(objectManifest(targetBlobs, [artifactA, artifactB])).resolves.toEqual(await objectManifest(sourceBlobs, [artifactA, artifactB]));
     await expect(targetBlobs.getVerified(artifactA.key, artifactA.digest)).resolves.toEqual(artifactBytesA);
     await expect(targetBlobs.getVerified(artifactB.key, artifactB.digest)).resolves.toEqual(artifactBytesB);
+    const restoredHostedDispatch = await sql.unsafe<{
+      cursor_org_id: string | null;
+      lease_token: string | null;
+      lease_expires_ms: string | null;
+    }[]>(
+      `SELECT cursor_org_id, lease_token,
+        (extract(epoch FROM lease_expires_at) * 1000)::bigint::text AS lease_expires_ms
+       FROM ${publicTable(targetHostedWorkerDispatch)} WHERE singleton_id = 'default'`,
+    );
+    expect(restoredHostedDispatch).toEqual([{
+      cursor_org_id: ORG_A,
+      lease_token: sourceHostedLease.token,
+      lease_expires_ms: String(NOW + 5 * 60 * 1_000),
+    }]);
+    const restoredHostedRetry = await sql.unsafe<{
+      organization_id: string;
+      attempts: string;
+      next_attempt_ms: string;
+      last_error: string;
+    }[]>(
+      `SELECT organization_id, attempts::text AS attempts,
+        (extract(epoch FROM next_attempt_at) * 1000)::bigint::text AS next_attempt_ms,
+        last_error
+       FROM ${publicTable(targetHostedWorkerRetry)} ORDER BY organization_id`,
+    );
+    expect(restoredHostedRetry).toEqual([{
+      organization_id: ORG_B,
+      attempts: '1',
+      next_attempt_ms: String(NOW + 30 * 1_000),
+      last_error: 'tenant_worker_unavailable',
+    }]);
+    await expect(targetHostedWorkerStore.acquireLease(NOW, 5 * 60 * 1_000)).resolves.toBeNull();
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, NOW)).resolves.toBe(false);
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, NOW + 60 * 1_000)).resolves.toBe(true);
+    const takeoverNow = NOW + 6 * 60 * 1_000;
+    const targetTakeoverLease = await targetHostedWorkerStore.acquireLease(takeoverNow, 5 * 60 * 1_000);
+    expect(targetTakeoverLease).toMatchObject({
+      cursor: ORG_A,
+      expiresAt: takeoverNow + 5 * 60 * 1_000,
+    });
+    if (!targetTakeoverLease) throw new Error('operations rehearsal did not take over the expired hosted worker lease');
+    await expect(targetHostedWorkerStore.advance(
+      { ...targetTakeoverLease, token: sourceHostedLease.token },
+      ORG_B,
+      takeoverNow,
+    )).rejects.toBeInstanceOf(HostedWorkerDispatchLeaseError);
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, takeoverNow)).resolves.toBe(true);
+    await targetHostedWorkerStore.release(targetTakeoverLease, ORG_A);
     const restoredRegistryA = await targetRegistryRepository.read(ORG_A) as RecoveryRegistryState;
     expect(restoredRegistryA.jobs).toEqual([
       expect.objectContaining({
