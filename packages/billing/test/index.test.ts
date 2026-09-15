@@ -541,6 +541,13 @@ describe('transactional usage enforcement', () => {
     await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
     await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: true });
   });
+
+  it('releases a reserved metric when reconciliation explicitly reports zero', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.reserveUsage('org-zero-reconcile', { eveCostCents: 40 }, 'estimate');
+    await service.reconcileUsage('org-zero-reconcile', 'estimate', { eveCostCents: 0 }, 'release');
+    await expect(service.usageSnapshot('org-zero-reconcile')).resolves.toMatchObject({ usage: { eveCostCents: 0 } });
+  });
 });
 
 describe('PostgreSQL repository contract', () => {

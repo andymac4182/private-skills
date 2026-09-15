@@ -446,12 +446,14 @@ export interface StateRepository { read(organizationId: string): Promise<Registr
 /** Durable scheduler bookkeeping; no prompts, credentials, or candidate text. */
 export interface TenantReviewDispatchRecord {
   operationKey: string;
-  state: 'claimed' | 'completed';
+  /** `uncertain` means the provider may have accepted the session; retries are fenced. */
+  state: 'claimed' | 'completed' | 'uncertain';
   claimToken?: string;
   leaseExpiresAt: string;
   sessionId?: string;
   updatedAt: string;
   completedAt?: string;
+  uncertainAt?: string;
 }
 
 /** Durable bounded queue state used when a deployment has more tenants than one page. */
@@ -459,6 +461,8 @@ export interface TenantReviewDispatchCursor {
   day: string;
   pendingOrganizationIds: string[];
   completedOrganizationIds: string[];
+  /** Tenants whose provider outcome is uncertain for this daily operation. */
+  blockedOrganizationIds?: string[];
   updatedAt: string;
 }
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }

@@ -1449,7 +1449,10 @@ function nonnegativeDeltaInput(delta: UsageDelta): UsageDelta {
   }
   // Reserve input may drop zero-valued fields, but reconciliation must retain
   // an explicit zero so callers can release a reservation they definitely did
-  // not write or execute.
+  // not write or execute. Reconciliation therefore distinguishes an omitted
+  // metric (keep its reservation) from an explicit zero (release that metric),
+  // while the reserve path may continue to canonicalize zeros away because
+  // zero and omission are equivalent there.
   for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
     if (delta[metric] === 0) normalized[metric] = 0;
   }

@@ -122,7 +122,7 @@ describe('tenant review dispatch', () => {
     await expect(dispatchTenantDailyReviews(retryOptions)).resolves.toMatchObject({ started: 1, outcomes: [{ status: 'started', sessionId: 'accepted' }] });
   });
 
-  it('holds an uncertain provider claim until the lease expires, then retries the same day key', async () => {
+  it('fences an uncertain provider result instead of retrying a duplicate session', async () => {
     const repo = repository();
     const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);
     let now = DAY;
@@ -134,10 +134,111 @@ describe('tenant review dispatch', () => {
     };
     const options = { listTenants: async () => [target('acme')], triggerForTenant, ledger, now: () => now };
     await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({ outcomes: [{ status: 'failed', reason: 'uncertain' }] });
-    await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({ outcomes: [{ status: 'in-progress' }] });
+    const held = await repo.read('acme') as { tenantReviewDispatches?: Array<{ state: string; uncertainAt?: string }> };
+    expect(held.tenantReviewDispatches).toEqual([
+      expect.objectContaining({ state: 'uncertain', uncertainAt: DAY.toISOString() }),
+    ]);
     now = new Date(DAY.getTime() + 15 * 60 * 1_000 + 1);
-    await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({ outcomes: [{ status: 'started', sessionId: 'retry-session' }] });
-    expect(calls).toBe(2);
+    await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({ outcomes: [{ status: 'in-progress' }] });
+    expect(calls).toBe(1);
+  });
+
+  it('refreshes the lease clock and fences a provider that returns after its lease', async () => {
+    const repo = repository();
+    const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);
+    let now = DAY;
+    let calls = 0;
+    const result = await dispatchTenantDailyReviews({
+      listTenants: async () => [target('acme')],
+      triggerForTenant: async () => async () => {
+        calls += 1;
+        now = new Date(DAY.getTime() + 2_001);
+        return { sessionId: 'late-session', status: 'started' as const };
+      },
+      ledger,
+      leaseMs: 2_000,
+      now: () => now,
+    });
+    expect(result.outcomes).toEqual([{
+      organizationId: 'acme',
+      operationKey: 'common-skill-review:2026-09-16',
+      status: 'failed',
+      reason: 'lease-lost',
+      sessionId: 'late-session',
+    }]);
+    const held = await repo.read('acme') as { tenantReviewDispatches?: Array<{ state: string; sessionId?: string }> };
+    expect(held.tenantReviewDispatches).toEqual([
+      expect.objectContaining({ state: 'uncertain', sessionId: 'late-session' }),
+    ]);
+    now = new Date(DAY.getTime() + 20_000);
+    await expect(dispatchTenantDailyReviews({
+      listTenants: async () => [target('acme')],
+      triggerForTenant: async () => async () => {
+        calls += 1;
+        return { sessionId: 'duplicate', status: 'started' as const };
+      },
+      ledger,
+      leaseMs: 2_000,
+      now: () => now,
+    })).resolves.toMatchObject({ outcomes: [{ status: 'in-progress' }] });
+    expect(calls).toBe(1);
+  });
+
+  it('persists the remaining page before the invocation budget expires', async () => {
+    const repo = repository();
+    const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);
+    let now = DAY;
+    const calls: string[] = [];
+    const options = {
+      listTenants: async () => [target('acme'), target('globex'), target('initech')],
+      triggerForTenant: async (organizationId: string) => async () => {
+        calls.push(organizationId);
+        if (organizationId === 'acme') now = new Date(DAY.getTime() + 1_001);
+        return { sessionId: `eve-${organizationId}`, status: 'started' as const };
+      },
+      ledger,
+      maxTenants: 3,
+      maxDurationMs: 1_000,
+      leaseMs: 5_000,
+      now: () => now,
+    };
+    const first = await dispatchTenantDailyReviews(options);
+    expect(first.started).toBe(1);
+    expect(first.truncated).toBe(2);
+    expect(calls).toEqual(['acme']);
+    const cursor = await ledger.cursorStore.read({ day: '2026-09-16' });
+    expect(cursor).toMatchObject({ pendingOrganizationIds: ['globex', 'initech'] });
+
+    now = new Date(DAY.getTime() + 2_000);
+    const second = await dispatchTenantDailyReviews(options);
+    expect(second.started).toBe(2);
+    expect(second.truncated).toBe(0);
+    expect(calls).toEqual(['acme', 'globex', 'initech']);
+  });
+
+  it('times out a provider call before the host deadline and fences its reservation', async () => {
+    const repo = repository();
+    const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);
+    let calls = 0;
+    const options = {
+      listTenants: async () => [target('acme')],
+      triggerForTenant: async () => async () => {
+        calls += 1;
+        return await new Promise<never>(() => undefined);
+      },
+      ledger,
+      maxDurationMs: 500,
+      leaseMs: 5_000,
+      now: () => DAY,
+    };
+    await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({
+      truncated: 0,
+      outcomes: [{ organizationId: 'acme', status: 'failed', reason: 'uncertain' }],
+    });
+    await expect(dispatchTenantDailyReviews(options)).resolves.toMatchObject({
+      outcomes: [{ organizationId: 'acme', status: 'in-progress' }],
+    });
+    expect(calls).toBe(1);
   });
 
   it('bounds target fan-out and requires the exact cron bearer', async () => {

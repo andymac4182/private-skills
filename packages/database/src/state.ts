@@ -188,22 +188,27 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
 
 function validTenantReviewDispatchRecord(value: unknown): boolean {
   if (!isObject(value) || typeof value.operationKey !== 'string' || value.operationKey.length === 0 || value.operationKey.length > 256 ||
-      (value.state !== 'claimed' && value.state !== 'completed') || typeof value.leaseExpiresAt !== 'string' || value.leaseExpiresAt.length > 64 ||
+      (value.state !== 'claimed' && value.state !== 'completed' && value.state !== 'uncertain') || typeof value.leaseExpiresAt !== 'string' || value.leaseExpiresAt.length > 64 ||
       typeof value.updatedAt !== 'string' || value.updatedAt.length > 64) return false;
   if (value.claimToken !== undefined && (typeof value.claimToken !== 'string' || value.claimToken.length === 0 || value.claimToken.length > 256)) return false;
   if (value.sessionId !== undefined && (typeof value.sessionId !== 'string' || value.sessionId.length === 0 || value.sessionId.length > 256)) return false;
   if (value.completedAt !== undefined && (typeof value.completedAt !== 'string' || value.completedAt.length > 64)) return false;
-  return value.state !== 'claimed' || value.claimToken !== undefined;
+  if (value.uncertainAt !== undefined && (typeof value.uncertainAt !== 'string' || value.uncertainAt.length > 64)) return false;
+  if (value.state === 'claimed' && value.claimToken === undefined) return false;
+  if (value.state !== 'claimed' && value.claimToken !== undefined) return false;
+  return value.state !== 'uncertain' || value.uncertainAt !== undefined;
 }
 
 function validTenantReviewDispatchCursor(value: unknown): boolean {
   if (!isObject(value) || typeof value.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value.day) ||
       typeof value.updatedAt !== 'string' || value.updatedAt.length > 64 ||
       !Array.isArray(value.pendingOrganizationIds) || !Array.isArray(value.completedOrganizationIds) ||
-      value.pendingOrganizationIds.length > 4_096 || value.completedOrganizationIds.length > 4_096) return false;
+      value.pendingOrganizationIds.length > 4_096 || value.completedOrganizationIds.length > 4_096 ||
+      (value.blockedOrganizationIds !== undefined && (!Array.isArray(value.blockedOrganizationIds) || value.blockedOrganizationIds.length > 4_096))) return false;
   const validIds = (ids: unknown[]): boolean => ids.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(id));
-  return validIds(value.pendingOrganizationIds) && validIds(value.completedOrganizationIds) &&
-    new Set([...value.pendingOrganizationIds, ...value.completedOrganizationIds]).size === value.pendingOrganizationIds.length + value.completedOrganizationIds.length;
+  const blocked = value.blockedOrganizationIds ?? [];
+  return validIds(value.pendingOrganizationIds) && validIds(value.completedOrganizationIds) && validIds(blocked) &&
+    new Set([...value.pendingOrganizationIds, ...value.completedOrganizationIds, ...blocked]).size === value.pendingOrganizationIds.length + value.completedOrganizationIds.length + blocked.length;
 }
 
 export function stateRevision(state: RegistryState): number {

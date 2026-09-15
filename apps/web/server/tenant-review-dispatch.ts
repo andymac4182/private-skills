@@ -22,6 +22,11 @@ const DEFAULT_MAX_TENANTS = 64;
 const MAX_MAX_TENANTS = 256;
 const DEFAULT_LEASE_MS = 15 * 60 * 1_000;
 const MAX_LEASE_MS = 60 * 60 * 1_000;
+const DEFAULT_MAX_INVOCATION_MS = 10 * 60 * 1_000;
+const MAX_MAX_INVOCATION_MS = 14 * 60 * 1_000;
+const MIN_LEASE_MARGIN_MS = 1_000;
+const MAX_PERSIST_MARGIN_MS = 5_000;
+const MIN_PROVIDER_BUDGET_MS = 100;
 const MAX_RECORDS_PER_TENANT = 256;
 const MAX_TRACKED_TENANTS = 4_096;
 const DEFAULT_CURSOR_ORGANIZATION_ID = '__private_skills_tenant_review_dispatch__';
@@ -50,6 +55,14 @@ export interface TenantReviewDispatchLedger {
     leaseMs: number;
   }): Promise<TenantReviewDispatchClaim>;
   complete(input: {
+    organizationId: string;
+    operationKey: string;
+    claimToken: string;
+    sessionId?: string;
+    now: Date;
+  }): Promise<boolean>;
+  /** Fence a provider result whose outcome cannot be retried safely. */
+  markUncertain(input: {
     organizationId: string;
     operationKey: string;
     claimToken: string;
@@ -113,6 +126,7 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       const records = recordsFor(mutable);
       const existing = records.find((record) => record.operationKey === operationKey);
       if (existing?.state === 'completed') return { claimed: false, reason: 'completed' as const };
+      if (existing?.state === 'uncertain') return { claimed: false, reason: 'in-progress' as const };
       if (existing?.state === 'claimed' && leaseIsActive(existing, now)) {
         return { claimed: false, reason: 'in-progress' as const };
       }
@@ -152,6 +166,33 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       delete record.claimToken;
       record.updatedAt = now.toISOString();
       record.completedAt = now.toISOString();
+      if (sessionId !== undefined) record.sessionId = sessionId;
+      mutable.tenantReviewDispatches = pruneRecords(records, this.maxRecords);
+      return true;
+    });
+  }
+
+  async markUncertain(input: {
+    organizationId: string;
+    operationKey: string;
+    claimToken: string;
+    sessionId?: string;
+    now: Date;
+  }): Promise<boolean> {
+    const organizationId = boundedText(input.organizationId, 'organizationId');
+    const operationKey = boundedText(input.operationKey, 'operationKey');
+    const claimToken = boundedText(input.claimToken, 'claimToken');
+    const now = validDate(input.now);
+    const sessionId = input.sessionId === undefined ? undefined : boundedText(input.sessionId, 'sessionId');
+    return this.repository.transaction(organizationId, (state) => {
+      const mutable = state as TenantReviewDispatchState;
+      const records = recordsFor(mutable);
+      const record = records.find((candidate) => candidate.operationKey === operationKey);
+      if (!record || record.state !== 'claimed' || record.claimToken !== claimToken) return false;
+      record.state = 'uncertain';
+      delete record.claimToken;
+      record.updatedAt = now.toISOString();
+      record.uncertainAt = now.toISOString();
       if (sessionId !== undefined) record.sessionId = sessionId;
       mutable.tenantReviewDispatches = pruneRecords(records, this.maxRecords);
       return true;
@@ -237,6 +278,8 @@ export interface TenantReviewDispatcherOptions {
   cursorStore?: TenantReviewDispatchCursorStore;
   maxTenants?: number;
   leaseMs?: number;
+  /** Stop starting new tenants before the lease/platform timeout. */
+  maxDurationMs?: number;
   now?: () => Date;
 }
 
@@ -252,6 +295,13 @@ export class TenantReviewDispatchError extends Error {
   }
 }
 
+class TenantReviewDispatchBudgetError extends Error {
+  constructor() {
+    super('Tenant review dispatch invocation budget expired');
+    this.name = 'TenantReviewDispatchBudgetError';
+  }
+}
+
 /**
  * Dispatch one deterministic review operation per explicitly provisioned
  * tenant. Calls are sequential and bounded so a schedule cannot share a
@@ -260,8 +310,15 @@ export class TenantReviewDispatchError extends Error {
 export async function dispatchTenantDailyReviews(options: TenantReviewDispatcherOptions): Promise<TenantReviewDispatchResult> {
   const maxTenants = boundedMaxTenants(options.maxTenants);
   const leaseMs = boundedLease(options.leaseMs ?? DEFAULT_LEASE_MS);
-  const now = validDate(options.now?.() ?? new Date());
-  const operationKey = dailyReviewIdempotencyKey(now);
+  const clock = options.now ?? (() => new Date());
+  const initialNow = validDate(clock());
+  const maxDurationMs = boundedMaxDuration(options.maxDurationMs, leaseMs);
+  const deadlineMs = initialNow.getTime() + maxDurationMs;
+  const wallDeadlineMs = Date.now() + maxDurationMs;
+  const persistMarginMs = Math.min(MAX_PERSIST_MARGIN_MS, Math.max(MIN_PROVIDER_BUDGET_MS, Math.floor(maxDurationMs / 5)));
+  const currentNow = (): Date => validDate(clock());
+  const remainingBudgetMs = (): number => Math.min(deadlineMs - currentNow().getTime(), wallDeadlineMs - Date.now());
+  const operationKey = dailyReviewIdempotencyKey(initialNow);
   let rawTargets: readonly TenantReviewTarget[];
   try {
     rawTargets = await options.listTenants();
@@ -291,10 +348,12 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
   const pageIds = queue.pendingOrganizationIds.slice(0, maxTenants);
   const remainingIds = queue.pendingOrganizationIds.slice(pageIds.length);
   const done = new Set(queue.completedOrganizationIds);
+  const blocked = new Set(queue.blockedOrganizationIds);
   const retry: string[] = [];
   const outcomes: TenantReviewDispatchOutcome[] = [];
   let attempted = 0;
   let started = 0;
+  let unprocessedPageIds = pageIds;
 
   if (pageIds.length === 0) {
     // Keep the response useful for an idempotent replay while avoiding a
@@ -302,11 +361,20 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
     for (const target of targets.slice(0, maxTenants)) {
       if (done.has(target.organizationId)) {
         outcomes.push({ organizationId: target.organizationId, operationKey, status: 'already-completed' });
+      } else if (blocked.has(target.organizationId)) {
+        outcomes.push({ organizationId: target.organizationId, operationKey, status: 'in-progress' });
       }
     }
   }
 
-  for (const organizationId of pageIds) {
+  for (let index = 0; index < pageIds.length; index += 1) {
+    const organizationId = pageIds[index]!;
+    const claimNow = currentNow();
+    if (remainingBudgetMs() <= persistMarginMs || claimNow.getTime() >= deadlineMs) {
+      unprocessedPageIds = pageIds.slice(index);
+      break;
+    }
+    unprocessedPageIds = pageIds.slice(index + 1);
     const target = targetMap.get(organizationId);
     if (!target) {
       done.add(organizationId);
@@ -323,7 +391,7 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
       claim = await options.ledger.claim({
         organizationId: target.organizationId,
         operationKey,
-        now,
+        now: claimNow,
         leaseMs,
       });
     } catch {
@@ -347,6 +415,12 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
       retry.push(organizationId);
       continue;
     }
+    if (remainingBudgetMs() <= persistMarginMs) {
+      const released = await releaseAfterFailure(options.ledger, target.organizationId, operationKey, claimToken);
+      if (!released) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not save its continuation');
+      retry.push(organizationId);
+      continue;
+    }
     let trigger: ReviewTrigger | undefined;
     try {
       trigger = await options.triggerForTenant(target.organizationId);
@@ -364,16 +438,32 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
     }
     let result: ReviewTriggerResult;
     try {
-      result = await trigger(target.organizationId);
+      const providerBudgetMs = Math.floor(remainingBudgetMs() - persistMarginMs);
+      if (providerBudgetMs < MIN_PROVIDER_BUDGET_MS) {
+        const released = await releaseAfterFailure(options.ledger, target.organizationId, operationKey, claimToken);
+        if (!released) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not save its continuation');
+        retry.push(organizationId);
+        continue;
+      }
+      result = await runWithDispatchBudget(() => trigger(target.organizationId), providerBudgetMs);
     } catch (error) {
       const uncertain = isUncertainEveStartFailure(error);
       if (!uncertain) {
         const released = await releaseAfterFailure(options.ledger, target.organizationId, operationKey, claimToken);
         outcomes.push({ ...base, status: released ? 'failed' : 'failed', reason: released ? 'provider-rejected' : 'uncertain' });
       } else {
+        const held = await markUncertainAfterFailure(
+          options.ledger,
+          target.organizationId,
+          operationKey,
+          claimToken,
+          currentNow(),
+        );
+        if (!held) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not persist an uncertain provider result');
         outcomes.push({ ...base, status: 'failed', reason: 'uncertain' });
       }
-      retry.push(organizationId);
+      if (uncertain) blocked.add(organizationId);
+      else retry.push(organizationId);
       continue;
     }
     const sessionId = safeSessionId(result?.sessionId);
@@ -383,11 +473,20 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
         operationKey,
         claimToken,
         ...(sessionId === undefined ? {} : { sessionId }),
-        now,
+        now: currentNow(),
       });
       if (!completed) {
         outcomes.push({ ...base, status: 'failed', reason: 'lease-lost', ...(sessionId === undefined ? {} : { sessionId }) });
-        retry.push(organizationId);
+        const held = await markUncertainAfterFailure(
+          options.ledger,
+          target.organizationId,
+          operationKey,
+          claimToken,
+          currentNow(),
+          sessionId,
+        );
+        if (!held) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not persist a late provider result');
+        blocked.add(organizationId);
       } else {
         started += 1;
         done.add(organizationId);
@@ -396,20 +495,32 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
     } catch {
       // The provider has already accepted the session. Keep the claim and
       // cost reservation for a retry/reconciliation rather than releasing it.
+      const held = await markUncertainAfterFailure(
+        options.ledger,
+        target.organizationId,
+        operationKey,
+        claimToken,
+        currentNow(),
+        sessionId,
+      );
+      if (!held) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not persist a provider result');
+      blocked.add(organizationId);
       outcomes.push({ ...base, status: 'failed', reason: 'uncertain', ...(sessionId === undefined ? {} : { sessionId }) });
-      retry.push(organizationId);
     }
   }
 
-  const pendingOrganizationIds = [
+  const pendingOrganizationIds = uniqueIds([
     ...remainingIds.filter((organizationId) => !done.has(organizationId)),
+    ...unprocessedPageIds.filter((organizationId) => !done.has(organizationId)),
     ...retry.filter((organizationId) => !done.has(organizationId)),
-  ];
+  ]).filter((organizationId) => !blocked.has(organizationId));
+  const updatedAt = currentNow().toISOString();
   const nextCursor = normalizeCursor({
     day: operationKey.slice('common-skill-review:'.length),
     pendingOrganizationIds,
     completedOrganizationIds: [...done].filter((organizationId) => targetMap.has(organizationId)).sort(),
-    updatedAt: now.toISOString(),
+    blockedOrganizationIds: [...blocked].filter((organizationId) => targetMap.has(organizationId)).sort(),
+    updatedAt,
   });
   if (cursorStore) {
     try {
@@ -479,7 +590,7 @@ function recordsFor(state: TenantReviewDispatchState): TenantReviewDispatchRecor
   }
   if (!Array.isArray(state.tenantReviewDispatches)) throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review dispatch state is invalid', false);
   for (const record of state.tenantReviewDispatches) {
-    if (!record || typeof record !== 'object' || typeof record.operationKey !== 'string' || (record.state !== 'claimed' && record.state !== 'completed') || typeof record.leaseExpiresAt !== 'string' || typeof record.updatedAt !== 'string') {
+    if (!record || typeof record !== 'object' || typeof record.operationKey !== 'string' || (record.state !== 'claimed' && record.state !== 'completed' && record.state !== 'uncertain') || typeof record.leaseExpiresAt !== 'string' || typeof record.updatedAt !== 'string') {
       throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review dispatch state is invalid', false);
     }
   }
@@ -492,7 +603,15 @@ function pruneRecords(records: readonly TenantReviewDispatchRecord[], max: numbe
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   const remove = Math.max(0, records.length - max);
   const removeKeys = new Set(completed.slice(0, remove).map((record) => record.operationKey));
-  return records.filter((record) => !removeKeys.has(record.operationKey));
+  const retained = records.filter((record) => !removeKeys.has(record.operationKey));
+  if (retained.length > max) {
+    // Never evict an unresolved provider outcome merely to stay within the
+    // state bound: doing so would make a later retry capable of opening a
+    // duplicate session. Operators must reconcile the oldest uncertain row
+    // before this tenant can accumulate more history.
+    throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review dispatch has too many unresolved outcomes', false);
+  }
+  return retained;
 }
 
 function leaseIsActive(record: TenantReviewDispatchRecord, now: Date): boolean {
@@ -540,6 +659,16 @@ function boundedLease(value: number): number {
   return value;
 }
 
+function boundedMaxDuration(value: number | undefined, leaseMs: number): number {
+  const available = leaseMs - MIN_LEASE_MARGIN_MS;
+  if (available <= 0) throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review lease is too short for a bounded invocation', false);
+  const candidate = value ?? Math.min(DEFAULT_MAX_INVOCATION_MS, available);
+  if (!Number.isSafeInteger(candidate) || candidate <= 0 || candidate > MAX_MAX_INVOCATION_MS || candidate >= leaseMs) {
+    throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review invocation budget is invalid', false);
+  }
+  return candidate;
+}
+
 function validDate(value: Date): Date {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review clock is invalid', false);
   return new Date(value.getTime());
@@ -557,19 +686,21 @@ function buildQueue(
   const ids = targets.map((target) => target.organizationId);
   const available = new Set(ids);
   const completed = new Set((cursor?.completedOrganizationIds ?? []).filter((id) => available.has(id)));
+  const blocked = new Set((cursor?.blockedOrganizationIds ?? []).filter((id) => available.has(id) && !completed.has(id)));
   const pending = new Set<string>();
   for (const id of cursor?.pendingOrganizationIds ?? []) {
-    if (available.has(id) && !completed.has(id)) pending.add(id);
+    if (available.has(id) && !completed.has(id) && !blocked.has(id)) pending.add(id);
   }
   // New companies are appended in stable order. Existing queue order remains
   // intact, so a large company list advances one bounded page at a time.
   for (const id of ids) {
-    if (!completed.has(id) && !pending.has(id)) pending.add(id);
+    if (!completed.has(id) && !blocked.has(id) && !pending.has(id)) pending.add(id);
   }
   return {
     day: cursor?.day ?? '',
     pendingOrganizationIds: [...pending],
     completedOrganizationIds: [...completed].sort(),
+    blockedOrganizationIds: [...blocked].sort(),
     updatedAt: cursor?.updatedAt ?? new Date(0).toISOString(),
   };
 }
@@ -582,13 +713,15 @@ function normalizeCursor(cursor: TenantReviewDispatchCursor): TenantReviewDispat
   }
   const pending = cursor.pendingOrganizationIds.map((id) => boundedText(id, 'pending organization')).filter(Boolean);
   const completed = cursor.completedOrganizationIds.map((id) => boundedText(id, 'completed organization')).filter(Boolean);
-  if (pending.length > MAX_TRACKED_TENANTS || completed.length > MAX_TRACKED_TENANTS || new Set([...pending, ...completed]).size !== pending.length + completed.length) {
+  const blocked = (cursor.blockedOrganizationIds ?? []).map((id) => boundedText(id, 'blocked organization')).filter(Boolean);
+  if (pending.length > MAX_TRACKED_TENANTS || completed.length > MAX_TRACKED_TENANTS || blocked.length > MAX_TRACKED_TENANTS || new Set([...pending, ...completed, ...blocked]).size !== pending.length + completed.length + blocked.length) {
     throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review cursor exceeds its durable bound', false);
   }
   return {
     day,
     pendingOrganizationIds: pending,
     completedOrganizationIds: completed,
+    blockedOrganizationIds: blocked,
     updatedAt: validDate(new Date(cursor.updatedAt)).toISOString(),
   };
 }
@@ -598,6 +731,7 @@ function cloneCursor(cursor: TenantReviewDispatchCursor): TenantReviewDispatchCu
     day: cursor.day,
     pendingOrganizationIds: [...cursor.pendingOrganizationIds],
     completedOrganizationIds: [...cursor.completedOrganizationIds],
+    ...(cursor.blockedOrganizationIds === undefined ? {} : { blockedOrganizationIds: [...cursor.blockedOrganizationIds] }),
     updatedAt: cursor.updatedAt,
   };
 }
@@ -625,6 +759,41 @@ async function releaseAfterFailure(
     return await ledger.release({ organizationId, operationKey, claimToken });
   } catch {
     return false;
+  }
+}
+
+async function markUncertainAfterFailure(
+  ledger: TenantReviewDispatchLedger,
+  organizationId: string,
+  operationKey: string,
+  claimToken: string,
+  now: Date,
+  sessionId?: string,
+): Promise<boolean> {
+  return ledger.markUncertain({
+    organizationId,
+    operationKey,
+    claimToken,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    now,
+  });
+}
+
+function uniqueIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
+}
+
+async function runWithDispatchBudget<T>(action: () => Promise<T>, budgetMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new TenantReviewDispatchBudgetError()), budgetMs);
+  });
+  try {
+    // A late provider promise remains attached to the race, so a response
+    // arriving after the host budget cannot become an unhandled rejection.
+    return await Promise.race([action(), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
 }
 

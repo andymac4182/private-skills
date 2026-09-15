@@ -22,6 +22,7 @@ export interface TenantReviewRuntimeOptions {
   listTenants: () => Promise<readonly TenantReviewTarget[]>;
   maxTenants?: number;
   leaseMs?: number;
+  maxDurationMs?: number;
   now?: () => Date;
   /** Reuse the host adapter for interactive tenant review runs as well. */
   costReservation?: EveTenantCostReservation;
@@ -81,6 +82,7 @@ export function createPostgresTenantReviewTargetLister(
 export function createTenantReviewRuntime(options: TenantReviewRuntimeOptions): ((request: Request) => Promise<Response | undefined>) | undefined {
   const cronSecret = options.env.CRON_SECRET?.trim();
   if (!cronSecret) return undefined;
+  const maxDurationMs = options.maxDurationMs ?? parseOptionalDuration(options.env.PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS);
   const costReservation = options.costReservation ?? createTenantReviewCostReservation(options.env, options.billing);
   const ledger = new StateRepositoryTenantReviewDispatchLedger(options.repository);
   const dispatch = async (): Promise<TenantReviewDispatchResult> => dispatchTenantDailyReviews({
@@ -99,6 +101,7 @@ export function createTenantReviewRuntime(options: TenantReviewRuntimeOptions): 
     ledger,
     ...(options.maxTenants === undefined ? {} : { maxTenants: options.maxTenants }),
     ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
+    ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   return createTenantReviewCronHandler({ dispatch, cronSecret });
@@ -120,6 +123,14 @@ function parseEstimate(value: string): number {
   if (!/^\d+$/u.test(value.trim())) throw new Error('PSKILLS_EVE_REVIEW_ESTIMATE_CENTS is invalid');
   const parsed = Number(value.trim());
   if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 10_000) throw new Error('PSKILLS_EVE_REVIEW_ESTIMATE_CENTS is invalid');
+  return parsed;
+}
+
+function parseOptionalDuration(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  if (!/^\d+$/u.test(value.trim())) throw new Error('PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS is invalid');
+  const parsed = Number(value.trim());
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS is invalid');
   return parsed;
 }
 
