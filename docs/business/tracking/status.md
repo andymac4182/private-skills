@@ -8,9 +8,9 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Navigation integrated d529e42, four focused tests pass; browser proof pending; compact overview integrated 491ddc7 (11 related tests pass); visual proof pending |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
-| L05 | Company-managed SSO | oauth_demo_finish | Configuration module integrated 825c6a3; 15 focused tests pass and agent PG proof passes; real plugin provider lookup/callback bridge and UI remain open |
+| L05 | Company-managed SSO | oauth_demo_finish | Configuration integrated 825c6a3; bridge handoff passes actual signed local OIDC callback with PostgreSQL. Root rerun: 14 tests passed across callback and module suites. Bridge commit/runtime mounting, UI and signed SAML proof remain open; no customer IdP claim |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Integrated e13600d; focused checks pass, live PostgreSQL adoption and hosted worker proof remain open |
-| L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
+| L07 | Company billing console and enforced usage | billing_finish | Backend 9089e10 and console/route factory 9c92c68 integrated; actual PostgreSQL concurrency/deduplication/order tests pass. Runtime/navigation/invoice wiring and browser payment fixture journey active; Stripe account deferred |
 | L08 | Tenant-aware Eve callbacks | tenant_eve | Eve entrypoints integrated f486ee6, 26 tests pass; registry provider/client wiring and end-to-end tenant flows remain open |
 | L09 | Login/logout browser journey | root / editor_test_stability | dc836e7 browser proof passed: Acme sign-in, sign-out to login, Globex sign-in with only Globex membership; real customer SSO remains open |
 | L10 | Full isolation and launch acceptance | root | Open; test populated companies across every registry surface, not just empty catalogs |
