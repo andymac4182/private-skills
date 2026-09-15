@@ -173,7 +173,7 @@ class GenerationAwareBilling implements BillingUsageAdmission {
     return { enabled: true };
   }
 
-  async reserveUsage(): Promise<unknown> {
+  async reserveUsage(): Promise<MeteredUsageReservation> {
     throw new Error("storage recovery must never restore through reserveUsage");
   }
 
