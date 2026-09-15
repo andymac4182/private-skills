@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-cli-release-files-sdk-provision",
+  "observedAt": "2026-09-15T15:53:38.961Z",
+  "source": {
+    "commit": "1b2671a294637ba928f6b0e6062c1e6853ca1259",
+    "releaseTag": "v0.4.0",
+    "tagCommit": "84f712720dba74508d56f0bcb532393dad24324d",
+    "localVerifiedAssetDirectory": "/private/tmp/private-skills-cli-release-v04-download"
+  },
+  "provider": {
+    "kind": "files-sdk",
+    "package": "files-sdk",
+    "adapter": "fs",
+    "prefix": null,
+    "storageRoot": "/private/tmp/private-skills-cli-v04-private-provision-1b2671a",
+    "privateOnly": true,
+    "remoteUpload": false
+  },
+  "manifest": {
+    "path": "/private/tmp/private-skills-cli-v04-configured-manifest-1b2671a.json",
+    "environmentKey": "PSKILLS_CLI_RELEASE_MANIFEST",
+    "parse": "passed",
+    "storageKeysRecorded": true
+  },
+  "assets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "filename": "pskills-aarch64-apple-darwin.tar.gz",
+      "size": 2673030,
+      "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+      "storageKey": "sealed/efc3f272dad1e1d1777a715b864e26be3599f5e38404e42b",
+      "storeReadback": "exact-byte",
+      "providerReadback": "exact-byte-and-digest"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "filename": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 2922162,
+      "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+      "storageKey": "sealed/fd809e1698356ae2cf0d274fdc9128c961e1621491394eaa",
+      "storeReadback": "exact-byte",
+      "providerReadback": "exact-byte-and-digest"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "filename": "pskills-x86_64-pc-windows-msvc.zip",
+      "size": 2479997,
+      "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+      "storageKey": "sealed/7acdba2dabed314905e4beb226bfe6b8d40a94e85bf4c19d",
+      "storeReadback": "exact-byte",
+      "providerReadback": "exact-byte-and-digest"
+    }
+  ],
+  "result": {
+    "assetsProvisioned": 3,
+    "objectAllocation": "fresh random sealed key per BlobStore.put; no overwrite",
+    "exactByteReadback": true,
+    "digestReadback": true
+  },
+  "authenticatedRouteProof": {
+    "origin": "http://127.0.0.1:63779",
+    "organizationId": "local-cli-release-company",
+    "principalSubject": "local-cli-release-reader",
+    "role": "reader",
+    "scopes": ["registry:read", "artifacts:download"],
+    "authenticator": "TokenAuthenticator with disposable bearer credential; secret omitted",
+    "inventory": {
+      "status": 200,
+      "assets": 3,
+      "allReady": true,
+      "privateStorageDetailsOmitted": true
+    },
+    "anonymousDownloadStatus": 401,
+    "downloads": [
+      {
+        "target": "aarch64-apple-darwin",
+        "status": 200,
+        "size": 2673030,
+        "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "contentLength": "2673030",
+        "digestHeader": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "cacheControl": "no-store",
+        "exactBytes": true
+      },
+      {
+        "target": "x86_64-unknown-linux-gnu",
+        "status": 200,
+        "size": 2922162,
+        "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "contentLength": "2922162",
+        "digestHeader": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "cacheControl": "no-store",
+        "exactBytes": true
+      },
+      {
+        "target": "x86_64-pc-windows-msvc",
+        "status": 200,
+        "size": 2479997,
+        "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "contentLength": "2479997",
+        "digestHeader": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "cacheControl": "no-store",
+        "exactBytes": true
+      }
+    ],
+    "privateStorageDetailsOmittedFromInventory": true
+  },
+  "productionProcedure": {
+    "status": "not-run; production credential access was intentionally unavailable",
+    "steps": [
+      "Read each allowlisted v0.4.0 archive and compare size and SHA-256 with this pinned manifest before any upload.",
+      "Construct createNodeFilesSdkBlobStore from the deployment's selected private Files SDK provider and preserve its configured prefix; call put once per archive and persist only the returned StoredBlob key, digest, and size.",
+      "Call getVerified for every returned key with the pinned digest, then add those exact keys to the server-only PSKILLS_CLI_RELEASE_MANIFEST JSON; do not use release filenames or caller-supplied URLs as provider keys.",
+      "Apply the manifest through the deployment secret/configuration manager without logging its value, restart the app, and verify an authenticated company member receives each exact archive while an anonymous request receives 401 and the inventory omits storageKey.",
+      "Record provider, prefix, StoredBlob metadata, response status, Content-Length, ETag/digest, and no-store headers in a sanitized release evidence record; do not publish the objects or export credentials."
+    ],
+    "runtimePrefixConstraint": "runtime-node currently passes no PSKILLS_STORAGE_PREFIX; production keys must therefore use the factory's existing empty prefix unless the same prefix is explicitly wired through runtime configuration before deployment.",
+    "requiredInputs": [
+      "operator-selected private Files SDK provider and its secret-manager references",
+      "private storage root/bucket/container and existing prefix policy",
+      "allowlisted verified v0.4.0 archive bytes",
+      "server-only PSKILLS_CLI_RELEASE_MANIFEST configuration"
+    ]
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "privateReleaseUrlsIncluded": false,
+    "assetBytesIncluded": false
+  },
+  "boundary": [
+    "Disposable local filesystem adapter only; no production bucket or secret was accessed.",
+    "Better Auth and production environment were not changed.",
+    "This proves Files SDK object provisioning and readback, not hosted provider availability."
+  ]
+}
