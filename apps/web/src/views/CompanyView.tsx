@@ -20,22 +20,29 @@ function invitationStatus(invitation: OrganizationInvitation): string {
   return status || 'pending'
 }
 
-function displayInvitationStatus(invitation: OrganizationInvitation): string {
-  return displayRole(invitationStatus(invitation))
+function effectiveInvitationStatus(invitation: OrganizationInvitation, now: number): string {
+  const status = invitationStatus(invitation)
+  if (status !== 'pending' || !invitation.expiresAt) return status
+  const expiresAt = Date.parse(invitation.expiresAt)
+  return Number.isFinite(expiresAt) && expiresAt <= now ? 'expired' : status
 }
 
-function isPendingInvitation(invitation: OrganizationInvitation): boolean {
-  return invitationStatus(invitation) === 'pending'
+function displayInvitationStatus(invitation: OrganizationInvitation, now: number): string {
+  return displayRole(effectiveInvitationStatus(invitation, now))
 }
 
-function groupInvitations(invitations: readonly OrganizationInvitation[]): {
+function isPendingInvitation(invitation: OrganizationInvitation, now: number): boolean {
+  return effectiveInvitationStatus(invitation, now) === 'pending'
+}
+
+function groupInvitations(invitations: readonly OrganizationInvitation[], now: number): {
   pending: OrganizationInvitation[]
   history: OrganizationInvitation[]
 } {
   const pending: OrganizationInvitation[] = []
   const history: OrganizationInvitation[] = []
   for (const invitation of invitations) {
-    if (isPendingInvitation(invitation)) pending.push(invitation)
+    if (isPendingInvitation(invitation, now)) pending.push(invitation)
     else history.push(invitation)
   }
   return { pending, history }
@@ -206,12 +213,13 @@ function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: ()
 }
 
 function TeamPanel({ canManage, invitations, members, onChanged }: { canManage: boolean; invitations: OrganizationInvitation[] | null; members: TeamMember[] | null; onChanged: () => void }) {
-  const groups = invitations === null ? null : groupInvitations(invitations)
-  return <Panel className="company-team-panel" title="Team access" description={canManage ? 'Choose a new role and save it. The change takes effect after it is checked.' : 'You can view team access. Ask an owner or admin to change roles.'}>{members === null ? <LoadingState label="Loading team access…" /> : members.length === 0 ? <EmptyState title="No team members yet" description="The active company has no memberships in the current response." /> : <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{members.map((member) => <MemberRow canManage={canManage} key={member.id} member={member} onChanged={onChanged} />)}</tbody></table></div>}{canManage ? <div className="company-invitations"><section aria-labelledby="pending-invitations-heading" data-testid="pending-invitations"><div className="company-subheading"><div><h3 id="pending-invitations-heading">Pending invitations</h3><p className="muted">Links waiting to be accepted stay here. Accepted or closed links appear in history.</p></div><span className="badge badge-muted" data-testid="pending-invitations-count">{groups?.pending.length ?? '…'}</span></div>{invitations === null ? <LoadingState label="Loading invitations…" /> : groups!.pending.length === 0 ? <p className="company-empty-note">No pending invitations.</p> : <InvitationList invitations={groups!.pending} />}</section>{groups !== null && groups.history.length > 0 && <section aria-labelledby="invitation-history-heading" className="company-invitation-history" data-testid="invitation-history"><div className="company-subheading"><div><h3 id="invitation-history-heading">Invitation history</h3><p className="muted">Accepted or closed invitations stay here for reference.</p></div><span className="badge badge-muted" data-testid="invitation-history-count">{groups.history.length}</span></div><InvitationList invitations={groups.history} /></section>}</div> : <p className="company-empty-note">Owners and admins can see pending invitations.</p>}</Panel>
+  const now = Date.now()
+  const groups = invitations === null ? null : groupInvitations(invitations, now)
+  return <Panel className="company-team-panel" title="Team access" description={canManage ? 'Choose a new role and save it. The change takes effect after it is checked.' : 'You can view team access. Ask an owner or admin to change roles.'}>{members === null ? <LoadingState label="Loading team access…" /> : members.length === 0 ? <EmptyState title="No team members yet" description="The active company has no memberships in the current response." /> : <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{members.map((member) => <MemberRow canManage={canManage} key={member.id} member={member} onChanged={onChanged} />)}</tbody></table></div>}{canManage ? <div className="company-invitations"><section aria-labelledby="pending-invitations-heading" data-testid="pending-invitations"><div className="company-subheading"><div><h3 id="pending-invitations-heading">Pending invitations</h3><p className="muted">Links waiting to be accepted stay here. Accepted or closed links appear in history.</p></div><span className="badge badge-muted" data-testid="pending-invitations-count">{groups?.pending.length ?? '…'}</span></div>{invitations === null ? <LoadingState label="Loading invitations…" /> : groups!.pending.length === 0 ? <p className="company-empty-note">No pending invitations.</p> : <InvitationList invitations={groups!.pending} now={now} />}</section>{groups !== null && groups.history.length > 0 && <section aria-labelledby="invitation-history-heading" className="company-invitation-history" data-testid="invitation-history"><div className="company-subheading"><div><h3 id="invitation-history-heading">Invitation history</h3><p className="muted">Accepted or closed invitations stay here for reference.</p></div><span className="badge badge-muted" data-testid="invitation-history-count">{groups.history.length}</span></div><InvitationList invitations={groups.history} now={now} /></section>}</div> : <p className="company-empty-note">Owners and admins can see pending invitations.</p>}</Panel>
 }
 
-function InvitationList({ invitations }: { invitations: readonly OrganizationInvitation[] }) {
-  return <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.email}</strong><span>{displayRole(invitation.role)} · {displayInvitationStatus(invitation)}</span></div><Badge tone="muted" value={invitationStatus(invitation)} /></div>)}</div>
+function InvitationList({ invitations, now }: { invitations: readonly OrganizationInvitation[]; now: number }) {
+  return <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.email}</strong><span>{displayRole(invitation.role)} · {displayInvitationStatus(invitation, now)}</span></div><Badge tone="muted" value={effectiveInvitationStatus(invitation, now)} /></div>)}</div>
 }
 
 function MemberRow({ canManage, member, onChanged }: { canManage: boolean; member: TeamMember; onChanged: () => void }) {

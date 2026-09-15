@@ -193,6 +193,48 @@ describe('CompanyView', () => {
     expect(historySection?.textContent).toContain('Accepted')
   })
 
+  it('moves expired pending links to history while preserving accepted status', async () => {
+    harness.auth.session = makeSession()
+    const now = Date.now()
+    const expiredPending: OrganizationInvitation = {
+      id: 'invite-expired',
+      email: 'expired@acme.test',
+      role: 'reader',
+      status: 'pending',
+      expiresAt: new Date(now - 60_000).toISOString(),
+    }
+    const futurePending: OrganizationInvitation = {
+      id: 'invite-future',
+      email: 'future@acme.test',
+      role: 'reader',
+      status: 'pending',
+      expiresAt: new Date(now + 60_000).toISOString(),
+    }
+    const acceptedExpired: OrganizationInvitation = {
+      id: 'invite-accepted-expired',
+      email: 'ben@acme.test',
+      role: 'publisher',
+      status: 'accepted',
+      expiresAt: new Date(now - 60_000).toISOString(),
+    }
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [expiredPending, futurePending, acceptedExpired] })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const pendingSection = document.querySelector<HTMLElement>('[data-testid="pending-invitations"]')
+    const historySection = document.querySelector<HTMLElement>('[data-testid="invitation-history"]')
+    expect(pendingSection?.querySelector('[data-testid="pending-invitations-count"]')?.textContent).toBe('1')
+    expect(pendingSection?.textContent).toContain('future@acme.test')
+    expect(pendingSection?.textContent).not.toContain('expired@acme.test')
+    expect(pendingSection?.textContent).not.toContain('ben@acme.test')
+    expect(historySection?.querySelector('[data-testid="invitation-history-count"]')?.textContent).toBe('2')
+    expect(historySection?.textContent).toContain('expired@acme.test')
+    expect(historySection?.textContent).toContain('Expired')
+    expect(historySection?.textContent).toContain('ben@acme.test')
+    expect(historySection?.textContent).toContain('Accepted')
+  })
+
   it('derives a same-origin copy link from the Better Auth invitation id', async () => {
     harness.auth.session = makeSession()
     vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
