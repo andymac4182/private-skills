@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  captureIdentityOperationsTask,
   IDENTITY_OPERATIONS_EVENTS_TABLE,
   PostgresIdentityOperationsEventStore,
   identityOperationsEventsSchemaSql,
@@ -44,6 +45,7 @@ describe('identity operations event store', () => {
     expect(schema).toContain('reason_code IN');
     expect(schema).toContain('role IS NULL OR role IN');
     expect(schema).toContain('organization_time');
+    expect(schema).toContain('occurred_time');
     expect(schema).not.toContain('message');
     expect(identityOperationsEventsSchemaSql()).toContain(IDENTITY_OPERATIONS_EVENTS_TABLE);
     expect(() => new PostgresIdentityOperationsEventStore(options(new PoolFixture(), async () => null))).not.toThrow();
@@ -78,7 +80,7 @@ describe('identity operations event store', () => {
       expect.any(Date),
       'membership_denial',
       'membership_role_denied',
-      undefined,
+      null,
       'org-a',
       'reader',
     ]);
@@ -108,6 +110,8 @@ describe('identity operations event store', () => {
     expect(query.text).toContain('GROUP BY event_kind');
     expect(query.text).toContain('LIMIT 3');
     expect(query.text).not.toContain('SELECT *');
+    expect(query.parameters?.[1]).toEqual(new Date(NOW - 30 * 24 * 60 * 60 * 1_000));
+    expect(query.parameters?.[2]).toEqual(new Date(NOW - 24 * 60 * 60 * 1_000));
     expect(JSON.stringify(summary)).not.toContain('secret');
   });
 
@@ -124,5 +128,50 @@ describe('identity operations event store', () => {
     expect(cleanup.text).toContain('ORDER BY occurred_at ASC');
     expect(cleanup.text).toContain('LIMIT $2');
     expect(cleanup.parameters?.[1]).toBe(2);
+  });
+
+  it('runs one bounded record-triggered cleanup per interval', async () => {
+    const pool = new PoolFixture();
+    pool.rowCount = 2;
+    const store = new PostgresIdentityOperationsEventStore({
+      ...options(pool, async () => null),
+      cleanupBatchSize: 2,
+      cleanupIntervalMs: 1_000,
+    });
+    await store.recordGlobal({ kind: 'authentication_failure', reasonCode: 'authentication_rejected' });
+    await store.recordGlobal({ kind: 'callback_failure', reasonCode: 'callback_rejected' });
+    expect(pool.calls.filter((call) => call.text.startsWith('DELETE FROM'))).toHaveLength(1);
+    expect(pool.calls.filter((call) => call.text.startsWith('DELETE FROM'))[0]?.parameters?.[1]).toBe(2);
+  });
+
+  it('uses waitUntil when available and otherwise waits only for the bounded fallback', async () => {
+    let release!: () => void;
+    let captured: Promise<unknown> | undefined;
+    const waitUntil = vi.fn((task: Promise<unknown>) => {
+      captured = task;
+    });
+    let settled = false;
+    const withHook = captureIdentityOperationsTask({ waitUntil }, async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      settled = true;
+    });
+    await expect(withHook).resolves.toBeUndefined();
+    expect(waitUntil).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    release();
+    await captured;
+    expect(settled).toBe(true);
+
+    let fallbackRelease!: () => void;
+    let fallbackSettled = false;
+    const fallback = captureIdentityOperationsTask(undefined, async () => {
+      await new Promise<void>((resolve) => { fallbackRelease = resolve; });
+      fallbackSettled = true;
+    }, 10);
+    await Promise.resolve();
+    expect(fallbackSettled).toBe(false);
+    fallbackRelease();
+    await fallback;
+    expect(fallbackSettled).toBe(true);
   });
 });

@@ -6,8 +6,11 @@ import {
   createIdentityRuntime,
   createIdentityRuntimeConfig,
 } from '../src/index';
+import { loopbackDatabaseURL } from './loopback-database.js';
 
-const databaseURL = process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL;
+const databaseURL = loopbackDatabaseURL(
+  ['PSKILLS_IDENTITY_TEST_DATABASE_URL', process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL],
+);
 
 function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;

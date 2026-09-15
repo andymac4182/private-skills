@@ -153,8 +153,28 @@ process owns startup DDL, or call the infrastructure `runMigrations()` helper
 from the reviewed deployment job. That helper also removes up to the bounded
 `PSKILLS_IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE` of rows older than
 `PSKILLS_IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS` (30 days by default) on
-each run. The operations status endpoint returns aggregate totals and
-last-24-hour counts for the selected company; it never returns event rows.
+each run. A successful event write also starts at most one bounded cleanup per
+five-minute interval, so long-running processes with `autoMigrate=false` do
+not depend on startup DDL for retention. Deployments may call the public
+`cleanup()` method from a scheduler for additional bounded batches. Aggregate
+queries apply the same retention boundary before counting, and use the
+`occurred_at` index; the operations status endpoint returns only aggregate
+totals and last-24-hour counts for the selected company.
+
+Failure capture is best effort and never changes an authentication result. A
+request with a platform `waitUntil` hook submits the sanitized database write
+to that hook. Ordinary Fetch runtimes await the write for at most 250 ms, then
+continue even if the database is unavailable. Events contain only the closed
+kind/reason/provider fields and never exception text, request content, tokens,
+or unverified tenant claims.
+
+The PostgreSQL identity and operations-event suites are opt-in and refuse any
+configured database URL whose host is not `localhost`, `127.0.0.1`, or `::1`.
+Run them against a disposable local database by supplying
+`PSKILLS_IDENTITY_TEST_DATABASE_URL` through the process environment; the
+fixture creates and drops unique schemas and never prints the connection
+string. This covers Better Auth membership revocation and owner serialization,
+the handler failure to durable event row path, and record-triggered expiry.
 
 The implementation follows Better Auth's current
 [PostgreSQL adapter guidance](https://www.better-auth.com/docs/adapters/postgresql),
