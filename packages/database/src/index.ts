@@ -59,3 +59,23 @@ export type {
 } from './http';
 
 export type { RegistryState, StateRepository } from '../../contracts/src/index';
+
+export {
+  HOSTED_WORKER_DISPATCH_SCHEMA_SQL,
+  HostedWorkerDispatchLeaseError,
+  HostedWorkerDispatcher,
+  PostgresHostedWorkerDispatchStore,
+  createHostedWorkerDispatcher,
+  createHostedWorkerScheduler,
+  hostedWorkerDispatchSchemaSql,
+} from './hosted-worker-dispatch';
+export type {
+  HostedWorkerDispatchCatalog,
+  HostedWorkerDispatchLease,
+  HostedWorkerDispatchOperationContext,
+  HostedWorkerDispatchStateReader,
+  HostedWorkerDispatchStore,
+  HostedWorkerDispatchSummary,
+  HostedWorkerDispatcherOptions,
+  PostgresHostedWorkerDispatchStoreOptions,
+} from './hosted-worker-dispatch';
