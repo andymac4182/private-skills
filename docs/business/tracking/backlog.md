@@ -36,4 +36,6 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B15 — Develop a detailed brand shortlist with name rationale, pronunciation, category fit, collision risks and domain options. Check live domain registration/registrar availability with timestamps and source links; explicitly separate unregistered, purchasable, premium, reserved, taken and unverified. DNS absence is not availability. Domain checks are not trademark clearance. No purchases or registrations without a separate user decision. Owner: marketing_finish.
 - [ ] B16 — Use market findings to revise positioning, homepage messaging, launch offer and prioritized roadmap; obtain user brand selection before replacing the working name.
 
-- [ ] B17 — L03: header/account display should prefer identity name/email over opaque principal subject after company selection, preserving legacy token fallback. Observed in actual browser; assigned tenant_ui.
+- [x] B17 — L03: account display fix integrated 2de3e2f; identity name/email preferred with legacy fallback. Reader overview role-order correction ff2d0ab also integrated. Root seven focused tests passed. New build browser proof remains part of B03.
+
+- [ ] B18 — Company CLI token console: create scoped expiring tokens, reveal secret once with copy/manual fallback, list metadata and revoke, clear secret on company switch, enforce server role/company checks. Root found no token management entry in CompanyView/command navigation; tenant_ui owns current API contract audit and complete connected UI, not just a visual mockup.
