@@ -6,6 +6,7 @@ import type {
   StoredBlob,
 } from "../../contracts/src/index.js";
 import { digestBytes, isSha256Digest } from "./digest.js";
+import { normalizeStorageProviderBinding } from "./receipt.js";
 
 export const DEFAULT_STORAGE_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -54,6 +55,11 @@ export interface FilesSdkBlobStoreOptions {
   prefix?: string;
   /** Maximum object size accepted by put/get. */
   maxBytes?: number;
+  /**
+   * Stable, non-secret identity for the provider configuration. Omit it for
+   * legacy hosts; without a binding no verified recovery receipt is minted.
+   */
+  providerBinding?: string;
 }
 
 export type StorageErrorCode =
@@ -270,6 +276,7 @@ export class FilesSdkBlobStore implements RecoverableBlobStore {
   readonly #client: FilesClientLike;
   readonly #prefix: string;
   readonly #maxBytes: number;
+  readonly #providerBinding?: string;
   readonly #records = new Map<string, BlobRecord>();
 
   constructor(options: FilesSdkBlobStoreOptions) {
@@ -277,10 +284,24 @@ export class FilesSdkBlobStore implements RecoverableBlobStore {
     this.#client = options.client;
     this.#prefix = normalizePrefix(options.prefix);
     this.#maxBytes = assertLimit(options.maxBytes);
+    if (options.providerBinding !== undefined) {
+      const binding = normalizeStorageProviderBinding(options.providerBinding);
+      if (!binding) {
+        throw new StorageError(
+          "configuration",
+          "providerBinding must be a stable non-secret storage identity",
+        );
+      }
+      this.#providerBinding = binding;
+    }
   }
 
   get maxBytes(): number {
     return this.#maxBytes;
+  }
+
+  get providerBinding(): string | undefined {
+    return this.#providerBinding;
   }
 
   async confirmWriteTerminated(key: string): Promise<boolean> {

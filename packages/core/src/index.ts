@@ -49,13 +49,17 @@ import {
   type MeteredReservationOwner,
   canonicalMeteredImportIdentity,
   type StorageAttempt,
+  type StorageWriteReceipt,
 } from '../../contracts/src/index.js';
 import {
   allocateStorageObjectKey,
+  createVerifiedStorageWriteReceipt,
   digestBytes,
   encodeBundle,
+  isVerifiedStorageWriteReceipt,
   parseSkillMetadata,
   putStorageAttemptBlob,
+  storageProviderBinding,
   validateBundle,
 } from '../../storage/src/index.js';
 import {
@@ -2927,6 +2931,7 @@ async function publishSkill(
   }
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
   try {
     // Admission happens before the first blob write. A rejected plan therefore
     // cannot leave a newly stored artifact or enqueue scanner work.
@@ -2939,6 +2944,7 @@ async function publishSkill(
       reservationGeneration: storageReservation?.reservationGeneration,
     });
     stored = await putVerifiedBlob(deps, bytes, digest, storageAttempt);
+    writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
     const skill: SkillVersion = {
       id: skillId,
       organizationId: config.organizationId,
@@ -2988,7 +2994,7 @@ async function publishSkill(
     });
     return jsonResponse({ operation: result }, 202);
   } catch (error) {
-    if (storageAttempt) await markStorageAttemptOrphaned(deps, config.organizationId, storageAttempt.id, stored?.key);
+    if (storageAttempt) await markStorageAttemptOrphaned(deps, config.organizationId, storageAttempt.id, stored?.key, writeReceipt);
     else {
       // beginStorageAttempt completed no provider call.  If its transaction
       // failed after an uncertain metadata write, the external object is still
@@ -6532,6 +6538,7 @@ async function completeJob(
   let importedStorageAdmission: { billing: BillingUsageAdmission; reservationKey: string; delta: MeteredUsageDelta; reservationGeneration?: number } | undefined;
   let importedStorageAttempt: StorageAttempt | undefined;
   let importedStored: StoredBlob | undefined;
+  let importedWriteReceipt: StorageWriteReceipt | undefined;
   if (job.kind === 'import' && !body.error) {
     if (!isObject(body.bundle)) throw new RegistryApiError('INVALID_JOB_RESULT', 'An import completion requires a bundle', 400);
     try {
@@ -6557,6 +6564,7 @@ async function completeJob(
         reservationGeneration: reservation?.reservationGeneration,
       });
       importedStored = await putVerifiedBlob(deps, bytes, digest, importedStorageAttempt);
+      importedWriteReceipt = createVerifiedStorageWriteReceipt(deps.blobs, importedStorageAttempt, importedStored);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
       if (requestedDigest && requestedDigest !== digest) {
         throw new RegistryApiError('DIGEST_MISMATCH', 'Completion artifact digest does not match the imported bundle', 409);
@@ -6564,7 +6572,7 @@ async function completeJob(
       imported = { bundle, bytes, stored: importedStored, digest, metadata };
     } catch (error) {
       if (importedStorageAttempt) {
-        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
         importedStorageAttempt = undefined;
         importedStorageAdmission = undefined;
       } else if (importedStorageAdmission) {
@@ -6596,7 +6604,7 @@ async function completeJob(
       if (resultIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result ids must be unique', 400);
     } catch (error) {
       if (importedStorageAttempt) {
-        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
         importedStorageAttempt = undefined;
         importedStorageAdmission = undefined;
       } else if (importedStorageAdmission) {
@@ -6735,7 +6743,7 @@ async function completeJob(
     });
   } catch (error) {
     if (importedStorageAttempt) {
-      await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+      await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
       importedStorageAttempt = undefined;
       importedStorageAdmission = undefined;
     } else if (importedStorageAdmission) {
@@ -6755,7 +6763,7 @@ async function completeJob(
     // The provider write already happened. A requeue or other non-completed
     // result therefore owns an orphaned object until reconciliation verifies
     // deletion; releasing the storage admission here would undercount bytes.
-    await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+    await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
     importedStorageAttempt = undefined;
     importedStorageAdmission = undefined;
   }
@@ -8322,6 +8330,7 @@ function storageAttemptRecord(input: {
   size: number;
   jobId?: string;
   objectKey?: string;
+  providerBinding?: string;
   reservationGeneration?: number;
 }): StorageAttempt {
   const timestamp = nowIso();
@@ -8335,6 +8344,7 @@ function storageAttemptRecord(input: {
     createdAt: timestamp,
     updatedAt: timestamp,
     ...(input.objectKey ? { objectKey: input.objectKey } : {}),
+    ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
     ...(input.jobId ? { jobId: input.jobId } : {}),
     ...(input.reservationGeneration === undefined ? {} : { reservationGeneration: input.reservationGeneration }),
   };
@@ -8354,7 +8364,11 @@ async function beginStorageAttempt(
   // Persist the provider object identity before any write. Legacy BlobStores
   // remain supported, but their attempts cannot be recovered after an
   // ambiguous provider response because no stable key is available.
-  const attempt = storageAttemptRecord({ ...input, objectKey: allocateStorageObjectKey(deps.blobs) });
+  const attempt = storageAttemptRecord({
+    ...input,
+    objectKey: allocateStorageObjectKey(deps.blobs),
+    providerBinding: storageProviderBinding(deps.blobs),
+  });
   await deps.repository.transaction(input.organizationId, (state) => {
     const mutable = ensureState(state, defaultPolicy());
     mutable.storageAttempts!.push(attempt);
@@ -8367,6 +8381,7 @@ async function markStorageAttemptOrphaned(
   organizationId: string,
   attemptId: string,
   objectKey?: string,
+  writeReceipt?: StorageWriteReceipt,
 ): Promise<void> {
   try {
     await deps.repository.transaction(organizationId, (state) => {
@@ -8376,6 +8391,14 @@ async function markStorageAttemptOrphaned(
       attempt.state = 'orphaned';
       attempt.updatedAt = nowIso();
       if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
+      if (writeReceipt && isVerifiedStorageWriteReceipt(writeReceipt, {
+        providerBinding: attempt.providerBinding,
+        key: attempt.objectKey,
+        digest: attempt.digest,
+        size: attempt.size,
+      })) {
+        attempt.writeReceipt = writeReceipt;
+      }
     });
   } catch {
     // A pending attempt is deliberately retained when its state transition is

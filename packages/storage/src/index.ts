@@ -24,6 +24,14 @@ export {
   type StorageErrorCode,
 } from "./files.js";
 export {
+  STORAGE_PROVIDER_BINDING_MAX_LENGTH,
+  createVerifiedStorageWriteReceipt,
+  isVerifiedStorageWriteReceipt,
+  normalizeStorageProviderBinding,
+  storageProviderBinding,
+  type StorageWriteReceiptExpectation,
+} from "./receipt.js";
+export {
   STORAGE_RECOVERY_CAPABILITY,
   STORAGE_RECOVERY_SCOPE,
   StorageRecoveryError,

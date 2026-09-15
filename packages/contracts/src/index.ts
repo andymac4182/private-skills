@@ -78,6 +78,13 @@ export interface RecoverableBlobStore extends BlobStore {
   putAtKey(key: string, bytes: Uint8Array, metadata?: Record<string, string>): Promise<StoredBlob>;
   inspectObject(key: string): Promise<StorageObjectInspection>;
   /**
+   * Stable, non-secret identity for the provider configuration used by this
+   * store. Hosts should change it when the bucket, endpoint, account, or
+   * private object prefix changes. It is optional so legacy stores remain
+   * usable, but a verified write receipt cannot be minted without it.
+   */
+  readonly providerBinding?: string;
+  /**
    * Provider-specific proof that the original write for this stable key has
    * reached a terminal outcome and can no longer create the object later.
    * An adapter must return false when it cannot establish that fact.
@@ -460,6 +467,10 @@ export interface StorageAttempt {
   state: StorageAttemptState;
   /** Exact metered reservation lifecycle captured at admission. */
   reservationGeneration?: number;
+  /** Stable provider configuration identity captured before provider I/O. */
+  providerBinding?: string;
+  /** Server-created proof that this exact write completed and was verified. */
+  writeReceipt?: StorageWriteReceipt;
   /** Set atomically when a late metadata reference requires billing restoration. */
   billingCorrection?: StorageBillingCorrection;
   createdAt: string;
@@ -469,6 +480,21 @@ export interface StorageAttempt {
   /** A short-lived compare-and-set fence held during external recovery I/O. */
   recoveryToken?: string;
   recoveryStartedAt?: string;
+}
+
+/**
+ * A durable positive write result. This receipt is deliberately narrower than
+ * a provider error: callers may mint it only after the adapter has awaited the
+ * write and verified the exact returned bytes. An ambiguous write has no
+ * receipt and remains retained until provider finality is established.
+ */
+export interface StorageWriteReceipt {
+  kind: 'verified';
+  providerBinding: string;
+  key: string;
+  digest: Digest;
+  size: number;
+  completedAt: string;
 }
 /**
  * Durable fence for a metered reservation while a caller is deciding whether
