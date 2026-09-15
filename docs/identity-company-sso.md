@@ -13,6 +13,21 @@ The API is mounted at:
 /v1/companies/:organizationId/sso/providers/:providerId
 ```
 
+The public company login seam is mounted separately:
+
+```
+GET  /v1/companies/:organizationId/sso/login
+POST /v1/companies/:organizationId/sso/login
+```
+
+The GET response contains only active providers and the public `providerId`,
+display name, and protocol. The POST body selects one of those server-issued
+ids and carries a same-origin `/app` or invitation return path. The runtime
+resolves the provider again for the path organization, calls `selectProvider`,
+and forwards the protocol selected from the persisted row to Better Auth. It
+never accepts an email domain or a caller-selected issuer or protocol as
+discovery input.
+
 Reads and mutations require the injected company authorizer to return an owner
 or admin for the path organization. An authenticated platform recovery path may
 return `mode: "recovery"`; the request body cannot enable recovery. Responses
@@ -57,6 +72,12 @@ The bridge rejects any existing provider-id row whose id, organization, or
 admin owner does not match, so a company cannot overwrite a platform or other
 company provider. `getRuntimeProvider` returns the same id-bearing Better Auth
 shape for runtime callers that need to inspect or reconcile a single row.
+
+For OIDC sign-in and callback requests, the Node composition resolves the
+configured provider row from the request's provider id and adds only that
+row's validated IdP endpoint origins to Better Auth's trusted-origin set. This
+keeps private development fixtures usable while preventing a request-supplied
+issuer from widening trust.
 
 References:
 

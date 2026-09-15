@@ -99,6 +99,12 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
     const identity = infrastructure.identity;
     const companySso = infrastructure.companySso;
     if (!identity || !companySso) throw new Error('company SSO infrastructure did not initialize');
+    const loginRuntime = {
+      identityHandler: identity.handler,
+      basePath: identity.publicProviderConfig().basePath,
+      appOrigin: ORIGIN,
+      allowLoopbackHttp: true,
+    };
 
     let fixture: ReturnType<typeof createServer> | undefined;
     try {
@@ -190,6 +196,32 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
       const createdBody = await created?.json() as { provider?: { callbackUrl?: string; providerId?: string; organizationId?: string } };
       expect(createdBody).toMatchObject({ provider: { providerId: 'acme-runtime-oidc', organizationId: 'sso-runtime-acme' } });
       expect(createdBody.provider?.callbackUrl).toBe(`${ORIGIN}/api/auth/sso/callback/acme-runtime-oidc`);
+
+      const discovered = await handleCompanySsoRoute(
+        request('/v1/companies/sso-runtime-acme/sso/login'),
+        companySso,
+        loginRuntime,
+      );
+      expect(discovered?.status).toBe(200);
+      await expect(discovered?.json()).resolves.toMatchObject({
+        organizationId: 'sso-runtime-acme',
+        providers: [{ providerId: 'acme-runtime-oidc', displayName: 'Acme Runtime OIDC', protocol: 'oidc' }],
+      });
+
+      const signIn = await handleCompanySsoRoute(
+        request('/v1/companies/sso-runtime-acme/sso/login', {
+          method: 'POST',
+          headers: { origin: ORIGIN, 'content-type': 'application/json' },
+          body: JSON.stringify({ providerId: 'acme-runtime-oidc', callbackURL: '/app' }),
+        }),
+        companySso,
+        loginRuntime,
+      );
+      expect(signIn?.status).toBe(200);
+      const signInBody = await signIn?.json() as { url?: string; redirect?: boolean };
+      expect(signInBody.redirect).toBe(true);
+      expect(signInBody.url).toContain(`${issuer}/authorize`);
+      expect(new URL(signInBody.url!).searchParams.get('redirect_uri')).toBe(`${ORIGIN}/api/auth/sso/callback/acme-runtime-oidc`);
 
       const mirrored = await context.adapter.findOne<Record<string, unknown>>({
         model: 'ssoProvider',

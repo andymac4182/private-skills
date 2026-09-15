@@ -146,6 +146,7 @@ export function createIdentityInfrastructure(
   });
   const identity = createIdentityRuntimeFromEnv(env, {
     plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
+    trustedOrigins: (request) => companySsoTrustedOrigins(request, companySsoRepository),
   });
   if (!identity) return { identity: null, apiTokens: null, companySso: null };
 
@@ -202,6 +203,69 @@ function companySsoTableName(
     ?? env.COMPANY_SSO_TABLE_NAME;
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+/**
+ * Resolve only the configured company's IdP origins for Better Auth's SSO
+ * request. The initial sign-in body and both protocol callback paths carry
+ * the server-issued provider id; no request-supplied issuer or domain is
+ * accepted as a trusted origin.
+ */
+async function companySsoTrustedOrigins(
+  request: Request | undefined,
+  repository: ReturnType<typeof createPostgresCompanySsoRepository>,
+): Promise<string[]> {
+  const providerId = await providerIdFromSsoRequest(request);
+  if (!providerId) return [];
+  let record;
+  try {
+    record = await repository.getByProviderId(providerId);
+  } catch {
+    return [];
+  }
+  if (!record || record.status !== 'active') return [];
+  const candidates = record.protocol === 'oidc'
+    ? [record.issuer, record.oidc?.discoveryUrl, record.oidc?.authorizationEndpoint, record.oidc?.tokenEndpoint, record.oidc?.jwksEndpoint, record.oidc?.userInfoEndpoint]
+    : [record.saml?.entryPoint, record.issuer];
+  const origins = new Set<string>();
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    try {
+      const parsed = new URL(candidate);
+      if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && !parsed.username && !parsed.password) origins.add(parsed.origin);
+    } catch {
+      // The registry validator rejects malformed provider URLs. A malformed
+      // row is not allowed to widen the Better Auth trusted-origin set.
+    }
+  }
+  return [...origins];
+}
+
+async function providerIdFromSsoRequest(request: Request | undefined): Promise<string | undefined> {
+  if (!request) return undefined;
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return undefined;
+  }
+  const callback = /\/sso\/(?:callback|saml2\/sp\/acs)\/([^/]+)$/u.exec(url.pathname);
+  if (callback?.[1]) {
+    try {
+      return decodeURIComponent(callback[1]);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!url.pathname.endsWith('/sign-in/sso')) return undefined;
+  try {
+    const body = await request.clone().json() as unknown;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+    const providerId = (body as { providerId?: unknown }).providerId;
+    return typeof providerId === 'string' && providerId.trim() !== '' ? providerId.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function qualifiedMemberTable(schemaName: string | undefined): string {
