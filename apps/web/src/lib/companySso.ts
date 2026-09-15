@@ -17,6 +17,29 @@ export const companySsoRoute = (organizationId: string, providerId?: string): st
   return `${base}/${encodeURIComponent(provider)}`
 }
 
+/** Public provider metadata used by the company-specific sign-in picker. */
+export interface CompanySsoLoginProvider {
+  providerId: string
+  displayName: string
+  protocol: 'oidc' | 'saml'
+}
+
+export interface CompanySsoLoginProviderListResponse {
+  organizationId: string
+  providers: readonly CompanySsoLoginProvider[]
+}
+
+export interface CompanySsoLoginResponse {
+  url?: string
+  redirect?: boolean
+}
+
+export const companySsoLoginRoute = (organizationId: string): string => {
+  const organization = organizationId.trim()
+  if (!organization) throw new Error('A company is required for company sign-in.')
+  return `/v1/companies/${encodeURIComponent(organization)}/sso/login`
+}
+
 export interface CompanySsoProviderListResponse {
   providers: readonly CompanySsoProviderPublic[]
 }
@@ -68,6 +91,23 @@ export function companySsoErrorMessage(error: unknown, fallback: string): string
 
 export async function listCompanySsoProviders(organizationId: string, signal?: AbortSignal): Promise<CompanySsoProviderListResponse> {
   return requestCompanySso<CompanySsoProviderListResponse>(companySsoRoute(organizationId), { signal })
+}
+
+export async function listCompanySsoLoginProviders(organizationId: string, signal?: AbortSignal): Promise<CompanySsoLoginProviderListResponse> {
+  return requestCompanySso<CompanySsoLoginProviderListResponse>(companySsoLoginRoute(organizationId), { signal })
+}
+
+export async function startCompanySsoLogin(
+  organizationId: string,
+  providerId: string,
+  callbackURL: string,
+): Promise<CompanySsoLoginResponse> {
+  const provider = providerId.trim()
+  if (!provider) throw new Error('A company SSO provider is required.')
+  return requestCompanySso<CompanySsoLoginResponse>(companySsoLoginRoute(organizationId), {
+    method: 'POST',
+    body: { providerId: provider, callbackURL },
+  })
 }
 
 export async function createCompanySsoProvider(organizationId: string, input: CompanySsoProviderCreateInput): Promise<CompanySsoProviderResponse> {
