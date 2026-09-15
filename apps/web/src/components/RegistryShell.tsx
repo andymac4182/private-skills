@@ -7,6 +7,11 @@ import { CompanySwitcher } from './CompanySwitcher'
 import { HealthStatus } from './HealthStatus'
 import { Button, LoadingState } from './Primitives'
 
+// These destinations are guarded by the company-admin boundary. A reader can
+// still open a bookmarked URL and receive the server's denial, but the normal
+// navigation should not advertise controls they cannot use.
+const READER_HIDDEN_COMPANY_SECTIONS = new Set(['company-sso', 'billing', 'audit'])
+
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled])'))
     .filter((element) => {
@@ -23,6 +28,7 @@ export function RegistryShell() {
   const location = useLocation()
   const [routeIsEntering, setRouteIsEntering] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileExpandedGroupId, setMobileExpandedGroupId] = useState<string | null>(null)
   const mobileNavRef = useRef<HTMLElement>(null)
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null)
 
@@ -32,9 +38,23 @@ export function RegistryShell() {
   const routeSection = location.pathname.split('/')[2] || 'overview'
   const activeSection = routeSection === 'topic' ? 'topics' : routeSection
   const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
-  const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
-  const canManageCompany = session?.activeMembership?.role === 'owner' || session?.activeMembership?.role === 'admin'
-  const readonlyCompanyNavigation = Boolean(session?.activeMembership && !canManageCompany)
+  const sessionCompanyRole = session?.activeMembership?.role
+  const principalHasCompanyRole = principal?.roles.some((role) => ['owner', 'admin', 'publisher', 'reader'].includes(role)) ?? false
+  const canManageCompany = sessionCompanyRole !== undefined
+    ? sessionCompanyRole === 'owner' || sessionCompanyRole === 'admin'
+    : principal?.roles.some((role) => role === 'owner' || role === 'admin') ?? false
+  const readonlyCompanyNavigation = (sessionCompanyRole !== undefined || principalHasCompanyRole) && !canManageCompany
+  const navigationGroups = readonlyCompanyNavigation
+    ? registryNavGroups
+      .map((group) => group.id === 'company-admin'
+        ? { ...group, sections: group.sections.filter((section) => !READER_HIDDEN_COMPANY_SECTIONS.has(section.id)) }
+        : group)
+      .filter((group) => group.sections.length > 0)
+    : registryNavGroups
+  const navigationSections = readonlyCompanyNavigation
+    ? registrySections.filter((section) => !READER_HIDDEN_COMPANY_SECTIONS.has(section.id))
+    : registrySections
+  const activeGroup = navigationGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? navigationGroups[0] ?? registryNavGroups[0]
   const activeNavItemRef = useRef<HTMLAnchorElement>(null)
   // Identity sessions carry the human-facing account label. The legacy
   // principal subject is often an opaque id, so only use it after the
@@ -50,6 +70,10 @@ export function RegistryShell() {
   const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
   const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), [])
+
+  useEffect(() => {
+    setMobileExpandedGroupId(activeGroup.id)
+  }, [activeGroup.id])
 
   useEffect(() => {
     if (!returnTo || status === 'loading') return
@@ -171,32 +195,47 @@ export function RegistryShell() {
           </Link>
 
           <nav className="primary-nav" aria-label="Registry sections">
-            {registryNavGroups.map((group) => {
+            {navigationGroups.map((group) => {
               const defaultSection = group.sections.find((section) => section.id === group.defaultSectionId)
               if (!defaultSection) return null
               const isActiveGroup = group.id === activeGroup.id
               const isReadonlyCompanyGroup = group.id === 'company-admin' && readonlyCompanyNavigation
               const groupLabel = isReadonlyCompanyGroup ? 'Company' : group.label
               const groupHint = isReadonlyCompanyGroup ? 'Team and access' : group.hint
+              const groupSubnavId = `registry-nav-${group.id}-sections`
+              const mobileGroupExpanded = mobileNavOpen && mobileExpandedGroupId === group.id
+              const showSubnav = group.sections.length > 1 && (mobileNavOpen ? mobileGroupExpanded : isActiveGroup)
               return (
                 <div className={`nav-group${isActiveGroup ? ' nav-group-active' : ''}${group.admin && !isReadonlyCompanyGroup ? ' nav-group-admin' : ''}`} key={group.id}>
-                  <Link
-                    className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
-                    params={{ section: defaultSection.id }}
-                    to="/app/$section"
-                    ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
-                    onClick={closeMobileNav}
-                  >
-                    <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
-                    <span className="nav-group-copy">
-                      <strong>{groupLabel}</strong>
-                      <small>{groupHint}</small>
-                    </span>
-                    {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
-                  </Link>
+                  <div className="nav-group-heading">
+                    <Link
+                      className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
+                      params={{ section: defaultSection.id }}
+                      to="/app/$section"
+                      ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
+                      onClick={closeMobileNav}
+                    >
+                      <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
+                      <span className="nav-group-copy">
+                        <strong>{groupLabel}</strong>
+                        <small>{groupHint}</small>
+                      </span>
+                      {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
+                    </Link>
+                    {group.sections.length > 1 && <button
+                      aria-controls={groupSubnavId}
+                      aria-expanded={mobileGroupExpanded}
+                      aria-label={`${mobileGroupExpanded ? 'Collapse' : 'Expand'} ${groupLabel} sections`}
+                      className="nav-group-toggle"
+                      type="button"
+                      onClick={() => setMobileExpandedGroupId((current) => current === group.id ? null : group.id)}
+                    >
+                      <span aria-hidden="true">{mobileGroupExpanded ? '⌄' : '›'}</span>
+                    </button>}
+                  </div>
 
-                  {group.sections.length > 1 && (isActiveGroup || mobileNavOpen) && (
-                    <div aria-label={`${groupLabel} sections`} className="nav-subnav">
+                  {group.sections.length > 1 && (
+                    <div aria-label={`${groupLabel} sections`} className="nav-subnav" hidden={!showSubnav} id={groupSubnavId} role="group">
                       {group.sections.map((section) => (
                         <Link
                           activeProps={{ className: 'nav-subitem nav-subitem-active' }}
@@ -247,7 +286,10 @@ export function RegistryShell() {
                 aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
                 className="mobile-nav-trigger"
                 type="button"
-                onClick={() => setMobileNavOpen(true)}
+                onClick={() => {
+                  setMobileExpandedGroupId(activeGroup.id)
+                  setMobileNavOpen(true)
+                }}
               >
                 <span aria-hidden="true" className="mobile-nav-trigger-icon">☰</span>
                 <span className="mobile-nav-trigger-label">Menu</span>
@@ -260,7 +302,7 @@ export function RegistryShell() {
             </div>
 
             <div className="topbar-status">
-              <CommandPalette sections={registrySections} />
+              <CommandPalette sections={navigationSections} />
               <CompanySwitcher />
               <HealthStatus />
               <span className="divider" aria-hidden="true" />

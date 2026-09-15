@@ -1,8 +1,11 @@
 # Marketing usability and claims audit
 
 Observed 2026-09-16 against `https://private-skills-marketing.vercel.app` with
-headless `agent-browser`. The audit used the isolated marketing worktree based
-on `eb23f54`; no credentials, secrets, or purchase flows were used.
+headless `agent-browser`. The deployed route, CTA, and claims observations are
+the state of that URL before the local source follow-up in commit `3da1cf0`;
+the URL was not changed by this audit. Local checks below include the source
+follow-up based on `eb23f54`; no credentials, secrets, or purchase flows were
+used.
 
 ## Route coverage
 
@@ -46,7 +49,22 @@ the comparison heading fixed while the table moves.
 
 The pricing route returned zero axe violations. Axe reported one incomplete
 gradient-background contrast check, which requires manual colour review and
-was not treated as a confirmed violation.
+was closed manually against the local source follow-up. The shell background's
+linear-gradient stops are `#f8faff`, `#f1f5fb`, and `#fafcff`, with a blue
+radial overlay only at the upper-right. Across the nine public routes, the
+lowest sampled root-gradient text pair was `.marketing-section-heading p`
+using `#5d6d86` over approximately `rgb(241,245,251)` at 4.80:1; the
+`#5d6d86` value over the actual sampled point was 4.806:1. The previous
+`.marketing-footer-bottom` foreground `#8d9ab0` measured 2.76:1 over its
+lower-gradient background; it now uses `--marketing-muted` and measures
+5.10:1 at the same point. The strongest radial overlay region contains no
+root-gradient body text bounds. At the radial centre, the overlay composes to
+approximately `#dfe9fc`, where `#5d6d86` would measure 4.30:1; sampled text
+bounds reached at most 0.026 overlay alpha and retained the 4.80:1 minimum
+above. The other local gradient text surfaces were also above 4.5:1 at their
+darkest stops. No contrast violation remains in the manual review; axe cannot
+resolve CSS gradient backgrounds and therefore keeps this one item as
+incomplete.
 
 ## Source follow-up
 
@@ -56,6 +74,8 @@ The bounded source changes in this commit:
   files;
 - keep the comparison heading and mobile swipe cue outside the horizontal
   table scroller so the heading remains readable at the Business column;
+- raise the footer metadata text to the existing muted text token so it remains
+  readable over the lower page gradient;
 - preserve the existing plan IDs, finite limits, preview wording, and no-
   purchase behaviour.
 
@@ -83,3 +103,5 @@ repository at:
 - `/private/tmp/private-skills-marketing-audit-local-pricing-mobile.png`
 - `/private/tmp/private-skills-marketing-audit-local-pricing-mobile-business.png`
 - `/private/tmp/private-skills-marketing-audit-local-pricing-desktop.png`
+- `/private/tmp/private-skills-marketing-audit-local-home-desktop-contrast.png`
+- `/private/tmp/private-skills-marketing-audit-local-home-mobile-contrast.png`
