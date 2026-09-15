@@ -195,3 +195,7 @@ Root independently ran three PostgreSQL-enabled suites at coherent verification 
 ### Expanded local restore root proof — 16 September, 02:15 AEST
 
 Root applied recovery testf3ab981 asd4f8640 atop coherent8cff18f and ran the real disposable PostgreSQL rehearsal:1test passed in3.08seconds. The test exercises identity operations persistence, billing reserve/reconcile replay, Eve starting/uncertain ledger claims, job lease/retry denials, restored identity/token boundaries and FilesSDK filesystem object bytes. It does not yet copy separate private_skills_hosted_worker_dispatch and private_skills_hosted_worker_dispatch_retry tables present in the current schema; owner is extending that coverage. StorageAttempt fields in this interim test are compatibility-shaped JSON, not acceptance of the pending caller lifecycle implementation. Hosted object restore remains open.
+
+### Combined runtime full regression — 16 September, 02:18 AEST
+
+Root full Vitest run on verification d4f8640 passed168files/1,197tests, with17files/36tests skipped, in23.54seconds. Opt-in PostgreSQL tests were separately activated in the22-test ledger/Eve/worker checkpoint and expandedrestore proof. The snapshot still excludes pending atomic caller ownership, operatorrecovery and deploymentbudget fixes; fullregressionpassing doesnotremove those releaseholds. Release owner reported production11b5e1d authenticatedCLIcatalog/allthreeexactarchive downloads passed, anonymousdownload401; durable production record is beingprepared.
