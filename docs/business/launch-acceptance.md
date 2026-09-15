@@ -3,7 +3,7 @@
 **Planning snapshot:** 15 September 2026, Brisbane (Australia/Brisbane)
 
 **Reconciled against integration:** 16 September 2026, Brisbane. The status
-rows below describe integration snapshot `dd80c18` and use
+rows below describe integration snapshot `857b149` and use
 `docs/business/tracking/status.md` as the current work ledger. Local and
 disposable evidence remains separate from hosted and commercial acceptance.
 
@@ -24,7 +24,24 @@ not close a row that requires an authenticated hosted result.
 
 ## Verification update after the planning snapshot
 
-The editor fallback test correction is integrated as `acca451`. Root independently reran the combined suite at verification commit `d93a1e6`: **1,087 passed, 20 skipped, no failures**. This supersedes the earlier 1,079-pass/one-failure result retained below as historical context. The local web production build also passed. Portability fix `f19149a` is integrated with 13 focused origin/identity/runtime tests passing after combination; its Node/container/workerd evidence remains legacy-authentication and local-only. Token-session release proof, quota enforcement, daily Eve scheduling, and hosted/commercial gates remain open.
+The current source snapshot is `857b149`. Root's dated candidate rerun after
+`acca451` passed **1,087 tests, skipped 20, with no failures** at verification
+commit `d93a1e6`; this is local candidate evidence, not a hosted deployment.
+A later post-migration candidate run at `cddf73a` (source integration
+`432bf5d`) passed **1,113 tests in 154 files, skipped 24**, with typecheck
+passing; that newer result is recorded as follow-on evidence and does not
+silently change the `857b149` matrix.
+The PR #52 / `e32161a` production record separately reports **1,098 passed,
+20 skipped**, typecheck/build success, four READY Git-triggered deployments,
+and `/health` 200 while identity remained disabled. Local token create,
+sign-in/use, revoke, and post-revoke readback passed on the disposable 5405
+PostgreSQL fixture; root's fresh 5407 browser check loaded the company
+operations and SSO settings surfaces without a page error. The composed local
+Nitro/PostgreSQL/Files SDK/worker proof and the three-file tenant acceptance
+rerun also passed on disposable fixtures. These checks are explicitly local or
+candidate evidence. Hosted identity/provider callbacks, positive customer CLI
+acquisition, quota enforcement, Eve scheduling, and commercial gates remain
+open.
 
 ## Launch modes and decision boundary
 
@@ -83,7 +100,7 @@ cross-site navigation is verified.
 
 ## Product acceptance
 
-| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration dd80c18 / target |
+| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration 857b149 / target |
 | --- | --- | --- | --- |
 | Product + Engineering | **Positioning:** the product is a private registry and governed pull-through for versioned agent skills and packs. The user journey is source or upload → validation → required scan → policy decision → immutable release → authorized CLI install. Homepage copy must say that scan evidence is a policy input, not a harmlessness or agent-behavior guarantee. | `README.md:1-3,53-68`, `docs/product.md`, `docs/business/launch-plan.md`, and `apps/marketing/src/routes/index.tsx`. | Product description and marketing source exist in the integration snapshot. Agent browser review is recorded, but the current separate build/deployment, cross-site navigation, and final claim review remain open; 16 Sep. |
 | Product + Engineering | **Publish/review/install:** a benign artifact can be published, required evidence can complete, approval can be read, a pinned release or exact-member pack can be authorized, and the Rust CLI receives the same approved digest on repeat install. A blocked, stale, or revoked release cannot transfer. | `tests/e2e/registry.test.ts`, `tests/e2e/directory-security.test.ts`, `docs/evidence/local-compose-required-scan-34e4f56.json`, `docs/evidence/production-release-checkpoint-34e4f56.json`, `docs/cli-and-packs.md`. | Local and prior deployment slices exist. A current positive hosted install with the launch identity boundary remains required; 17–18 Sep. |
@@ -92,15 +109,15 @@ cross-site navigation is verified.
 | Product + Engineering | **Search and analytics:** search only returns approved, authorized rows and rechecks content/artifact digests. Install analytics come from client-confirmed receipts and never infer installs from downloads. | `docs/semantic-search.md`, `docs/analytics.md`, `packages/search/src`, `packages/core/src/index.ts` search/analytics routes. | Implemented as opt-in/best-effort. Hosted identity/company filters and cost controls require the tenant acceptance run; 17 Sep. |
 | Product + Eve owner | **Human review:** Eve receives a bounded, company-bound snapshot and records a proposal. Eve cannot publish, merge, edit source, authorize installs, or execute candidates. | `docs/eve-reviewer.md`, `packages/intelligence/src/handler.ts`, `apps/web/server/eve-tenant-runtime.ts`, `packages/eve-tenant/src/index.ts`, and `docs/evidence/production-m6-eve-session-34e4f56.json`. | Tenant-bound Eve entrypoints and registry callbacks are integrated in `f486ee6`/`5be8f00`; the tracking ledger records 26 focused entrypoint tests. Company-bound end-to-end prepare/complete, worker/Eve audience, cost-reservation, and hosted proof remain required; 17 Sep. |
 | CLI owner | **Cross-platform install:** the published `pskills` assets pass checksum/member-shape verification and the supported native limits are stated. Mac arm64 is the current native smoke; Linux QEMU and Windows Wine are nonnative evidence unless current native CI says otherwise. | `README.md:7-12,65-66`, `docs/verification-current.md`, `docs/evidence/production-cli-v0.3-release-20260913.json`. | Release evidence exists with explicit limits. Do not expand the homepage into a native-platform promise without new evidence; 18 Sep. |
-| Product + Support | **Onboarding:** a new user can see provider choices, sign in, choose or create a company, and use a copy-link invitation. An authenticated user with no membership receives an onboarding response and no registry data. Invitation delivery is not described as email until an email transport is configured and tested. | Integrated identity BFF (`/auth/identity/config`, `/auth/identity/session`), `apps/web/server/company-sso-runtime.ts`, `docs/identity.md`, `docs/identity-company-sso.md`, and the local browser journey. | Better Auth identity BFF, onboarding source, company selector UI, invitation copy-link source, company SSO runtime/discovery/picker source, and local PostgreSQL composition are integrated. Local invitation/browser evidence exists; authenticated selector persistence/return, invitee acceptance, hosted browser flow, a real customer provider callback, and persisted token exchange remain open. Manual link/code is the launch path; 16–18 Sep. |
+| Product + Support | **Onboarding:** a new user can see provider choices, sign in, choose or create a company, and use a copy-link invitation. An authenticated user with no membership receives an onboarding response and no registry data. Invitation delivery is not described as email until an email transport is configured and tested. | Integrated identity BFF (`/auth/identity/config`, `/auth/identity/session`), `apps/web/server/company-sso-runtime.ts`, `docs/identity.md`, `docs/identity-company-sso.md`, and the local browser journey. | Better Auth identity BFF, onboarding source, company selector UI, invitation copy-link source, company SSO runtime/discovery/picker source, and local PostgreSQL composition are integrated. Local token create/use/revoke readback and fresh 5407 settings checks are recorded; invitee acceptance, clipboard/wrong-email/expiry cases, hosted browser flow, and a real customer provider callback remain open. Manual link/code is the launch path; 16–18 Sep. |
 | Tenant acceptance | **Two-company boundary:** the actual outer tenant router derives company from a verified Better Auth membership or scoped credential before creating a fixed-company handler. Same names and digests remain separate rows; a foreign id/key/grant/operation returns a generic denial without opening the blob. Company headers, query selectors, body fields, and display names cannot switch context. | `docs/identity-company-sso.md`, `tests/e2e/directory-security.test.ts`, `tests/e2e/source-tenant-isolation.test.ts`, `apps/web/src/tenant-identity-route.postgres.integration.test.ts`, and `tests/e2e/multi-tenant-postgres-acceptance.test.ts`. | Local PostgreSQL proofs cover composed Better Auth/API-token routing and a separate populated fixed-handler registry isolation scenario. B05/L10 still requires the populated two-company matrix across files, drafts, packs, imports/scans, downloads, search, analytics, tokens, and Eve callbacks through the integrated runtime; no hosted acceptance is claimed. |
-| Tenant acceptance + Worker/Eve | **Credential audiences:** browser sessions, scoped CLI/service tokens, worker tokens, source credentials, storage grants, and Eve reviewer tokens are separate. User/session cookies cannot claim jobs; worker tokens cannot call `/v1/*`; Eve tokens cannot call registry routes; company A credentials cannot reach company B. Role removal, session revoke, and token revoke take effect on the next privileged request. | `packages/contracts/src/index.ts`, `packages/auth/src/index.ts`, `workers/runner/src`, `packages/eve-tenant/src/index.ts`, `docs/eve-reviewer.md`, integrated identity/tenant router, and the focused acceptance tests. | Baseline negative matrix and tenant-bound Eve entrypoint/runtime source are integrated. Local membership/session evidence and revoked-token recovery are recorded; persisted token browser exchange/use/revocation, the full worker/Eve audience journey, and hosted boundary remain open; 16–17 Sep. |
+| Tenant acceptance + Worker/Eve | **Credential audiences:** browser sessions, scoped CLI/service tokens, worker tokens, source credentials, storage grants, and Eve reviewer tokens are separate. User/session cookies cannot claim jobs; worker tokens cannot call `/v1/*`; Eve tokens cannot call registry routes; company A credentials cannot reach company B. Role removal, session revoke, and token revoke take effect on the next privileged request. | `packages/contracts/src/index.ts`, `packages/auth/src/index.ts`, `workers/runner/src`, `packages/eve-tenant/src/index.ts`, `docs/eve-reviewer.md`, integrated identity/tenant router, and the focused acceptance tests. | Baseline negative matrix and tenant-bound Eve entrypoint/runtime source are integrated. Local session/token create/use/revoke readback and deterministic worker transfer/denial evidence are recorded; the full worker/Eve audience journey, hosted boundary, and connected provider proof remain open; 16–17 Sep. |
 | Tenant acceptance + Operations | **Migration/recovery:** Better Auth and company tables migrate additively under a lock; the current `default` organization is adopted only through an explicit bootstrap-owner action; backup/restore preserves ids, digests, grants, scans, audit, and object references; rollback behavior is rehearsed and secrets are absent from manifests/logs. | `docs/identity-company-sso.md`, `docs/restore-rehearsal.md`, `docs/evidence/hosted-restore-20260910.json`, `scripts/restore-backup-postgres.ts`, `tests/operations-postgres-rehearsal.test.ts`, and the integrated identity migration plan. | The `da2606b`/`3950816` PostgreSQL recovery rehearsal passed once against disposable loopback PostgreSQL and covers identity/session/membership, SSO records, revoked tokens, billing mappings/reservations, registry state, sealed-object bytes, and cross-company denial. Better Auth migration is exercised locally; exact object copy/readback uses the Files SDK filesystem adapter, while explicit default adoption, rollback, and hosted restore/readback remain open; 17–18 Sep. |
 | Tenant acceptance + Operations | **Caps:** request/body, upload, publish, source fetch, search/reindex, callback/device poll, transfer, worker, reviewer, and provider calls have per-company bounded limits. At a cap, responses are stable and bounded with no silent required-scan bypass or unbounded queue/cache growth. | `docs/identity-company-sso.md`, `docs/operations.md`, `packages/auth/src`, scanner/job contracts, and a low-cap focused probe. | Some route and scanner bounds are implemented. Identity callback/device, company-aware rate accounting, and deployed cap evidence remain open; 17–18 Sep. |
 
 ## Marketing and public surface acceptance
 
-| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration dd80c18 / target |
+| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration 857b149 / target |
 | --- | --- | --- | --- |
 | Marketing + Product | **Homepage:** the hero, feature sections, FAQ, and calls to action explain “private registry for engineering teams,” source → scan → pack → install, provenance, required-scan failure behavior, and human Eve review. Claims distinguish implemented product behavior from configured provider/deployment inputs. | Integrated `apps/marketing/src/routes/index.tsx`, `apps/marketing/src/components/PublicLayout.tsx`, `apps/marketing/src/lib/brand.ts`, `docs/business/launch-plan.md`, and `README.md`. | Marketing source and launch collateral are integrated (including `f27e274` keyboard/mobile work and `205a28e`). Agent browser review covered nine routes at 320px plus desktop/mobile and keyboard tabs, and root marketing typecheck passed. The separate build/deployment, cross-site navigation, and final claim review remain open; 16 Sep. |
 | Marketing + Product | **Docs-led activation:** `/docs`, `/docs/getting-started`, and the CLI path show the shortest benign local proof, policy-first setup, exact release/pack install, boundaries, and the next owner-group workflow. They do not imply hosted source, OAuth, or paid support where none is configured. | Integrated `apps/marketing/src/routes/docs.tsx`, `apps/marketing/src/routes/docs.getting-started.tsx`, `apps/marketing/src/routeTree.gen.ts`, `docs/cli-and-packs.md`, `docs/verification-current.md`, and `docs/identity-company-sso.md`. | Marketing docs routes and the hosted-user/operator onboarding split are integrated. Route-tree/build/browser readback remains required; 16 Sep. |
@@ -110,7 +127,7 @@ cross-site navigation is verified.
 
 ## Business and billing acceptance
 
-| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration dd80c18 / target |
+| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration 857b149 / target |
 | --- | --- | --- | --- |
 | Billing + Engineering | **Billing test mode is launch readiness:** a disposable/local provider and signed webhook fixture create a customer, start checkout, map a known price to a plan, apply an entitlement, change/cancel/refund it, reject stale/invalid/replayed events, and reconcile idempotently. Usage reservations enforce seats, retained bytes, scanner executions, and Eve budget without an “unlimited” fallback. | Integrated `packages/billing/src/{types,plans,repository,stripe,webhooks}.ts`, `apps/web/server/routes/billing.ts`, focused billing/runtime tests, and `docs/business/launch-plan.md`. | Billing package, tenant console, route factory, and invoice provider are integrated (tracking records 33 focused runtime/billing/UI tests and PostgreSQL concurrency/deduplication/order proofs). Actual costly scan/storage/seat quota callers, the browser payment fixture journey, and usage enforcement remain open; no live charge is implied. |
 | Billing + Product | **Plan/entitlement consistency:** one server catalog is the source of plan ids, limits, price ids, checkout availability, portal availability, and cap behavior. The public page and onboarding use projections of that catalog rather than a second hard-coded offer. | `packages/billing/src/plans.ts`, `packages/billing/src/types.ts`, integrated pricing route, and a plan readback. | Open packaging/configuration decision; 17 Sep. |
@@ -120,7 +137,7 @@ cross-site navigation is verified.
 
 ## Hosting and production acceptance
 
-| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration dd80c18 / target |
+| Owner | Requirement and observable acceptance | Authoritative evidence | Status at integration 857b149 / target |
 | --- | --- | --- | --- |
 | Hosting/Operations | **Hosting decision:** use the existing Vercel Pro + Nitro Node path for launch where configured: Neon PostgreSQL, Files SDK object storage, durable PostgreSQL jobs, bounded Vercel Sandbox scanning, and AI/Eve provider settings. Keep S3/R2 and other Nitro profiles as portability seams, not Friday migrations. | `docs/business/hosting-review.md`, `docs/implementation.md`, `docs/operations.md`, `vercel.json`, and the final deployment record. | Hosting review and executable cost model are integrated in `b15ed1b`; JavaScript syntax and regenerated CSV equality were checked. Scenario values remain estimates; exact release/origin, capacity, and hosted acceptance remain open, 18 Sep. |
 | Hosting/Operations | **Configuration and secrets:** production has explicit Better Auth secret/base URL/callback origins, database and storage bindings, worker/cron credentials, immutable scanner references, deny-all scanner networking, model/provider config, and bounded request/storage settings. No secret appears in source, health, browser config, logs, or evidence. | `.env.example`, `docs/identity.md`, `docs/operations.md`, hosting env readback with values redacted, and secret-scan output. | Identity/provider env contract exists in the integrated root `.env.example`, `docs/identity.md`, and Node infrastructure. Production wiring and redacted deployment readback remain open, 18 Sep. |
@@ -132,7 +149,7 @@ cross-site navigation is verified.
 ## Authoritative evidence register
 
 The following files are the source of truth for their stated slices in
-integration snapshot `dd80c18`. Each row names the evidence boundary
+integration snapshot `857b149`. Each row names the evidence boundary
 that still has to be closed; source integration alone does not turn a local
 fixture into hosted acceptance:
 
@@ -216,18 +233,46 @@ User-confirmed on 15 September 2026: every company has a complete isolated porta
 ### Latest local verification update
 
 This update supersedes the older 15 September source and provisioning notes.
-It describes integration snapshot `dd80c18` and the evidence ledger in
-`docs/business/tracking/status.md` without treating local evidence as
-hosted acceptance.
+It describes integration snapshot `857b149` and the evidence ledger in
+`docs/business/tracking/status.md`. Local and candidate evidence is recorded
+separately from hosted and commercial acceptance.
 
-- Better Auth identity and the outer tenant Request composition are integrated in `68942ac`, `668f53e`, and `cfa7769`. Root's local rerun of the composed identity/API-token test with the integrated billing, route, and UI suites passed four files and 11 tests with loopback database variables. This verifies local database composition only; it does not prove hosted Nitro startup, customer IdP configuration, or the B05 matrix.
-- Company SSO bridge, runtime mount, login discovery, and picker are integrated (`01a3650`, `784f39a`, `4e4ce2d`, `d2fe825`, `7b6935f`; settings UI `cba7f63`). Root reports 13 focused SSO/runtime tests, seven picker tests, one PostgreSQL discovery/sign-in scenario, and typecheck passing on this increment. A separate local PostgreSQL Better Auth protocol run (`f6eae9b`) passed two signed OIDC/SAML cases with the wrong-issuer/audience negatives covered. These are local protocol proofs; real provider credentials and the authenticated hosted browser flow remain open.
-- Onboarding and company-selection source plus invitation source are integrated. Local browser evidence covers Acme/Globex account journeys and an owner-created invitation; authenticated selector persistence/return, invitee acceptance, clipboard readback, wrong-email/expiry cases, and hosted onboarding remain open.
-- CLI token console `d30fcc8` is integrated and tracking records 20 focused tests. Persisted browser token exchange, actual token use, and revocation readback remain release blockers; no raw token is recorded here.
-- Billing console, route factory, invoice provider, and runtime are integrated in `7860d16` and `6ee7db6`. Tracking records 33 focused runtime/billing/UI tests plus database concurrency/deduplication/order proofs. Costly scan/storage/seat quota callers, browser payment fixture, usage enforcement, and Stripe activation remain open.
-- Tenant-bound Eve registry callbacks are integrated in `f486ee6` and `5be8f00`. The entrypoint/runtime source is present, but the populated end-to-end worker/Eve audience journey, cost reservations, and hosted provider proof remain open.
-- `da2606b`/`3950816` is the integrated PostgreSQL recovery rehearsal. Root recorded one passing run against disposable loopback PostgreSQL covering restored identity/session/membership, SSO rows, revoked tokens, billing mappings/reservations, registry state, sealed-object bytes, and cross-company denial. The object copy and exact-byte readback use the Files SDK filesystem adapter in isolated temporary roots; this is local provider evidence, not S3/R2/Vercel Blob or hosted recovery. Explicit default adoption, rollback, hosted migration, and hosted restore/readback remain open.
-- `b15ed1b` is the integrated hosting review and executable cost model. Root checked JavaScript syntax and regenerated CSV equality. The scenarios are planning estimates, not a capacity acceptance or provider commitment.
-- Marketing source and launch collateral are integrated (separate project history `a6d1cda`/`15673e6`/`205a28e`, with the keyboard/mobile fix in `f27e274`). Agent browser review covered nine routes at 320px plus desktop/mobile and keyboard tabs, and root marketing typecheck passed. Market/naming research is integrated in `d02b1ae` with MR01–MR07/A1–A7 identifiers kept separate from product B17–B20. The separate build/deployment, cross-site navigation, and full responsive/claim review remain open. No brand or domain purchase is recorded.
-- The latest combined verification reports 1,079 tests passed, 20 skipped, and one DraftEditor fallback failure assigned to `business_billing`; that failure remains open and the run does not close launch acceptance. Skipped native CI and local fixtures remain limited evidence.
-- Release remains held for the populated B05/L10 matrix, persisted token exchange/use/revocation, company SSO runtime/provider/browser evidence, hosted positive install and negative boundary checks, test-mode billing/usage enforcement, hosted migration/restore/monitoring, and unresolved pricing, legal, support, and Stripe inputs.
+- Root's dated full candidate rerun after `acca451` passed **1,087 tests,
+  skipped 20, with no failures** at `d93a1e6`. The PR #52 / `e32161a` production
+  record separately reports **1,098 passed, 20 skipped**, typecheck/build
+  success, four READY Git-triggered deployments, and `/health` 200; identity
+  was disabled there and native CI was blocked before runner execution.
+- Local 5405 disposable PostgreSQL evidence (`b72e376`, `89ef195`, and
+  [local-native-cli-api-token-20260915.json](../evidence/local-native-cli-api-token-20260915.json))
+  passed scoped token creation, sign-in/use, owner revoke, existing-session
+  denial, fresh-sign-in denial, and native CLI metadata/revocation readback.
+  This supersedes the earlier token-session failure for that local fixture; no
+  raw token or hosted identity claim is made.
+- Root's fresh 5407 browser check on 16 September loaded the selected company
+  operations and SSO settings surfaces with no page error. The local signed
+  OIDC/SAML checks and PostgreSQL discovery proof remain local protocol
+  evidence; real customer provider callbacks and hosted browser identity remain
+  open.
+- Root's three-file local tenant rerun at `d11f6cb` passed
+  `multi-tenant-postgres-acceptance`, `source-tenant-isolation`, and
+  `tenant-identity-route.postgres.integration` (3 tests, 2.25 seconds).
+  The composed Nitro/PostgreSQL/Files SDK/worker proof recorded in `335826c`
+  also passed one deterministic transfer test (11.41 seconds). These fixtures
+  cover distinct boundaries and do not close the full B05/L10 matrix, hosted
+  worker/provider behavior, or external scanner service acceptance.
+- Billing, tenant-bound Eve, recovery, hosting, and marketing increments are
+  integrated in `857b149` with the focused evidence named above. Remaining
+  gates include costly caller quota enforcement, Eve crash/restart and budget
+  reconciliation, hosted migration/restore/monitoring, separate marketing
+  deployment and cross-site review, plan/legal/support decisions, provider
+  configuration, and Stripe activation.
+- Historical note (15 September, `dd80c18`): the prior 1,079-pass/one-failure
+  run and the earlier newly-issued-token rejection remain valid observations
+  for those snapshots only. They are retained in the tracker as dated history,
+  not current release blockers.
+- Follow-on note (16 September): root's post-migration candidate `cddf73a` /
+  `432bf5d` passed 1,113 tests in 154 files with 24 skipped and typecheck
+  passing. Native Mac CLI installation and canonical artifact digest/repeat
+  checks also passed in that later candidate; this is local release evidence,
+  while B26's hosted archive acquisition and the PR #53 production readback
+  remain open.

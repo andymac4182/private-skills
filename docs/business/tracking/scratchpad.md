@@ -53,7 +53,7 @@ Working hypothesis to test: an approachable company skills platform for engineer
 
 ### 5405 browser revocation completed
 
-On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting the same token again returned "Session token is invalid" and cleared the input. The temporary browser variable was discarded. This closes the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI, display-name correction, SSO settings failure and hosted acceptance remain separate. No production state changed.
+On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting that revoked token again returned "Session token is invalid" and cleared the input, as expected. The temporary browser variable was discarded. This closed the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI and hosted acceptance remained separate at that observation. No production state changed.
 
 Review follow-ups: billing count reconciliation needs a stale-read/after-hook barrier test in addition to concurrent reservation tests; Eve dispatcher needs current lease timestamps and bounded invocation continuation under slow providers. Owners are implementing and verifying these before integration.
 
@@ -102,3 +102,16 @@ Native Mac CLI proof is integrated from 5d7a645 plus correction e6465ab. Against
 Integrated dff442f (0669c9e) and independently passed four PostgreSQL tests at root cc50c62. The regression issues a public-table token before composed migration, reruns migration, creates fresh infrastructure, and authenticates the same unchanged token without a custom-schema token table. B27 is closed for local implementation/regression; production migration remains unperformed.
 
 PR53 is merged at92d2f0b (GitHub mergedAt2026-09-15T15:21:07Z), verified by root. Integration merged origin/main successfully. Production deployment verification remains with foundation_release. Root found B29 by tracing hosted-worker.ts/runtime.ts: new companies get only best-effort two-job POST drains, while /internal/worker/run cron selects default tenant. Durable cross-company retry scheduling assigned to tenant_ui with Eve owner coordination.
+
+### Reconciliation note — 16 September 2026
+
+The later 5405 follow-up completed the local browser token create, sign-in/use,
+owner revoke, existing-session denial, fresh-sign-in denial, and native CLI
+metadata/revocation readback. This supersedes the earlier “pending browser/CLI”
+wording above for the disposable fixture; hosted provider configuration and
+customer archive acquisition remain open under L05/B26. Root's fresh 5407
+browser check loaded company operations and SSO settings without a page error;
+it remains local fixture evidence. A later post-migration candidate run
+(`cddf73a` / `432bf5d`) passed 1,113 tests with 24 skipped and typecheck; native
+Mac CLI installation and canonical artifact digest/repeat checks passed
+against the separately retained a8ab65a fixture. Neither follow-up proves hosted identity or production PR #53 behavior.
