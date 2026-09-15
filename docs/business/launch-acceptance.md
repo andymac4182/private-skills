@@ -22,6 +22,10 @@ has a dated artifact or deployment record. Source existence, a green unit test,
 an unconfigured account, and a healthy unauthenticated `/health` response do
 not close a row that requires an authenticated hosted result.
 
+## Verification update after the planning snapshot
+
+The editor fallback test correction is integrated as `acca451`. Root independently reran the combined suite at verification commit `d93a1e6`: **1,087 passed, 20 skipped, no failures**. This supersedes the earlier 1,079-pass/one-failure result retained below as historical context. The local web production build also passed. Portability fix `f19149a` is integrated with 13 focused origin/identity/runtime tests passing after combination; its Node/container/workerd evidence remains legacy-authentication and local-only. Token-session release proof, quota enforcement, daily Eve scheduling, and hosted/commercial gates remain open.
+
 ## Launch modes and decision boundary
 
 There are three deliberately different launch modes:
