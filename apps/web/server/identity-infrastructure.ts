@@ -1,7 +1,9 @@
 import {
   createIdentityRuntimeFromEnv,
   normalizeIdentityRole,
+  seatOperationKey,
   type IdentityEnvironment,
+  type IdentityBillingAdmission,
   type IdentityRuntimeAdmin,
   PostgresIdentityOperationsEventStore,
   type IdentityOperationsEventSink,
@@ -14,6 +16,7 @@ import {
   type CompanySsoAuthorizer,
   type CompanySsoModule,
 } from '../../../packages/identity/src/company-sso.js';
+import type { BillingService } from '../../../packages/billing/src/index.js';
 import {
   createApiTokenModule,
   createPostgresApiTokenRepository,
@@ -36,6 +39,8 @@ export interface IdentityInfrastructureOptions {
   postgresPool?: ApiTokenPgPool;
   /** Trusted deployment origin used for cookie-authenticated token mutations. */
   canonicalOrigin?: string;
+  /** Optional billing service used for identity seat admission. */
+  billing?: BillingService;
   apiTokenTableName?: string;
   /** Optional PostgreSQL schema for API tokens; public remains the default. */
   apiTokenSchemaName?: string;
@@ -57,6 +62,64 @@ export interface IdentityInfrastructure {
   ready: Promise<void>;
   /** Runs all reviewed identity and API-token migrations explicitly for a controlled deployment job. */
   runMigrations: () => Promise<void>;
+}
+
+/**
+ * Keep seat admission at the Better Auth boundary. Identity owns the
+ * authoritative member and pending-invitation rows; billing owns the durable
+ * usage ledger and enforces the configured plan limit.
+ */
+export class PostgresIdentityBillingAdmission implements IdentityBillingAdmission {
+  private readonly billing: BillingService;
+  private readonly pool: ApiTokenPgPool;
+  private readonly memberTable: string;
+  private readonly invitationTable: string;
+
+  constructor(billing: BillingService, pool: ApiTokenPgPool, schemaName?: string) {
+    this.billing = billing;
+    this.pool = pool;
+    this.memberTable = qualifiedMemberTable(schemaName);
+    this.invitationTable = qualifiedInvitationTable(schemaName);
+  }
+
+  async reserveNewSeat(organizationId: string, operationKey: string): Promise<void> {
+    await this.syncSeats(organizationId, `${operationKey}:sync`);
+    await this.billing.reserveSeat(organizationId, operationKey, { subjectKey: true });
+  }
+
+  async releaseSeat(organizationId: string, operationKey: string): Promise<void> {
+    await this.billing.releaseSeat(organizationId, operationKey);
+  }
+
+  async commitSeat(organizationId: string, operationKey: string): Promise<void> {
+    await this.billing.commitSeat(organizationId, operationKey);
+  }
+
+  async syncSeats(organizationId: string, operationKey: string): Promise<void> {
+    const observedRevision = await this.billing.seatRevision(organizationId);
+    const result = await this.pool.query<{
+      kind?: unknown;
+      subjectId?: unknown;
+    }>(
+      `SELECT 'member' AS "kind", "id" AS "subjectId"
+         FROM ${this.memberTable}
+        WHERE "organizationId" = $1
+       UNION ALL
+       SELECT 'invitation' AS "kind", "id" AS "subjectId"
+         FROM ${this.invitationTable}
+        WHERE "organizationId" = $1
+          AND "status" = 'pending'
+          AND "expiresAt" > now()`,
+      [organizationId],
+    );
+    const subjectOperationKeys = await Promise.all(result.rows.map(async (row) => {
+      if ((row.kind !== 'member' && row.kind !== 'invitation') || typeof row.subjectId !== 'string' || row.subjectId.trim() === '') {
+        throw new Error('Better Auth returned an invalid organization seat identity');
+      }
+      return seatOperationKey(row.kind, organizationId, row.subjectId);
+    }));
+    await this.billing.syncSeatSubjects(organizationId, subjectOperationKeys, operationKey, observedRevision);
+  }
 }
 
 /** Keep the API-token browser exchange on the same durable secret boundary as identity. */
@@ -187,10 +250,14 @@ export function createIdentityInfrastructure(
     autoMigrate: companySsoAutoMigrate,
   });
   let operationsEvents: IdentityOperationsEventSink | undefined;
+  const billingAdmission = options.billing && options.billing.status().usageEnforcement
+    ? new PostgresIdentityBillingAdmission(options.billing, options.postgresPool, identitySchemaName)
+    : undefined;
   const identity = createIdentityRuntimeFromEnv(env, {
     plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
     trustedOrigins: (request) => companySsoTrustedOrigins(request, companySsoRepository),
     onOperationalFailure: (failure) => operationsEvents?.recordGlobal(failure),
+    ...(billingAdmission === undefined ? {} : { billing: billingAdmission }),
   });
   if (!identity) return { identity: null, apiTokens: null, companySso: null, operationsEvents: null, ready: Promise.resolve(), runMigrations: async () => undefined };
 
@@ -403,7 +470,11 @@ function qualifiedMemberTable(schemaName: string | undefined): string {
   return qualifiedIdentityTable(schemaName, 'member');
 }
 
-function qualifiedIdentityTable(schemaName: string | undefined, tableName: 'member' | 'user' | 'organization'): string {
+function qualifiedInvitationTable(schemaName: string | undefined): string {
+  return qualifiedIdentityTable(schemaName, 'invitation');
+}
+
+function qualifiedIdentityTable(schemaName: string | undefined, tableName: 'member' | 'user' | 'organization' | 'invitation'): string {
   if (!schemaName) return `"${tableName}"`;
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/u.test(schemaName)) throw new Error('Better Auth schema name is invalid');
   return `"${schemaName}"."${tableName}"`;

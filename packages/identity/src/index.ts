@@ -562,6 +562,19 @@ export interface IdentityInvitationEmailData {
   inviter: Record<string, unknown> & { user: IdentityUser };
 }
 
+/**
+ * Server-side seat admission for Better Auth organization mutations. The
+ * host owns the durable ledger and authoritative member/invitation snapshot;
+ * this package only invokes it at the identity mutation boundary.
+ */
+export interface IdentityBillingAdmission {
+  reserveNewSeat(organizationId: string, operationKey: string): Promise<void>;
+  /** Optional lifecycle extensions for older host adapters. */
+  commitSeat?(organizationId: string, operationKey: string): Promise<void>;
+  releaseSeat?(organizationId: string, operationKey: string): Promise<void>;
+  syncSeats(organizationId: string, operationKey: string): Promise<void>;
+}
+
 export interface IdentityRuntimeOptions {
   /** Optional existing transport. No email is sent when this is absent. */
   sendInvitationEmail?: (data: IdentityInvitationEmailData, request?: Request) => Promise<void>;
@@ -579,6 +592,8 @@ export interface IdentityRuntimeOptions {
   trustedOrigins?: BetterAuthOptions['trustedOrigins'];
   /** Best-effort, sanitized operational events; never part of auth control flow. */
   onOperationalFailure?: (failure: IdentityOperationsFailure) => Promise<void> | void;
+  /** Optional finite seat enforcement backed by the host billing ledger. */
+  billing?: IdentityBillingAdmission;
 }
 
 export interface IdentityRuntimeAdmin extends IdentityRuntime {
@@ -664,15 +679,89 @@ function authError(code: string, message: string): APIError {
   return APIError.from('FORBIDDEN', { code, message });
 }
 
+function billingAdmissionError(error: unknown): APIError {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === 'USAGE_LIMIT_EXCEEDED') {
+    return authError('BILLING_SEAT_LIMIT', 'This organization has reached its member limit');
+  }
+  return authError('BILLING_UNAVAILABLE', 'Organization seat availability could not be verified');
+}
+
+/** Stable server-owned idempotency key for one identity seat lifecycle. */
+export async function seatOperationKey(kind: string, organizationId: string, subject: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`${kind}:${organizationId}:${subject}`);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  let hex = '';
+  for (const byte of digest) hex += byte.toString(16).padStart(2, '0');
+  return `private-skills:seat:${kind}:${hex}`;
+}
+
+async function reserveIdentitySeat(
+  billing: IdentityBillingAdmission | undefined,
+  organizationId: string,
+  operationKey: string,
+): Promise<void> {
+  if (!billing) return;
+  try {
+    await billing.reserveNewSeat(organizationId, operationKey);
+  } catch (error) {
+    throw billingAdmissionError(error);
+  }
+}
+
+async function releaseIdentitySeat(
+  billing: IdentityBillingAdmission | undefined,
+  organizationId: string,
+  operationKey: string,
+): Promise<void> {
+  if (!billing?.releaseSeat) return;
+  try {
+    await billing.releaseSeat(organizationId, operationKey);
+  } catch {
+    // The Better Auth mutation has already committed. Keep the reservation
+    // fail-closed so the next reconciliation can repair the lifecycle.
+  }
+}
+
+async function commitIdentitySeat(
+  billing: IdentityBillingAdmission | undefined,
+  organizationId: string,
+  operationKey: string,
+): Promise<void> {
+  if (!billing?.commitSeat) return;
+  try {
+    await billing.commitSeat(organizationId, operationKey);
+  } catch {
+    // Keep an active hold when the post-mutation handoff fails. A later
+    // authoritative snapshot can settle it without undercounting seats.
+  }
+}
+
+async function syncIdentitySeats(
+  billing: IdentityBillingAdmission | undefined,
+  organizationId: string,
+  operationKey: string,
+  failClosed = false,
+): Promise<void> {
+  if (!billing) return;
+  try {
+    await billing.syncSeats(organizationId, operationKey);
+  } catch (error) {
+    if (failClosed) throw billingAdmissionError(error);
+    // Post-mutation reconciliation is best effort; the existing reservation
+    // remains fail-closed until a later identity snapshot repairs it.
+  }
+}
+
 function buildAuthOptions(
   config: IdentityRuntimeConfig,
-  emailSender?: IdentityRuntimeOptions['sendInvitationEmail'],
+  options: IdentityRuntimeOptions = {},
   dialect?: PostgresJSDialect,
-  additionalPlugins: IdentityRuntimeOptions['plugins'] = [],
-  additionalTrustedOrigins?: IdentityRuntimeOptions['trustedOrigins'],
 ): BetterAuthOptions {
   if (!config.enabled) throw new IdentityConfigurationError('Better Auth identity runtime is disabled');
-  if (config.invitations.emailDelivery === 'configured' && !emailSender) {
+  if (config.invitations.emailDelivery === 'configured' && !options.sendInvitationEmail) {
     throw new IdentityConfigurationError('Configured invitation email delivery requires an existing email transport');
   }
   const socialProviders: Record<string, unknown> = {};
@@ -720,37 +809,132 @@ function buildAuthOptions(
         publisher: memberAc,
       },
       organizationHooks: {
-        beforeAddMember: async ({ member }) => ({
-          data: { ...member, role: normalizeRoleForBetterAuth(member.role) },
-        }),
+        beforeAddMember: async ({ member }) => {
+          // Generate the member id before the adapter write so the admission
+          // key is identical in before/after hooks and in reconciliation.
+          const memberId = crypto.randomUUID();
+          await reserveIdentitySeat(
+            options.billing,
+            member.organizationId,
+            await seatOperationKey('member', member.organizationId, memberId),
+          );
+          return { data: { ...member, id: memberId, role: normalizeRoleForBetterAuth(member.role) } };
+        },
+        afterAddMember: async ({ member, organization }) => {
+          const memberId = typeof member.id === 'string' && member.id.trim() !== '' ? member.id : member.userId;
+          await commitIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('member', organization.id, memberId),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-member', organization.id, memberId),
+          );
+        },
+        afterRemoveMember: async ({ organization, member }) => {
+          const memberId = typeof member.id === 'string' && member.id.trim() !== '' ? member.id : member.userId;
+          await releaseIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('member', organization.id, memberId),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-member-remove', organization.id, memberId),
+          );
+        },
         beforeUpdateMemberRole: async ({ newRole }) => ({
           data: { role: normalizeRoleForBetterAuth(newRole) },
         }),
-        beforeCreateInvitation: async ({ invitation }) => ({
-          data: { ...invitation, role: normalizeRoleForBetterAuth(invitation.role) },
-        }),
-        beforeAcceptInvitation: async ({ invitation, user }) => {
+        beforeCreateInvitation: async ({ invitation }) => {
+          const invitationId = crypto.randomUUID();
+          await reserveIdentitySeat(
+            options.billing,
+            invitation.organizationId,
+            await seatOperationKey('invitation', invitation.organizationId, invitationId),
+          );
+          return { data: { ...invitation, id: invitationId, role: normalizeRoleForBetterAuth(invitation.role) } };
+        },
+        afterCreateInvitation: async ({ invitation, organization }) => {
+          await commitIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('invitation', organization.id, invitation.id),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-invitation', organization.id, invitation.id),
+          );
+        },
+        beforeAcceptInvitation: async ({ invitation, user, organization }) => {
           if (user.emailVerified !== true || lowerEmail(invitation.email) !== lowerEmail(user.email)) {
             throw authError('INVITATION_EMAIL_UNVERIFIED', 'A verified session for the invited email is required');
           }
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-accept-before', organization.id, invitation.id),
+            true,
+          );
+        },
+        afterAcceptInvitation: async ({ organization, invitation }) => {
+          await commitIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('invitation', organization.id, invitation.id),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-accept-after', organization.id, invitation.id),
+          );
+        },
+        afterRejectInvitation: async ({ organization, invitation }) => {
+          await releaseIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('invitation', organization.id, invitation.id),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-reject', organization.id, invitation.id),
+          );
+        },
+        afterCancelInvitation: async ({ organization, invitation }) => {
+          await releaseIdentitySeat(
+            options.billing,
+            organization.id,
+            await seatOperationKey('invitation', organization.id, invitation.id),
+          );
+          await syncIdentitySeats(
+            options.billing,
+            organization.id,
+            await seatOperationKey('sync-cancel', organization.id, invitation.id),
+          );
         },
       },
-      ...(emailSender
+      ...(options.sendInvitationEmail
         ? {
             sendInvitationEmail: async (data, request) => {
-              await emailSender(data as IdentityInvitationEmailData, request);
+              await options.sendInvitationEmail!(data as IdentityInvitationEmailData, request);
             },
           }
         : {}),
     }),
   ];
   if (genericProviders.length > 0) plugins.push(genericOAuth({ config: genericProviders }));
-  plugins.push(...additionalPlugins);
+  plugins.push(...(options.plugins ?? []));
   const staticTrustedOrigins = [config.baseURL];
   for (const provider of config.providers) {
     if (!provider.redirectURI) continue;
     staticTrustedOrigins.push(new URL(provider.redirectURI).origin);
   }
+  const additionalTrustedOrigins = options.trustedOrigins;
   const trustedOrigins: BetterAuthOptions['trustedOrigins'] = typeof additionalTrustedOrigins === 'function'
     ? async (request) => [
         ...staticTrustedOrigins,
@@ -891,7 +1075,7 @@ export function createIdentityRuntime(
     connect_timeout: 10,
   });
   const dialect = new PostgresJSDialect({ postgres: sql });
-  const auth = betterAuth(buildAuthOptions(config, options.sendInvitationEmail, dialect, options.plugins, options.trustedOrigins));
+  const auth = betterAuth(buildAuthOptions(config, options, dialect));
   const api = identityApi(auth);
   const publicConfig = createIdentityPublicConfig(config);
   const onboarding: IdentityOnboardingContract = {
