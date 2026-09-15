@@ -29,6 +29,7 @@ const configNames = [
   "PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA",
   "PSKILLS_COMPANY_SSO_AUTO_MIGRATE",
   "PSKILLS_API_TOKEN_AUTO_MIGRATE",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
   "PSKILLS_STATE_PROVIDER",
   "PSKILLS_STORAGE_PROVIDER",
   "BLOB_READ_WRITE_TOKEN",
@@ -52,6 +53,7 @@ function passingInput(overrides = {}) {
         PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: "true",
         PSKILLS_COMPANY_SSO_AUTO_MIGRATE: "false",
         PSKILLS_API_TOKEN_AUTO_MIGRATE: "false",
+        PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE: "false",
         PSKILLS_STATE_PROVIDER: "postgres",
       },
     },
@@ -234,6 +236,58 @@ test("holds activation while B27 token-schema compatibility remains unresolved",
   });
 });
 
+test("requires the configured API-token schema to remain public", () => {
+  const baseline = passingInput();
+  const customSchema = passingInput({
+    environment: {
+      ...baseline.environment,
+      configNames: [...baseline.environment.configNames, "PSKILLS_API_TOKEN_SCHEMA"],
+      safeValues: { ...baseline.environment.safeValues, PSKILLS_API_TOKEN_SCHEMA: "tenant_identity" },
+    },
+  });
+  const blocked = evaluateHostedIdentityPreflight(customSchema);
+  assert.deepEqual(blocked.blockers.find(({ name }) => name === "service-token-public-schema"), {
+    name: "service-token-public-schema",
+    status: "blocked",
+    detail: "API-token schema must remain empty or public while preserving the existing service-token table",
+  });
+
+  const publicSchema = passingInput({
+    environment: {
+      ...baseline.environment,
+      configNames: [...baseline.environment.configNames, "PSKILLS_API_TOKEN_SCHEMA"],
+      safeValues: { ...baseline.environment.safeValues, PSKILLS_API_TOKEN_SCHEMA: "" },
+    },
+  });
+  assert.equal(evaluateHostedIdentityPreflight(publicSchema).checks.find(({ name }) => name === "service-token-public-schema")?.status, "pass");
+});
+
+test("requires an explicit false identity operations auto-migration flag", () => {
+  const baseline = passingInput();
+  const missing = evaluateHostedIdentityPreflight({
+    ...baseline,
+    environment: {
+      ...baseline.environment,
+      configNames: baseline.environment.configNames.filter((name) => name !== "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE"),
+      safeValues: Object.fromEntries(Object.entries(baseline.environment.safeValues).filter(([name]) => name !== "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE")),
+    },
+  });
+  assert.equal(missing.blockers.some(({ name }) => name === "identity-operations-explicit-migration"), true);
+
+  const enabled = evaluateHostedIdentityPreflight({
+    ...baseline,
+    environment: {
+      ...baseline.environment,
+      safeValues: { ...baseline.environment.safeValues, PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE: "true" },
+    },
+  });
+  assert.deepEqual(enabled.blockers.find(({ name }) => name === "identity-operations-explicit-migration"), {
+    name: "identity-operations-explicit-migration",
+    status: "blocked",
+    detail: "identity operations-event startup auto-migration is explicitly disabled; configured state is unsafe",
+  });
+});
+
 test("rejects adoption selected by a browser header or email-domain inference", () => {
   const baseline = passingInput().adoption;
   const report = evaluateHostedIdentityPreflight(passingInput({
@@ -347,4 +401,31 @@ test("runbook keeps the operator command read-only and ordered around B27", asyn
   for (const step of ["Fence registry writes", "Generate the Better Auth plan", "Apply the reviewed company SSO schema", "Prove service-token schema compatibility", "Read back registry state", "Switch traffic only after"]) {
     assert.match(document, new RegExp(step, "u"));
   }
+});
+
+test("runbook records the current baseline and exact public-token/schema boundaries", async () => {
+  const document = await readFile("docs/business/hosted-identity-preflight.md", "utf8");
+
+  for (const marker of [
+    "bd877a5cc6733fe4dcc50577fa500ed0011d2b33",
+    "Better Auth is disabled",
+    "providers: []",
+    "revision `231`",
+    "I.",
+    "I.private_skills_company_sso_providers",
+    "public.private_skills_service_tokens",
+    "I.private_skills_identity_operations_events",
+    "public.private_skills_registry_state",
+    "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
+    "getIdentityMigrations",
+    "compileMigrations",
+    "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+    "CREATE TABLE IF NOT EXISTS",
+    "forward fix",
+    "Provider credentials are a separate gate",
+  ]) {
+    assert.ok(document.includes(marker), `runbook is missing ${marker}`);
+  }
+  assert.match(document, /I\."user"/u);
+  assert.doesNotMatch(document, /PSKILLS_STORAGE_PREFIX/u);
 });
