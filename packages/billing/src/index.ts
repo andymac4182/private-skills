@@ -1383,6 +1383,23 @@ export class BillingService {
       } else if (reservationStatus === 'reserved' || reservationStatus === 'committed') {
         // The charge is still present. Do not apply a positive adjustment; the
         // generation advance alone fences a delayed zero carrying G1.
+        const priorStorage = reservation.reconciled?.storageBytes;
+        if (priorStorage !== undefined && priorStorage !== originalStorage) {
+          // A later zero is measured against reservation.delta. If G1 already
+          // recorded a different actual (for example 30 against a 40-byte
+          // estimate), clearing that measurement would make G2 subtract 40
+          // from an aggregate that only contains 30. Preserve the current
+          // lifecycle and require a domain-specific baseline repair instead.
+          throw new BillingError('USAGE_RESTORATION_INVALID', 'Storage recovery cannot fence a partially reconciled reservation', 409);
+        }
+        if (priorStorage === originalStorage) {
+          // The old measurement belongs to G1. Remove it so G2 accepts a
+          // fresh zero measurement and releases exactly the charged bytes.
+          const nextReconciled = { ...(reservation.reconciled ?? {}) };
+          delete nextReconciled.storageBytes;
+          reservation.reconciled = Object.keys(nextReconciled).length === 0 ? undefined : nextReconciled;
+          reservation.status = 'reserved';
+        }
         action = 'fenced';
       } else {
         throw new BillingError('BILLING_LEDGER_CORRUPT', 'The storage recovery source lifecycle has an invalid status', 500, { retryable: false });

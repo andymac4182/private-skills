@@ -374,6 +374,22 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     expect(persistedFence[0]).toMatchObject({ status: 'committed', reservation_generation: 2, restoration: { action: 'fenced', reservationKey: 'pg-resolution-fenced-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } } })
     await expect(baseService.usageSnapshot(fencedOrganizationId)).resolves.toMatchObject({ usage: { storageBytes: 40 } })
 
+    const measuredOrganizationId = 'org-pg-storage-resolution-measured'
+    const measuredAdmission = await baseService.reserveUsage(measuredOrganizationId, { storageBytes: 40 }, 'pg-resolution-measured-reservation')
+    await baseService.reconcileUsage(measuredOrganizationId, 'pg-resolution-measured-reservation', { storageBytes: 40 }, 'pg-resolution-measured-actual', measuredAdmission.reservationGeneration!)
+    await expect(baseService.resolveStorageRecovery(measuredOrganizationId, 'pg-resolution-measured-reservation', { storageBytes: 40 }, 'pg-resolution-measured-operation', measuredAdmission.reservationGeneration!)).resolves.toMatchObject({ action: 'fenced', idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2 })
+    await expect(baseService.reconcileUsage(measuredOrganizationId, 'pg-resolution-measured-reservation', { storageBytes: 0 }, 'pg-resolution-measured-cleanup', 2)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 2 })
+    await expect(baseService.usageSnapshot(measuredOrganizationId)).resolves.toMatchObject({ usage: { storageBytes: 0 } })
+    await expect(baseService.reconcileUsage(measuredOrganizationId, 'pg-resolution-measured-reservation', { storageBytes: 0 }, 'pg-resolution-measured-late-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+
+    const mismatchedOrganizationId = 'org-pg-storage-resolution-mismatched'
+    const mismatchedAdmission = await baseService.reserveUsage(mismatchedOrganizationId, { storageBytes: 40 }, 'pg-resolution-mismatched-reservation')
+    await baseService.reconcileUsage(mismatchedOrganizationId, 'pg-resolution-mismatched-reservation', { storageBytes: 30 }, 'pg-resolution-mismatched-actual', mismatchedAdmission.reservationGeneration!)
+    const mismatchedBefore = await baseService.usageSnapshot(mismatchedOrganizationId)
+    await expect(baseService.resolveStorageRecovery(mismatchedOrganizationId, 'pg-resolution-mismatched-reservation', { storageBytes: 40 }, 'pg-resolution-mismatched-operation', mismatchedAdmission.reservationGeneration!)).rejects.toMatchObject({ code: 'USAGE_RESTORATION_INVALID', status: 409 })
+    await expect(baseService.usageSnapshot(mismatchedOrganizationId)).resolves.toEqual(mismatchedBefore)
+    await expect(baseService.findUsageOperation(mismatchedOrganizationId, 'pg-resolution-mismatched-reservation')).resolves.toMatchObject({ status: 'committed', reservationGeneration: 1, reconciled: { storageBytes: 30 } })
+
     // Finish the fenced lifecycle, reopen it, and age the resolution out of
     // the bounded read window before replaying it through a new repository.
     await baseService.reconcileUsage(fencedOrganizationId, 'pg-resolution-fenced-reservation', { storageBytes: 0 }, 'pg-resolution-fenced-cleanup', 2)

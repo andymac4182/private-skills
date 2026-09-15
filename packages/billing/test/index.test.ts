@@ -708,6 +708,26 @@ describe('transactional usage enforcement', () => {
       1,
     )).resolves.toMatchObject({ action: 'fenced', idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 });
 
+    const measured = await service.reserveUsage('org-storage-resolution-measured', { storageBytes: 40 }, 'resolution-measured-reservation');
+    await service.reconcileUsage('org-storage-resolution-measured', 'resolution-measured-reservation', { storageBytes: 40 }, 'resolution-measured-actual', measured.reservationGeneration!);
+    await expect(service.resolveStorageRecovery(
+      'org-storage-resolution-measured',
+      'resolution-measured-reservation',
+      { storageBytes: 40 },
+      'resolution-measured-operation',
+      measured.reservationGeneration!,
+    )).resolves.toMatchObject({ action: 'fenced', idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2 });
+    await expect(service.reconcileUsage('org-storage-resolution-measured', 'resolution-measured-reservation', { storageBytes: 0 }, 'resolution-measured-cleanup', 2)).resolves.toMatchObject({ idempotent: false, reservationGeneration: 2 });
+    await expect(service.usageSnapshot('org-storage-resolution-measured')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
+    await expect(service.reconcileUsage('org-storage-resolution-measured', 'resolution-measured-reservation', { storageBytes: 0 }, 'resolution-measured-late-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+
+    const mismatched = await service.reserveUsage('org-storage-resolution-mismatched', { storageBytes: 40 }, 'resolution-mismatched-reservation');
+    await service.reconcileUsage('org-storage-resolution-mismatched', 'resolution-mismatched-reservation', { storageBytes: 30 }, 'resolution-mismatched-actual', mismatched.reservationGeneration!);
+    const mismatchedBefore = await service.usageSnapshot('org-storage-resolution-mismatched');
+    await expect(service.resolveStorageRecovery('org-storage-resolution-mismatched', 'resolution-mismatched-reservation', { storageBytes: 40 }, 'resolution-mismatched-operation', mismatched.reservationGeneration!)).rejects.toMatchObject({ code: 'USAGE_RESTORATION_INVALID', status: 409 });
+    await expect(service.usageSnapshot('org-storage-resolution-mismatched')).resolves.toEqual(mismatchedBefore);
+    await expect(service.findUsageOperation('org-storage-resolution-mismatched', 'resolution-mismatched-reservation')).resolves.toMatchObject({ status: 'committed', reservationGeneration: 1, reconciled: { storageBytes: 30 } });
+
     const restored = await service.reserveUsage('org-storage-resolution-restored', { storageBytes: 40 }, 'resolution-restored-reservation');
     await service.reconcileUsage('org-storage-resolution-restored', 'resolution-restored-reservation', { storageBytes: 0 }, 'resolution-restored-zero', restored.reservationGeneration);
     const restoredResult = await service.resolveStorageRecovery(
