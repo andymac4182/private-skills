@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { formatDate } from '../lib/format'
-import type { Job, PackVersion, Policy, SkillVersion } from '../lib/types'
+import type { AuthSession, Job, PackVersion, Policy, Principal, SkillVersion } from '../lib/types'
 import { Badge, EmptyState, ErrorState, LoadingState, Panel } from '../components/Primitives'
 import '../styles/experience-pages.css'
 
@@ -10,6 +11,7 @@ type ReleaseView = 'all' | 'attention'
 type ActivityView = 'all' | 'active'
 
 export function OverviewView() {
+  const { principal, session } = useAuth()
   const [skills, setSkills] = useState<SkillVersion[] | null>(null)
   const [packs, setPacks] = useState<PackVersion[] | null>(null)
   const [operations, setOperations] = useState<Job[] | null>(null)
@@ -46,12 +48,12 @@ export function OverviewView() {
   }, [])
 
   if (error) return <div className="view-heading overview-view overview-state-view">
-    <OverviewIntro />
+    <OverviewIntro principal={principal} session={session} showActions={false} />
     <ErrorState message={error} onRetry={() => void load()} />
   </div>
 
   if (!skills || !packs || !operations || !policy) return <div className="view-heading overview-view overview-state-view">
-    <OverviewIntro />
+    <OverviewIntro principal={principal} session={session} showActions={false} />
     <Panel className="overview-loading-panel"><LoadingState label="Loading your releases, collections, and review settings." /></Panel>
   </div>
 
@@ -61,65 +63,38 @@ export function OverviewView() {
   const enabledScanners = policy.scanners.filter((scanner) => scanner.mode !== 'disabled')
   const visibleReleases = releaseView === 'attention' ? needsAttention : skills
   const visibleOperations = activityView === 'active' ? activeOperations : operations
+  const isFirstRun = skills.length === 0 && packs.length === 0 && operations.length === 0
+  const companyName = session?.activeOrganization?.name ?? 'this company'
 
   return <div className="view-heading overview-view">
-    <section className="overview-hero" aria-labelledby="overview-title">
-      <div className="overview-hero-copy">
-        <div className="overview-hero-kicker"><span className="eyebrow">Workspace overview</span><span className="overview-snapshot"><span aria-hidden="true" className="health-dot health-online" /> Live registry snapshot</span></div>
-        <h1 id="overview-title">Your team’s skills, <em>connected.</em></h1>
-        <p className="overview-hero-lede">A calm place to publish releases, trace review activity, and keep installation rules visible to everyone on the team.</p>
-      </div>
-      <div className="overview-hero-aside" aria-label="Registry snapshot">
-        <span className="overview-aside-label">Registry snapshot</span>
-        <strong>{skills.length} release{skills.length === 1 ? '' : 's'}</strong>
-        <span>{approvedReleases.length} approved · {needsAttention.length} needing attention</span>
-      </div>
-    </section>
-
-    <nav className="overview-action-rail" aria-label="Workspace actions">
-      <Link className="overview-action-card overview-action-card-primary" params={{ section: 'catalog' }} to="/app/$section">
-        <span className="overview-action-index">01</span>
-        <span className="overview-action-copy"><strong>Browse the catalog</strong><small>Inspect private releases and scan evidence.</small></span>
-        <span aria-hidden="true" className="overview-action-arrow">↗</span>
-      </Link>
-      <Link className="overview-action-card" params={{ section: 'publish' }} to="/app/$section">
-        <span className="overview-action-index">02</span>
-        <span className="overview-action-copy"><strong>Publish a release</strong><small>Send a complete skill folder through review.</small></span>
-        <span aria-hidden="true" className="overview-action-arrow">↗</span>
-      </Link>
-      <Link className="overview-action-card" params={{ section: 'source-discovery' }} to="/app/$section">
-        <span className="overview-action-index">03</span>
-        <span className="overview-action-copy"><strong>Find across sources</strong><small>Compare configured providers before importing.</small></span>
-        <span aria-hidden="true" className="overview-action-arrow">↗</span>
-      </Link>
-    </nav>
+    <OverviewIntro firstRun={isFirstRun} principal={principal} session={session} />
 
     <section className="overview-stats" aria-label="Registry metrics">
       <Panel className="overview-stat-card">
-        <div className="overview-stat-heading"><span>Skill releases</span><span aria-hidden="true">01</span></div>
+        <div className="overview-stat-heading"><span>Skill releases</span></div>
         <strong className="overview-stat-value">{skills.length}</strong>
         <span className="overview-stat-note">{approvedReleases.length} approved</span>
       </Panel>
       <Panel className={`overview-stat-card ${needsAttention.length ? 'overview-stat-card-attention' : ''}`.trim()}>
-        <div className="overview-stat-heading"><span>Needs attention</span><span aria-hidden="true">02</span></div>
+        <div className="overview-stat-heading"><span>Needs attention</span></div>
         <strong className="overview-stat-value">{needsAttention.length}</strong>
         <span className="overview-stat-note">{needsAttention.length ? 'Releases outside current rules' : 'Everything is current'}</span>
       </Panel>
       <Panel className="overview-stat-card">
-        <div className="overview-stat-heading"><span>Skill packs</span><span aria-hidden="true">03</span></div>
+        <div className="overview-stat-heading"><span>Skill packs</span></div>
         <strong className="overview-stat-value">{packs.length}</strong>
         <span className="overview-stat-note">Fixed member lists</span>
       </Panel>
       <Panel className="overview-stat-card">
-        <div className="overview-stat-heading"><span>Active tasks</span><span aria-hidden="true">04</span></div>
+        <div className="overview-stat-heading"><span>Active tasks</span></div>
         <strong className="overview-stat-value">{activeOperations.length}</strong>
         <span className="overview-stat-note">{enabledScanners.length} security check{enabledScanners.length === 1 ? '' : 's'} enabled</span>
       </Panel>
     </section>
 
     <div className="overview-content-grid">
-      <Panel className="overview-table-panel" title="Recent releases" description="Newest versions in the signed-in organization." action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Release table view"><button aria-pressed={releaseView === 'all'} className={releaseView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('all')}>All <span>{skills.length}</span></button><button aria-pressed={releaseView === 'attention'} className={releaseView === 'attention' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('attention')}>Attention <span>{needsAttention.length}</span></button></div><Link className="button button-quiet" params={{ section: 'catalog' }} to="/app/$section">View catalog ↗</Link></div>}>
-        {visibleReleases.length === 0 ? releaseView === 'attention' ? <EmptyState title="Nothing needs attention" description="Every release matches the current scanner policy." /> : <EmptyState title="Catalog is empty" description="Publish or import the first skill to start building your private registry." action={<Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Publish a skill</Link>} /> : <div className="table-wrap"><table><thead><tr><th>Skill</th><th>State</th><th>Files</th><th>Created</th></tr></thead><tbody>{visibleReleases.slice(0, 5).map((skill) => {
+      <Panel className="overview-table-panel" title="Recent releases" description={`Newest versions in ${companyName}.`} action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Release table view"><button aria-pressed={releaseView === 'all'} className={releaseView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('all')}>All <span>{skills.length}</span></button><button aria-pressed={releaseView === 'attention'} className={releaseView === 'attention' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('attention')}>Attention <span>{needsAttention.length}</span></button></div><Link className="button button-quiet" params={{ section: 'catalog' }} to="/app/$section">View catalog ↗</Link></div>}>
+        {visibleReleases.length === 0 ? releaseView === 'attention' ? <EmptyState title="Nothing needs attention" description="Every release matches the current scanner policy." /> : <EmptyState title={isFirstRun ? 'Add your first skill' : 'Catalog is empty'} description={isFirstRun ? `Start ${companyName} with a private release or find one from a configured source.` : 'Publish or import a skill to start building your private registry.'} action={isFirstRun ? <div className="overview-empty-actions"><Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link><Link className="button button-secondary" params={{ section: 'source-discovery' }} to="/app/$section">Find skills</Link></div> : <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link>} /> : <div className="table-wrap"><table><thead><tr><th>Skill</th><th>State</th><th>Files</th><th>Created</th></tr></thead><tbody>{visibleReleases.slice(0, 5).map((skill) => {
           const stale = skill.state === 'approved' && skill.policyRevision !== policy.revision
           return <tr key={skill.id}>
             <td><Link className="overview-table-link" params={{ section: 'catalog' }} search={{ skill: skill.id }} to="/app/$section"><strong>{skill.name}</strong><span className="cell-sub">{skill.version}</span></Link></td>
@@ -130,8 +105,8 @@ export function OverviewView() {
         })}</tbody></table>{visibleReleases.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleReleases.length} releases. Open the catalog to see the rest.</div>}</div>}
       </Panel>
 
-      <Panel className="overview-table-panel" title="Recent activity" description="Publishing, imports, and security checks reported by the registry." action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Activity table view"><button aria-pressed={activityView === 'all'} className={activityView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('all')}>All <span>{operations.length}</span></button><button aria-pressed={activityView === 'active'} className={activityView === 'active' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('active')}>Active <span>{activeOperations.length}</span></button></div><Link className="button button-quiet" params={{ section: 'operations' }} to="/app/$section">View activity ↗</Link></div>}>
-        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : 'Work will appear here when you publish or import a skill.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
+      <Panel className="overview-table-panel" title="Recent activity" description={`Publishing, imports, and checks for ${companyName}.`} action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Activity table view"><button aria-pressed={activityView === 'all'} className={activityView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('all')}>All <span>{operations.length}</span></button><button aria-pressed={activityView === 'active'} className={activityView === 'active' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('active')}>Active <span>{activeOperations.length}</span></button></div><Link className="button button-quiet" params={{ section: 'operations' }} to="/app/$section">View activity ↗</Link></div>}>
+        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : isFirstRun ? 'Activity starts here' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : isFirstRun ? 'Publish or import a skill to see its review and scan progress.' : 'Work will appear here when you publish or import a skill.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
       </Panel>
     </div>
 
@@ -142,12 +117,28 @@ export function OverviewView() {
   </div>
 }
 
-function OverviewIntro() {
-  return <section className="overview-hero overview-hero-state" aria-labelledby="overview-title">
-    <div className="overview-hero-copy">
-      <div className="overview-hero-kicker"><span className="eyebrow">Workspace overview</span><span className="overview-snapshot"><span aria-hidden="true" className="health-dot health-checking" /> Registry snapshot</span></div>
-      <h1 id="overview-title">Your team’s skills, <em>connected.</em></h1>
-      <p className="overview-hero-lede">A calm place to publish releases, trace review activity, and keep installation rules visible to everyone on the team.</p>
+function OverviewIntro({ firstRun = false, principal, session, showActions = true }: { firstRun?: boolean; principal: Principal | null; session: AuthSession | null; showActions?: boolean }) {
+  const organization = session?.activeOrganization
+  const companyName = organization?.name ?? 'Private registry'
+  const companyIdentifier = organization?.slug ?? principal?.organizationId
+  const role = session?.activeMembership?.role ?? principal?.roles.find((candidate) => candidate !== 'worker')
+  const description = firstRun
+    ? 'This company is ready for its first private skill.'
+    : 'Private releases, team activity, and review state for this company.'
+
+  return <header className={`overview-header${showActions ? '' : ' overview-header-state'}`} aria-labelledby="overview-title">
+    <div className="overview-header-copy">
+      <div className="overview-header-kicker"><span className="eyebrow">Company workspace</span><span className="overview-company-status">Private registry</span></div>
+      <h1 id="overview-title">{companyName}</h1>
+      <div className="overview-company-meta">
+        {companyIdentifier && <code>{companyIdentifier}</code>}
+        {role && <span>{role}</span>}
+      </div>
+      <p className="overview-header-lede">{description}</p>
     </div>
-  </section>
+    {showActions && <div className="overview-header-actions" aria-label="Workspace actions">
+      <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link>
+      <Link className="button button-secondary" params={{ section: 'source-discovery' }} to="/app/$section">Find skills</Link>
+    </div>}
+  </header>
 }
