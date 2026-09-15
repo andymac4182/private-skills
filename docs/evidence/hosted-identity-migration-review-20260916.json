@@ -176,7 +176,14 @@
       "identity operations-event table",
       "pre/post readback of registry, identity, tokens, billing, and objects"
     ],
-    "autoMigrationsApplied": false
+    "autoMigrationsApplied": false,
+    "sqlArtifacts": {
+      "manifest": "hosted-identity-migration-review-20260916.sql-manifest.json",
+      "betterAuth": "hosted-identity-migration-review-20260916.better-auth.sql",
+      "companySso": "hosted-identity-migration-review-20260916.company-sso.sql",
+      "serviceTokens": "hosted-identity-migration-review-20260916.service-tokens.sql",
+      "identityOperations": "hosted-identity-migration-review-20260916.identity-operations.sql"
+    }
   },
   "gates": {
     "schemaReadiness": "blocked; target identity, SSO, operations, and service-token tables are absent",

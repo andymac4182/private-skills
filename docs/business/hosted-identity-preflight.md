@@ -308,6 +308,18 @@ custom token location, or non-public token alias blocks the change. A plan
 with no operations is still evidence that the target already matches the
 reviewed Better Auth models; it is not permission to enable identity.
 
+The fresh hosted review materializes the exact statements used for review in
+the following local artifacts, with their bytes and SHA-256 values captured in
+[`hosted-identity-migration-review-20260916.sql-manifest.json`](../evidence/hosted-identity-migration-review-20260916.sql-manifest.json):
+
+- [`hosted-identity-migration-review-20260916.better-auth.sql`](../evidence/hosted-identity-migration-review-20260916.better-auth.sql) — the nine-table Better Auth plan, `sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b`.
+- [`hosted-identity-migration-review-20260916.company-sso.sql`](../evidence/hosted-identity-migration-review-20260916.company-sso.sql) — the additive public company SSO table and indexes, `sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5`.
+- [`hosted-identity-migration-review-20260916.service-tokens.sql`](../evidence/hosted-identity-migration-review-20260916.service-tokens.sql) — the compatibility-bound public service-token table and indexes, `sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492`.
+- [`hosted-identity-migration-review-20260916.identity-operations.sql`](../evidence/hosted-identity-migration-review-20260916.identity-operations.sql) — the additive identity operations-event table and indexes, `sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c`.
+
+The files are review artifacts only. Generating them ran no DDL or DML and
+does not authorize applying them.
+
 ## Explicit additive migration
 
 After the root change owner approves the reviewed digest, run one controlled
