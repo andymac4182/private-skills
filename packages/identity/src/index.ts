@@ -8,6 +8,7 @@ import postgres from 'postgres';
 
 import { defaultScopesForRoles } from '../../auth/src/index';
 import type { Principal, Role } from '../../contracts/src/index';
+import type { IdentityOperationsFailure } from './operations-events.js';
 
 /** Version of the host-neutral identity boundary shared by the API and UI. */
 export const IDENTITY_PROTOCOL_VERSION = 1 as const;
@@ -575,6 +576,8 @@ export interface IdentityRuntimeOptions {
    * registry trust only the configured provider endpoints used by that request.
    */
   trustedOrigins?: BetterAuthOptions['trustedOrigins'];
+  /** Best-effort, sanitized operational events; never part of auth control flow. */
+  onOperationalFailure?: (failure: IdentityOperationsFailure) => Promise<void> | void;
 }
 
 export interface IdentityRuntimeAdmin extends IdentityRuntime {
@@ -847,6 +850,12 @@ function isOrganizationMutation(request: Request, basePath: string): boolean {
     && pathname.startsWith(`${basePath}/organization/`);
 }
 
+function isCallbackPath(pathname: string, basePath: string): boolean {
+  return pathname.startsWith(`${basePath}/callback/`)
+    || pathname.startsWith(`${basePath}/sso/callback/`)
+    || pathname.startsWith(`${basePath}/sso/saml2/sp/acs/`);
+}
+
 /** Build an invitation URL for the copy-link delivery mode. */
 export function createInvitationLink(baseURL: string, invitationId: string): string {
   const origin = normalizeBaseURL(baseURL);
@@ -892,17 +901,33 @@ export function createIdentityRuntime(
     invitation: publicConfig.invitations,
     bootstrap: publicConfig.bootstrap,
   };
+  const reportOperationalFailure = (failure: IdentityOperationsFailure): void => {
+    try {
+      const result = options.onOperationalFailure?.(failure);
+      if (result && typeof (result as PromiseLike<void>).then === 'function') {
+        void Promise.resolve(result).catch(() => undefined);
+      }
+    } catch {
+      // Operational visibility must never change authentication behaviour.
+    }
+  };
   const runMigrations = async (): Promise<void> => {
     const migration = await getMigrations(auth.options);
     await migration.runMigrations();
   };
   let ready: Promise<void> = Promise.resolve();
   const getSession = async (request: Request): Promise<IdentitySession | null> => {
-    await ready;
+    try {
+      await ready;
+    } catch {
+      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
+      return null;
+    }
     let session: SessionApiValue | null;
     try {
       session = await api.getSession({ headers: request.headers });
     } catch {
+      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
       return null;
     }
     if (!session) return null;
@@ -910,6 +935,7 @@ export function createIdentityRuntime(
     try {
       organizations = await api.listOrganizations({ headers: request.headers });
     } catch {
+      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
       return null;
     }
     const memberships: IdentityMembership[] = [];
@@ -971,18 +997,44 @@ export function createIdentityRuntime(
         });
       }
       if (pathname === config.basePath || pathname.startsWith(`${config.basePath}/`)) {
-        await ready;
-        if (isOrganizationMutation(request, config.basePath)) {
+        try {
+          await ready;
+        } catch {
+          reportOperationalFailure({
+            kind: isCallbackPath(pathname, config.basePath) ? 'callback_failure' : 'authentication_failure',
+            reasonCode: isCallbackPath(pathname, config.basePath) ? 'callback_unavailable' : 'session_unavailable',
+          });
+          throw new Error('identity runtime is unavailable');
+        }
+        try {
           // Better Auth's last-owner check is correct for sequential calls but
           // its role-update route performs the count and write separately. A
           // transaction-scoped advisory lock closes that concurrent race while
           // leaving the plugin's membership and permission checks authoritative.
-          return lockSql.begin(async (transaction) => {
-            await transaction`select pg_advisory_xact_lock(${ORGANIZATION_MUTATION_LOCK_KEY})`;
-            return auth.handler(request);
+          const response = isOrganizationMutation(request, config.basePath)
+            ? await lockSql.begin(async (transaction) => {
+                await transaction`select pg_advisory_xact_lock(${ORGANIZATION_MUTATION_LOCK_KEY})`;
+                return auth.handler(request);
+              })
+            : await auth.handler(request);
+          if (response.status >= 400) {
+            const callback = isCallbackPath(pathname, config.basePath);
+            reportOperationalFailure({
+              kind: callback ? 'callback_failure' : 'authentication_failure',
+              reasonCode: callback
+                ? response.status >= 500 ? 'callback_unavailable' : 'callback_rejected'
+                : 'authentication_rejected',
+            });
+          }
+          return response;
+        } catch (error) {
+          const callback = isCallbackPath(pathname, config.basePath);
+          reportOperationalFailure({
+            kind: callback ? 'callback_failure' : 'authentication_failure',
+            reasonCode: callback ? 'callback_unavailable' : 'session_unavailable',
           });
+          throw error;
         }
-        return auth.handler(request);
       }
       return new Response('Not Found', { status: 404 });
     },
@@ -1023,3 +1075,25 @@ export function createIdentityRuntimeFromEnv(
 export async function getIdentityMigrations(runtime: IdentityRuntimeAdmin): Promise<Awaited<ReturnType<typeof getMigrations>>> {
   return getMigrations(runtime.auth.options);
 }
+
+export {
+  IDENTITY_OPERATIONS_CLEANUP_BATCH_SIZE,
+  IDENTITY_OPERATIONS_EVENTS_SCHEMA_SQL,
+  IDENTITY_OPERATIONS_EVENTS_TABLE,
+  IDENTITY_OPERATIONS_RETENTION_DAYS,
+  PostgresIdentityOperationsEventStore,
+  identityOperationsEventsSchemaSql,
+  recordIdentityOperationsEvent,
+} from './operations-events.js';
+export type {
+  IdentityOperationsCounter,
+  IdentityOperationsEventKind,
+  IdentityOperationsEventSink,
+  IdentityOperationsFailure,
+  IdentityOperationsReasonCode,
+  IdentityOperationsRole,
+  IdentityOperationsSummary,
+  IdentityOperationsTenantVerifier,
+  IdentityOperationsTrustedTenant,
+  IdentityOperationsEventStoreOptions,
+} from './operations-events.js';

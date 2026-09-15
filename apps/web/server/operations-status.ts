@@ -13,6 +13,11 @@ import type {
   BillingStatus,
   UsageSnapshot,
 } from '../../../packages/billing/src/index.js';
+import type {
+  IdentityOperationsCounter,
+  IdentityOperationsEventSink,
+  IdentityOperationsFailure,
+} from '../../../packages/identity/src/index.js';
 import type { ReviewRun } from '../../../packages/reviews/src/index.js';
 import type { UploadReviewJob } from '../../../packages/upload-reviews/src/index.js';
 
@@ -49,11 +54,12 @@ export interface OperationsScanStatus {
 }
 
 export interface OperationsAuthStatus {
-  /** Authentication is working for this request; failure history is unavailable. */
-  state: 'unavailable';
-  authenticationFailures: null;
-  callbackFailures: null;
-  reason: string;
+  /** Aggregate identity events are available only after the existing admin boundary passes. */
+  state: 'available' | 'empty' | 'unavailable';
+  authenticationFailures: IdentityOperationsCounter | null;
+  callbackFailures: IdentityOperationsCounter | null;
+  membershipDenials: IdentityOperationsCounter | null;
+  reason?: string;
 }
 
 export interface OperationsBillingUsage {
@@ -129,6 +135,8 @@ export interface OperationsStatusOptions {
   organizationId: string;
   /** Whether an Eve reviewer is configured for the selected tenant. */
   eveConfigured?: boolean;
+  /** Optional durable identity event store; absent on legacy/edge profiles. */
+  operationsEvents?: IdentityOperationsEventSink;
   now?: () => number;
 }
 
@@ -347,26 +355,95 @@ async function billingStatus(
   };
 }
 
+async function authStatus(
+  options: Pick<OperationsStatusOptions, 'operationsEvents'>,
+  organizationId: string,
+  nowMilliseconds: number,
+): Promise<OperationsAuthStatus> {
+  if (!options.operationsEvents) {
+    return {
+      state: 'unavailable',
+      authenticationFailures: null,
+      callbackFailures: null,
+      membershipDenials: null,
+      reason: 'Identity failure history is not configured on this deployment.',
+    };
+  }
+  try {
+    const summary = await options.operationsEvents.summarize(organizationId, nowMilliseconds);
+    const hasFailures = summary.authenticationFailures.total > 0
+      || summary.callbackFailures.total > 0
+      || summary.membershipDenials.total > 0;
+    return {
+      state: hasFailures ? 'available' : 'empty',
+      authenticationFailures: summary.authenticationFailures,
+      callbackFailures: summary.callbackFailures,
+      membershipDenials: summary.membershipDenials,
+    };
+  } catch {
+    return {
+      state: 'unavailable',
+      authenticationFailures: null,
+      callbackFailures: null,
+      membershipDenials: null,
+      reason: 'Identity failure history is temporarily unavailable.',
+    };
+  }
+}
+
+async function recordMembershipDenial(
+  sink: IdentityOperationsEventSink,
+  principal: NonNullable<Awaited<ReturnType<Authenticator['authenticate']>>>,
+  organizationId: string,
+): Promise<void> {
+  const reasonCode: IdentityOperationsFailure['reasonCode'] = principal.organizationId === organizationId
+    ? 'membership_role_denied'
+    : 'tenant_mismatch';
+  let context: Awaited<ReturnType<IdentityOperationsEventSink['trustedTenant']>> = null;
+  try {
+    context = await sink.trustedTenant(principal.organizationId, principal.subject);
+  } catch {
+    // A telemetry lookup failure must never change the authorization response.
+  }
+  if (context) {
+    try {
+      if (await sink.recordTenant(context, { kind: 'membership_denial', reasonCode })) return;
+    } catch {
+      // Fall through to an unattributed operator event. The membership was
+      // not proven at the point the event could be persisted.
+    }
+  }
+  // A principal without a live Better Auth membership cannot be attributed to
+  // a company. Keep the denial global for operator diagnostics. This also
+  // covers a stale context revoked between the two exact membership checks.
+  try {
+    await sink.recordGlobal({ kind: 'membership_denial', reasonCode: 'membership_missing' });
+  } catch {
+    // Operational visibility is best effort and remains outside auth control.
+  }
+}
+
+function recordAuthenticationFailure(sink: IdentityOperationsEventSink | undefined): void {
+  if (!sink) return;
+  void sink.recordGlobal({ kind: 'authentication_failure', reasonCode: 'authentication_rejected' }).catch(() => undefined);
+}
+
 export async function buildOperationsStatus(
-  options: Pick<OperationsStatusOptions, 'repository' | 'billing' | 'organizationId' | 'eveConfigured' | 'now'>,
+  options: Pick<OperationsStatusOptions, 'repository' | 'billing' | 'organizationId' | 'eveConfigured' | 'operationsEvents' | 'now'>,
 ): Promise<OperationsStatusResponse> {
   const organizationId = options.organizationId.trim();
   if (!organizationId) throw new Error('operations status organization is required');
   const nowMilliseconds = normalizedNow(options.now);
   const state = await options.repository.read(organizationId);
   const billing = await billingStatus(options, organizationId);
+  const auth = await authStatus(options, organizationId, nowMilliseconds);
   return {
     protocolVersion: OPERATIONS_STATUS_PROTOCOL_VERSION,
     organizationId,
     generatedAt: isoAt(nowMilliseconds),
     queue: queueStatus(state, organizationId, nowMilliseconds),
     scans: scanStatus(state, organizationId, nowMilliseconds),
-    auth: {
-      state: 'unavailable',
-      authenticationFailures: null,
-      callbackFailures: null,
-      reason: 'Authentication and callback failure history is not persisted by the current identity adapter.',
-    },
+    auth,
     billing,
     eve: eveStatus(state, organizationId, options.eveConfigured === true),
   };
@@ -405,11 +482,20 @@ export function createOperationsStatusHandler(options: OperationsStatusOptions):
     try {
       principal = await options.authenticate(request);
     } catch {
+      recordAuthenticationFailure(options.operationsEvents);
       return json({ code: 'OPERATIONS_AUTH_UNAVAILABLE', message: 'Operations status authorization is temporarily unavailable.', retryable: true }, 503);
     }
-    if (!principal) return json({ code: 'UNAUTHENTICATED', message: 'Authentication is required.' }, 401);
+    if (!principal) {
+      recordAuthenticationFailure(options.operationsEvents);
+      return json({ code: 'UNAUTHENTICATED', message: 'Authentication is required.' }, 401);
+    }
     const denial = forbidden(principal, organizationId);
-    if (denial) return json({ code: 'OPERATIONS_FORBIDDEN', message: denial }, 403);
+    if (denial) {
+      if (options.operationsEvents) {
+        void recordMembershipDenial(options.operationsEvents, principal, organizationId).catch(() => undefined);
+      }
+      return json({ code: 'OPERATIONS_FORBIDDEN', message: denial }, 403);
+    }
     try {
       return json(await buildOperationsStatus(options));
     } catch {

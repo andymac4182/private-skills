@@ -63,6 +63,7 @@ import {
 } from '../../../packages/cli-release/src/index.js';
 import { createCliReleaseRoutes } from './routes/cli-release.js';
 import { readSessionExchangeToken } from './session-exchange.js';
+import type { IdentityOperationsEventSink } from '../../../packages/identity/src/index.js';
 import {
   looksLikeEveTenantDelegation,
   EVE_TENANT_ID_HEADER,
@@ -120,6 +121,9 @@ async function createRuntime(env: RuntimeEnvironment) {
       authenticator: Authenticator;
     };
   }).apiTokens;
+  const operationsEvents = (infrastructure as typeof infrastructure & {
+    operationsEvents?: IdentityOperationsEventSink;
+  }).operationsEvents;
   const companySsoRuntime = (infrastructure as typeof infrastructure & {
     companySso?: {
       handler: (request: Request) => Promise<Response | undefined>;
@@ -498,6 +502,7 @@ async function createRuntime(env: RuntimeEnvironment) {
       repository: infrastructure.repository,
       billing: infrastructure.billing.service,
       authenticate: context.auth.authenticate,
+      ...(operationsEvents === undefined ? {} : { operationsEvents }),
       organizationId: context.organizationId,
       eveConfigured: isLegacyTenant
         ? legacyReviewTrigger !== undefined || uploadReviewRuntime?.configured === true

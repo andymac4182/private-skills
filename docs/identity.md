@@ -130,13 +130,31 @@ multi-instance deployments.
 
 The web Node host composes Better Auth with the company SSO and persisted
 service-token repositories. Its `IdentityInfrastructure.runMigrations()`
-entrypoint runs those three reviewed plans in order, using the configured
+entrypoint runs the Better Auth, company SSO, API-token, and operations-event
+plans in order, using the configured
 `PSKILLS_BETTER_AUTH_SCHEMA` for the Better Auth and private SSO tables. The
 service-token schema remains public for compatibility unless the host
 explicitly supplies `apiTokenSchemaName` or `PSKILLS_API_TOKEN_SCHEMA`; its
 configured table name is preserved. The lower-level
 `runtime.runMigrations()` above remains the Better Auth-only entrypoint for
 callers that construct the package runtime directly.
+
+Identity operations visibility uses the separate
+`private_skills_identity_operations_events` table. It records only bounded
+event kinds and reason codes for sign-in, provider callback, and membership
+denials. A tenant id and role are written only after the server verifies the
+current Better Auth membership; failures before that check remain global and
+are excluded from a company panel. No token, provider response, URL, email,
+request body, or exception text is stored.
+
+The table migration is explicit by default. Set
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE=true` only when one controlled
+process owns startup DDL, or call the infrastructure `runMigrations()` helper
+from the reviewed deployment job. That helper also removes up to the bounded
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE` of rows older than
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS` (30 days by default) on
+each run. The operations status endpoint returns aggregate totals and
+last-24-hour counts for the selected company; it never returns event rows.
 
 The implementation follows Better Auth's current
 [PostgreSQL adapter guidance](https://www.better-auth.com/docs/adapters/postgresql),

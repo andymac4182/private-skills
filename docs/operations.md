@@ -133,6 +133,14 @@ rm -f "$cookie_file"
 
 The exchange turns a configured user token into a short-lived signed `HttpOnly` cookie. Worker tokens cannot be exchanged for browser sessions. Cookie mutations require an `Origin` matching `PSKILLS_PUBLIC_ORIGIN`. Do not use a browser session for worker or CLI automation.
 
+Company operations status is available at `GET /v1/operations/status` to an
+owner or admin with the selected company's live membership. Its identity block
+shows aggregate sign-in failures, provider callback failures, and membership
+denials, including retained totals and last-24-hour counts. Events without a
+server-verified company membership remain global diagnostics and are never
+included in another company's response. The route returns no event rows or
+identity credentials.
+
 The CLI stores a token bound to an exact registry origin:
 
 ```sh
