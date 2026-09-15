@@ -1,5 +1,7 @@
 # Launch status
 
+Billing runtime integrated `7860d16`: company-bound routes, raw webhook dispatch, durable PostgreSQL service and customer-validated invoice adapter. Root isolated rerun: 33 focused runtime/billing/UI tests passed. Navigation mount assigned tenant_ui; billing_finish now owns actual scan/storage/seat quota callers, coordinating Eve cost reservations with runtime_finish. This is not live Stripe activation or completed usage enforcement.
+
 CLI token console integrated `d30fcc8`: create scoped expiring tokens, reveal once with copy fallback, list lifecycle metadata, revoke and clear secret on company switch. Root isolated focused rerun: 20 tests passed. foundation_release preparing PostgreSQL fixture for actual browser-to-token-use/revocation proof; that journey remains open.
 
 Root independent clean verification at `91023f6` passed frozen offline install, typecheck and full suite (1,052 tests passed, 17 skipped). A prior shared-checkout run failed to load samlify because another worktree replaced dependency links; isolate dependency installs per worktree. Do not reuse that failed run as release evidence.
