@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "900bc3e680093d9c3dd10790eab9ce1b24e71bc1",
+  "reviewStatus": "review-only-no-hosted-ddl",
+  "targetReadback": {
+    "environment": "DATABASE_URL",
+    "configured": false,
+    "readOnly": true,
+    "result": "No in-process target was configured; no production schema claim is made."
+  },
+  "migration": {
+    "sqlPath": "packages/billing/migrations/0001_billing_schema.sql",
+    "manifestPath": "packages/billing/migrations/0001_billing_schema.manifest.json",
+    "sqlSha256": "sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880",
+    "sqlByteLength": 4705,
+    "inventory": {
+      "createTablesIfMissing": 5,
+      "addColumnsIfMissing": 7,
+      "guardedConstraints": 2,
+      "createIndexesIfMissing": 2,
+      "destructiveStatements": 0
+    }
+  },
+  "loopbackProof": {
+    "environment": "Disposable loopback PostgreSQL; connection details omitted",
+    "status": "passed",
+    "schemaReadback": {
+      "status": "ready",
+      "tableCount": 5,
+      "columnCount": 51,
+      "checkCount": 13,
+      "physicalIndexCount": 9,
+      "rowPayloadRead": false
+    },
+    "populatedMigrationLoop": {
+      "allTablesPopulated": true,
+      "unboundWebhookRetained": true,
+      "reruns": 3,
+      "rowDigestsStable": true,
+      "manifestDigest": "sha256:276b2eaae7506a3012c107bc1883539a9bcb1b188bf856eb503d1e76bad9b148"
+    },
+    "isolatedLogicalBackupRestore": {
+      "isolatedSchema": true,
+      "allTablesRestored": true,
+      "rowDigestsStable": true
+    },
+    "legacyAdditiveUpgrade": {
+      "olderSchemaMissingLifecycleColumns": true,
+      "existingRowsPreserved": true,
+      "stableColumnDigestsStable": true
+    },
+    "rollback": {
+      "transactionRolledBack": true,
+      "objectsRemaining": 0
+    }
+  },
+  "verification": [
+    {
+      "command": "pnpm exec tsc --noEmit --pretty false",
+      "exitCode": 0
+    },
+    {
+      "command": "pnpm exec vitest run packages/billing/test/schema-migration-review.test.ts --reporter=dot",
+      "exitCode": 0,
+      "testFilesPassed": 1,
+      "testsPassed": 5
+    },
+    {
+      "command": "pnpm exec vitest run tests/runtime-billing.test.ts --reporter=dot",
+      "exitCode": 0,
+      "testFilesPassed": 1,
+      "testsPassed": 9,
+      "scope": "production auto-migration default, explicit opt-in, local/test convenience, and billing journeys"
+    },
+    {
+      "command": "schema-migration-review.ts --rehearse-loopback PSKILLS_BILLING_POSTGRES_URL",
+      "exitCode": 0,
+      "scope": "five-table catalog, populated rerun, isolated logical restore, legacy upgrade, rollback"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "limitations": [
+    "The current process did not have DATABASE_URL, so hosted schema drift and row counts were not inspected.",
+    "The local row-manifest is evidence for an isolated rehearsal, not an encrypted production backup.",
+    "The authoritative helper does not validate an existing relation shape; production must preflight columns, defaults, keys, checks, and indexes before applying it.",
+    "The Node composition now defaults billing auto-migration off in production; setting PSKILLS_BILLING_AUTO_MIGRATE=true remains an explicit migration-window opt-in.",
+    "No Stripe account, provider credential, local production adapter, hosted DDL, or environment value was used or changed."
+  ]
+}
