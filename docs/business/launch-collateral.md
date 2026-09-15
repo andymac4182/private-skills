@@ -355,4 +355,3 @@ These are follow-ups, not launch claims:
 5. Add a durable, authenticated support intake in the app if a first-party
    support channel is required; keep public marketing contact configuration
    pointed at its real HTTPS entry point.
-
