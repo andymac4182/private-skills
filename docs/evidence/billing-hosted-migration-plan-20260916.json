@@ -78,7 +78,19 @@
     "mode": "0600",
     "encrypted": false,
     "contents": "Bounded namespace, identity/registry counts, catalog metadata, and digests; no row payloads or credentials.",
-    "limitation": "This is not a complete encrypted PostgreSQL backup. An external provider-consistent encrypted backup remains required before any hosted apply window."
+    "limitation": "This is not a complete encrypted PostgreSQL backup; the recorded AES-GCM backup/restore evidence below covers the recovery point used for the apply."
+  },
+  "initialApplyAttempt": {
+    "runnerCommit": "84e4045aadcce3ace919158e45fc1601cef0fe5e",
+    "processResult": "exit 1 with the runner's sanitized failure message",
+    "postFailureReadOnlyVerification": {
+      "billingStatus": "absent",
+      "billingTables": 0,
+      "identityRows": 0,
+      "registryRevision": 232,
+      "independentReadbackStable": true
+    },
+    "conclusion": "Transaction rolled back; no billing relation was committed."
   },
   "apply": {
     "runnerCommit": "77194d0f893387f53f2e325c806f48816c72ad84",
@@ -125,7 +137,8 @@
     "restoreMatched": true,
     "restoredRelations": 14,
     "restoredIdentityRelations": 12,
-    "restoredSemanticRelations": 2,
+    "restoredSemanticRows": 2,
+    "restoredSemanticTables": 1,
     "restoredRegistryRevision": 232,
     "credentialHandling": "Key and backup material were retained outside this repository; no secret value is recorded here."
   },
@@ -164,6 +177,11 @@
       "command": "prepare-hosted-migration.ts --apply --baseline-output PATH",
       "result": "passed",
       "observed": "committed on PostgreSQL 18.6; transaction shape 5 tables, 51 columns, 13 checks, 9 indexes, zero rows; independent readback stable"
+    },
+    {
+      "command": "read-only plan after initial guarded apply attempt",
+      "result": "passed",
+      "observed": "billing remained absent; all 12 identity relations remained present with zero rows; registry remained at revision 232; independent readback stable"
     },
     {
       "command": "independent read-only billing catalog readback after apply",
