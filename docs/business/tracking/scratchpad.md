@@ -29,3 +29,9 @@ Resolved dependency check: coordinator ran CI=true pnpm install --frozen-lockfil
 Navigation handoff integrated d529e42. Whole integration typecheck passes at this observation, including in-flight SSO/runtime files, but this is not immutable release evidence. Invitation/navigation browser fixture must use a free port (5400 already occupied by marketing) and a committed snapshot. Overview density is assigned to tenant_ui as a separate bounded change.
 
 Overview implementation integrated 491ddc7: compact company header, useful primary actions and real metrics replace decorative hero/CTA panels. Eleven related tests pass. Browser desktop/mobile visual verification remains required.
+
+## Market positioning research — 15 September 2026
+
+User reiterated market research and domain checks as launch work (B14–B16). Current primary-source observations: [Tessl registry](https://tessl.io/registry) positions around agent skills and evaluation; [JFrog MCP Registry](https://jfrog.com/ai-catalog/mcp-registry/) explicitly includes agent skills in its broader AI Catalog; [Cloudsmith artifact management](https://cloudsmith.com/platform-features/artifact-management) includes AI artifacts. Governance or scanning alone is not an evidenced unique differentiator.
+
+Working hypothesis to test: an approachable company skills platform for engineering teams, combining transparent upstream ingestion, private authoring and distribution, and portable hosting. This is a positioning hypothesis, not a validated buyer preference or a claim that competitors lack these features. Marketing agent owns the source-backed comparison and naming/domain shortlist. Include buyer versus daily user, switching friction, purchase triggers, pricing hypotheses, and low-cost validation tasks. No outreach or purchases are authorized by this research task.

@@ -14,7 +14,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B08 — L01/L02: check separate marketing project has public configuration only, working app links, responsive pages and truthful unavailable billing/legal states.
 - [ ] B09 — L10: reconcile all acceptance rows against actual evidence before claiming beta or paid readiness; keep skipped native CI and local fixtures explicitly limited.
 
-- [ ] B10 — L07: prove billing reservations and webhook deduplication on actual disposable PostgreSQL with competing transactions, not only the SQL test double.
+- [x] B10 — L07: actual disposable PostgreSQL proof reported by billing_finish at 93d089b (integrated 9c92c68): three tests cover concurrent reservations, durable webhook deduplication and out-of-order events. Route mounting, invoice adapter and browser billing journey remain L07 work; this does not prove Stripe configuration.
 
 ## Later roadmap — preserve, reassess after launch essentials
 
@@ -24,7 +24,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] F04 — Audit diffs.com file viewing/editing and editor Eve assistance against earlier requirements; retain unfinished polish without duplicating completed features.
 - [ ] F05 — SCIM provisioning, custom domains, residency/SLA commitments and dedicated scanner fleet when evidence warrants them. Company SSO itself is launch scope.
 
-- [ ] B11 — L04: verify copied invitation in browser through invitee login, acceptance, membership persistence, wrong-email denial and expiration. Component tests pass at 574286e; browser proof pending.
+- [ ] B11 — L04: root browser proof on owner-role-fixed local 5401 fixture passed invitee Acme OIDC login, invitation display and acceptance, with correct company selected and reader role. Clipboard copy returned empty, so root used the previously observed invitation URL; copy UX needs review. Real PostgreSQL persistence covered by author flow; browser wrong-email denial and expiration remain open. No production IdP proof claimed.
 
 - [x] B12 — L04: actual browser owner invite denied on d529e42 (Alice Acme / Acme Labs Demo, reader invite for synthetic Ben). UI shows owner but Better Auth returns permission denial. Inspect role resource mapping and invitation creation contract; prove authorized owner success and reader denial against real runtime. No invitation was created by this test.
 
