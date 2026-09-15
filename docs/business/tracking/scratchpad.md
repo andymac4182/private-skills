@@ -187,3 +187,7 @@ Source review confirms contact page still uses the honest launch-preview fallbac
 ### Main merge and anonymous production readback — 16 September
 
 Root independently confirmed PR54 merged to main11b5e1d7888d28e65e37143fc7d3da940c37a318 and merged origin/main into the integration branch. Subsequent anonymous requests returned marketing homepage200, marketing robots.txt200, and registry /v1/cli/releases401. This proves public-route availability and anonymous inventory denial at observation time; exact deployment-SHA correlation and authenticated archive byte checks remain with the release owner. Do not treat these anonymous checks as full CLI or identity acceptance.
+
+### Combined ledger/Eve/scheduler database verification — 16 September, 02:14 AEST
+
+Root independently ran three PostgreSQL-enabled suites at coherent verification snapshot8cff18f: billing repository/lifecycle, Eve durable reservation recovery, and hosted worker dispatch. All22tests passed in2.72seconds. Editor separately reported161focusedtests and TypeScript passing on this snapshot. It remains unreleased: caller StorageAttempt/atomic reservation ownership work is pending, operatorseat recovery is being strengthened, and generatedVercelconfiguration lacks an explicit duration while reviewerdefaultis600seconds. A dedicated owner is aligning deployment andruntimebudgets before release; componentpasses do not close those gaps.
