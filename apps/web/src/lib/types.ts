@@ -6,6 +6,7 @@ import type {
   PackVersion,
   Policy,
   Principal,
+  PrincipalDisplayMetadata,
   Resolution,
   ScanResult,
   SkillBundle,
@@ -140,6 +141,7 @@ export type OrganizationSummary = IdentityOrganization
 export type AuthUser = IdentityUser
 export type OrganizationRole = IdentityRole
 export type AuthSession = IdentitySession
+export type BrowserPrincipal = Principal & { display?: PrincipalDisplayMetadata }
 
 export interface ProviderSignInResponse {
   redirect?: boolean
@@ -184,6 +186,62 @@ export interface SkillListResponse { skills: CatalogSkillVersion[] }
 export interface SkillResponse { skill: CatalogSkillVersion }
 export interface PackListResponse { packs: PackVersion[] }
 export interface OperationListResponse { operations: Job[] }
+export interface OperationsStatusResponse {
+  protocolVersion: 1
+  organizationId: string
+  generatedAt: string
+  queue: {
+    state: 'clear' | 'active' | 'attention' | 'empty'
+    queued: number
+    running: number
+    failed: number
+    oldestActiveAt?: string
+    oldestActiveAgeSeconds?: number
+  }
+  scans: {
+    state: 'current' | 'attention' | 'empty'
+    skills: { total: number; current: number; stale: number; failed: number; blocked: number; unavailable: number }
+    enabledScannerCount: number
+    requiredScannerCount: number
+    evidenceMaxAgeSeconds: number
+    latestCompletedAt?: string
+  }
+  auth: {
+    state: 'unavailable'
+    authenticationFailures: null
+    callbackFailures: null
+    reason: string
+  }
+  billing: {
+    state: 'available' | 'unconfigured' | 'disabled' | 'unavailable'
+    provider: 'stripe' | 'local' | null
+    mode: 'disabled' | 'test' | 'live'
+    webhookVerification: boolean
+    checkout: boolean
+    portal: boolean
+    usageState: 'available' | 'empty' | 'unavailable'
+    usage: {
+      periodStart: string
+      periodEnd: string
+      updatedAt: string
+      seats: number
+      storageBytes: number
+      scans: number
+      eveCostCents: number
+      limits: { seats: number; storageBytes: number; scansPerMonth: number; eveCostCentsPerMonth: number }
+    } | null
+    failureCount: null
+    failureState: 'unavailable'
+    reason: string
+  }
+  eve: {
+    state: 'current' | 'attention' | 'empty' | 'unavailable'
+    consolidationRuns: { total: number; running: number; completed: number; failed: number }
+    uploadReviews: { total: number; pending: number; running: number; passed: number; failed: number; stale: number }
+    latestFailureAt?: string
+    reason?: string
+  }
+}
 export interface ScanListResponse { scans: ScanResult[] }
 export interface PolicyResponse { policy: Policy }
 export interface UpstreamListResponse { upstreams: Upstream[] }
@@ -235,7 +293,7 @@ export interface SourceResolveResponse {
   operation?: Job
   resolution?: Resolution
 }
-export interface SessionResponse { principal?: Principal }
+export interface SessionResponse { principal?: BrowserPrincipal }
 export interface ReviewsResponse { runs: ReviewRunView[]; suggestions: ReviewSuggestionView[] }
 export interface ReviewRunResponse { sessionId: string; status: 'started' }
 export interface ReviewDecisionResponse { suggestion: ReviewSuggestionView }

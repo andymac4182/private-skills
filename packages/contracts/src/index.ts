@@ -1,7 +1,52 @@
 export const PROTOCOL_VERSION = 1;
 export type Digest = `sha256:${string}`;
 export type Role = 'owner' | 'admin' | 'publisher' | 'reader' | 'worker';
-export interface Principal { organizationId: string; subject: string; roles: Role[]; namespaces?: string[]; scopes?: string[]; }
+/**
+ * Human-facing labels resolved by the authenticated server record. This
+ * metadata is display-only: it is never used for tenant selection or access
+ * checks, and it deliberately excludes credentials and authorization grants.
+ */
+export interface PrincipalDisplayMetadata {
+  userName?: string;
+  userEmail?: string;
+  organizationName?: string;
+  organizationSlug?: string;
+}
+
+const PRINCIPAL_DISPLAY_VALUE_MAX_LENGTH = 256;
+
+function safePrincipalDisplayValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > PRINCIPAL_DISPLAY_VALUE_MAX_LENGTH || /[\u0000-\u001f\u007f]/u.test(normalized)) return undefined;
+  return normalized;
+}
+
+/** Normalize optional server-derived labels before they cross a public API boundary. */
+export function normalizePrincipalDisplayMetadata(value: unknown): PrincipalDisplayMetadata | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const candidate = value as Partial<PrincipalDisplayMetadata>;
+  const userName = safePrincipalDisplayValue(candidate.userName);
+  const userEmail = safePrincipalDisplayValue(candidate.userEmail);
+  const organizationName = safePrincipalDisplayValue(candidate.organizationName);
+  const organizationSlug = safePrincipalDisplayValue(candidate.organizationSlug);
+  if (!userName && !userEmail && !organizationName && !organizationSlug) return undefined;
+  return {
+    ...(userName === undefined ? {} : { userName }),
+    ...(userEmail === undefined ? {} : { userEmail }),
+    ...(organizationName === undefined ? {} : { organizationName }),
+    ...(organizationSlug === undefined ? {} : { organizationSlug }),
+  };
+}
+
+export interface Principal {
+  organizationId: string;
+  subject: string;
+  roles: Role[];
+  namespaces?: string[];
+  scopes?: string[];
+  display?: PrincipalDisplayMetadata;
+}
 /** A bounded, request-local observation of one external fetch boundary. */
 export type UpstreamRequestKind = 'catalog' | 'source';
 export interface UpstreamRequestObserver {

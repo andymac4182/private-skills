@@ -1,6 +1,6 @@
-import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
+import type { PackVersion, Policy, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
 import type {
-  AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, PackCreateResponse,
+  AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, OperationsStatusResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
   ResolveResponse, ScanActionResponse, ScanListResponse, SearchReindexResponse, SearchResponse, SearchStatusResponse, SessionResponse,
   SkillListResponse, SkillResponse, UpstreamListResponse, UpstreamResponse,
@@ -11,7 +11,7 @@ import type {
   DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
   AuthSession, OrganizationInvitation, OrganizationInvitationsResponse, OrganizationListResponse,
   OrganizationInvitationAcceptanceResponse, OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
-  ProviderSignInResponse,
+  ProviderSignInResponse, BrowserPrincipal,
 } from './types'
 
 export class ApiError extends Error {
@@ -101,7 +101,7 @@ export const identityRoutes = {
 
 export const api = {
   health() { return request<HealthResponse>('/health') },
-  me() { return request<Principal>('/v1/me').then(unwrap) },
+  me() { return request<BrowserPrincipal>('/v1/me').then(unwrap) },
   signIn(token: string) { return request<SessionResponse>('/auth/session', { method: 'POST', body: { token } }).then(unwrap) },
   signOut() { return request<void>('/auth/session', { method: 'DELETE' }) },
   /** Public metadata only; provider credentials never cross this boundary. */
@@ -165,6 +165,7 @@ export const api = {
   packs() { return request<PackListResponse>('/v1/packs').then(unwrap) },
   createPack(input: { name: string; version: string; description: string; skills: Array<{ ref: string; version: string }> }) { return request<PackCreateResponse>('/v1/packs', { method: 'POST', body: input }).then(unwrap) },
   operations() { return request<OperationListResponse>('/v1/operations').then(unwrap) },
+  operationsStatus() { return request<OperationsStatusResponse>('/v1/operations/status').then(unwrap) },
   operation(id: string) { return request<OperationResponse>(`/v1/operations/${encodeURIComponent(id)}`).then(unwrap) },
   releaseFiles(resourceId: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/files`, { signal }).then(unwrap) },
   releaseFile(resourceId: string, path: string, signal?: AbortSignal) { return request<ReleaseFilesResponse>(`/v1/skills/${encodeURIComponent(resourceId)}/file`, { query: { path }, signal }).then(unwrap) },

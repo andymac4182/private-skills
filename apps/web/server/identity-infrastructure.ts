@@ -23,6 +23,7 @@ import {
   type MembershipSnapshot,
   type OrganizationSessionLike,
 } from '../../../packages/api-tokens/src/index.js';
+import type { PrincipalDisplayMetadata } from '../../../packages/contracts/src/index.js';
 import { canonicalOriginFromEnv } from './identity-origin.js';
 
 export { canonicalOriginFromEnv } from './identity-origin.js';
@@ -43,6 +44,10 @@ export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
+  /** Resolves only after opted-in Better Auth and company SSO migrations finish. */
+  ready: Promise<void>;
+  /** Runs both reviewed migrations explicitly for a controlled deployment job. */
+  runMigrations: () => Promise<void>;
 }
 
 /** Keep the API-token browser exchange on the same durable secret boundary as identity. */
@@ -63,11 +68,15 @@ export class PostgresBetterAuthMembershipAuthorizer implements MembershipAuthori
   private readonly identity: IdentityRuntimeAdmin;
   private readonly pool: ApiTokenPgPool;
   private readonly memberTable: string;
+  private readonly userTable: string;
+  private readonly organizationTable: string;
 
   constructor(identity: IdentityRuntimeAdmin, pool: ApiTokenPgPool, schemaName?: string) {
     this.identity = identity;
     this.pool = pool;
     this.memberTable = qualifiedMemberTable(schemaName);
+    this.userTable = qualifiedIdentityTable(schemaName, 'user');
+    this.organizationTable = qualifiedIdentityTable(schemaName, 'organization');
   }
 
   async getOrganizationSession(request: Request): Promise<OrganizationSessionLike | null> {
@@ -102,12 +111,42 @@ export class PostgresBetterAuthMembershipAuthorizer implements MembershipAuthori
         // sessions. Better Auth's built-in member role is normalized to
         // reader; unknown roles, including manager, fail closed.
         const role: ApiTokenIdentityRole = normalizeIdentityRole(row.role);
-        return { organizationId, userId, role, active: true };
+        const display = await this.lookupDisplayMetadata(organizationId, userId);
+        return { organizationId, userId, role, active: true, ...(display === undefined ? {} : { display }) };
       } catch {
         return null;
       }
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Resolve labels only after the membership row has passed the live role
+   * check. A metadata query failure must not alter an otherwise valid access
+   * decision, so this helper intentionally returns no display block on error.
+   */
+  private async lookupDisplayMetadata(organizationId: string, userId: string): Promise<PrincipalDisplayMetadata | undefined> {
+    try {
+      const result = await this.pool.query<{
+        userName?: unknown;
+        userEmail?: unknown;
+        organizationName?: unknown;
+        organizationSlug?: unknown;
+      }>(
+        `SELECT u."name" AS "userName", u."email" AS "userEmail", o."name" AS "organizationName", o."slug" AS "organizationSlug" FROM ${this.userTable} AS u JOIN ${this.organizationTable} AS o ON o."id" = $1 WHERE u."id" = $2 LIMIT 1`,
+        [organizationId, userId],
+      );
+      const row = result.rows[0];
+      if (!row) return undefined;
+      return {
+        ...(typeof row.userName === 'string' ? { userName: row.userName } : {}),
+        ...(typeof row.userEmail === 'string' ? { userEmail: row.userEmail } : {}),
+        ...(typeof row.organizationName === 'string' ? { organizationName: row.organizationName } : {}),
+        ...(typeof row.organizationSlug === 'string' ? { organizationSlug: row.organizationSlug } : {}),
+      };
+    } catch {
+      return undefined;
     }
   }
 }
@@ -122,7 +161,7 @@ export function createIdentityInfrastructure(
 ): IdentityInfrastructure {
   if (!options.postgresPool) {
     const identity = createIdentityRuntimeFromEnv(env);
-    if (!identity) return { identity: null, apiTokens: null, companySso: null };
+    if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
     throw new Error('Better Auth API tokens require a shared PostgreSQL pool');
   }
 
@@ -131,16 +170,18 @@ export function createIdentityInfrastructure(
     env.PSKILLS_COMPANY_SSO_AUTO_MIGRATE ?? env.COMPANY_SSO_AUTO_MIGRATE,
     false,
   );
+  const identitySchemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const appOrigin = options.canonicalOrigin ?? canonicalOriginFromEnv(env);
   const companySsoRepository = createPostgresCompanySsoRepository(options.postgresPool, {
     ...(configuredCompanySsoTable === undefined ? {} : { tableName: configuredCompanySsoTable }),
+    ...(identitySchemaName === undefined ? {} : { schemaName: identitySchemaName }),
     autoMigrate: companySsoAutoMigrate,
   });
   const identity = createIdentityRuntimeFromEnv(env, {
     plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
     trustedOrigins: (request) => companySsoTrustedOrigins(request, companySsoRepository),
   });
-  if (!identity) return { identity: null, apiTokens: null, companySso: null };
+  if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
@@ -166,7 +207,18 @@ export function createIdentityInfrastructure(
     autoMigrate: companySsoAutoMigrate,
     bridge: createCompanySsoBetterAuthBridge(identity.auth),
   });
-  return { identity, apiTokens, companySso };
+  // Better Auth's own `ready` covers its mirrored tables. The private company
+  // table has a separate reviewed schema, so an explicitly opted-in startup
+  // waits for both migrations before the Node handler is exposed.
+  const runMigrations = async (): Promise<void> => {
+    await identity.runMigrations();
+    await companySsoRepository.runMigrations();
+  };
+  const ready = identity.ready.then(async () => {
+    if (companySsoAutoMigrate) await companySsoRepository.runMigrations();
+  });
+  void ready.catch(() => undefined);
+  return { identity, apiTokens, companySso, ready, runMigrations };
 }
 
 function createCompanySsoAuthorizer(identity: IdentityRuntimeAdmin): CompanySsoAuthorizer {
@@ -265,9 +317,13 @@ async function providerIdFromSsoRequest(request: Request | undefined): Promise<s
 }
 
 function qualifiedMemberTable(schemaName: string | undefined): string {
-  if (!schemaName) return '"member"';
+  return qualifiedIdentityTable(schemaName, 'member');
+}
+
+function qualifiedIdentityTable(schemaName: string | undefined, tableName: 'member' | 'user' | 'organization'): string {
+  if (!schemaName) return `"${tableName}"`;
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/u.test(schemaName)) throw new Error('Better Auth schema name is invalid');
-  return `"${schemaName}"."member"`;
+  return `"${schemaName}"."${tableName}"`;
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {

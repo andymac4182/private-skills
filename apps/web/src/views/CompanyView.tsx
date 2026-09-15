@@ -96,7 +96,7 @@ export function CompanyView() {
   const needsOrganization = session?.needsOnboarding === true
   const needsSelection = !needsOrganization && memberships.length > 0 && !activeOrganization
 
-  if (!session && principal) return <LegacyCompanyState organizationId={principal.organizationId} />
+  if (!session && principal) return <LegacyCompanyState organizationId={principal.organizationId} organizationName={principal.display?.organizationName} />
   if (!session) return <LoadingState label="Loading company access…" />
   if (needsOrganization) return <OnboardingPanel onCreated={async (organizationId) => {
     clearTenantScopedClientState()
@@ -113,8 +113,8 @@ export function CompanyView() {
   return <CompanyManagement activeMembership={activeMembership} organization={activeOrganization} />
 }
 
-function LegacyCompanyState({ organizationId }: { organizationId: string }) {
-  return <div className="view-heading"><div><span className="eyebrow">Company</span><h1>{organizationId}</h1><p className="muted">This registry is using the existing token sign-in. Company switching and team controls appear after company identity is configured.</p></div><Notice kind="info">Your access is checked before each change. Ask an owner to configure company identity access before inviting teammates.</Notice></div>
+function LegacyCompanyState({ organizationId, organizationName }: { organizationId: string; organizationName?: string }) {
+  return <div className="view-heading"><div><span className="eyebrow">Company</span><h1>{organizationName ?? organizationId}</h1><p className="muted">This registry is using the existing token sign-in. Company switching and team controls appear after company identity is configured.</p></div><Notice kind="info">Your access is checked before each change. Ask an owner to configure company identity access before inviting teammates.</Notice></div>
 }
 
 function OnboardingPanel({ onCreated }: { onCreated: (organizationId?: string) => Promise<void> }) {

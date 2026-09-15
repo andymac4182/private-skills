@@ -51,3 +51,12 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - MR01–MR07 in [market research](../market-research.md) track buyer, onboarding, evidence comprehension, repeat use, ownership, packaging and deployment hypotheses. These are unvalidated research plans, not customer evidence.
 - A1–A7 in that document track content/onboarding experiments with measurable acceptance criteria. No external outreach or publication is authorized by those experiment descriptions.
 - Keep research identifiers separate from implementation B17–B20. Recheck shortlisted domains immediately before selection; retain Private Skills until a brand is chosen.
+
+## Billing acceptance findings — 16 September
+
+- [ ] B21 — Billing lifecycle correctness before release: preserve explicit-zero reconciliation; re-admit released operation keys on retry; keep successful or uncertain blob writes charged until durable reconciliation; deduplicate concurrent imports without extra quota or false limit errors; release scan reservations for failures before scanner invocation. Owners: billing_finish (ledger), business_billing (core/authoring/worker callers). Add failure/retry/concurrency tests, not just quota-rejection tests.
+- [ ] B22 — Seat reconciliation must handle stale low and high snapshots, natural invitation expiry, removal of pre-existing members, and recovery from failed lifecycle hooks without lost capacity or quota bypass. Owner: billing_finish. Actual PostgreSQL barrier and lifecycle evidence required.
+- [ ] B23 — Eve dispatch crash recovery must prevent duplicate external sessions under one reservation after a host crash between provider acceptance and durable completion. Owner: runtime_finish. Verify durable start/reconciliation behavior beyond caught timeout tests.
+
+- [ ] B24 — Eve cost reconciliation must survive process restart and cache eviction. Current candidate stores reservation lookup metadata only in a process-local map; replace with durable lookup and prove restart/eviction reconciliation against PostgreSQL. Confirm budgeted Eve works in the intended no-Stripe evaluation configuration without bypassing limits. Owner: runtime_finish.
+- [ ] B25 — Persist sanitized authentication/callback failure and membership-denial signals. Attribute company metrics only from server-trusted identity; unknown-tenant failures stay operator-only. Verify persistence and tenant/admin boundaries. Owner: tenant_auth_backend.

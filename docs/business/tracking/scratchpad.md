@@ -62,3 +62,9 @@ Review follow-ups: billing count reconciliation needs a stale-read/after-hook ba
 Root verified Globex fixture login on 5405 (`89ef195`) as Carol, then created `Globex Browser Demo` / `globex-browser-demo` through the actual onboarding UI. The company selector contained only that company; Carol appeared as owner. Reload persisted the company and loaded its empty registry with three configured checks and unreviewed releases blocked. This supplements Acme login; it is local fixture evidence, not real GitHub/Google proof or populated cross-company artifact isolation.
 
 Foundation traced the 5404 SSO error to missing `private_skills_company_sso_providers` (42P01), explicitly applied the repository schema only to disposable local DB, and obtained authenticated HTTP 200 with an empty provider list. The old browser tab had closed, so no post-migration browser success is claimed yet. Launcher regression fix and fresh-instance proof remain assigned.
+
+### SSO browser recheck after explicit local schema application
+
+Root opened a new 5404 browser tab, completed Acme login and explicit company selection, then opened SSO settings. Provider list loaded empty, provider ID input was enabled, and alert count was zero. This verifies the repaired disposable DB at `acca451`; fresh-launch migration regression coverage is still pending.
+
+Release increment `3809277` is in PR #52. Marketing preview ready; app/builder previews pending at this checkpoint. Native CI failures must be checked for billing/runner unavailability before applying the user waiver; no source-regression waiver is implied.
