@@ -51,9 +51,11 @@ import {
   type StorageAttempt,
 } from '../../contracts/src/index.js';
 import {
+  allocateStorageObjectKey,
   digestBytes,
   encodeBundle,
   parseSkillMetadata,
+  putStorageAttemptBlob,
   validateBundle,
 } from '../../storage/src/index.js';
 import {
@@ -2926,7 +2928,7 @@ async function publishSkill(
       size: bytes.byteLength,
       jobId,
     });
-    stored = await putVerifiedBlob(deps, bytes, digest);
+    stored = await putVerifiedBlob(deps, bytes, digest, storageAttempt);
     const skill: SkillVersion = {
       id: skillId,
       organizationId: config.organizationId,
@@ -6514,7 +6516,7 @@ async function completeJob(
         size: bytes.byteLength,
         jobId: job.id,
       });
-      importedStored = await putVerifiedBlob(deps, bytes, digest);
+      importedStored = await putVerifiedBlob(deps, bytes, digest, importedStorageAttempt);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
       if (requestedDigest && requestedDigest !== digest) {
         throw new RegistryApiError('DIGEST_MISMATCH', 'Completion artifact digest does not match the imported bundle', 409);
@@ -7411,7 +7413,7 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (!attempt.id || storageAttemptIds.has(attempt.id) || !attempt.reservationKey || !attempt.createdAt || !attempt.updatedAt) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt state is invalid', 500);
     }
-    if (!['pending', 'committed', 'orphaned', 'released'].includes(attempt.state) || !/^sha256:[0-9a-f]{64}$/u.test(attempt.digest) || !Number.isSafeInteger(attempt.size) || attempt.size < 0) {
+    if (!['pending', 'committed', 'orphaned', 'recovering', 'released'].includes(attempt.state) || !/^sha256:[0-9a-f]{64}$/u.test(attempt.digest) || !Number.isSafeInteger(attempt.size) || attempt.size < 0) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt metadata is invalid', 500);
     }
     if (attempt.objectKey !== undefined && (typeof attempt.objectKey !== 'string' || attempt.objectKey.length === 0)) {
@@ -7419,6 +7421,13 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     }
     if (attempt.jobId !== undefined && (typeof attempt.jobId !== 'string' || attempt.jobId.length === 0)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt job id is invalid', 500);
+    }
+    if (attempt.state === 'recovering') {
+      if (typeof attempt.recoveryToken !== 'string' || attempt.recoveryToken.length === 0 || attempt.recoveryToken.length > 256 || typeof attempt.recoveryStartedAt !== 'string' || attempt.recoveryStartedAt.length === 0 || attempt.recoveryStartedAt.length > 64) {
+        throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt recovery fence is invalid', 500);
+      }
+    } else if (attempt.recoveryToken !== undefined || attempt.recoveryStartedAt !== undefined) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt recovery fence is stale', 500);
     }
     storageAttemptIds.add(attempt.id);
   }
@@ -7601,10 +7610,15 @@ function compareVersions(a: string, b: string): number {
   return left.pre.localeCompare(right.pre);
 }
 
-async function putVerifiedBlob(deps: RegistryDependencies, bytes: Uint8Array, digest: Digest): Promise<StoredBlob> {
+async function putVerifiedBlob(
+  deps: RegistryDependencies,
+  bytes: Uint8Array,
+  digest: Digest,
+  attempt?: Pick<StorageAttempt, 'objectKey'>,
+): Promise<StoredBlob> {
   let stored: StoredBlob;
   try {
-    stored = await deps.blobs.put(bytes);
+    stored = await (attempt ? putStorageAttemptBlob(deps.blobs, attempt, bytes) : deps.blobs.put(bytes));
   } catch {
     throw new RegistryApiError('STORAGE_UNAVAILABLE', 'Artifact storage is temporarily unavailable', 503, { retryable: true });
   }
@@ -8161,6 +8175,7 @@ function storageAttemptRecord(input: {
   digest: Digest;
   size: number;
   jobId?: string;
+  objectKey?: string;
 }): StorageAttempt {
   const timestamp = nowIso();
   return {
@@ -8172,6 +8187,7 @@ function storageAttemptRecord(input: {
     state: 'pending',
     createdAt: timestamp,
     updatedAt: timestamp,
+    ...(input.objectKey ? { objectKey: input.objectKey } : {}),
     ...(input.jobId ? { jobId: input.jobId } : {}),
   };
 }
@@ -8186,7 +8202,10 @@ async function beginStorageAttempt(
     jobId?: string;
   },
 ): Promise<StorageAttempt> {
-  const attempt = storageAttemptRecord(input);
+  // Persist the provider object identity before any write. Legacy BlobStores
+  // remain supported, but their attempts cannot be recovered after an
+  // ambiguous provider response because no stable key is available.
+  const attempt = storageAttemptRecord({ ...input, objectKey: allocateStorageObjectKey(deps.blobs) });
   await deps.repository.transaction(input.organizationId, (state) => {
     const mutable = ensureState(state, defaultPolicy());
     mutable.storageAttempts!.push(attempt);
@@ -8204,10 +8223,10 @@ async function markStorageAttemptOrphaned(
     await deps.repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
       const attempt = mutable.storageAttempts!.find((candidate) => candidate.id === attemptId);
-      if (!attempt || attempt.state === 'committed' || attempt.state === 'released') return;
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'released') return;
       attempt.state = 'orphaned';
       attempt.updatedAt = nowIso();
-      if (objectKey) attempt.objectKey = objectKey;
+      if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
     });
   } catch {
     // A pending attempt is deliberately retained when its state transition is
@@ -8228,7 +8247,8 @@ function commitStorageAttempt(
     if (attempt.objectKey !== stored.key) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership record conflicts with the stored object', 409);
     return;
   }
-  if (attempt.state === 'released') throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership was already released', 409);
+  if (attempt.state === 'released' || attempt.state === 'recovering') throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  if (attempt.objectKey !== undefined && attempt.objectKey !== stored.key) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
   attempt.state = 'committed';
   attempt.objectKey = stored.key;
   attempt.updatedAt = nowIso();

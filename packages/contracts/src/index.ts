@@ -58,6 +58,26 @@ export interface BundleFile { path: string; content: string; executable?: boolea
 export interface SkillBundle { format: 'pskills-bundle-v1'; files: BundleFile[]; }
 export interface StoredBlob { key: string; digest: Digest; size: number; }
 export interface BlobStore { put(bytes: Uint8Array): Promise<StoredBlob>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void>; }
+/**
+ * A bounded provider observation used by the storage-attempt reconciler.
+ * `unknown` is intentionally distinct from `absent`: a timeout, permission
+ * failure, or integrity failure must retain the metered reservation.
+ */
+export type StorageObjectInspection =
+  | { state: 'present'; key: string; digest: Digest; size: number }
+  | { state: 'absent'; key: string }
+  | { state: 'unknown'; key: string; reason: 'provider-error' | 'integrity' | 'limit' };
+
+/**
+ * BlobStore capability required for durable write recovery. The caller
+ * allocates the object identity before provider I/O, then retries the same
+ * key and verifies its bytes instead of creating an untracked object.
+ */
+export interface RecoverableBlobStore extends BlobStore {
+  allocateObjectKey(): string;
+  putAtKey(key: string, bytes: Uint8Array, metadata?: Record<string, string>): Promise<StoredBlob>;
+  inspectObject(key: string): Promise<StorageObjectInspection>;
+}
 export type DistributionState = 'pending' | 'approved' | 'quarantined' | 'scan-error' | 'revoked';
 export type ScannerId = 'cisco-skill-scanner' | 'nvidia-skillspector' | 'skillsguard';
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
@@ -422,7 +442,7 @@ export interface Job { id: string; organizationId: string; kind: 'scan' | 'impor
  * completed).  This is intentionally separate from a Job because publication
  * and draft writes can fail before a job exists.
  */
-export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'released';
+export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'recovering' | 'released';
 export interface StorageAttempt {
   id: string;
   organizationId: string;
@@ -434,6 +454,9 @@ export interface StorageAttempt {
   updatedAt: string;
   objectKey?: string;
   jobId?: string;
+  /** A short-lived compare-and-set fence held during external recovery I/O. */
+  recoveryToken?: string;
+  recoveryStartedAt?: string;
 }
 /**
  * Durable fence for a metered reservation while a caller is deciding whether

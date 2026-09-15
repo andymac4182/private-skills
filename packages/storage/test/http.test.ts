@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type {
   BlobStore,
   Digest,
+  RecoverableBlobStore,
+  StorageObjectInspection,
   StoredBlob,
 } from "../../contracts/src/index.js";
 import {
@@ -10,15 +12,32 @@ import {
   digestBytes,
 } from "../src/index.js";
 
-class MemoryBlobStore implements BlobStore {
+class MemoryBlobStore implements RecoverableBlobStore {
   readonly objects = new Map<string, Uint8Array>();
   private sequence = 0;
+
+  allocateObjectKey(): string {
+    return `sealed/${String(++this.sequence).padStart(48, "0")}`;
+  }
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
     const key = `sealed/${++this.sequence}`;
     const copy = new Uint8Array(bytes);
     this.objects.set(key, copy);
     return { key, digest: await digestBytes(copy), size: copy.byteLength };
+  }
+
+  async putAtKey(key: string, bytes: Uint8Array): Promise<StoredBlob> {
+    const existing = await this.inspectObject(key);
+    const copy = new Uint8Array(bytes);
+    const digest = await digestBytes(copy);
+    if (existing.state === "present") {
+      if (existing.digest !== digest || existing.size !== copy.byteLength) throw new Error("stable key conflict");
+      return { key, digest, size: copy.byteLength };
+    }
+    if (existing.state === "unknown") throw new Error("stable key unknown");
+    this.objects.set(key, copy);
+    return { key, digest, size: copy.byteLength };
   }
 
   async get(key: string): Promise<Uint8Array> {
@@ -29,6 +48,12 @@ class MemoryBlobStore implements BlobStore {
 
   async remove(key: string): Promise<void> {
     this.objects.delete(key);
+  }
+
+  async inspectObject(key: string): Promise<StorageObjectInspection> {
+    const bytes = this.objects.get(key);
+    if (!bytes) return { state: "absent", key };
+    return { state: "present", key, digest: await digestBytes(bytes), size: bytes.byteLength };
   }
 }
 
@@ -165,5 +190,35 @@ describe("private blob HTTP gateway", () => {
     );
     expect(response.status).toBe(400);
     expect(store.objects.size).toBe(0);
+  });
+
+  it("round-trips a preallocated stable key through the private gateway", async () => {
+    const store = new MemoryBlobStore();
+    const handler = createBlobGatewayHandler({
+      baseOrigin: "https://gateway.example",
+      store,
+      authorize: () => true,
+    });
+    const client = new HttpBlobStore({
+      baseUrl: "https://gateway.example",
+      fetch: gatewayFetch(handler),
+    });
+    const key = client.allocateObjectKey();
+    const bytes = new TextEncoder().encode("stable gateway bytes");
+
+    await expect(client.putAtKey(key, bytes)).resolves.toEqual({
+      key,
+      digest: await digestBytes(bytes),
+      size: bytes.byteLength,
+    });
+    await expect(client.putAtKey(key, bytes)).resolves.toEqual({
+      key,
+      digest: await digestBytes(bytes),
+      size: bytes.byteLength,
+    });
+    await expect(client.inspectObject("sealed/missing")).resolves.toEqual({
+      state: "absent",
+      key: "sealed/missing",
+    });
   });
 });

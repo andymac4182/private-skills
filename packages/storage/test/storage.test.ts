@@ -13,8 +13,10 @@ import {
 
 class InMemoryFilesClient {
   readonly objects = new Map<string, Uint8Array>();
+  readonly uploads: Array<{ key: string; options?: Record<string, unknown> }> = [];
 
-  async upload(key: string, body: Uint8Array): Promise<void> {
+  async upload(key: string, body: Uint8Array, options?: Record<string, unknown>): Promise<void> {
+    this.uploads.push({ key, options });
     if (this.objects.has(key)) throw new Error("overwrite");
     this.objects.set(key, new Uint8Array(body));
   }
@@ -384,5 +386,48 @@ describe("Files SDK BlobStore boundary", () => {
     const store = new FilesSdkBlobStore({ client, maxBytes: 2 });
     await expect(store.put(new Uint8Array([1, 2, 3]))).rejects.toThrow(/limit/u);
     expect(client.objects.size).toBe(0);
+  });
+
+  it("persists the stable key before an ambiguous upload and makes a retry idempotent", async () => {
+    class PutThenThrowsClient extends InMemoryFilesClient {
+      failOnce = true;
+
+      override async upload(key: string, body: Uint8Array, options?: Record<string, unknown>): Promise<void> {
+        await super.upload(key, body, options);
+        if (this.failOnce) {
+          this.failOnce = false;
+          throw new Error("provider response lost after write");
+        }
+      }
+    }
+    const client = new PutThenThrowsClient();
+    const store = new FilesSdkBlobStore({ client, prefix: "private" });
+    const key = store.allocateObjectKey();
+    const bytes = new TextEncoder().encode("ambiguous upload");
+
+    await expect(store.putAtKey(key, bytes)).rejects.toThrow(/response lost/u);
+    await expect(store.inspectObject(key)).resolves.toMatchObject({
+      state: "present",
+      key,
+      size: bytes.byteLength,
+    });
+    await expect(store.putAtKey(key, bytes)).resolves.toEqual({
+      key,
+      digest: await digestBytes(bytes),
+      size: bytes.byteLength,
+    });
+    expect(client.uploads).toHaveLength(1);
+  });
+
+  it("keeps an unknown provider read distinct from confirmed absence", async () => {
+    const client = new InMemoryFilesClient();
+    client.head = async () => { throw new Error("provider timeout"); };
+    const store = new FilesSdkBlobStore({ client });
+
+    await expect(store.inspectObject("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toEqual({
+      state: "unknown",
+      key: "sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      reason: "provider-error",
+    });
   });
 });

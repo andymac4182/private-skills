@@ -1,6 +1,8 @@
 import type {
   BlobStore,
   Digest,
+  RecoverableBlobStore,
+  StorageObjectInspection,
   StoredBlob,
 } from "../../contracts/src/index.js";
 import { digestBytes, isSha256Digest } from "./digest.js";
@@ -175,6 +177,38 @@ function sizeOf(value: unknown): number | undefined {
     : undefined;
 }
 
+function providerErrorCode(value: unknown): string | undefined {
+  if (!isObject(value)) return undefined;
+  const code = value.code ?? value.name;
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Files SDK adapters normalize not-found failures to `code: "NotFound"`.
+ * Keep a narrow compatibility match for simple injected clients used by
+ * local hosts; every other provider failure remains unknown and therefore
+ * cannot trigger destructive cleanup or a billing release.
+ */
+function isKnownNotFound(error: unknown): boolean {
+  if (isObject(error)) {
+    const code = providerErrorCode(error)?.toLowerCase();
+    const status = error.status ?? error.statusCode;
+    if (code === "notfound" || code === "not_found" || code === "enoent" || status === 404) return true;
+  }
+  return error instanceof Error && /^(?:not[ -]?found|enoent)$/iu.test(error.message.trim());
+}
+
+function inspectionFailure(key: string, error: unknown): StorageObjectInspection {
+  if (isKnownNotFound(error)) return { state: "absent", key };
+  if (error instanceof StorageError && error.code === "limit") {
+    return { state: "unknown", key, reason: "limit" };
+  }
+  if (error instanceof StorageError && error.code === "integrity") {
+    return { state: "unknown", key, reason: "integrity" };
+  }
+  return { state: "unknown", key, reason: "provider-error" };
+}
+
 async function asBytes(value: unknown): Promise<Uint8Array> {
   if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
@@ -221,7 +255,7 @@ async function asBytes(value: unknown): Promise<Uint8Array> {
  * reads the sealed object back and hashes those retrieved bytes. The store
  * never uses a digest as a provider key and never overwrites an existing key.
  */
-export class FilesSdkBlobStore implements BlobStore {
+export class FilesSdkBlobStore implements RecoverableBlobStore {
   readonly #client: FilesClientLike;
   readonly #prefix: string;
   readonly #maxBytes: number;
@@ -258,8 +292,33 @@ export class FilesSdkBlobStore implements BlobStore {
 
   async put(
     input: Uint8Array,
-    _metadata?: Record<string, string>
+    metadata?: Record<string, string>
   ): Promise<StoredBlob> {
+    const key = this.allocateObjectKey();
+    return this.putAtKey(key, input, metadata);
+  }
+
+  allocateObjectKey(): string {
+    let key: string | undefined;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `${this.#prefix ? `${this.#prefix}/` : ""}sealed/${randomKeyPart()}`;
+      if (!this.#records.has(candidate)) {
+        key = candidate;
+        break;
+      }
+    }
+    if (!key) {
+      throw new StorageError("configuration", "could not allocate a unique sealed key");
+    }
+    return key;
+  }
+
+  async putAtKey(
+    key: string,
+    input: Uint8Array,
+    metadata?: Record<string, string>,
+  ): Promise<StoredBlob> {
+    assertSealedKey(key, this.#prefix);
     if (!(input instanceof Uint8Array)) {
       throw new StorageError("integrity", "put expects a Uint8Array");
     }
@@ -272,46 +331,77 @@ export class FilesSdkBlobStore implements BlobStore {
     }
     const digest = await digestBytes(bytes);
 
-    let key: string | undefined;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const candidate = `${this.#prefix ? `${this.#prefix}/` : ""}sealed/${randomKeyPart()}`;
-      if (!this.#records.has(candidate)) {
-        key = candidate;
-        break;
-      }
-    }
-    if (!key) {
-      throw new StorageError("configuration", "could not allocate a unique sealed key");
-    }
-
-    try {
-      const uploadOptions: Record<string, unknown> = {
-        contentType: "application/octet-stream",
-      };
-      if (this.#client.capabilities?.conditional?.create === true) {
-        uploadOptions.condition = { type: "create" };
-      }
-      await this.#client.upload(key, bytes, uploadOptions);
-      const retrieved = await this.#read(key);
-      const retrievedDigest = await digestBytes(retrieved);
-      if (
-        retrieved.byteLength !== bytes.byteLength ||
-        retrievedDigest !== digest
-      ) {
+    // A retry first establishes whether the stable identity was already
+    // written. An object with another digest is a hard conflict; an unknown
+    // provider response is retained for operator reconciliation.
+    const existing = await this.inspectObject(key);
+    if (existing.state === "present") {
+      if (existing.digest !== digest || existing.size !== bytes.byteLength) {
         throw new StorageError(
           "integrity",
-          `provider changed sealed bytes after upload (expected ${digest}, got ${retrievedDigest})`,
-          key
+          `sealed object ${key} does not match the requested bytes`,
+          key,
         );
       }
       this.#records.set(key, { digest, size: bytes.byteLength });
       return { digest, key, size: bytes.byteLength };
+    }
+    if (existing.state === "unknown") {
+      throw new StorageError(
+        "integrity",
+        `cannot establish whether sealed object ${key} exists`,
+        key,
+      );
+    }
+
+    const uploadOptions: Record<string, unknown> = {
+      contentType: "application/octet-stream",
+    };
+    if (metadata !== undefined) uploadOptions.metadata = { ...metadata };
+    if (this.#client.capabilities?.conditional?.create === true) {
+      uploadOptions.condition = { type: "create" };
+    }
+    // Never delete after an uncertain write. The caller has already persisted
+    // this exact key and the recovery workflow will verify it before cleanup.
+    await this.#client.upload(key, bytes, uploadOptions);
+    const retrieved = await this.#read(key);
+    const retrievedDigest = await digestBytes(retrieved);
+    if (
+      retrieved.byteLength !== bytes.byteLength ||
+      retrievedDigest !== digest
+    ) {
+      throw new StorageError(
+        "integrity",
+        `provider changed sealed bytes after upload (expected ${digest}, got ${retrievedDigest})`,
+        key
+      );
+    }
+    this.#records.set(key, { digest, size: bytes.byteLength });
+    return { digest, key, size: bytes.byteLength };
+  }
+
+  async inspectObject(key: string): Promise<StorageObjectInspection> {
+    assertSealedKey(key, this.#prefix);
+    try {
+      const head = this.#client.head
+        ? await this.#client.head(key)
+        : undefined;
+      const declaredSize = sizeOf(head);
+      if (declaredSize !== undefined && declaredSize > this.#maxBytes) {
+        return { state: "unknown", key, reason: "limit" };
+      }
+      const bytes = await this.#read(key);
+      if (bytes.byteLength > this.#maxBytes) {
+        return { state: "unknown", key, reason: "limit" };
+      }
+      if (declaredSize !== undefined && bytes.byteLength !== declaredSize) {
+        return { state: "unknown", key, reason: "integrity" };
+      }
+      const digest = await digestBytes(bytes);
+      this.#records.set(key, { digest, size: bytes.byteLength });
+      return { state: "present", key, digest, size: bytes.byteLength };
     } catch (error) {
-      // Never delete after an uncertain write: a provider-side key collision
-      // or a lost response could make cleanup remove another sealed object.
-      // The random key is never reused; abandoned objects are reconciled by
-      // the normal retention cleanup job.
-      throw error;
+      return inspectionFailure(key, error);
     }
   }
 

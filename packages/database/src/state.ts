@@ -106,7 +106,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 const SEVERITIES = new Set(['info', 'low', 'medium', 'high', 'critical']);
-const STORAGE_ATTEMPT_STATES = new Set(['pending', 'committed', 'orphaned', 'released']);
+const STORAGE_ATTEMPT_STATES = new Set(['pending', 'committed', 'orphaned', 'recovering', 'released']);
 const METERED_RESERVATION_OWNER_STATES = new Set(['owned', 'releasing', 'released']);
 
 function validScannerPolicy(value: unknown): value is ScannerPolicy {
@@ -140,7 +140,7 @@ function validPolicy(value: unknown): value is Policy {
 
 function validStorageAttempt(value: unknown): value is Record<string, unknown> {
   if (!isObject(value)) return false;
-  return (
+  const valid = (
     typeof value.id === 'string' && value.id.length > 0 &&
     typeof value.organizationId === 'string' && value.organizationId.length > 0 &&
     typeof value.reservationKey === 'string' && value.reservationKey.length > 0 &&
@@ -150,8 +150,15 @@ function validStorageAttempt(value: unknown): value is Record<string, unknown> {
     typeof value.createdAt === 'string' && value.createdAt.length > 0 &&
     typeof value.updatedAt === 'string' && value.updatedAt.length > 0 &&
     (value.objectKey === undefined || (typeof value.objectKey === 'string' && value.objectKey.length > 0)) &&
-    (value.jobId === undefined || (typeof value.jobId === 'string' && value.jobId.length > 0))
+    (value.jobId === undefined || (typeof value.jobId === 'string' && value.jobId.length > 0)) &&
+    (value.recoveryToken === undefined || (typeof value.recoveryToken === 'string' && value.recoveryToken.length > 0 && value.recoveryToken.length <= 256)) &&
+    (value.recoveryStartedAt === undefined || (typeof value.recoveryStartedAt === 'string' && value.recoveryStartedAt.length > 0 && value.recoveryStartedAt.length <= 64))
   );
+  if (!valid) return false;
+  if (value.state === 'recovering') {
+    return value.recoveryToken !== undefined && value.recoveryStartedAt !== undefined;
+  }
+  return value.recoveryToken === undefined && value.recoveryStartedAt === undefined;
 }
 
 function validMeteredReservationOwner(value: unknown): value is Record<string, unknown> {
