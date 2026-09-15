@@ -11,13 +11,16 @@ public calls to action cannot accidentally point back to the marketing site.
 Development uses the explicit app default `http://localhost:5173` when the
 variable is unset. Links use `/login?returnTo=%2Fapp` on that origin.
 
-Set `MARKETING_ORIGIN` to the origin of this deployment. Production and
-preview builds require it so canonical URLs and the sitemap never guess a
-hostname. Set `MARKETING_INDEXING=noindex` for local and preview deployments;
-set `MARKETING_INDEXING=public` explicitly for the production deployment. A
-public indexing build must use an HTTPS `MARKETING_ORIGIN`. The noindex mode
-serves a disallow-all `robots.txt` and an empty sitemap, while the public mode
-lists only the nine public marketing routes.
+`MARKETING_ORIGIN` is optional until the site is ready for public indexing. If
+it is omitted, every build is noindex and emits no canonical or
+origin-derived social URLs; `robots.txt` disallows crawling and the sitemap
+is empty. If it is supplied, it must be an origin without credentials, a path,
+query, or fragment. Set `MARKETING_INDEXING=noindex` explicitly for local and
+preview deployments when you want that intent to be visible in the build
+configuration. To publish discovery metadata, set
+`MARKETING_INDEXING=public` and provide an HTTPS `MARKETING_ORIGIN`; a public
+build fails when either requirement is missing or malformed. Public mode lists
+only the nine public marketing routes.
 
 The optional `PUBLIC_CONTACT_URL` may point to a real public intake form or
 scheduling page. It must be an HTTPS URL in Preview and Production. When it
@@ -46,10 +49,11 @@ For Vercel, create a dedicated project for this app with these settings:
 - **Node.js:** 24.x
 - **Environment variables:** set `APP_ORIGIN` to the public origin of the
   authenticated app in both Preview and Production, for example
-  `https://app.example.com`; set `MARKETING_ORIGIN` to the exact marketing
-  deployment origin; set `MARKETING_INDEXING=noindex` for Preview and
-  `MARKETING_INDEXING=public` for Production. Do not place secrets in this
-  deployment.
+  `https://app.example.com`. For a noindex Preview, the new marketing
+  variables may be omitted or set explicitly to `MARKETING_INDEXING=noindex`.
+  For a public Production deployment, set `MARKETING_ORIGIN` to the exact
+  HTTPS marketing origin and set `MARKETING_INDEXING=public`. Do not place
+  secrets in this deployment.
 
 The checked-in [`vercel.json`](vercel.json) is the project configuration. With
 `apps/marketing` as the Root Directory, Vercel runs these commands from that

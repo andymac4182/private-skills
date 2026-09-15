@@ -72,14 +72,25 @@ describe('marketing SEO metadata', () => {
     expect(marketingRobotsTxt(previewConfig)).toBe('User-agent: *\nDisallow: /\n')
     expect(renderHead({ path: '/', title: 'Preview', description: 'Preview site' }, previewConfig)).toContain('noindex, nofollow, noarchive')
   })
+
+  it('omits origin-derived URLs when no marketing origin is configured', () => {
+    const noOriginConfig: MarketingSeoConfig = { indexing: 'noindex' }
+    const html = renderHead({ path: '/', title: 'Preview', description: 'Preview site' }, noOriginConfig)
+
+    expect(html).not.toContain('rel="canonical"')
+    expect(html).not.toContain('og:url')
+    expect(html).not.toContain('twitter:url')
+    expect(marketingSitemapXml(noOriginConfig)).not.toContain('<loc>')
+    expect(marketingRobotsTxt(noOriginConfig)).toBe('User-agent: *\nDisallow: /\n')
+  })
 })
 
 describe('marketing build configuration', () => {
-  it('defaults development to localhost noindex and requires production intent', () => {
-    expect(marketingOriginForBuild(undefined, 'development')).toBe('http://localhost:5173')
-    expect(marketingIndexingForBuild(undefined, 'development', 'http://localhost:5173')).toBe('noindex')
-    expect(() => marketingOriginForBuild(undefined, 'production')).toThrow('MARKETING_ORIGIN is required')
-    expect(() => marketingIndexingForBuild(undefined, 'production', 'https://marketing.example.test')).toThrow('MARKETING_INDEXING')
+  it('defaults production, preview, and development to safe noindex without an origin', () => {
+    for (const mode of ['production', 'preview', 'development']) {
+      expect(marketingOriginForBuild(undefined, mode)).toBeUndefined()
+      expect(marketingIndexingForBuild(undefined, mode)).toBe('noindex')
+    }
   })
 
   it('validates origins and requires HTTPS for public indexing', () => {
@@ -87,6 +98,8 @@ describe('marketing build configuration', () => {
     expect(() => marketingOriginForBuild('https://marketing.example.test/base', 'production')).toThrow()
     expect(() => marketingOriginForBuild('https://user:pass@marketing.example.test', 'production')).toThrow()
     expect(marketingIndexingForBuild('public', 'production', 'https://marketing.example.test')).toBe('public')
+    expect(() => marketingIndexingForBuild('public', 'production')).toThrow('MARKETING_ORIGIN is required')
     expect(() => marketingIndexingForBuild('public', 'production', 'http://localhost:5173')).toThrow('HTTPS')
+    expect(() => marketingIndexingForBuild('maybe', 'preview')).toThrow('public or noindex')
   })
 })

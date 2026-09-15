@@ -3,7 +3,7 @@ import { brand } from './brand'
 import type { MarketingIndexing } from './marketingConfig'
 
 export interface MarketingSeoConfig {
-  origin: string
+  origin?: string
   indexing: MarketingIndexing
 }
 
@@ -28,7 +28,7 @@ export const MARKETING_PUBLIC_ROUTES = [
 
 const configuredOrigin = typeof __MARKETING_ORIGIN__ === 'string' && __MARKETING_ORIGIN__.length > 0
   ? __MARKETING_ORIGIN__
-  : 'http://localhost:5173'
+  : undefined
 const configuredIndexing: MarketingIndexing = typeof __MARKETING_INDEXING__ === 'string' && __MARKETING_INDEXING__ === 'public'
   ? 'public'
   : 'noindex'
@@ -48,6 +48,10 @@ function publicPath(path: string): string {
 }
 
 export function marketingCanonicalUrl(path: string, config: MarketingSeoConfig = marketingSeoConfig): string {
+  if (!config.origin) {
+    throw new Error('Marketing canonical URLs require an explicit MARKETING_ORIGIN')
+  }
+
   return new URL(publicPath(path), config.origin).href
 }
 
@@ -56,7 +60,7 @@ export function marketingRobotsContent(config: MarketingSeoConfig = marketingSeo
 }
 
 export function marketingHead(metadata: MarketingPageMetadata, config: MarketingSeoConfig = marketingSeoConfig) {
-  const canonical = marketingCanonicalUrl(metadata.path, config)
+  const canonical = config.origin ? marketingCanonicalUrl(metadata.path, config) : undefined
   const robots = marketingRobotsContent(config)
   const meta: MetaHTMLAttributes<HTMLMetaElement>[] = [
     { title: metadata.title },
@@ -66,19 +70,25 @@ export function marketingHead(metadata: MarketingPageMetadata, config: Marketing
     { property: 'og:type', content: 'website' },
     { property: 'og:title', content: metadata.title },
     { property: 'og:description', content: metadata.description },
-    { property: 'og:url', content: canonical },
     { name: 'twitter:card', content: 'summary' },
     { name: 'twitter:title', content: metadata.title },
     { name: 'twitter:description', content: metadata.description },
-    { name: 'twitter:url', content: canonical },
+    ...(canonical ? [
+      { property: 'og:url', content: canonical },
+      { name: 'twitter:url', content: canonical },
+    ] : []),
   ]
+
+  const links: LinkHTMLAttributes<HTMLLinkElement>[] = canonical
+    ? [{ rel: 'canonical', href: canonical }]
+    : []
 
   return {
     meta,
     // There is no approved public image asset in this app. The social tags
     // reuse the existing brand config and intentionally omit og:image rather
     // than pointing at a design fixture or inventing a preview graphic.
-    links: [{ rel: 'canonical', href: canonical }],
+    links,
   }
 }
 

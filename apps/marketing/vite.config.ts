@@ -69,7 +69,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __MARKETING_APP_ORIGIN__: JSON.stringify(appOrigin),
       __MARKETING_CONTACT_URL__: JSON.stringify(contactUrl),
-      __MARKETING_ORIGIN__: JSON.stringify(marketingOrigin),
+      __MARKETING_ORIGIN__: JSON.stringify(marketingOrigin ?? ''),
       __MARKETING_INDEXING__: JSON.stringify(marketingIndexing),
     },
     plugins: [

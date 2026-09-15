@@ -1,7 +1,5 @@
 export type MarketingIndexing = 'public' | 'noindex'
 
-export const LOCAL_MARKETING_ORIGIN = 'http://localhost:5173'
-
 function parseOrigin(value: string, label: string): URL {
   let parsed: URL
   try {
@@ -18,34 +16,39 @@ function parseOrigin(value: string, label: string): URL {
 }
 
 /**
- * Resolve the public origin used for canonical URLs and the sitemap. A
- * production build must receive this explicitly so a preview hostname or an
- * application origin cannot be guessed into public metadata.
+ * Resolve the optional origin used for canonical URLs and the sitemap. A
+ * missing origin is safe: the build remains noindex and emits no
+ * origin-derived URLs. A public build is checked separately below so a
+ * preview hostname or an application origin cannot be guessed into public
+ * metadata.
  */
-export function marketingOriginForBuild(value: string | undefined, mode: string): string {
+export function marketingOriginForBuild(value: string | undefined, _mode: string): string | undefined {
   const raw = value?.trim() ?? ''
-  if (!raw) {
-    if (mode === 'development') return LOCAL_MARKETING_ORIGIN
-    throw new Error('MARKETING_ORIGIN is required for a production marketing build')
-  }
+  if (!raw) return undefined
 
   return parseOrigin(raw, 'MARKETING_ORIGIN').origin
 }
 
 /**
- * Require an explicit indexing intent for production and preview builds.
- * Development is always noindex unless a caller opts into an explicit mode;
- * public indexing still requires an HTTPS marketing origin.
+ * Resolve indexing intent. Omitted intent is noindex in every mode, which
+ * keeps existing local and preview builds safe while the public deployment
+ * must opt in explicitly. Public indexing also requires an explicit HTTPS
+ * marketing origin.
  */
-export function marketingIndexingForBuild(value: string | undefined, mode: string, origin: string): MarketingIndexing {
+export function marketingIndexingForBuild(value: string | undefined, _mode: string, origin?: string): MarketingIndexing {
   const raw = value?.trim().toLowerCase() ?? ''
-  if (!raw && mode === 'development') return 'noindex'
   if (raw !== 'public' && raw !== 'noindex') {
-    throw new Error('MARKETING_INDEXING must be explicitly set to public or noindex for a production marketing build')
+    if (!raw) return 'noindex'
+    throw new Error('MARKETING_INDEXING must be public or noindex')
   }
 
-  if (raw === 'public' && parseOrigin(origin, 'MARKETING_ORIGIN').protocol !== 'https:') {
-    throw new Error('MARKETING_INDEXING=public requires an HTTPS MARKETING_ORIGIN')
+  if (raw === 'public') {
+    if (!origin) {
+      throw new Error('MARKETING_ORIGIN is required when MARKETING_INDEXING=public')
+    }
+    if (parseOrigin(origin, 'MARKETING_ORIGIN').protocol !== 'https:') {
+      throw new Error('MARKETING_INDEXING=public requires an HTTPS MARKETING_ORIGIN')
+    }
   }
 
   return raw
