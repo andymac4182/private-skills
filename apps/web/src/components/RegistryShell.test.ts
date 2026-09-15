@@ -347,6 +347,19 @@ describe('RegistryShell auth return route', () => {
     expect(close).not.toBeNull()
     expect(document.activeElement).toBe(close)
 
+    const companyGroup = container.querySelector<HTMLElement>('[aria-label="Company sections"]')?.closest<HTMLElement>('.nav-group')
+    const companyToggle = companyGroup?.querySelector<HTMLButtonElement>('.nav-group-toggle')
+    const companySubnav = companyGroup?.querySelector<HTMLElement>('.nav-subnav')
+    expect(companyToggle?.getAttribute('aria-controls')).toBe('registry-nav-company-admin-sections')
+    expect(companyToggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(companySubnav?.hidden).toBe(true)
+    await act(async () => {
+      companyToggle?.click()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+    expect(companyToggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(companySubnav?.hidden).toBe(false)
+
     const focusable = Array.from(drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
     const last = focusable.at(-1)
     last?.focus()
