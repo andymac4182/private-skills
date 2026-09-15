@@ -31,6 +31,16 @@ billing target tables. The complete bounded result, including the current
 deployment source SHA and migration-plan digest, is recorded in the linked
 review artifact above.
 
+The first guarded schema-preparation attempt then stopped and rolled back
+before DDL when the fresh registry revision had advanced to `232`; its
+sanitized record is [`hosted-identity-schema-preparation-20260916.json`](../evidence/hosted-identity-schema-preparation-20260916.json).
+After review, the second attempt used that fresh row-locked revision as the
+authoritative window baseline and committed the same four additive SQL
+artifacts. All twelve new tables are empty, their columns and indexes match,
+and the registry readback remains unchanged at revision `232`; identity,
+providers, adoption, and traffic remain disabled. The bounded pre/in-transaction/post
+record is [`hosted-identity-schema-preparation-20260916-attempt-2.json`](../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json).
+
 Before a migration window, take a fresh fenced read-only capture and call its
 revision `BASELINE_REVISION`. The supplied `231` is the expected starting
 value for this window, not a permanent value: if an authorized write occurs
