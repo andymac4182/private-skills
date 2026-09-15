@@ -123,3 +123,7 @@ B21 concurrent import review found a shared-reservation race: the first reservin
 B25 identity telemetry candidate03c73bb needs request-lifetime persistence rather than fire-and-forget writes, operational retention cleanup rather than migration-only cleanup, and actual loopback PostgreSQL proof. CLI acquisition needs an in-app sign-in/download flow instead of public links landing on JSON401 responses. Neither candidate is accepted yet.
 
 Extended Nitro fixture21701b7 adds packs, draft revisions/files, search through local embedding fixture and synthetic confirmed-install receipts. Follow-up strengthens exact edited content and foreign edit denial before root runs combined scenarios. B30 tracks missing marketing metadata/sitemap discovered in root source review.
+
+### Composed authoring and pack acceptance
+
+Integrated47f10a8/82ccaea and independently ran both Nitro+PostgreSQL+Files SDK scenarios at root a50f0c9: two tests passed in20.99seconds. New proof verifies exact edited SKILL.md bytes, changed revision digest, persisted revision2, stale-revision denial, rejected foreign PUT with unchanged owner content, isolated same-name packs/search and synthetic client-confirmed pack receipts. Evidence: docs/evidence/local-composed-tenant-authoring-root-20260916.json. External scanner/Gateway, native pack install and hosted identity remain separate gates.
