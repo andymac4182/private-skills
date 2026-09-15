@@ -14,6 +14,11 @@ import {
   createHostedWorkerHandlerFromEnv,
   type HostedOpenClawSourceConfig,
 } from '../../../workers/runner/src/hosted';
+import {
+  WORKER_DELEGATION_SECRET_ENV,
+  createWorkerTenantCredentialProvider,
+  workerTenantDelegationIssuerOptionsFromEnv,
+} from '../../../workers/runner/src/identity.js';
 import { resolveCurrentUploadReviewBinding } from '../../../packages/core/src/index';
 import {
   createUploadReviewPersistenceService,
@@ -38,6 +43,10 @@ import {
   createIdentityInfrastructure,
   type IdentityInfrastructure,
 } from './identity-infrastructure.js';
+import {
+  createPostgresBootstrapAdoptionStore,
+  type BootstrapAdoptionStore,
+} from './bootstrap-adoption.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -58,6 +67,7 @@ const OPENCLAW_SOURCE_STRING_MAX_BYTES = 4_096;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/u;
 const HEX40_RE = /^[0-9a-f]{40}$/u;
 const HEX64_RE = /^[0-9a-f]{64}$/u;
+const MAX_TENANT_HOSTED_WORKERS = 64;
 
 /**
  * Build the deployment-owned OpenClaw source locator. Supported public
@@ -303,7 +313,12 @@ function required(env: RuntimeEnvironment, name: string): string {
   return value;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+function optionalEnvironmentValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -327,10 +342,24 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     repository = new HttpStateRepository({ baseUrl: required(env, 'PSKILLS_STATE_ENDPOINT'), headers: { authorization: `Bearer ${required(env, 'PSKILLS_STATE_TOKEN')}` } });
   } else throw new Error('Unsupported PSKILLS_STATE_PROVIDER');
 
+  const identitySchemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const identityInfrastructure = createIdentityInfrastructure(env, {
     ...(postgresPool === undefined ? {} : { postgresPool }),
     ...(identityEnabled(env) ? { canonicalOrigin: canonicalOriginFromEnv(env) } : {}),
   });
+  // Adoption is an explicit deployment operation. Construct only when the
+  // Better Auth runtime and its shared PostgreSQL pool are both present; the
+  // endpoint remains unavailable for file/edge/legacy-only profiles.
+  const organizationName = optionalEnvironmentValue(env.PSKILLS_ORGANIZATION_NAME);
+  const organizationSlug = optionalEnvironmentValue(env.PSKILLS_ORGANIZATION_SLUG);
+  const bootstrapAdoptionStore = identityInfrastructure.identity && postgresPool
+    ? createPostgresBootstrapAdoptionStore(postgresPool, {
+      organizationId: env.PSKILLS_ORGANIZATION_ID ?? 'default',
+      ...(identitySchemaName === undefined ? {} : { schemaName: identitySchemaName }),
+      ...(organizationName === undefined ? {} : { organizationName }),
+      ...(organizationSlug === undefined ? {} : { organizationSlug }),
+    })
+    : undefined;
 
   const provider = env.PSKILLS_STORAGE_PROVIDER ?? (production ? 's3' : 'filesystem');
   const blobs = provider === 'http'
@@ -372,14 +401,55 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const hostedOpenClawSource = env.PSKILLS_HOSTED_WORKER === 'true'
     ? createHostedOpenClawSourceConfigFromEnv(env)
     : undefined;
-  const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true'
-    ? createHostedWorkerHandlerFromEnv(
-      { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL ?? env.PSKILLS_PUBLIC_ORIGIN },
-      {
-        ...(directoryOfficialAvailable ? { acquisition: { getSkillsShToken: hostedSkillsShToken } } : {}),
-        ...(hostedOpenClawSource === undefined ? {} : { openClawSource: hostedOpenClawSource }),
-      },
-    )
+  const hostedWorkerEnv = { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL?.trim() || env.PSKILLS_PUBLIC_ORIGIN?.trim() };
+  const hostedWorkerOverrides = {
+    ...(directoryOfficialAvailable ? { acquisition: { getSkillsShToken: hostedSkillsShToken } } : {}),
+    ...(hostedOpenClawSource === undefined ? {} : { openClawSource: hostedOpenClawSource }),
+  };
+  const hostedWorker = env.PSKILLS_HOSTED_WORKER === 'true' && (
+    env[WORKER_DELEGATION_SECRET_ENV] === undefined || env.PSKILLS_WORKER_TOKEN !== undefined
+  )
+    ? createHostedWorkerHandlerFromEnv(hostedWorkerEnv, hostedWorkerOverrides)
+    : undefined;
+  const workerDelegationIssuer = hostedWorkerEnv.PSKILLS_API_URL?.trim();
+  const workerServiceIdentity = env.PSKILLS_WORKER_SERVICE_IDENTITY?.trim() || 'hosted-worker-service';
+  const workerDelegationOptions = env.PSKILLS_HOSTED_WORKER === 'true' && workerDelegationIssuer
+    ? workerTenantDelegationIssuerOptionsFromEnv(env, {
+      issuer: workerDelegationIssuer,
+      serviceIdentity: workerServiceIdentity,
+    })
+    : undefined;
+  const tenantHostedWorkers = workerDelegationOptions
+    ? new Map<string, (request: Request) => Promise<Response>>()
+    : undefined;
+  const createHostedWorkerForTenant = workerDelegationOptions && tenantHostedWorkers
+    ? (organizationId: string): ((request: Request) => Promise<Response>) => {
+      const existing = tenantHostedWorkers.get(organizationId);
+      if (existing) {
+        // Touch the entry so the small bound is an LRU rather than a first-use
+        // eviction list. The handler itself remains immutable and may still
+        // be referenced by a request after it leaves this cache.
+        tenantHostedWorkers.delete(organizationId);
+        tenantHostedWorkers.set(organizationId, existing);
+        return existing;
+      }
+      const tenantCredentialProvider = createWorkerTenantCredentialProvider({
+        ...workerDelegationOptions,
+        tenantId: organizationId,
+      });
+      const handler = createHostedWorkerHandlerFromEnv(hostedWorkerEnv, {
+        ...hostedWorkerOverrides,
+        tenantId: organizationId,
+        tenantCredentialProvider,
+      });
+      tenantHostedWorkers.set(organizationId, handler);
+      while (tenantHostedWorkers.size > MAX_TENANT_HOSTED_WORKERS) {
+        const oldest = tenantHostedWorkers.keys().next().value;
+        if (oldest === undefined) break;
+        tenantHostedWorkers.delete(oldest);
+      }
+      return handler;
+    }
     : undefined;
   const uploadReviewEnabled = env.PSKILLS_UPLOAD_REVIEW_ENABLED === 'true';
   const uploadReview = uploadReviewEnabled
@@ -389,12 +459,14 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     repository,
     blobs,
     hostedWorker,
+    ...(createHostedWorkerForTenant === undefined ? {} : { createHostedWorkerForTenant }),
     directoryTokenProvider,
     directoryOfficialTokenProvider,
     directoryOfficialAvailable,
     ...(uploadReview === undefined ? {} : { uploadReview }),
     ...(identityInfrastructure.identity === null ? {} : { identity: identityInfrastructure.identity }),
     ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
+    ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),
     createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {

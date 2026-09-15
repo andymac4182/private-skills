@@ -4,6 +4,8 @@ declare module '#pskills-infrastructure' {
     repository: import('../../../packages/contracts/src/index').StateRepository;
     blobs: import('../../../packages/contracts/src/index').BlobStore;
     hostedWorker?: (request: Request) => Promise<Response>;
+    /** Optional signed worker factory bound to one server-selected tenant. */
+    createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
     directoryTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
     directoryOfficialTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
     directoryOfficialAvailable: boolean;
@@ -25,6 +27,8 @@ declare module '#pskills-infrastructure' {
       handler: import('../../../packages/api-tokens/src/index').ApiTokenHandler;
       authenticator: import('../../../packages/contracts/src/index').Authenticator;
     };
+    /** Explicit Better Auth user + bootstrap-owner adoption transaction. */
+    bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;
     createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;

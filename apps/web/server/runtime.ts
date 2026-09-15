@@ -1,4 +1,4 @@
-import { createAuthenticatorFromEnv } from '../../../packages/auth/src/index';
+import { createAuthenticatorFromEnv, parseBootstrapTokenEnv } from '../../../packages/auth/src/index';
 import {
   createRegistryHandler,
   canReadOpenClawNamespace,
@@ -44,6 +44,13 @@ import {
   type TenantIdentityRuntimeAdapter,
   type TenantRuntimeContext,
 } from './tenant-runtime.js';
+import {
+  BOOTSTRAP_ADOPTION_PATH,
+  createBootstrapAdoptionHandler,
+  type BootstrapAdoptionStore,
+} from './bootstrap-adoption.js';
+import { canonicalOriginFromEnv } from './identity-infrastructure.js';
+import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -86,6 +93,7 @@ async function createRuntime(env: RuntimeEnvironment) {
       authenticator: Authenticator;
     };
   }).apiTokens;
+  const signedWorkerAuthenticator = createSignedWorkerAuthenticatorFromEnv(env);
   // Source discovery is server-owned. The catalog receives only this host's
   // environment snapshot; provider credentials are retained by adapters and
   // are never serialized into RegistryHandlerDependencies or browser data.
@@ -98,6 +106,13 @@ async function createRuntime(env: RuntimeEnvironment) {
   const auth = await createAuthenticatorFromEnv(env);
   const requestAuthenticator: Authenticator = {
     authenticate: async (request: Request) => {
+      // Signed worker delegations are route-specific and must be considered
+      // before user/session credentials. They carry the tenant selected by
+      // the worker deployment and are rechecked by the tenant router.
+      if (signedWorkerAuthenticator) {
+        const principal = await signedWorkerAuthenticator.authenticate(request);
+        if (principal) return principal;
+      }
       // Better Auth owns browser sessions. The API-token authenticator owns
       // durable company credentials, and the legacy authenticator remains the
       // final fallback for bootstrap/session compatibility and worker tokens.
@@ -117,6 +132,24 @@ async function createRuntime(env: RuntimeEnvironment) {
     ...(auth.createSession === undefined ? {} : { createSession: auth.createSession.bind(auth) }),
     ...(auth.clearSessionCookie === undefined ? {} : { clearSessionCookie: auth.clearSessionCookie.bind(auth) }),
   };
+  const bootstrapOwnerTokenIds = parseBootstrapTokenEnv(env)
+    .filter((token) => token.kind !== 'worker' && token.worker !== true && token.organizationId === config.organizationId && token.roles.includes('owner'))
+    .map((token) => token.id);
+  const organizationName = optionalEnvironmentValue(env.PSKILLS_ORGANIZATION_NAME);
+  const organizationSlug = optionalEnvironmentValue(env.PSKILLS_ORGANIZATION_SLUG);
+  const bootstrapAdoption = identityRuntime?.getSession && infrastructure.bootstrapAdoptionStore && bootstrapOwnerTokenIds.length > 0
+    ? createBootstrapAdoptionHandler({
+      defaultOrganizationId: config.organizationId,
+      canonicalOrigin: canonicalOriginFromEnv(env),
+      identity: { getSession: identityRuntime.getSession.bind(identityRuntime) },
+      authenticator: auth,
+      repository: infrastructure.repository,
+      store: infrastructure.bootstrapAdoptionStore as BootstrapAdoptionStore,
+      allowedBootstrapTokenIds: bootstrapOwnerTokenIds,
+      ...(organizationName === undefined ? {} : { organizationName }),
+      ...(organizationSlug === undefined ? {} : { organizationSlug }),
+    })
+    : undefined;
   const builder = createBuilderBffRuntime(env);
   const openClawFeedId = env.PSKILLS_OPENCLAW_FEED_ID?.trim();
   const openClawFeedUrl = env.PSKILLS_OPENCLAW_FEED_URL?.trim() || `${config.publicOrigin}/v1/feeds/skills`;
@@ -299,17 +332,19 @@ async function createRuntime(env: RuntimeEnvironment) {
       } : {}),
       ...(isLegacyTenant ? { triggerReview: legacyReviewTrigger } : {}),
     });
+    const tenantHostedWorker = infrastructure.createHostedWorkerForTenant?.(context.organizationId)
+      ?? (isLegacyTenant ? infrastructure.hostedWorker : undefined);
     return async (request: Request): Promise<Response> => {
       const intelligenceResponse = await intelligence(request);
       if (intelligenceResponse) return intelligenceResponse;
       const response = await registry(request);
-      if (isLegacyTenant && infrastructure.hostedWorker && env.CRON_SECRET && shouldDrainHostedWorker(request, response)) {
+      if (tenantHostedWorker && env.CRON_SECRET && shouldDrainHostedWorker(request, response)) {
         // Nitro forwards the platform waitUntil hook on the Web Request. On
         // hosts without that hook, await the bounded drain before returning.
         const drain = async () => {
           const signal = AbortSignal.timeout(240_000);
           for (let count = 0; count < 2; count++) {
-            const result = await infrastructure.hostedWorker!(new Request(`${config.publicOrigin}/internal/worker/run`, {
+            const result = await tenantHostedWorker(new Request(`${config.publicOrigin}/internal/worker/run`, {
               headers: { authorization: `Bearer ${env.CRON_SECRET}` },
               signal,
             }));
@@ -370,7 +405,7 @@ async function createRuntime(env: RuntimeEnvironment) {
   });
   return async (request: Request) => {
     const path = new URL(request.url).pathname;
-    const identityResponse = await handleIdentityRoute(request, identityRuntime);
+    const identityResponse = await handleIdentityRoute(request, identityRuntime, bootstrapAdoption);
     if (identityResponse) return identityResponse;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
@@ -379,7 +414,9 @@ async function createRuntime(env: RuntimeEnvironment) {
       if (response) return response;
     }
     if (path === '/internal/worker/run') {
-      return infrastructure.hostedWorker ? infrastructure.hostedWorker(request)
+      const workerHandler = infrastructure.hostedWorker
+        ?? infrastructure.createHostedWorkerForTenant?.(defaultOrganizationId);
+      return workerHandler ? workerHandler(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
     }
     if (path === '/v1/tokens' || path.startsWith('/v1/tokens/')) {
@@ -419,6 +456,7 @@ const DISABLED_IDENTITY_PUBLIC_CONFIG = {
 async function handleIdentityRoute(
   request: Request,
   identity: TenantIdentityRuntimeAdapter | undefined,
+  bootstrapAdoption?: (request: Request) => Promise<Response>,
 ): Promise<Response | undefined> {
   let pathname: string;
   try {
@@ -445,6 +483,16 @@ async function handleIdentityRoute(
       });
     }
   }
+  if (pathname === BOOTSTRAP_ADOPTION_PATH) {
+    if (!identity) return new Response('Not Found', { status: 404 });
+    if (!bootstrapAdoption) {
+      return Response.json({ code: 'BOOTSTRAP_ADOPTION_UNAVAILABLE', message: 'Bootstrap adoption is not configured.' }, {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
+    return bootstrapAdoption(request);
+  }
   if (pathname === '/api/auth' || pathname.startsWith('/api/auth/')) {
     if (!identity) return new Response('Not Found', { status: 404 });
     return identity.handler(request);
@@ -454,6 +502,11 @@ async function handleIdentityRoute(
 
 function isBetterAuthPrincipal(value: Principal & { authMethod?: unknown }): boolean {
   return value.authMethod === 'better-auth';
+}
+
+function optionalEnvironmentValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized === '' ? undefined : normalized;
 }
 
 // A stable environment object is cached on Node; worker bindings are per-request.
