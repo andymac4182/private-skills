@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "reviewStatus": "plan-only-no-hosted-ddl",
-  "preparedFrom": "900bc3e680093d9c3dd10790eab9ce1b24e71bc1",
+  "reviewStatus": "applied-with-independent-readback",
+  "preparedFrom": "77194d0f893387f53f2e325c806f48816c72ad84",
   "source": {
     "kind": "authenticated Vercel production DATABASE_URL environment-variable lookup by ID",
     "credentialHandling": "The connection value was held in process memory only and was never printed or written to this repository or evidence file.",
@@ -14,6 +14,7 @@
     "sqlSha256": "sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880",
     "sqlByteLength": 4705,
     "targetSchema": "public",
+    "serverVersion": "PostgreSQL 18.6",
     "advisoryLockKey": "private-skills.billing-schema.v1",
     "transaction": {
       "isolation": "repeatable read",
@@ -61,15 +62,16 @@
     "readOnly": true
   },
   "independentReadback": {
+    "phase": "pre-apply",
     "readOnly": true,
     "stableAgainstLockedBaseline": true,
     "billingStatus": "absent",
     "billingRows": 0
   },
   "decision": {
-    "status": "ready",
+    "status": "committed",
     "exactAdditiveSqlApplicable": true,
-    "hostedDdlExecuted": false
+    "hostedDdlExecuted": true
   },
   "baselineArtifact": {
     "generated": true,
@@ -77,6 +79,55 @@
     "encrypted": false,
     "contents": "Bounded namespace, identity/registry counts, catalog metadata, and digests; no row payloads or credentials.",
     "limitation": "This is not a complete encrypted PostgreSQL backup. An external provider-consistent encrypted backup remains required before any hosted apply window."
+  },
+  "apply": {
+    "runnerCommit": "77194d0f893387f53f2e325c806f48816c72ad84",
+    "confirmation": "APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916",
+    "status": "committed",
+    "preflight": {
+      "billingStatus": "absent",
+      "billingFoundTables": 0,
+      "billingMissingTables": 5,
+      "identityRelations": 12,
+      "identityPresent": 12,
+      "identityRows": 0,
+      "registryRows": 1,
+      "registryRevision": 232
+    },
+    "transactionShape": {
+      "tableCount": 5,
+      "columnCount": 51,
+      "checkCount": 13,
+      "physicalIndexCount": 9,
+      "zeroRows": true
+    },
+    "postCommit": {
+      "readOnly": true,
+      "stable": true,
+      "billingStatus": "ready",
+      "billingTables": 5,
+      "billingRows": 0,
+      "identityRows": 0,
+      "registryRevision": 232
+    },
+    "baselineArtifact": {
+      "mode": "0600",
+      "encrypted": false,
+      "contents": "Bounded metadata and digests only; no credentials or row payloads."
+    }
+  },
+  "backupEvidence": {
+    "sourceCommit": "38915216d289afed66c608c9fe8e42a98137c4a0",
+    "kind": "AES-GCM encrypted full backup and isolated restore",
+    "sha256": "b395c43c40c21facb50f6474e89d078f59f49bab8a51333e5773da78edcf77dc",
+    "bytes": 590279,
+    "mode": "0600",
+    "restoreMatched": true,
+    "restoredRelations": 14,
+    "restoredIdentityRelations": 12,
+    "restoredSemanticRelations": 2,
+    "restoredRegistryRevision": 232,
+    "credentialHandling": "Key and backup material were retained outside this repository; no secret value is recorded here."
   },
   "applyProtocol": {
     "confirmation": "APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916",
@@ -110,6 +161,16 @@
       "tests": 8
     },
     {
+      "command": "prepare-hosted-migration.ts --apply --baseline-output PATH",
+      "result": "passed",
+      "observed": "committed on PostgreSQL 18.6; transaction shape 5 tables, 51 columns, 13 checks, 9 indexes, zero rows; independent readback stable"
+    },
+    {
+      "command": "independent read-only billing catalog readback after apply",
+      "result": "passed",
+      "observed": "public schema ready; five relations, 51 columns, 13 checks, 9 indexes, zero billing rows; registry revision 232"
+    },
+    {
       "command": "pnpm exec tsc --noEmit --pretty false",
       "result": "passed"
     },
@@ -119,8 +180,8 @@
     }
   ],
   "limitations": [
-    "The target has no billing relations or billing data, so there is no existing billing shape or webhook history to fence or preserve.",
-    "The secure local artifact records metadata and digests, not a database backup; it does not satisfy the separate encrypted-backup recovery gate.",
-    "The plan does not enable billing, metering, a local payment provider, Stripe, or any environment value."
+    "The pre-apply target had no billing relations or billing data, so there was no existing billing shape or webhook history to fence or preserve.",
+    "The secure local artifact records metadata and digests, not a database backup; the separate AES-GCM backup/restore evidence covers recovery.",
+    "The apply created only the five billing relations; it did not enable billing, metering, a local payment provider, Stripe, or any environment value."
   ]
 }
