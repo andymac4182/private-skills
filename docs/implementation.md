@@ -181,6 +181,8 @@ Metadata has three durable deployment shapes:
 
 Blob storage has the corresponding Node and edge boundaries. Node loads the selected Files SDK adapter (`fs`, `s3`, `r2`, `gcs`, `azure`, or `vercel-blob`) only in the Node runtime. Edge and provider-isolated deployments use `HttpBlobStore` and the internal gateway, keeping provider credentials out of the web process. Private access is required; a public base URL is not accepted as a substitute for a grant or gateway.
 
+The Node Files SDK factory derives a provider binding from non-secret storage configuration and the private prefix when the host does not pass one explicitly. Vercel Blob requires an explicit binding or a configured store ID because its token is intentionally excluded from persisted identities. Hosts that use another adapter or a custom provider must expose an equivalent stable binding before relying on verified receipt cleanup.
+
 The production registry has exercised the Neon PostgreSQL state path and the
 PostgreSQL/pgvector search path with two indexed fixtures. File and
 authenticated HTTP remain supported profiles; provider-specific credentials,

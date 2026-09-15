@@ -22,7 +22,7 @@ export function normalizeStorageProviderBinding(value: unknown): string | undefi
     value.length === 0 ||
     value.length > STORAGE_PROVIDER_BINDING_MAX_LENGTH ||
     value !== value.trim() ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(value)
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value)
   ) {
     return undefined;
   }
@@ -61,7 +61,7 @@ export function isVerifiedStorageWriteReceipt(
     candidate.key.length === 0 ||
     candidate.key.length > 4_096 ||
     /[\u0000-\u001f\u007f]/u.test(candidate.key) ||
-    !isSha256Digest(candidate.digest as string) ||
+    !isSha256Digest(candidate.digest) ||
     !Number.isSafeInteger(candidate.size) ||
     (candidate.size as number) < 0 ||
     typeof candidate.completedAt !== 'string' ||
