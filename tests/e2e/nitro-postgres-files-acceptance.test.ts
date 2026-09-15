@@ -1028,11 +1028,12 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
       await expectNoDigest(foreignPackAuthorization.response, packA.manifestDigest);
 
       type DraftView = { id: string; revision: number; digest: string; files: Array<{ path: string }> };
+      type DraftResult = { created: DraftView; updated: DraftView; editedSkillContent: string };
       const createAndEditDraft = async (
         cookie: string,
         skill: SkillVersion,
         label: string,
-      ): Promise<{ created: DraftView; updated: DraftView }> => {
+      ): Promise<DraftResult> => {
         const createdResponse = await http<{ draft: DraftView }>(
           runtime!,
           `/v1/skills/${encodeURIComponent(skill.id)}/drafts`,
@@ -1046,6 +1047,8 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
         const created = createdResponse.value?.draft;
         if (!created) throw new Error(`${label} draft creation omitted its draft`);
         const editedBundle = bundleFor(skill.skillName, `Edited ${label} shared draft`) as SkillBundle;
+        const editedSkillContent = editedBundle.files.find((file) => file.path === 'SKILL.md')?.content;
+        if (!editedSkillContent) throw new Error(`${label} edited bundle omitted SKILL.md`);
         const updatedResponse = await http<{ draft: DraftView }>(runtime!, `/v1/drafts/${encodeURIComponent(created.id)}`, cookie, {
           method: 'PUT',
           headers: { 'idempotency-key': `draft-update-${runId}-${label}` },
@@ -1062,7 +1065,9 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
         if (!persisted) throw new Error(`${label} persisted draft was omitted`);
         expect(persisted).toMatchObject({ id: created.id, revision: 2, digest: updated.digest });
         expect(persisted.files.length).toBeGreaterThan(0);
-        return { created, updated: persisted };
+        expect(created.digest).toBe(skill.artifact.digest);
+        expect(persisted.digest).not.toBe(created.digest);
+        return { created, updated: persisted, editedSkillContent };
       };
       const draftA = await createAndEditDraft(seeded.cookieA, approvedA.skill, 'company-a');
       const draftB = await createAndEditDraft(seeded.cookieB, approvedB.skill, 'company-b');
@@ -1073,11 +1078,28 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
         { method: 'GET' },
       );
       expect(draftFileA.response.status).toBe(200);
-      expect(draftFileA.value?.file).toMatchObject({ path: 'SKILL.md', content: expect.any(String) });
+      expect(draftFileA.value?.file).toMatchObject({ path: 'SKILL.md', content: draftA.editedSkillContent });
+      const staleDraftFile = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}/files?path=SKILL.md&revision=1&digest=${encodeURIComponent(draftA.created.digest)}`, seeded.cookieA, { method: 'GET' });
+      expect(staleDraftFile.response.status).toBe(409);
       const foreignDraft = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, seeded.cookieB, { method: 'GET' });
       expect(foreignDraft.response.status).toBe(404);
       const foreignDraftFile = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}/files?path=SKILL.md&revision=2&digest=${encodeURIComponent(draftA.updated.digest)}`, seeded.cookieB, { method: 'GET' });
       expect(foreignDraftFile.response.status).toBe(404);
+      const foreignDraftUpdate = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, seeded.cookieB, {
+        method: 'PUT',
+        headers: { 'idempotency-key': `draft-foreign-update-${runId}` },
+        json: {
+          expectedRevision: 2,
+          files: (bundleFor(approvedA.skill.skillName, 'Foreign editor attempt') as SkillBundle).files,
+        },
+      });
+      expect(foreignDraftUpdate.response.status).toBe(404);
+      const ownerDraftAfterForeignUpdate = await http<{ draft: DraftView }>(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, seeded.cookieA, { method: 'GET' });
+      expect(ownerDraftAfterForeignUpdate.response.status).toBe(200);
+      expect(ownerDraftAfterForeignUpdate.value?.draft).toMatchObject({ id: draftA.updated.id, revision: 2, digest: draftA.updated.digest });
+      const ownerFileAfterForeignUpdate = await http<{ file: { path: string; content: string } }>(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}/files?path=SKILL.md&revision=2&digest=${encodeURIComponent(draftA.updated.digest)}`, seeded.cookieA, { method: 'GET' });
+      expect(ownerFileAfterForeignUpdate.response.status).toBe(200);
+      expect(ownerFileAfterForeignUpdate.value?.file.content).toBe(draftA.editedSkillContent);
       expect(draftB.updated.id).not.toBe(draftA.updated.id);
 
       const searchReindexA = await http<{ indexed: number }>(runtime, '/v1/search/reindex', seeded.cookieA, { method: 'POST' });
