@@ -372,6 +372,7 @@
   .marketing-header { padding-inline: 17px; }
   .marketing-logo-copy small { display: none; }
   .marketing-signin-link { display: none; }
+  .marketing-nav { justify-content: flex-start; gap: 0 10px; flex-wrap: wrap; }
   .marketing-button-small { padding-inline: 11px; }
   .marketing-hero { padding-inline: 17px; }
   .marketing-hero h1 { font-size: clamp(43px, 12vw, 59px); }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { appLoginHref } from '../lib/appHref'
 import { brand } from '../lib/brand'
 import '../styles/public-marketing.css'
@@ -37,6 +37,25 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
     <main id="main-content">{children}</main>
     <MarketingFooter />
   </div>
+}
+
+function handleTabKeyDown(
+  event: KeyboardEvent<HTMLButtonElement>,
+  index: number,
+  count: number,
+  tabIdPrefix: string,
+  select: (nextIndex: number) => void,
+) {
+  let nextIndex: number | undefined
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % count
+  if (event.key === 'ArrowLeft') nextIndex = (index - 1 + count) % count
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = count - 1
+  if (nextIndex === undefined) return
+
+  event.preventDefault()
+  select(nextIndex)
+  document.getElementById(`${tabIdPrefix}-${nextIndex}`)?.focus()
 }
 
 export function ProductFlowDemo() {
@@ -93,7 +112,9 @@ export function ProductFlowDemo() {
         id={`marketing-demo-tab-${index}`}
         key={item.number}
         onClick={() => setActiveStep(index)}
+        onKeyDown={event => handleTabKeyDown(event, index, steps.length, 'marketing-demo-tab', nextIndex => setActiveStep(nextIndex))}
         role="tab"
+        tabIndex={activeStep === index ? 0 : -1}
         type="button"
       >
         <span className="marketing-demo-tab-number">{item.number}</span>
@@ -164,7 +185,9 @@ export function InstallWalkthrough() {
           id={`marketing-install-tab-${index}`}
           key={item.label}
           onClick={() => { setActiveStep(index); setCopied(false) }}
+          onKeyDown={event => handleTabKeyDown(event, index, steps.length, 'marketing-install-tab', nextIndex => { setActiveStep(nextIndex); setCopied(false) })}
           role="tab"
+          tabIndex={activeStep === index ? 0 : -1}
           type="button"
         >{item.label}</button>)}
       </div>
