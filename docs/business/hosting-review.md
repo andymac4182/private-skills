@@ -1,7 +1,7 @@
 # Private Skills business hosting review
 
-**Decision date:** 15 September 2026 (Brisbane)  
-**Launch target:** Friday 18 September 2026  
+**Decision date:** 15 September 2026 (Brisbane)
+**Launch target:** Friday 18 September 2026
 **Scope:** hosted private agent-skills SaaS, including Nitro web/API, PostgreSQL sessions and tenant state, JSONB/pgvector search, bundle storage, 24-hour scan freshness, queued jobs, Eve review, and AI Gateway usage.
 
 ## Recommendation
