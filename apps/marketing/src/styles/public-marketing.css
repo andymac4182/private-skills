@@ -295,6 +295,32 @@
 .marketing-start-path-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; margin-top: auto; }
 .marketing-start-path-actions .marketing-text-link { margin-top: 0; }
 .marketing-start-path-note { color: var(--marketing-ink-soft) !important; font-size: 10px !important; }
+.marketing-cli-chooser { max-width: 1240px; padding: 0 24px 55px; margin: 0 auto; }
+.marketing-cli-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, .72fr); align-items: end; gap: 42px; padding: 25px 0 22px; border-top: 1px solid var(--marketing-line); }
+.marketing-cli-heading h2 { max-width: 650px; margin: 11px 0 0; color: var(--marketing-ink); font: 600 clamp(28px, 3.5vw, 43px)/1.03 Georgia, 'Times New Roman', serif; letter-spacing: -.055em; }
+.marketing-cli-heading h2 code { color: var(--marketing-cobalt); font: inherit; }
+.marketing-cli-heading p { max-width: 370px; margin: 0; color: var(--marketing-muted); font-size: 11px; line-height: 1.6; }
+.marketing-cli-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; border: 1px solid var(--marketing-line-strong); border-radius: 11px 11px 0 0; background: var(--marketing-line-strong); }
+.marketing-cli-tab { display: grid; min-height: 67px; align-content: center; gap: 5px; border: 0; padding: 12px 16px; background: #f6f8fc; color: var(--marketing-ink-soft); cursor: pointer; font-size: 11px; font-weight: 850; text-align: left; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }
+.marketing-cli-tab:hover, .marketing-cli-tab:focus-visible { background: white; color: var(--marketing-cobalt-deep); }
+.marketing-cli-tab:focus-visible { z-index: 1; outline: 3px solid rgba(23, 92, 230, .26); outline-offset: -3px; }
+.marketing-cli-tab-active { background: white; color: var(--marketing-cobalt-deep); box-shadow: inset 0 -3px 0 var(--marketing-cobalt); }
+.marketing-cli-tab small { overflow: hidden; color: var(--marketing-muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.marketing-cli-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px 28px; padding: 23px 21px 20px; border: 1px solid var(--marketing-line-strong); border-top: 0; background: rgba(255, 255, 255, .84); }
+.marketing-cli-panel:focus-visible { outline: 3px solid rgba(23, 92, 230, .24); outline-offset: -3px; }
+.marketing-cli-panel-copy { min-width: 0; }
+.marketing-cli-panel-copy h3 { margin: 8px 0 7px; color: var(--marketing-ink); font: 600 23px/1.08 Georgia, 'Times New Roman', serif; letter-spacing: -.04em; }
+.marketing-cli-panel-copy p { max-width: 620px; margin: 0; color: var(--marketing-muted); font-size: 11px; line-height: 1.55; }
+.marketing-cli-panel-actions { display: flex; flex-wrap: wrap; align-items: start; justify-content: end; gap: 9px; }
+.marketing-cli-panel-actions .marketing-button { min-height: 38px; padding-inline: 13px; font-size: 10px; }
+.marketing-cli-details { grid-column: 1 / -1; margin-top: 1px; border-top: 1px solid var(--marketing-line); }
+.marketing-cli-details summary { padding-top: 13px; color: var(--marketing-cobalt-deep); cursor: pointer; font-size: 10px; font-weight: 800; }
+.marketing-cli-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 13px 0 0; padding-top: 13px; border-top: 1px solid var(--marketing-line); }
+.marketing-cli-meta div { display: grid; gap: 4px; min-width: 0; }
+.marketing-cli-meta dt { color: var(--marketing-muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.marketing-cli-meta dd { overflow-wrap: anywhere; margin: 0; color: var(--marketing-ink-soft); font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.marketing-cli-note { margin: 13px 0 0; color: var(--marketing-muted); font-size: 10px; line-height: 1.55; }
+.marketing-cli-note strong { color: var(--marketing-seafoam-deep); }
 .marketing-demo-script-list { display: grid; gap: 17px; max-width: 410px; margin: 31px 0 0; padding: 0; list-style: none; }
 .marketing-demo-script-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; align-items: start; }
 .marketing-demo-script-list li > span { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid #b8cbec; border-radius: 7px; background: #eff4ff; color: var(--marketing-cobalt-deep); font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -329,6 +355,7 @@
   .marketing-product-window-body { grid-template-columns: 110px minmax(0, 1fr); }
   .marketing-feature-grid { grid-template-columns: repeat(2, 1fr); }
   .marketing-demo-script-grid, .marketing-start-path-grid { grid-template-columns: 1fr; }
+  .marketing-cli-heading { grid-template-columns: 1fr; gap: 15px; }
   .marketing-section-split, .marketing-install { gap: 38px; }
   .marketing-footer-grid { grid-template-columns: 1.2fr repeat(3, 1fr); gap: 20px; }
 }
@@ -347,7 +374,7 @@
   .marketing-proof-items { grid-template-columns: repeat(2, 1fr); }
   .marketing-proof-item { border-top: 1px solid var(--marketing-line); border-left: 0; }
   .marketing-section { margin-bottom: 86px; }
-  .marketing-section-split, .marketing-install, .marketing-page-hero-grid, .marketing-start-hero, .marketing-start-content, .marketing-docs-layout, .marketing-contact-layout { grid-template-columns: 1fr; }
+  .marketing-section-split, .marketing-install, .marketing-page-hero-grid, .marketing-start-hero, .marketing-start-content, .marketing-docs-layout, .marketing-contact-layout, .marketing-cli-panel { grid-template-columns: 1fr; }
   .marketing-section-split .marketing-section-heading, .marketing-docs-sidebar, .marketing-start-checklist { position: static; }
   .marketing-section-split .marketing-section-heading { max-width: 650px; }
   .marketing-demo-panel { grid-template-columns: 1fr; }
@@ -363,6 +390,8 @@
   .marketing-start-content { gap: 38px; }
   .marketing-start-paths { padding-top: 0; }
   .marketing-start-success { margin-left: 60px; }
+  .marketing-cli-chooser { padding-inline: 17px; }
+  .marketing-cli-panel-actions { justify-content: start; }
   .marketing-footer-cta { display: grid; align-items: start; }
   .marketing-footer-grid { grid-template-columns: repeat(2, 1fr); }
   .marketing-footer-brand { grid-column: 1 / -1; }
@@ -405,6 +434,9 @@
   .marketing-start-step:not(:last-child)::before { left: 15px; top: 35px; }
   .marketing-start-success { margin-left: 48px; }
   .marketing-start-paths { padding-inline: 17px; }
+  .marketing-cli-tabs { grid-template-columns: 1fr; }
+  .marketing-cli-tab { min-height: 55px; }
+  .marketing-cli-meta { grid-template-columns: 1fr; }
   .marketing-start-path-actions { align-items: stretch; flex-direction: column; }
   .marketing-start-path-actions .marketing-button { width: 100%; }
   .marketing-demo-script-list { max-width: none; }

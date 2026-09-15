@@ -57,6 +57,11 @@ import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
 import { createOperationsStatusHandler } from './operations-status.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
+import {
+  createBlobCliReleaseAssetProvider,
+  resolveCliReleaseManifest,
+} from '../../../packages/cli-release/src/index.js';
+import { createCliReleaseRoutes } from './routes/cli-release.js';
 import { readSessionExchangeToken } from './session-exchange.js';
 import {
   looksLikeEveTenantDelegation,
@@ -100,6 +105,8 @@ async function createRuntime(env: RuntimeEnvironment) {
   // Origin supplied by a caller.
   const eveTenant = createEveTenantHostRuntime(env, canonicalOriginFromEnv(env));
   const infrastructure = await createInfrastructure(env);
+  const cliReleaseManifest = resolveCliReleaseManifest(env.PSKILLS_CLI_RELEASE_MANIFEST);
+  const cliReleaseProvider = infrastructure.cliReleaseProvider ?? createBlobCliReleaseAssetProvider(infrastructure.blobs);
   const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
   // Better Auth is optional and Node-owned. The infrastructure profile may
   // provide it without making the shared runtime import a database driver;
@@ -356,7 +363,7 @@ async function createRuntime(env: RuntimeEnvironment) {
   const directoryPacks = env.PSKILLS_PACK_DIRECTORY_ENABLED === 'true' || env.PSKILLS_DIRECTORY_ENABLED === 'true'
     ? createSkillsPackClient() : undefined;
   const defaultOrganizationId = config.organizationId;
-  const { uploadReview: uploadReviewRuntime, ...baseInfrastructure } = infrastructure;
+  const { uploadReview: uploadReviewRuntime, cliReleaseProvider: _cliReleaseProvider, ...baseInfrastructure } = infrastructure;
   const legacyDependencies = {
     sourceCatalog,
     directory,
@@ -439,6 +446,12 @@ async function createRuntime(env: RuntimeEnvironment) {
         ...(tenantBuilder === undefined ? {} : { builder: tenantBuilder }),
         ...(tenantUploadReview === undefined ? {} : { uploadReview: tenantUploadReview }),
       };
+    const cliRelease = createCliReleaseRoutes({
+      manifest: cliReleaseManifest,
+      provider: cliReleaseProvider,
+      authenticate: context.auth.authenticate,
+      organizationId: context.organizationId,
+    });
     const registry = createRegistryHandler({
       ...baseInfrastructure,
       auth: context.auth,
@@ -493,6 +506,8 @@ async function createRuntime(env: RuntimeEnvironment) {
     const tenantHostedWorker = infrastructure.createHostedWorkerForTenant?.(context.organizationId)
       ?? (isLegacyTenant ? infrastructure.hostedWorker : undefined);
     return async (request: Request): Promise<Response> => {
+      const cliReleaseResponse = await cliRelease(request);
+      if (cliReleaseResponse) return cliReleaseResponse;
       const operationsStatusResponse = await operationsStatus(request);
       if (operationsStatusResponse) return operationsStatusResponse;
       const billingResponse = await billing(request);

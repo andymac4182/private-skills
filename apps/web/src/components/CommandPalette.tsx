@@ -28,6 +28,7 @@ export const registrySections = [
   { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
   { id: 'company-sso', label: 'SSO settings', hint: 'Company sign-in', glyph: '⌁' },
   { id: 'company-tokens', label: 'CLI tokens', hint: 'Scoped access', glyph: '⌘' },
+  { id: 'cli', label: 'CLI downloads', hint: 'Install pskills', glyph: '↓' },
   { id: 'billing', label: 'Billing & usage', hint: 'Plan and invoices', glyph: '$' },
 ] as const satisfies readonly RegistrySection[]
 
@@ -100,6 +101,15 @@ export const registryNavGroups = [
     defaultSectionId: 'operations',
     admin: false,
     sections: [registrySectionsById.operations, registrySectionsById.analytics, registrySectionsById.reviews],
+  },
+  {
+    id: 'tools',
+    label: 'Tools',
+    hint: 'Install and automate',
+    glyph: '↓',
+    defaultSectionId: 'cli',
+    admin: false,
+    sections: [registrySectionsById.cli],
   },
   {
     id: 'company-admin',

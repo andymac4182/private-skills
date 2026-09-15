@@ -1,5 +1,6 @@
 const APP_PATH = '/login'
 const FALLBACK_RETURN_TO = '/app'
+const CLI_TARGET_PATTERN = /^(?:aarch64-apple-darwin|x86_64-unknown-linux-gnu|x86_64-pc-windows-msvc)$/u
 
 /**
  * Keep marketing links pointed at the authenticated app while allowing the
@@ -36,4 +37,16 @@ function configuredAppOrigin(): string {
 export function appLoginHref(returnTo: unknown = FALLBACK_RETURN_TO): string {
   const query = new URLSearchParams({ returnTo: safeAppReturnTo(returnTo) })
   return `${configuredAppOrigin()}${APP_PATH}?${query.toString()}`
+}
+
+/**
+ * Enter the authenticated app chooser and preserve the selected platform.
+ * The app performs the session and private-storage checks before offering a
+ * download, so public pages never link directly to a binary API response.
+ */
+export function appCliReleaseChooserHref(target?: string): string {
+  const query = typeof target === 'string' && CLI_TARGET_PATTERN.test(target)
+    ? `?target=${encodeURIComponent(target)}`
+    : ''
+  return `${configuredAppOrigin()}/app/cli${query}`
 }
