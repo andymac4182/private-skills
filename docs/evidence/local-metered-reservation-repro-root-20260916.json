@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-metered-reservation-repro",
+  "observedOn": "2026-09-16",
+  "sourceCommit": "4917215",
+  "verification": "Root independent repro on the durable metered caller ownership candidate",
+  "environment": "Disposable local verification with a simulated second repository transaction failure after billing correction",
+  "scenario": {
+    "functions": [
+      "releaseMeteredUsageIfUnowned",
+      "claimMeteredReservationOwner"
+    ],
+    "failurePoint": "Second repository transaction fails after billing correction",
+    "observed": {
+      "afterCrash": "releasing",
+      "afterRetry": "releasing",
+      "corrections": 2,
+      "queueError": "METERED_RESERVATION_BUSY"
+    }
+  },
+  "finding": "A non-idempotent retry remains stuck after the simulated failure.",
+  "requiredFollowUp": [
+    "Add durable ownership fencing and recovery for the crash window.",
+    "Add a crash-barrier regression test covering correction and retry state.",
+    "Do not rely on blind TTL-based release to recover the reservation."
+  ],
+  "releaseImpact": {
+    "combinedBillingRuntime": "blocked",
+    "independentMobileMarketing": "canRelease"
+  },
+  "limitations": [
+    "This is a sanitized local reproduction; no production billing state or credentials are included.",
+    "The result does not establish hosted provider behavior or Stripe activation."
+  ]
+}

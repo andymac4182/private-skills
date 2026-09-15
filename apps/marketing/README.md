@@ -76,6 +76,33 @@ The public discovery endpoints are `/robots.txt` and `/sitemap.xml`. Their
 contents follow `MARKETING_INDEXING`; a preview or local build is intentionally
 not discoverable.
 
+## Plan preview boundary
+
+The pricing preview is a projection of the billing package's browser-safe
+`PlanCatalog.publicMetadata()` result. The default build imports only the pure
+plan metadata module and renders the shared `free`, `team`, and `business`
+IDs, labels, descriptions, and finite limits. It does not import the app
+server, a Stripe adapter, billing credentials, or customer state.
+
+The marketing site is a separate static build, so it cannot read a live app
+catalog at request time. If an application deployment supplies custom plan
+definitions or recurring Price IDs, export only its public metadata (the
+`protocolVersion`, plan IDs, labels, descriptions, limits, and the two boolean
+readiness flags) and set `PUBLIC_PLAN_METADATA_JSON` during the marketing
+build. The value may be a metadata array or a
+`{ "protocolVersion": 1, "plans": [...] }` envelope. The build rejects
+malformed, duplicate, oversized, or server-only fields such as `priceId`; it
+does not silently merge custom values with the defaults. Keep this input free
+of Price IDs and secrets.
+
+When `PUBLIC_PLAN_METADATA_JSON` is omitted, the projection uses the shared
+default catalog. Rebuild the marketing site with the public projection before
+publishing custom application packaging. The authenticated app's billing console and
+`GET /v1/billing` response remain authoritative for live entitlements,
+provider readiness, and checkout. The public page always keeps its preview
+label and has no purchase or checkout action, even when a build-time metadata
+projection reports an application price as configured.
+
 See Vercel's [monorepo Root Directory guidance](https://vercel.com/docs/monorepos/monorepo-faq)
 and [build configuration reference](https://vercel.com/docs/builds/configure-a-build)
 for the corresponding project settings.

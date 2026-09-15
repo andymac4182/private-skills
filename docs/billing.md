@@ -17,6 +17,18 @@ catalog rejects duplicate plan IDs and duplicate Price IDs. Price IDs are
 server configuration; webhook metadata, query parameters, and checkout URLs
 cannot select an entitlement.
 
+`PlanCatalog.publicMetadata()` is the browser-safe projection for product
+surfaces. It carries the protocol version, public plan identity and copy,
+finite limits, and boolean price/checkout readiness without exposing a Price
+ID or provider credential. The separate marketing app derives its preview
+cards from this projection rather than maintaining a second plan list. A
+marketing build can receive a custom catalog through the bounded
+`PUBLIC_PLAN_METADATA_JSON` public-only input; malformed or server-only fields
+fail the build. Without that input, the page intentionally labels the
+checked-in defaults and asks the operator to rebuild when the application uses
+custom plan metadata. The authenticated billing console and runtime catalog
+remain authoritative for live entitlements and checkout.
+
 Until a provider and at least one paid Price ID are configured, hosted
 checkout, customer-portal sessions, and webhook verification remain
 unavailable. An explicitly enabled deployment can still enforce finite limits

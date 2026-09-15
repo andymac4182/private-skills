@@ -56,8 +56,18 @@ export const EXPECTED_CONFIG_NAMES = Object.freeze([
   "PSKILLS_COMPANY_SSO_AUTO_MIGRATE",
   "COMPANY_SSO_TABLE_NAME",
   "PSKILLS_COMPANY_SSO_TABLE_NAME",
+  "IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
+  "IDENTITY_OPERATIONS_EVENTS_TABLE_NAME",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_TABLE_NAME",
+  "IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS",
+  "IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE",
   "API_TOKEN_AUTO_MIGRATE",
   "PSKILLS_API_TOKEN_AUTO_MIGRATE",
+  "API_TOKEN_SCHEMA",
+  "PSKILLS_API_TOKEN_SCHEMA",
   "PSKILLS_STATE_PROVIDER",
   "PSKILLS_STATE_ENDPOINT",
   "PSKILLS_STATE_TOKEN",
@@ -246,6 +256,10 @@ export const SAFE_VALUE_NAMES = Object.freeze([
   "PSKILLS_STORAGE_BUILD_PROFILE",
   "COMPANY_SSO_TABLE_NAME",
   "PSKILLS_COMPANY_SSO_TABLE_NAME",
+  "IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
+  "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE",
+  "API_TOKEN_SCHEMA",
+  "PSKILLS_API_TOKEN_SCHEMA",
 ]);
 
 const SAFE_VALUE_NAME_SET = new Set(SAFE_VALUE_NAMES);
@@ -256,7 +270,9 @@ const BETTER_AUTH_SECRET_NAMES = ["BETTER_AUTH_SECRET", "PSKILLS_BETTER_AUTH_SEC
 const BETTER_AUTH_AUTO_MIGRATE_NAMES = ["PSKILLS_BETTER_AUTH_AUTO_MIGRATE", "BETTER_AUTH_AUTO_MIGRATE"];
 const BETTER_AUTH_VALIDATE_SCHEMA_NAMES = ["PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA", "BETTER_AUTH_VALIDATE_SCHEMA"];
 const COMPANY_SSO_AUTO_MIGRATE_NAMES = ["PSKILLS_COMPANY_SSO_AUTO_MIGRATE", "COMPANY_SSO_AUTO_MIGRATE"];
+const OPERATIONS_EVENTS_AUTO_MIGRATE_NAMES = ["PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE", "IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE"];
 const API_TOKEN_AUTO_MIGRATE_NAMES = ["PSKILLS_API_TOKEN_AUTO_MIGRATE", "API_TOKEN_AUTO_MIGRATE"];
+const API_TOKEN_SCHEMA_NAMES = ["PSKILLS_API_TOKEN_SCHEMA", "API_TOKEN_SCHEMA"];
 const LEGACY_TOKEN_NAMES = ["PSKILLS_BOOTSTRAP_TOKENS", "PSKILLS_BOOTSTRAP_TOKEN", "PSKILLS_BOOTSTRAP_TOKEN_HASH"];
 const PRIVATE_OBJECT_LOCATION_NAMES = ["PSKILLS_STORAGE_PROVIDER", "PSKILLS_STORAGE_ENDPOINT", "PSKILLS_STORAGE_BUCKET", "PSKILLS_STORAGE_ROOT"];
 const PRIVATE_OBJECT_CREDENTIAL_NAMES = [
@@ -468,6 +484,21 @@ function evaluatePrivateObjectConfiguration(names) {
   return check("private-object-configuration", "blocked", "private object storage requires both a location and a server-side credential configuration name");
 }
 
+function evaluatePublicApiTokenSchema(values, names) {
+  const configured = firstValue(values, API_TOKEN_SCHEMA_NAMES.filter((name) => names.has(name)));
+  if (!configured) {
+    if (hasAnyName(names, API_TOKEN_SCHEMA_NAMES)) {
+      return check("service-token-public-schema", "unknown", "an API-token schema override is present; supply its nonsecret value to prove the existing public table location");
+    }
+    return check("service-token-public-schema", "pass", "no API-token schema override is present; the existing public table location remains the default");
+  }
+  const normalized = configured.value.trim();
+  if (normalized === "" || normalized === "public") {
+    return check("service-token-public-schema", "pass", "the API-token schema override resolves to the existing public table location");
+  }
+  return check("service-token-public-schema", "blocked", "API-token schema must remain empty or public while preserving the existing service-token table");
+}
+
 function allTrue(record, fields) {
   return fields.every((field) => record?.[field] === true);
 }
@@ -663,8 +694,10 @@ export function evaluateHostedIdentityPreflight(input = {}) {
     statusForBoolean(values, names, BETTER_AUTH_VALIDATE_SCHEMA_NAMES, true, "better-auth-schema-validation", "Better Auth schema validation is explicitly enabled"),
     statusForBoolean(values, names, COMPANY_SSO_AUTO_MIGRATE_NAMES, false, "company-sso-explicit-migration", "company SSO startup auto-migration is explicitly disabled"),
     statusForBoolean(values, names, API_TOKEN_AUTO_MIGRATE_NAMES, false, "service-token-explicit-migration", "service-token startup auto-migration is explicitly disabled"),
+    statusForBoolean(values, names, OPERATIONS_EVENTS_AUTO_MIGRATE_NAMES, false, "identity-operations-explicit-migration", "identity operations-event startup auto-migration is explicitly disabled"),
     statusForExactValue(values, names, ["PSKILLS_STATE_PROVIDER"], "postgres", "node-state-boundary", "shared hosted identity and registry state must use the durable PostgreSQL Node boundary"),
     evaluatePrivateObjectConfiguration(names),
+    evaluatePublicApiTokenSchema(values, names),
     evaluateSchemaReadback(input.schemaReadback),
     evaluateTokenSchemaCompatibility(input.schemaReadback),
     evaluateAdoption(input.adoption, organizationId),

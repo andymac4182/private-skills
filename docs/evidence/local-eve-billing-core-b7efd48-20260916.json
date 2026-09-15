@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-16T07:06:31+10:00",
+  "sourceCommit": "b7efd48b6804d5f6e4d6415f299b214e441d1df5",
+  "sourceCommitShort": "b7efd48",
+  "verification": "Independent bounded Eve, billing, and core metered-ownership verification",
+  "checkout": "/private/tmp/private-skills-eve-verify-b7efd48",
+  "environment": "Disposable loopback PostgreSQL with generated test tables; no production configuration was changed",
+  "checks": [
+    {
+      "command": "CI=true pnpm exec vitest run packages/intelligence/test/eve-cost-reservation.test.ts packages/billing/test/index.test.ts packages/core/test/metered-ownership.test.ts --reporter=dot",
+      "result": {
+        "exitCode": 0,
+        "testFilesPassed": 3,
+        "testsPassed": 45,
+        "testsSkipped": 0
+      },
+      "scope": [
+        "Eve reservation generation and reconciliation",
+        "Billing metered enforcement",
+        "Core metered ownership"
+      ]
+    },
+    {
+      "command": "CI=true pnpm exec vitest run packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts packages/billing/test/postgres.integration.test.ts --reporter=dot",
+      "result": {
+        "exitCode": 0,
+        "testFilesPassed": 2,
+        "testsPassed": 13,
+        "testsSkipped": 0
+      },
+      "scope": [
+        "Eve durable reservation and generation recovery",
+        "Billing PostgreSQL durability and generation fencing"
+      ],
+      "databaseConfiguration": "PSKILLS_BILLING_POSTGRES_URL pointed at disposable loopback PostgreSQL; credential and URL omitted"
+    },
+    {
+      "command": "CI=true pnpm typecheck",
+      "result": {
+        "exitCode": 0
+      }
+    },
+    {
+      "command": "git diff --check",
+      "result": {
+        "exitCode": 0
+      }
+    }
+  ],
+  "limitations": [
+    "Worker follow-up verification was excluded; this record does not close the worker gate.",
+    "Storage-route verification was excluded; this record does not close the storage-route gate.",
+    "A later schema migration review found a same-prefix multi-schema constraint bug that is under a separate fix; these passing checks do not close full migration acceptance.",
+    "The run did not change production identity, billing, storage, or database configuration."
+  ]
+}

@@ -1,0 +1,590 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.hosted-postgres-restore-proof",
+  "observedAt": "2026-09-15T16:53:56.509Z",
+  "status": "verified",
+  "source": {
+    "provider": "PostgreSQL",
+    "table": "private_skills_registry_state",
+    "organizationIdSha256": "sha256:37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f",
+    "rowCount": 1,
+    "revision": 231,
+    "stateBytes": 2247761,
+    "stateDigest": "sha256:c98bd59acbdae1f3b8d4f4befb4beb70cef03252a2a484fd2da3a7b0e6d04bfd",
+    "schema": {
+      "columns": [
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": "NO"
+        },
+        {
+          "name": "revision",
+          "dataType": "bigint",
+          "nullable": "NO"
+        },
+        {
+          "name": "state",
+          "dataType": "jsonb",
+          "nullable": "NO"
+        },
+        {
+          "name": "updated_at",
+          "dataType": "timestamp with time zone",
+          "nullable": "NO"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "private_skills_registry_state_organization_id_not_null",
+          "type": "CHECK"
+        },
+        {
+          "name": "private_skills_registry_state_revision_not_null",
+          "type": "CHECK"
+        },
+        {
+          "name": "private_skills_registry_state_state_not_null",
+          "type": "CHECK"
+        },
+        {
+          "name": "private_skills_registry_state_updated_at_not_null",
+          "type": "CHECK"
+        },
+        {
+          "name": "private_skills_registry_state_pkey",
+          "type": "PRIMARY KEY"
+        }
+      ]
+    },
+    "snapshotConsistency": "one REPEATABLE READ READ ONLY transaction for schema and state row",
+    "snapshotDumpPathOutsideGit": "/private/tmp/private-skills-postgres-restore-proof-20260916/source-snapshot.json",
+    "sourceManifestPathOutsideGit": "/private/tmp/private-skills-postgres-restore-proof-20260916/source-blob-manifest.json",
+    "registryReferences": [
+      {
+        "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "size": 24197,
+        "referenceCount": 2
+      },
+      {
+        "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "size": 487,
+        "referenceCount": 28
+      },
+      {
+        "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "size": 1717,
+        "referenceCount": 2
+      },
+      {
+        "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "size": 325,
+        "referenceCount": 5
+      },
+      {
+        "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "size": 325,
+        "referenceCount": 2
+      },
+      {
+        "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "size": 487,
+        "referenceCount": 2
+      },
+      {
+        "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "size": 325,
+        "referenceCount": 4
+      },
+      {
+        "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "size": 483,
+        "referenceCount": 35
+      },
+      {
+        "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "size": 7369,
+        "referenceCount": 2
+      },
+      {
+        "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "size": 1717,
+        "referenceCount": 8
+      },
+      {
+        "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "size": 309,
+        "referenceCount": 1
+      }
+    ],
+    "referencedObjectCount": 11,
+    "referencedObjectBytes": 37741,
+    "databaseStateStable": true,
+    "secondSnapshot": {
+      "revision": 231,
+      "stateBytes": 2247761,
+      "stateDigest": "sha256:c98bd59acbdae1f3b8d4f4befb4beb70cef03252a2a484fd2da3a7b0e6d04bfd"
+    }
+  },
+  "hostedBlobProof": {
+    "evidenceCommit": "5c0ef44",
+    "evidenceFile": "docs/evidence/hosted-blob-restore-proof-20260916.json",
+    "storeId": "store_C0EMhnU7DH3uSMaw",
+    "access": "private",
+    "sourcePrefix": "sealed",
+    "manifestObjectCount": 14,
+    "registryManifestObjectCount": 11,
+    "cliManifestObjectCount": 3,
+    "inventoryBeforeReads": {
+      "count": 14,
+      "totalBytes": 8112930,
+      "hasMore": false,
+      "pageCount": 1,
+      "keys": [
+        "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304"
+      ],
+      "sizes": [
+        {
+          "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+          "size": 24197
+        },
+        {
+          "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+          "size": 487
+        },
+        {
+          "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+          "size": 1717
+        },
+        {
+          "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+          "size": 325
+        },
+        {
+          "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+          "size": 325
+        },
+        {
+          "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+          "size": 487
+        },
+        {
+          "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+          "size": 2479997
+        },
+        {
+          "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+          "size": 325
+        },
+        {
+          "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+          "size": 2673030
+        },
+        {
+          "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+          "size": 483
+        },
+        {
+          "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+          "size": 2922162
+        },
+        {
+          "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+          "size": 7369
+        },
+        {
+          "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+          "size": 1717
+        },
+        {
+          "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+          "size": 309
+        }
+      ]
+    },
+    "inventoryAfterReads": {
+      "count": 14,
+      "totalBytes": 8112930,
+      "hasMore": false,
+      "pageCount": 1,
+      "keys": [
+        "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304"
+      ],
+      "sizes": [
+        {
+          "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+          "size": 24197
+        },
+        {
+          "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+          "size": 487
+        },
+        {
+          "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+          "size": 1717
+        },
+        {
+          "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+          "size": 325
+        },
+        {
+          "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+          "size": 325
+        },
+        {
+          "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+          "size": 487
+        },
+        {
+          "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+          "size": 2479997
+        },
+        {
+          "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+          "size": 325
+        },
+        {
+          "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+          "size": 2673030
+        },
+        {
+          "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+          "size": 483
+        },
+        {
+          "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+          "size": 2922162
+        },
+        {
+          "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+          "size": 7369
+        },
+        {
+          "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+          "size": 1717
+        },
+        {
+          "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+          "size": 309
+        }
+      ]
+    },
+    "sourceBlobStateStable": true,
+    "missingHostedKeys": [],
+    "addedCurrentKeys": [],
+    "sizeMismatches": [],
+    "readbacks": [
+      {
+        "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "isCliAsset": false,
+        "size": 24197,
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "isCliAsset": false,
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "isCliAsset": false,
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "isCliAsset": false,
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "isCliAsset": false,
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "isCliAsset": false,
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "isCliAsset": true,
+        "size": 2479997,
+        "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "isCliAsset": false,
+        "size": 325,
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "isCliAsset": true,
+        "size": 2673030,
+        "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "isCliAsset": false,
+        "size": 483,
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "isCliAsset": true,
+        "size": 2922162,
+        "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "isCliAsset": false,
+        "size": 7369,
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "isCliAsset": false,
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "isCliAsset": false,
+        "size": 309,
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "matchesManifest": true,
+        "getVerified": "passed"
+      }
+    ],
+    "registryReferenceMatches": [
+      {
+        "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "size": 24197,
+        "referenceCount": 2,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "size": 487,
+        "referenceCount": 28,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "size": 1717,
+        "referenceCount": 2,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "size": 325,
+        "referenceCount": 5,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "size": 325,
+        "referenceCount": 2,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "size": 487,
+        "referenceCount": 2,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "size": 325,
+        "referenceCount": 4,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "size": 483,
+        "referenceCount": 35,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "size": 7369,
+        "referenceCount": 2,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "size": 1717,
+        "referenceCount": 8,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      },
+      {
+        "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "size": 309,
+        "referenceCount": 1,
+        "presentInHostedRegistryManifest": true,
+        "distinguishedAsCliAsset": false,
+        "matchesHostedRegistryManifest": true,
+        "matchesCurrentBlobReadback": true
+      }
+    ],
+    "allReferencesMatch": true
+  },
+  "localRestore": {
+    "target": "fresh loopback Docker PostgreSQL 16 Alpine container",
+    "targetPort": 55433,
+    "schemaTable": "private_skills_registry_state",
+    "targetRowCountBefore": 0,
+    "targetRowCountAfter": 1,
+    "targetRevision": 231,
+    "targetStateBytes": 2247761,
+    "targetStateDigest": "sha256:c98bd59acbdae1f3b8d4f4befb4beb70cef03252a2a484fd2da3a7b0e6d04bfd",
+    "exactRevision": true,
+    "exactStateDigest": true,
+    "referentiallyValid": true,
+    "localDatabaseWritesOnly": true,
+    "productionDatabaseWrites": false
+  },
+  "providerProof": {
+    "postgresCredentialReference": "DATABASE_URL (targeted production env reference; value omitted)",
+    "blobCredentialReference": "BLOB_READ_WRITE_TOKEN (targeted production env reference; value omitted)",
+    "credentialsUsedInProcessOnly": true,
+    "fullEnvironmentExported": false,
+    "blobAdapter": "files-sdk/vercel-blob",
+    "filesSdkVersion": "2.4.0"
+  },
+  "mutationBoundary": {
+    "productionDatabaseDDL": "not-run",
+    "productionDatabaseDML": "not-run",
+    "productionBlobWrites": "not-run",
+    "productionBlobDeletes": "not-run",
+    "productionConfigChanges": "not-run",
+    "deployment": "not-run",
+    "localTargetSchemaDDL": "run-on-fresh-loopback-target-only",
+    "localTargetStateDML": "run-on-fresh-loopback-target-only"
+  },
+  "limits": [
+    "This is a bounded PostgreSQL row snapshot plus registry-object digest match; it is not a provider pg_dump or whole-database backup.",
+    "The snapshot is consistent for the selected registry row and the second snapshot detected whether that row changed during Blob reads; no cross-provider transaction fence was available.",
+    "The Blob manifest is the previously verified private source inventory; all 14 current objects were rechecked, with CLI assets explicitly distinguished and excluded from registry references.",
+    "The local restore seeded metadata only; it validated referenced production Blob bytes by digest and did not copy production objects into the local target.",
+    "Better Auth, identity-provider, billing, and other tables were not included in this registry-state proof; production Better Auth remains disabled."
+  ],
+  "redaction": {
+    "organizationIdentifierIncluded": false,
+    "rowContentsIncluded": false,
+    "identitiesIncluded": false,
+    "credentialsIncluded": false,
+    "privateUrlsIncluded": false,
+    "objectBytesIncluded": false,
+    "fullEnvironmentExported": false
+  }
+}

@@ -33,6 +33,9 @@ export function RegistryShell() {
   const activeSection = routeSection === 'topic' ? 'topics' : routeSection
   const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
   const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
+  const canManageCompany = session?.activeMembership?.role === 'owner' || session?.activeMembership?.role === 'admin'
+  const readonlyCompanyNavigation = Boolean(session?.activeMembership && !canManageCompany)
+  const activeNavItemRef = useRef<HTMLAnchorElement>(null)
   // Identity sessions carry the human-facing account label. The legacy
   // principal subject is often an opaque id, so only use it after the
   // sanitized identity name/email fields and retain it for token sessions.
@@ -83,6 +86,16 @@ export function RegistryShell() {
     // on the same shell route.
     setMobileNavOpen(false)
   }, [location.pathname, location.searchStr, tenantKey])
+
+  useEffect(() => {
+    // Keep the selected destination visible when the navigation has more items
+    // than the viewport. This does not move focus, so keyboard users retain
+    // the normal drawer and link focus behavior.
+    const frame = window.requestAnimationFrame(() => {
+      activeNavItemRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'auto' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeSection, mobileNavOpen, tenantKey])
 
   useEffect(() => {
     if (!mobileNavOpen) return
@@ -162,24 +175,28 @@ export function RegistryShell() {
               const defaultSection = group.sections.find((section) => section.id === group.defaultSectionId)
               if (!defaultSection) return null
               const isActiveGroup = group.id === activeGroup.id
+              const isReadonlyCompanyGroup = group.id === 'company-admin' && readonlyCompanyNavigation
+              const groupLabel = isReadonlyCompanyGroup ? 'Company' : group.label
+              const groupHint = isReadonlyCompanyGroup ? 'Team and access' : group.hint
               return (
-                <div className={`nav-group${isActiveGroup ? ' nav-group-active' : ''}${group.admin ? ' nav-group-admin' : ''}`} key={group.id}>
+                <div className={`nav-group${isActiveGroup ? ' nav-group-active' : ''}${group.admin && !isReadonlyCompanyGroup ? ' nav-group-admin' : ''}`} key={group.id}>
                   <Link
                     className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
                     params={{ section: defaultSection.id }}
                     to="/app/$section"
+                    ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
                     onClick={closeMobileNav}
                   >
                     <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
                     <span className="nav-group-copy">
-                      <strong>{group.label}</strong>
-                      <small>{group.hint}</small>
+                      <strong>{groupLabel}</strong>
+                      <small>{groupHint}</small>
                     </span>
                     {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
                   </Link>
 
                   {group.sections.length > 1 && (isActiveGroup || mobileNavOpen) && (
-                    <div aria-label={`${group.label} sections`} className="nav-subnav">
+                    <div aria-label={`${groupLabel} sections`} className="nav-subnav">
                       {group.sections.map((section) => (
                         <Link
                           activeProps={{ className: 'nav-subitem nav-subitem-active' }}
@@ -187,6 +204,7 @@ export function RegistryShell() {
                           key={section.id}
                           params={{ section: section.id }}
                           to="/app/$section"
+                          ref={section.id === activeSection ? activeNavItemRef : undefined}
                           onClick={closeMobileNav}
                         >
                           <span aria-hidden="true" className="nav-subitem-glyph">{section.glyph}</span>
