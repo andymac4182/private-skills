@@ -1,0 +1,22 @@
+{
+  "scope": "local-postgresql-filesystem-restore",
+  "sourceCommit": "25a3189",
+  "command": "vitest run tests/operations-postgres-rehearsal.test.ts with loopback PostgreSQL enabled",
+  "testsPassed": 1,
+  "testsSkipped": 0,
+  "durationSeconds": 3.11,
+  "verified": [
+    "restored dispatcher cursor and active lease",
+    "restored retry attempts, backoff and error",
+    "overlapping lease denied",
+    "expired lease takeover",
+    "stale source lease mutation rejected",
+    "retry state preserved",
+    "existing tenant identity, billing, Eve and filesystem bundle restore assertions"
+  ],
+  "remaining": [
+    "hosted object-store restore",
+    "deployed multi-tenant runtime acceptance",
+    "pending caller StorageAttempt lifecycle acceptance"
+  ]
+}
