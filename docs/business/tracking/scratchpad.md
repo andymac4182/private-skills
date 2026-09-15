@@ -223,3 +223,7 @@ Root's combined verification snapshot `4917215`, with caller changes from `40783
 ### Brand domain recheck — 16 September
 
 Root independently repeated the authoritative Google RDAP checks at 2026-09-15 16:42:35 UTC for `releaseloom.dev` and `vouchpack.dev`. Both returned HTTP 404 JSON with `errorCode: 404` and no domain object. This supports “unregistered at check” only; it does not establish purchasability, pricing, legal clearance, or a secured domain. The dated [brand-clearance and domain follow-up](../brand-clearance-next-steps.md) remains the source document, and B15 stays open.
+
+### Metered reservation crash-window repro — 16 September
+
+Root reproduced the B21/B28 release block at source `4917215` by exercising `releaseMeteredUsageIfUnowned` and `claimMeteredReservationOwner` with a simulated second repository transaction failure after billing correction. The reservation stayed `releasing` after both the crash and retry, recorded two corrections, and the queue returned `METERED_RESERVATION_BUSY`. A non-idempotent retry remains stuck. `runtime_finish` owns the durable fencing/recovery fix and crash-barrier test, with `billing_finish` reviewing independently; the combined billing/runtime release remains blocked, while independent mobile marketing can release separately. Do not use a blind TTL release as the recovery. See [sanitized repro evidence](../../evidence/local-metered-reservation-repro-root-20260916.json).
