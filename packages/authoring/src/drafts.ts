@@ -344,17 +344,25 @@ async function beginDraftStorageAttempt(
     // only the first durable pending row may perform provider I/O. Returning
     // the same attempt to both callers would still create two physical
     // writers and make one caller's finality proof invalid for the other.
-    const existing = state.storageAttempts.find((candidate) =>
+    const sameLifecycle = state.storageAttempts.filter((candidate) =>
       candidate.organizationId === deps.config.organizationId &&
       candidate.reservationKey === input.reservationKey &&
       candidate.reservationGeneration === input.reservationGeneration &&
       candidate.objectKey !== undefined &&
       attempt.objectKey !== undefined,
     );
-    if (existing) {
+    for (const existing of sameLifecycle) {
       if (existing.digest !== input.digest || existing.size !== input.size) {
         throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the metered lifecycle', 409);
       }
+    }
+    // A historical retry may have left an orphan beside a committed sibling.
+    // Reuse the committed object and leave the orphan charged for recovery;
+    // never start another provider writer for this reservation lifecycle.
+    const committed = sameLifecycle.find((candidate) => candidate.state === 'committed');
+    if (committed) return { attempt: { ...committed }, ownsWrite: false, stored: committedDraftStorageBlob(committed) };
+    const existing = sameLifecycle.find((candidate) => candidate.state !== 'released');
+    if (existing) {
       if (existing.state === 'orphaned') {
         if (existing.billingCorrection === 'restore-pending') {
           throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is settling; retry shortly', 503);
@@ -414,6 +422,12 @@ async function resumeOrphanedDraftStorageAttempt(
       ) {
         throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
       }
+      const committedSibling = state.storageAttempts?.find((candidate) =>
+        candidate.id !== current.id &&
+        candidate.state === 'committed' &&
+        sameDraftStorageAttemptIdentity(candidate, deps.config.organizationId, input),
+      );
+      if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedDraftStorageBlob(committedSibling) };
       if (current.state === 'orphaned') return { attempt: { ...current }, ownsWrite: false, stored };
       if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedDraftStorageBlob(current) };
       if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
@@ -449,6 +463,12 @@ async function resumeOrphanedDraftStorageAttempt(
     ) {
       throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
     }
+    const committedSibling = state.storageAttempts?.find((candidate) =>
+      candidate.id !== current.id &&
+      candidate.state === 'committed' &&
+      sameDraftStorageAttemptIdentity(candidate, deps.config.organizationId, input),
+    );
+    if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedDraftStorageBlob(committedSibling) };
     if (current.state === 'orphaned') {
       current.state = 'pending';
       current.updatedAt = new Date().toISOString();
@@ -467,6 +487,19 @@ function committedDraftStorageBlob(attempt: StorageAttempt): StoredBlob {
     throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Committed storage ownership has no stable object key', 409);
   }
   return { key: attempt.objectKey, digest: attempt.digest, size: attempt.size };
+}
+
+function sameDraftStorageAttemptIdentity(
+  attempt: StorageAttempt,
+  organizationId: string,
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+): boolean {
+  return attempt.organizationId === organizationId &&
+    attempt.reservationKey === input.reservationKey &&
+    attempt.reservationGeneration === input.reservationGeneration &&
+    attempt.digest === input.digest &&
+    attempt.size === input.size &&
+    attempt.objectKey !== undefined;
 }
 
 function preservesDraftStorageAdmission(error: unknown): boolean {
