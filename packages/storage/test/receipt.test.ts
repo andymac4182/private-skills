@@ -116,6 +116,10 @@ describe('verified storage write receipts', () => {
   });
 
   it('rejects malformed or mismatched receipt fields', () => {
+    expect(() => new FilesSdkBlobStore({
+      client: new InMemoryFilesClient(),
+      providerBinding: 'https://storage.example.test/bucket',
+    })).toThrow(/providerBinding/u);
     expect(isVerifiedStorageWriteReceipt({
       kind: 'verified',
       providerBinding: 'files-sdk:local:private',

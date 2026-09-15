@@ -3,6 +3,7 @@ import {
   type FilesClientLike,
   type FilesSdkBlobStoreOptions,
 } from "./files.js";
+import { digestBytes } from "./digest.js";
 
 /** Providers supported by the current files-sdk adapter catalog. */
 export type FilesProvider =
@@ -237,10 +238,43 @@ export async function createNodeFilesSdkBlobStore(
   options: NodeFilesSdkOptions
 ): Promise<FilesSdkBlobStore> {
   const client = await createNodeFilesClient(options);
+  const providerBinding = options.providerBinding ?? await derivedProviderBinding(options);
   return new FilesSdkBlobStore({
     client,
     maxBytes: options.maxBytes,
     prefix: options.prefix,
-    providerBinding: options.providerBinding,
+    providerBinding,
   });
+}
+
+/**
+ * Build a stable non-secret identity when the host did not provide one.
+ * Credentials are intentionally excluded; rotation of a credential for the
+ * same bucket/account must not make a completed object look like another
+ * provider. Vercel Blob has no public store identity unless the host supplies
+ * `storeId`, so it must receive an explicit binding in that configuration.
+ */
+async function derivedProviderBinding(options: NodeFilesSdkOptions): Promise<string> {
+  const storeId = options.credentials?.storeId;
+  if (options.provider === "vercel-blob" && !storeId) {
+    throw new Error(
+      "Files SDK vercel-blob requires providerBinding or credentials.storeId for durable storage recovery",
+    );
+  }
+  const identity = {
+    provider: options.provider,
+    prefix: options.prefix ?? "",
+    root: options.root ?? null,
+    bucket: options.bucket ?? null,
+    container: options.container ?? null,
+    region: options.region ?? null,
+    endpoint: options.endpoint ?? null,
+    forcePathStyle: options.forcePathStyle ?? null,
+    projectId: options.projectId ?? null,
+    accountId: options.credentials?.accountId ?? null,
+    accountName: options.credentials?.accountName ?? null,
+    storeId: storeId ?? null,
+  };
+  const digest = await digestBytes(new TextEncoder().encode(JSON.stringify(identity)));
+  return `files-sdk:${options.provider}:${digest}`;
 }
