@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./public-plans": "./src/public-plans.ts",
     "./repository": "./src/repository.ts",
     "./stripe": "./src/stripe.ts",
     "./webhooks": "./src/webhooks.ts"

@@ -4,6 +4,7 @@ import { nitro } from 'nitro/vite'
 import viteReact from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
 import { marketingIndexingForBuild, marketingOriginForBuild } from './src/lib/marketingConfig.ts'
+import { parsePublicPlanMetadataJson } from './src/lib/marketingPlanMetadata.ts'
 
 /**
  * The marketing app is intentionally a small static-facing TanStack/Nitro
@@ -63,6 +64,11 @@ export default defineConfig(({ mode }) => {
   const contactUrl = publicContactUrlForBuild(process.env.PUBLIC_CONTACT_URL ?? environment.PUBLIC_CONTACT_URL, mode)
   const marketingOrigin = marketingOriginForBuild(process.env.MARKETING_ORIGIN ?? environment.MARKETING_ORIGIN, mode)
   const marketingIndexing = marketingIndexingForBuild(process.env.MARKETING_INDEXING ?? environment.MARKETING_INDEXING, mode, marketingOrigin)
+  const publicPlanMetadataJson = process.env.PUBLIC_PLAN_METADATA_JSON ?? environment.PUBLIC_PLAN_METADATA_JSON ?? ''
+  if (new TextEncoder().encode(publicPlanMetadataJson).byteLength > 256 * 1024) {
+    throw new Error('PUBLIC_PLAN_METADATA_JSON must be at most 256 KiB')
+  }
+  if (publicPlanMetadataJson.trim() !== '') parsePublicPlanMetadataJson(publicPlanMetadataJson)
 
   return {
     root,
@@ -71,6 +77,7 @@ export default defineConfig(({ mode }) => {
       __MARKETING_CONTACT_URL__: JSON.stringify(contactUrl),
       __MARKETING_ORIGIN__: JSON.stringify(marketingOrigin ?? ''),
       __MARKETING_INDEXING__: JSON.stringify(marketingIndexing),
+      __MARKETING_PUBLIC_PLAN_METADATA_JSON__: JSON.stringify(publicPlanMetadataJson),
     },
     plugins: [
       tanstackStart(),

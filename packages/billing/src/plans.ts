@@ -6,36 +6,9 @@ import {
   type PlanLimits,
   type PublicPlanMetadata,
 } from './types.js';
+import { DEFAULT_PLAN_DEFINITIONS } from './public-plans.js';
 
-const GIB = 1024 ** 3;
-
-/**
- * Provisional finite defaults used by the local/test contract.  Product and
- * marketing may replace these through explicit configuration before launch.
- */
-export const DEFAULT_PLAN_DEFINITIONS: readonly PlanDefinition[] = Object.freeze([
-  {
-    id: 'free' as PlanId,
-    label: 'Free',
-    description: 'A bounded evaluation workspace for trying the registry.',
-    limits: { seats: 3, storageBytes: GIB, scansPerMonth: 50, eveCostCentsPerMonth: 50 },
-    public: true,
-  },
-  {
-    id: 'team' as PlanId,
-    label: 'Team',
-    description: 'Shared private skill management for a small team (provisional).',
-    limits: { seats: 10, storageBytes: 10 * GIB, scansPerMonth: 750, eveCostCentsPerMonth: 500 },
-    public: true,
-  },
-  {
-    id: 'business' as PlanId,
-    label: 'Business',
-    description: 'Higher bounded capacity for governed organization use (provisional Team Plus anchor).',
-    limits: { seats: 25, storageBytes: 50 * GIB, scansPerMonth: 4_000, eveCostCentsPerMonth: 2_500 },
-    public: true,
-  },
-].map((plan) => Object.freeze({ ...plan, limits: Object.freeze({ ...plan.limits }) })));
+export { DEFAULT_PLAN_DEFINITIONS } from './public-plans.js';
 
 const MAX_LIMIT = Number.MAX_SAFE_INTEGER;
 const PLAN_ID = /^[a-z][a-z0-9_-]{0,63}$/u;
