@@ -224,16 +224,16 @@ describe('draft editor renderer fallback', () => {
       expect(draftFileRequest?.type).toBe('return')
       await act(async () => { await (draftFileRequest as { type: 'return'; value: Promise<unknown> }).value })
 
-      const editButton = await vi.waitFor(async () => {
-        let button: HTMLButtonElement | undefined
-        await act(async () => {
-          await flushMicrotasks()
-          button = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((candidate) => candidate.textContent === 'Edit')
-          expect(button).toBeDefined()
-          expect(button?.disabled).toBe(false)
-        })
-        return button as HTMLButtonElement
+      // The fixture promise only proves that the API returned bytes. The
+      // component must still verify their digest before Edit becomes enabled;
+      // wait for the read-only fallback to render those verified bytes, then
+      // assert the control state from the same committed render.
+      await vi.waitFor(() => {
+        expect(container.querySelector('.release-code-fallback')?.textContent).toBe(firstText)
       })
+      const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
+      expect(editButton).toBeDefined()
+      expect(editButton?.disabled).toBe(false)
       await act(async () => { editButton?.click() })
       expect(container.querySelector('.release-code-fallback')?.textContent).toBe(firstText)
       expect(container.querySelector('textarea')).toBeNull()
@@ -256,7 +256,10 @@ describe('draft editor renderer fallback', () => {
       const secondButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.release-file-row')).find((button) => button.textContent?.includes(secondPath))
       expect(secondButton).toBeDefined()
       await act(async () => { secondButton?.click() })
-      expect(container.querySelector('[aria-current="true"] code')?.textContent).toBe(secondPath)
+      await vi.waitFor(() => {
+        expect(container.querySelector('[aria-current="true"] code')?.textContent).toBe(secondPath)
+        expect(container.querySelector('.release-code-fallback')?.textContent).toBe(secondText)
+      })
       expect(container.querySelector('textarea')).toBeNull()
     } finally {
       await act(async () => { root.unmount() })
