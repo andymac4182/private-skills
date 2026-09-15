@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { safeLoginReturnTo } from '../lib/auth'
 import {
   companySsoErrorMessage,
@@ -30,15 +30,29 @@ const redirectToWindow = (url: string): void => {
 export function CompanySsoLogin({ returnTo, initialOrganizationId = '', redirect = redirectToWindow }: CompanySsoLoginProps) {
   const [organizationId, setOrganizationId] = useState(initialOrganizationId)
   const [providers, setProviders] = useState<CompanySsoLoginProvider[] | null>(null)
+  const [resolvedOrganizationId, setResolvedOrganizationId] = useState<string | null>(null)
   const [lookupBusy, setLookupBusy] = useState(false)
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const discoveryGeneration = useRef(0)
+
+  const handleOrganizationChange = (value: string): void => {
+    discoveryGeneration.current += 1
+    setOrganizationId(value)
+    setProviders(null)
+    setResolvedOrganizationId(null)
+    setLookupBusy(false)
+    setProviderBusy(null)
+    setError(null)
+  }
 
   async function discover(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const normalized = organizationId.trim()
+    const generation = ++discoveryGeneration.current
     if (!normalized) {
       setProviders(null)
+      setResolvedOrganizationId(null)
       setError('Enter the company identifier provided by your administrator.')
       return
     }
@@ -46,30 +60,38 @@ export function CompanySsoLogin({ returnTo, initialOrganizationId = '', redirect
     setError(null)
     try {
       const result = await listCompanySsoLoginProviders(normalized)
+      if (generation !== discoveryGeneration.current) return
+      const resolved = result.organizationId.trim()
       setOrganizationId(result.organizationId)
+      setResolvedOrganizationId(resolved)
       setProviders([...result.providers])
     } catch (cause) {
+      if (generation !== discoveryGeneration.current) return
       setProviders(null)
+      setResolvedOrganizationId(null)
       setError(isCompanySsoUnavailableError(cause)
         ? 'Company sign-in is unavailable on this registry.'
         : companySsoErrorMessage(cause, 'Could not find company sign-in providers.'))
     } finally {
-      setLookupBusy(false)
+      if (generation === discoveryGeneration.current) setLookupBusy(false)
     }
   }
 
   async function choose(provider: CompanySsoLoginProvider) {
     if (providerBusy !== null) return
     const normalized = organizationId.trim()
-    if (!normalized) {
+    const resolved = resolvedOrganizationId?.trim()
+    if (!resolved || resolved !== normalized) {
       setError('Enter the company identifier provided by your administrator.')
       return
     }
+    const generation = discoveryGeneration.current
     setProviderBusy(provider.providerId)
     setError(null)
     try {
       const callbackURL = safeLoginReturnTo(returnTo) ?? '/app'
-      const result = await startCompanySsoLogin(normalized, provider.providerId, callbackURL)
+      const result = await startCompanySsoLogin(resolved, provider.providerId, callbackURL)
+      if (generation !== discoveryGeneration.current) return
       if (!result.redirect || typeof result.url !== 'string' || result.url.length === 0) {
         throw new Error('The company identity provider did not return a sign-in URL.')
       }
@@ -88,14 +110,14 @@ export function CompanySsoLogin({ returnTo, initialOrganizationId = '', redirect
       <p className="muted">Enter the company identifier supplied by your administrator, then choose its configured identity provider.</p>
     </div>
     <form className="company-sso-discovery-form" onSubmit={(event) => void discover(event)}>
-      <Field hint="This lookup uses an explicit company id and does not infer access from an email domain." label="Company identifier">
-        <input autoComplete="organization" name="companySsoOrganizationId" onChange={(event) => setOrganizationId(event.target.value)} placeholder="acme" value={organizationId} />
+      <Field hint="Ask your administrator for your company identifier." label="Company identifier">
+        <input autoComplete="organization" name="companySsoOrganizationId" onChange={(event) => handleOrganizationChange(event.target.value)} placeholder="acme" value={organizationId} />
       </Field>
       <Button busy={lookupBusy} kind="secondary" type="submit">Find providers</Button>
     </form>
     {error && <Notice kind="error">{error}</Notice>}
-    {providers !== null && providers.length === 0 && <Notice kind="info">No active company identity providers are configured.</Notice>}
-    {providers !== null && providers.length > 0 && <div aria-label="Company identity providers" className="company-sso-provider-list">
+    {resolvedOrganizationId === organizationId.trim() && providers !== null && providers.length === 0 && <Notice kind="info">No active company identity providers are configured.</Notice>}
+    {resolvedOrganizationId === organizationId.trim() && providers !== null && providers.length > 0 && <div aria-label="Company identity providers" className="company-sso-provider-list">
       {providers.map((provider) => <Button
         aria-label={`Continue with ${provider.displayName}`}
         busy={providerBusy === provider.providerId}
