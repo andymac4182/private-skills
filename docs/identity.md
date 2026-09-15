@@ -131,8 +131,10 @@ multi-instance deployments.
 The web Node host composes Better Auth with the company SSO and persisted
 service-token repositories. Its `IdentityInfrastructure.runMigrations()`
 entrypoint runs those three reviewed plans in order, using the configured
-`PSKILLS_BETTER_AUTH_SCHEMA` for all application-owned identity tables and the
-configured service-token table name when supplied. The lower-level
+`PSKILLS_BETTER_AUTH_SCHEMA` for the Better Auth and private SSO tables. The
+service-token schema remains public for compatibility unless the host
+explicitly supplies `apiTokenSchemaName` or `PSKILLS_API_TOKEN_SCHEMA`; its
+configured table name is preserved. The lower-level
 `runtime.runMigrations()` above remains the Better Auth-only entrypoint for
 callers that construct the package runtime directly.
 

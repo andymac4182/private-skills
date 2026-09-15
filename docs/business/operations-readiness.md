@@ -137,10 +137,13 @@ process.
    unsafe change, then run the web host's
    `IdentityInfrastructure.runMigrations()` once before accepting traffic.
    That entrypoint applies Better Auth, company SSO, and service-token schemas
-   in order, using the configured schema and table names. Apply additive
-   expand/contract changes for populated tables. Never infer a migration from
-   the old registry table, and never run an unreviewed destructive down
-   migration against a populated identity database.
+   in order, using the configured table names and the explicit API-token schema
+   option when one is supplied. The Better Auth and private SSO tables follow
+   `PSKILLS_BETTER_AUTH_SCHEMA`; service-token storage remains public by
+   default for compatibility. Apply additive expand/contract changes for
+   populated tables. Never infer a migration from the old registry table, and
+   never run an unreviewed destructive down migration against a populated
+   identity database.
 3. **Apply the remaining application schemas.** Create the billing and registry
    tables using their current schema helpers and configured names, then record
    the resulting schema version and indexes. If a deployment does not use the
