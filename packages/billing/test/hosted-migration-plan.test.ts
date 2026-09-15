@@ -75,6 +75,7 @@ describe('hosted billing migration plan', () => {
         rowCount: 0,
         columns: spec.columns,
         constraints: [
+          ...spec.columns.filter((column) => !column.nullable).map((column) => ({ name: `${spec.name}_${column.name}_not_null`, type: 'n', definition: `NOT NULL ${column.name}` })),
           { name: `${spec.name}_pkey`, type: 'primary', definition: `PRIMARY KEY (${spec.primaryKey.join(', ')})` },
           ...spec.uniqueConstraints.map((columns, index) => ({ name: `${spec.name}_unique_${index}`, type: 'unique', definition: `UNIQUE (${columns.join(', ')})` })),
           ...spec.checks.map((check, index) => ({ name: `${spec.name}_check_${index}`, type: 'check', definition: `CHECK (${check})` })),
@@ -85,6 +86,13 @@ describe('hosted billing migration plan', () => {
     expect(validateBillingCreationReadback(target)).toEqual({ tableCount: 5, columnCount: 51, checkCount: 13, physicalIndexCount: 9, zeroRows: true });
     expect(() => validateBillingCreationReadback({ ...target, tables: target.tables.map((table, index) => index === 0 ? { ...table, rowCount: 1 } : table) })).toThrow(/not empty/u);
     expect(() => validateBillingCreationReadback({ ...target, schemaNames: ['billing_shadow'] })).toThrow(/public schema/u);
+    const wrongDirection = {
+      ...target,
+      tables: target.tables.map((table) => table.name.endsWith('_webhook_events')
+        ? { ...table, indexes: table.indexes.map((index) => index.name.endsWith('_events_org_idx') ? { ...index, definition: index.definition.replace('DESC', 'ASC') } : index) }
+        : table),
+    };
+    expect(() => validateBillingCreationReadback(wrongDirection)).toThrow(/secondary index definition/u);
   });
 
   it('writes a bounded baseline artifact with mode 0600', async () => {
