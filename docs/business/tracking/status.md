@@ -34,3 +34,5 @@ Brand selection; actual legal entity and support contact; real identity-provider
 
 - Root independently verified anonymous marketing homepage HTTP 200 and app login link, and read the rendered public page in browser. Interactive tab click was not completed because that browser tab became unavailable; do not count it as a passed interaction.
 - Navigation/invitation fixture from d529e42 reported ready at port 5400, launcher 74412. Root browser journey pending.
+
+- Clean release candidate d529e42: release agent reports frozen install, typecheck, 1,001 tests passed (8 skipped), production build. Root browser confirmed corrected single-company prompt and opening grouped mobile navigation as a dialog. Full keyboard/resize and invitation acceptance proof still pending.
