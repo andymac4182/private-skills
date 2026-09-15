@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-16T02:32:34+10:00",
+  "sourceCommit": "7f45b817e6235391e55f4c23412d5d5d84ad185f",
+  "verification": "Independent coordinator rerun",
+  "environment": "Disposable loopback Docker PostgreSQL; generated test tables",
+  "command": "pnpm exec vitest run packages/billing/test/postgres.integration.test.ts packages/billing/test/routes.test.ts tests/operations-postgres-rehearsal.test.ts",
+  "result": {
+    "exitCode": 0,
+    "filesPassed": 3,
+    "testsPassed": 16,
+    "testsSkipped": 0,
+    "durationSeconds": 4.01
+  },
+  "scope": [
+    "Billing PostgreSQL durability and fenced failed-seat recovery",
+    "Dedicated platform recovery capability and ordinary credential denial",
+    "Local database and filesystem restore, including durable worker dispatcher state"
+  ],
+  "limitations": [
+    "No production identity or billing configuration was changed",
+    "This is not a hosted database and blob transactional restore proof",
+    "This focused run does not close the separate metered caller concurrency fix or full launch acceptance"
+  ]
+}
