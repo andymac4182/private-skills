@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { betterAuth } from 'better-auth';
 import { makeSignature } from 'better-auth/crypto';
@@ -48,7 +51,9 @@ import {
 } from '../packages/database/src/index.js';
 import { createRegistryHandler, type RegistryHandler } from '../packages/core/src/index.js';
 import { createTenantHandlerRouter } from '../apps/web/server/tenant-runtime.js';
-import type { Authenticator, BlobStore, Digest, RegistryConfiguration, SkillVersion, StoredBlob } from '../packages/contracts/src/index.js';
+import { FilesSdkBlobStore, digestBytes } from '../packages/storage/src/index.js';
+import { createNodeFilesClient } from '../packages/storage/src/node.js';
+import type { Authenticator, BlobStore, RegistryConfiguration, SkillVersion, StoredBlob } from '../packages/contracts/src/index.js';
 
 /**
  * This is an opt-in, loopback-only rehearsal. A production or non-loopback
@@ -92,46 +97,14 @@ interface TableSnapshot {
   digest: string;
 }
 
-interface RehearsalBlob extends StoredBlob {
-  bytes: Uint8Array;
-}
-
-/** A sealed-object provider double with explicit source/target copy semantics. */
-class RehearsalBlobStore implements BlobStore {
-  private readonly objects = new Map<string, RehearsalBlob>();
-
-  async put(bytes: Uint8Array): Promise<StoredBlob> {
-    const key = `sealed/${randomUUID()}`;
-    return this.putAt(key, bytes);
+async function objectManifest(store: FilesSdkBlobStore, objects: readonly StoredBlob[]): Promise<TableSnapshot> {
+  const rows: string[] = [];
+  for (const object of objects) {
+    const bytes = await store.getVerified(object.key, object.digest);
+    rows.push(JSON.stringify({ key: object.key, digest: object.digest, size: bytes.byteLength }));
   }
-
-  async putAt(key: string, bytes: Uint8Array): Promise<StoredBlob> {
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}` as Digest;
-    const stored: RehearsalBlob = { key, digest, size: bytes.byteLength, bytes: new Uint8Array(bytes) };
-    this.objects.set(key, stored);
-    return { key: stored.key, digest: stored.digest, size: stored.size };
-  }
-
-  async get(key: string): Promise<Uint8Array> {
-    const value = this.objects.get(key);
-    if (!value) throw new Error('sealed object is missing');
-    return new Uint8Array(value.bytes);
-  }
-
-  async remove(key: string): Promise<void> {
-    this.objects.delete(key);
-  }
-
-  async copyTo(target: RehearsalBlobStore): Promise<void> {
-    for (const value of this.objects.values()) await target.putAt(value.key, value.bytes);
-  }
-
-  async manifest(): Promise<TableSnapshot> {
-    const rows = [...this.objects.values()]
-      .map((value) => JSON.stringify({ key: value.key, digest: value.digest, size: value.size }))
-      .sort();
-    return { count: rows.length, digest: createHash('sha256').update(rows.join('\n')).digest('hex') };
-  }
+  rows.sort();
+  return { count: rows.length, digest: createHash('sha256').update(rows.join('\n')).digest('hex') };
 }
 
 function identifier(value: string): string {
@@ -495,7 +468,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it('copies current identity, SSO, token, billing, registry, and sealed-object state to an isolated target', async () => {
+  it('copies current identity, SSO, token, billing, registry, and sealed-object state through the Files SDK filesystem provider', async () => {
     if (!DATABASE_URL) return;
     const runId = `${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const billingRunId = `${process.pid}_${randomUUID().slice(0, 8)}`;
@@ -515,8 +488,20 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const targetIdentity = identity(targetAuthSchema, DATABASE_URL);
     const sourceSsoAuth = ssoMirrorAuth(sourceAuthSchema, sql);
     const targetSsoAuth = ssoMirrorAuth(targetAuthSchema, sql);
-    const sourceBlobs = new RehearsalBlobStore();
-    const targetBlobs = new RehearsalBlobStore();
+    const storageRoot = await mkdtemp(join(tmpdir(), 'private-skills-operations-files-'));
+    cleanups.push(async () => {
+      await rm(storageRoot, { recursive: true, force: true });
+    });
+    const sourceStorageRoot = join(storageRoot, 'source');
+    const targetStorageRoot = join(storageRoot, 'target');
+    await Promise.all([
+      mkdir(sourceStorageRoot, { recursive: true }),
+      mkdir(targetStorageRoot, { recursive: true }),
+    ]);
+    const sourceClient = await createNodeFilesClient({ provider: 'fs', root: sourceStorageRoot });
+    const targetClient = await createNodeFilesClient({ provider: 'fs', root: targetStorageRoot });
+    const sourceBlobs = new FilesSdkBlobStore({ client: sourceClient, prefix: 'operations' });
+    const targetBlobs = new FilesSdkBlobStore({ client: targetClient, prefix: 'operations' });
 
     cleanups.push(async () => {
       await sourceIdentity.close().catch(() => undefined);
@@ -607,9 +592,10 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       tableName: targetRegistry,
       stateFactory: () => defaultRegistryState({ production: false, allowUnscanned: true, policyRevision: 'operations-rehearsal-policy' }),
     });
-    const artifactBytes = new TextEncoder().encode('shared restored operations object');
-    const artifactA = await sourceBlobs.putAt('sealed/operations-a', artifactBytes);
-    const artifactB = await sourceBlobs.putAt('sealed/operations-b', artifactBytes);
+    const artifactBytesA = new TextEncoder().encode('tenant A restored operations object');
+    const artifactBytesB = new TextEncoder().encode('tenant B restored operations object');
+    const artifactA = await sourceBlobs.put(artifactBytesA);
+    const artifactB = await sourceBlobs.put(artifactBytesB);
     await sourceRegistryRepository.transaction(ORG_A, (state) => state.skills.push(skill(ORG_A, 'operations-skill-a', artifactA)));
     await sourceRegistryRepository.transaction(ORG_B, (state) => state.skills.push(skill(ORG_B, 'operations-skill-b', artifactB)));
 
@@ -624,7 +610,10 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       [`${sourceBillingTable}_webhook_events`, `${targetBillingTable}_webhook_events`],
       [`${sourceBillingTable}_usage_operations`, `${targetBillingTable}_usage_operations`],
     ]);
-    await sourceBlobs.copyTo(targetBlobs);
+    for (const artifact of [artifactA, artifactB]) {
+      const bytes = await sourceBlobs.getVerified(artifact.key, artifact.digest);
+      await targetClient.upload(artifact.key, bytes, { contentType: 'application/octet-stream' });
+    }
     const targetIdentityTables = await identityTables(sql, targetAuthSchema);
     expect(targetIdentityTables).toEqual(await identityTables(sql, sourceAuthSchema));
     const identityTargetNames = new Map([...identitySourceManifest.keys()].map((logical) => [logical, qualifiedSchema(targetAuthSchema, logical.slice('identity:'.length))]));
@@ -640,9 +629,9 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     ]);
     await compareManifest(sql, identitySourceManifest, identityTargetNames);
     await compareManifest(sql, publicSourceManifest, publicTargetNames);
-    await expect(targetBlobs.manifest()).resolves.toEqual(await sourceBlobs.manifest());
-    await expect(targetBlobs.get(artifactA.key)).resolves.toEqual(artifactBytes);
-    await expect(targetBlobs.get(artifactB.key)).resolves.toEqual(artifactBytes);
+    await expect(objectManifest(targetBlobs, [artifactA, artifactB])).resolves.toEqual(await objectManifest(sourceBlobs, [artifactA, artifactB]));
+    await expect(targetBlobs.getVerified(artifactA.key, artifactA.digest)).resolves.toEqual(artifactBytesA);
+    await expect(targetBlobs.getVerified(artifactB.key, artifactB.digest)).resolves.toEqual(artifactBytesB);
     const restoredIdentityRows = await sql.unsafe<{ users: string; organizations: string; members: string; sessions: string }[]>(
       `SELECT
         (SELECT count(*)::text FROM ${qualifiedSchema(targetAuthSchema, 'user')}) AS users,
@@ -720,8 +709,44 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const restoredARequest = new Request(`${ORIGIN}/v1/skills/operations-skill-a`, { headers: { cookie: targetSession.headers.get('cookie') ?? '' } });
     const restoredA = await router(restoredARequest);
     expect(restoredA.status).toBe(200);
+    const sessionCookie = targetSession.headers.get('cookie') ?? '';
+    const restoredResolutionResponse = await router(new Request(`${ORIGIN}/v1/resolve`, {
+      method: 'POST',
+      headers: { cookie: sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'skill', ref: '@operations/shared', version: '1.0.0' }),
+    }));
+    expect(restoredResolutionResponse.status).toBe(200);
+    const restoredResolution = (await restoredResolutionResponse.json()) as { resolution: { digest: string } };
+    expect(restoredResolution.resolution.digest).toBe(artifactA.digest);
+    const restoredAuthorizationResponse = await router(new Request(`${ORIGIN}/v1/install-authorizations`, {
+      method: 'POST',
+      headers: { cookie: sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ resolution: restoredResolution.resolution }),
+    }));
+    expect(restoredAuthorizationResponse.status).toBe(201);
+    const restoredAuthorization = (await restoredAuthorizationResponse.json()) as { authorization: { id: string } };
+    const restoredDescriptorResponse = await router(new Request(`${ORIGIN}/v1/artifacts/${encodeURIComponent(artifactA.digest)}/download`, {
+      method: 'POST',
+      headers: { cookie: sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceId: 'operations-skill-a', authorizationId: restoredAuthorization.authorization.id }),
+    }));
+    expect(restoredDescriptorResponse.status).toBe(200);
+    const restoredDescriptor = (await restoredDescriptorResponse.json()) as { url: string; digest: string };
+    expect(restoredDescriptor.digest).toBe(artifactA.digest);
+    const restoredTransfer = await router(new Request(restoredDescriptor.url, { headers: { cookie: sessionCookie } }));
+    expect(restoredTransfer.status).toBe(200);
+    const restoredBytes = new Uint8Array(await restoredTransfer.arrayBuffer());
+    expect(restoredBytes).toEqual(artifactBytesA);
+    expect(await digestBytes(restoredBytes)).toBe(artifactA.digest);
+    const foreignArtifactDownload = await router(new Request(`${ORIGIN}/v1/artifacts/${encodeURIComponent(artifactB.digest)}/download`, {
+      method: 'POST',
+      headers: { cookie: sessionCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceId: 'operations-skill-b', authorizationId: restoredAuthorization.authorization.id }),
+    }));
+    expect(foreignArtifactDownload.status).toBe(404);
+    await expect(foreignArtifactDownload.text()).resolves.not.toContain(artifactB.digest);
     const foreignRequest = new Request(`${ORIGIN}/v1/skills/operations-skill-b`, {
-      headers: { cookie: targetSession.headers.get('cookie') ?? '', 'x-organization-id': ORG_B },
+      headers: { cookie: sessionCookie, 'x-organization-id': ORG_B },
     });
     const foreign = await router(foreignRequest);
     expect(foreign.status).toBe(404);

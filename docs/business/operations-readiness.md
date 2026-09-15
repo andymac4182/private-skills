@@ -8,10 +8,13 @@ restore, or a release approval.
 
 The decision for this revision is **no release on operations evidence**. The
 repository has useful local identity, billing, tenant-routing, scanner, and
-registry/object tests, but it does not yet prove a restored Better Auth and
-billing database serving two companies through the deployed `Request` runtime.
-The local and hosted restore artifacts currently prove the registry/object
-boundary only. A green registry restore cannot substitute for identity,
+registry/object tests, plus an opt-in local rehearsal that restores the
+current Better Auth, SSO, service-token, billing, registry, and object state
+for two companies. It still does not prove a restored Better Auth and billing
+database serving two companies through the deployed `Request` runtime. The
+hosted restore artifact remains registry/object-only, and the local rehearsal
+uses the Files SDK filesystem adapter rather than the selected hosted
+provider. A green registry restore cannot substitute for identity,
 membership, session, SSO, service-token, billing, or usage restoration.
 
 The existing Eve model setting is retained: `PSKILLS_REVIEW_MODEL` defaults to
@@ -72,7 +75,7 @@ The following evidence is available locally and is bounded as described:
 | `packages/billing/test/index.test.ts`, `tests/billing-routes.test.ts` | Passed in the targeted local run below | Exercises provider-neutral billing state, tenant-derived billing routes, idempotency and role checks. It does not connect a live billing provider or restore billing tables. |
 | `tests/restore-rehearsal.test.ts` and `tests/restore-rehearsal-postgres.test.ts` | Passed in the targeted local run below | Covers the registry/object restore adapter and PostgreSQL preflight. The hermetic fixture uses `allowUnscanned: true`; it is registry-only and does not prove Better Auth, company SSO, service tokens, or billing recovery. |
 | `docs/evidence/hosted-restore-20260910.json` | Records source revision `114`, five referenced objects, and digest/size checks | This is a sanitized isolated logical restore of registry metadata and referenced objects. It records operator quiescence, not a provider lifecycle guarantee, and did not start a restored public origin or scanner. |
-| `tests/operations-postgres-rehearsal.test.ts` | Passed with a loopback-only disposable PostgreSQL URL in the audit follow-up | Migrates unique Better Auth source/target schemas, mounts the adopted SSO schema, copies every current identity table including a `ssoProvider` mirror row, the private SSO row, service-token row, all five billing tables, registry state, and sealed-object bytes, then verifies row manifests, session and membership authorization, token revocation, billing mappings/reservations, and a restored two-company `Request` route. The audited `4016c4b` runtime does not compose the bridge, so callback/runtime wiring remains open even though the mirror persistence boundary is exercised here. This is local proof and does not establish hosted or production recovery. |
+| `tests/operations-postgres-rehearsal.test.ts` | Passed with a loopback-only disposable PostgreSQL URL in the audit follow-up | Migrates unique Better Auth source/target schemas, mounts the adopted SSO schema, copies every current identity table including a `ssoProvider` mirror row, the private SSO row, service-token row, all five billing tables, registry state, and sealed-object bytes through the real `files-sdk/fs` adapter in separate temporary source/target roots. It verifies row and object manifests with `FilesSdkBlobStore.getVerified`, session and membership authorization, token revocation, billing mappings/reservations, and a restored two-company `Request` flow from resolve through install authorization, download descriptor, and exact-byte transfer digest; the foreign company's object and metadata are denied. The audited `4016c4b` runtime does not compose the bridge, and this test uses a local filesystem provider plus direct table copy, so callback/runtime wiring and hosted provider recovery remain open. |
 | `packages/identity/test/postgres.integration.test.ts`, `packages/identity/test/company-sso.postgres.integration.test.ts`, and `packages/billing/test/postgres.integration.test.ts` | Not run in the local proof because their opt-in database environment variables were unset | These are the required next disposable-PostgreSQL exercises for Better Auth, SSO, token, and billing persistence. No production credentials belong in the test environment or its output. |
 | `docs/business/launch-acceptance.md` | The audited launch matrix had obsolete Better Auth acceptance links; integration follow-up `2bbfe28` replaced them with `apps/web/src/tenant-identity-route.postgres.integration.test.ts` and `tests/e2e/multi-tenant-postgres-acceptance.test.ts` | The reference gap is recorded as resolved by the follow-up. The replacement PostgreSQL proofs still do not close hosted runtime, provider, or full backup/restore acceptance. |
 
@@ -90,9 +93,10 @@ credential, mutate application data, or perform a backup. A passing validator
 shows that this document still names the current code boundaries; it is not a
 hosted acceptance result.
 
-The full PostgreSQL rehearsal was run with `PSKILLS_OPERATIONS_POSTGRES_URL`
-set by a local password-file wrapper to the disposable loopback database, and
-with the password and URL value kept out of output. The command was:
+The full PostgreSQL and object-provider rehearsal was run with
+`PSKILLS_OPERATIONS_POSTGRES_URL` set by a local password-file wrapper to the
+disposable loopback database, and with the password and URL value kept out of
+output. The command run inside that wrapper was:
 
 ```sh
 node_modules/.bin/vitest run tests/operations-postgres-rehearsal.test.ts
@@ -101,6 +105,17 @@ node_modules/.bin/vitest run tests/operations-postgres-rehearsal.test.ts
 When the opt-in variable is absent, this test reports skipped. That is an
 intentional safe default and must be reported as missing evidence rather than
 as a successful restore.
+
+The object side of this local proof uses the actual `files-sdk@2.4.0`
+`files-sdk/fs` adapter via `createNodeFilesClient({ provider: "fs", root })`.
+The source and target roots are unique temporary directories; the test copies
+the sealed keys into the target provider, reads them back with
+`FilesSdkBlobStore.getVerified`, and then downloads the restored tenant A
+artifact through the registry authorization route to verify its exact bytes
+and SHA-256 digest. It also attempts the tenant B artifact with tenant A's
+authorization and verifies a stable denial without exposing the foreign
+digest. No provider double is involved. This remains a local filesystem
+provider proof, not S3, R2, Vercel Blob, or hosted-origin recovery.
 
 ## Migration procedure
 
@@ -218,6 +233,15 @@ prompt.
 Restore into a new database, object prefix, and temporary origin. Do not write
 the live database or live object provider while testing. The restore order
 should preserve Better Auth relationships and application invariants:
+
+The executable local rehearsal uses the real Files SDK filesystem adapter
+(`files-sdk/fs`) with separate temporary source and target roots. It copies
+immutable object keys into the target provider, validates both target objects
+with `getVerified`, and exercises the restored tenant route through
+authorization, descriptor, and transfer. The local fixture sets
+`allowUnscanned: true` only to keep the rehearsal deterministic; this is not a
+scanner-admission or hosted-provider result. S3, R2, Vercel Blob, and the
+deployed runtime still require their own isolated proof.
 
 1. Create the target schema and run the reviewed Better Auth migration plan.
 2. Restore `user` rows and the related `account`, `session`, and `verification`
@@ -357,11 +381,12 @@ The explicit remaining actions are:
    planner and unique source/target schemas locally, but it emits no launch
    artifact and has no hosted migration record.
 2. Repeat the consistent backup and isolated restore with the integrated
-   runtime and actual object provider. The local rehearsal covers Better Auth,
-   private company SSO and the `ssoProvider` mirror schema from `01a3650`,
-   service tokens, all billing tables (including unbound webhook events),
-   registry state, and sealed objects. Decide the shared-user and global-event
-   policy for per-company restores before a hosted drill.
+   runtime and selected hosted object provider. The local rehearsal now covers
+   Better Auth, private company SSO and the `ssoProvider` mirror schema from
+   `01a3650`, service tokens, all billing tables (including unbound webhook
+   events), registry state, and sealed objects through the real Files SDK
+   filesystem adapter. Decide the shared-user and global-event policy for
+   per-company restores before a hosted drill.
 3. Run the two-company restored-origin matrix through the actual `Request`
    runtime, including session, active membership, token, SSO, billing, usage,
    registry, object, scanner, and Eve callback behavior.
