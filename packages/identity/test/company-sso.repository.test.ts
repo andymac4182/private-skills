@@ -84,6 +84,8 @@ describe('company SSO migration and repositories', () => {
     expect(COMPANY_SSO_SCHEMA_SQL).toContain('revision bigint NOT NULL DEFAULT 1');
     expect(COMPANY_SSO_SCHEMA_SQL).not.toContain('domain');
     expect(companySsoSchemaSql('identity_company_sso')).toContain('"identity_company_sso"');
+    expect(companySsoSchemaSql('identity_company_sso', 'identity')).toContain('CREATE SCHEMA IF NOT EXISTS "identity"');
+    expect(companySsoSchemaSql('identity_company_sso', 'identity')).toContain('"identity"."identity_company_sso"');
     expect(() => companySsoSchemaSql('bad-name')).toThrow();
   });
 
@@ -131,5 +133,22 @@ describe('company SSO migration and repositories', () => {
     const repository = createPostgresJsCompanySsoRepository(client);
     expect(await repository.get('acme', 'acme-oidc')).toEqual(record);
     expect(calls[0]?.parameters).toEqual(['acme', 'acme-oidc']);
+  });
+
+  it('runs the explicit migration in the configured schema', async () => {
+    const pool = new PoolFixture();
+    const repository = new PostgresCompanySsoRepository(pool, {
+      tableName: 'identity_company_sso',
+      schemaName: 'identity',
+      autoMigrate: true,
+    });
+
+    await repository.runMigrations();
+    expect(pool.calls).toHaveLength(1);
+    expect(pool.calls[0]?.text).toContain('CREATE SCHEMA IF NOT EXISTS "identity"');
+    expect(pool.calls[0]?.text).toContain('"identity"."identity_company_sso"');
+    // Concurrent repository calls share the one startup migration promise.
+    await Promise.all([repository.runMigrations(), repository.list('acme')]);
+    expect(pool.calls.filter(({ text }) => text.includes('CREATE SCHEMA IF NOT EXISTS')).length).toBe(1);
   });
 });

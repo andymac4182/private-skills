@@ -43,6 +43,10 @@ export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
+  /** Resolves only after opted-in Better Auth and company SSO migrations finish. */
+  ready: Promise<void>;
+  /** Runs both reviewed migrations explicitly for a controlled deployment job. */
+  runMigrations: () => Promise<void>;
 }
 
 /** Keep the API-token browser exchange on the same durable secret boundary as identity. */
@@ -122,7 +126,7 @@ export function createIdentityInfrastructure(
 ): IdentityInfrastructure {
   if (!options.postgresPool) {
     const identity = createIdentityRuntimeFromEnv(env);
-    if (!identity) return { identity: null, apiTokens: null, companySso: null };
+    if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
     throw new Error('Better Auth API tokens require a shared PostgreSQL pool');
   }
 
@@ -131,16 +135,18 @@ export function createIdentityInfrastructure(
     env.PSKILLS_COMPANY_SSO_AUTO_MIGRATE ?? env.COMPANY_SSO_AUTO_MIGRATE,
     false,
   );
+  const identitySchemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const appOrigin = options.canonicalOrigin ?? canonicalOriginFromEnv(env);
   const companySsoRepository = createPostgresCompanySsoRepository(options.postgresPool, {
     ...(configuredCompanySsoTable === undefined ? {} : { tableName: configuredCompanySsoTable }),
+    ...(identitySchemaName === undefined ? {} : { schemaName: identitySchemaName }),
     autoMigrate: companySsoAutoMigrate,
   });
   const identity = createIdentityRuntimeFromEnv(env, {
     plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
     trustedOrigins: (request) => companySsoTrustedOrigins(request, companySsoRepository),
   });
-  if (!identity) return { identity: null, apiTokens: null, companySso: null };
+  if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
@@ -166,7 +172,18 @@ export function createIdentityInfrastructure(
     autoMigrate: companySsoAutoMigrate,
     bridge: createCompanySsoBetterAuthBridge(identity.auth),
   });
-  return { identity, apiTokens, companySso };
+  // Better Auth's own `ready` covers its mirrored tables. The private company
+  // table has a separate reviewed schema, so an explicitly opted-in startup
+  // waits for both migrations before the Node handler is exposed.
+  const runMigrations = async (): Promise<void> => {
+    await identity.runMigrations();
+    await companySsoRepository.runMigrations();
+  };
+  const ready = identity.ready.then(async () => {
+    if (companySsoAutoMigrate) await companySsoRepository.runMigrations();
+  });
+  void ready.catch(() => undefined);
+  return { identity, apiTokens, companySso, ready, runMigrations };
 }
 
 function createCompanySsoAuthorizer(identity: IdentityRuntimeAdmin): CompanySsoAuthorizer {

@@ -441,6 +441,15 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(postgresPool === undefined ? {} : { postgresPool }),
     ...(identityEnabled(env) ? { canonicalOrigin: canonicalOriginFromEnv(env) } : {}),
   });
+  // Do not expose a partially migrated identity runtime. When the deployment
+  // explicitly opts into startup migrations, this waits for Better Auth's
+  // configured schema and the company SSO table in that same schema.
+  try {
+    await identityInfrastructure.ready;
+  } catch (error) {
+    await identityInfrastructure.identity?.close().catch(() => undefined);
+    throw error;
+  }
   // Adoption is an explicit deployment operation. Construct only when the
   // Better Auth runtime and its shared PostgreSQL pool are both present; the
   // endpoint remains unavailable for file/edge/legacy-only profiles.
