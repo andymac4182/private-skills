@@ -213,6 +213,14 @@ When tenant-bound Eve review is enabled, the same deployment invokes
 invocation drains one bounded cursor page and persists the next page in the
 registry state row, allowing all explicitly provisioned organizations to be
 attempted within the daily UTC window without making one function unbounded.
+Set `PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS` when the host needs a lower
+budget; the dispatcher keeps a persistence margin before the lease or platform
+deadline. A tenant review claim is durably marked `starting` before cost
+reservation or the Eve session call. `starting` and `uncertain` records remain
+fenced after lease expiry until an operator or reconciliation process resolves
+the provider outcome, so a host crash cannot automatically open a duplicate
+session. Definite provider rejections release their claim and can retry on the
+next scheduled invocation.
 
 Use immutable scanner references. A SkillsGuard source-built snapshot must
 include its source revision and prepared artifact digest:

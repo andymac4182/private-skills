@@ -61,6 +61,13 @@ export interface TenantReviewDispatchLedger {
     sessionId?: string;
     now: Date;
   }): Promise<boolean>;
+  /** Commit the external-call boundary before reserving or opening a session. */
+  markStarting(input: {
+    organizationId: string;
+    operationKey: string;
+    claimToken: string;
+    now: Date;
+  }): Promise<boolean>;
   /** Fence a provider result whose outcome cannot be retried safely. */
   markUncertain(input: {
     organizationId: string;
@@ -126,7 +133,7 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       const records = recordsFor(mutable);
       const existing = records.find((record) => record.operationKey === operationKey);
       if (existing?.state === 'completed') return { claimed: false, reason: 'completed' as const };
-      if (existing?.state === 'uncertain') return { claimed: false, reason: 'in-progress' as const };
+      if (existing?.state === 'starting' || existing?.state === 'uncertain') return { claimed: false, reason: 'in-progress' as const };
       if (existing?.state === 'claimed' && leaseIsActive(existing, now)) {
         return { claimed: false, reason: 'in-progress' as const };
       }
@@ -161,12 +168,36 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       const mutable = state as TenantReviewDispatchState;
       const records = recordsFor(mutable);
       const record = records.find((candidate) => candidate.operationKey === operationKey);
-      if (!record || record.state !== 'claimed' || record.claimToken !== claimToken || !leaseIsActive(record, now)) return false;
+      if (!record || (record.state !== 'claimed' && record.state !== 'starting') || record.claimToken !== claimToken || !leaseIsActive(record, now)) return false;
       record.state = 'completed';
       delete record.claimToken;
+      delete record.startingAt;
       record.updatedAt = now.toISOString();
       record.completedAt = now.toISOString();
       if (sessionId !== undefined) record.sessionId = sessionId;
+      mutable.tenantReviewDispatches = pruneRecords(records, this.maxRecords);
+      return true;
+    });
+  }
+
+  async markStarting(input: {
+    organizationId: string;
+    operationKey: string;
+    claimToken: string;
+    now: Date;
+  }): Promise<boolean> {
+    const organizationId = boundedText(input.organizationId, 'organizationId');
+    const operationKey = boundedText(input.operationKey, 'operationKey');
+    const claimToken = boundedText(input.claimToken, 'claimToken');
+    const now = validDate(input.now);
+    return this.repository.transaction(organizationId, (state) => {
+      const mutable = state as TenantReviewDispatchState;
+      const records = recordsFor(mutable);
+      const record = records.find((candidate) => candidate.operationKey === operationKey);
+      if (!record || record.state !== 'claimed' || record.claimToken !== claimToken || !leaseIsActive(record, now)) return false;
+      record.state = 'starting';
+      record.startingAt = now.toISOString();
+      record.updatedAt = now.toISOString();
       mutable.tenantReviewDispatches = pruneRecords(records, this.maxRecords);
       return true;
     });
@@ -188,9 +219,10 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       const mutable = state as TenantReviewDispatchState;
       const records = recordsFor(mutable);
       const record = records.find((candidate) => candidate.operationKey === operationKey);
-      if (!record || record.state !== 'claimed' || record.claimToken !== claimToken) return false;
+      if (!record || (record.state !== 'claimed' && record.state !== 'starting') || record.claimToken !== claimToken) return false;
       record.state = 'uncertain';
       delete record.claimToken;
+      delete record.startingAt;
       record.updatedAt = now.toISOString();
       record.uncertainAt = now.toISOString();
       if (sessionId !== undefined) record.sessionId = sessionId;
@@ -211,7 +243,7 @@ export class StateRepositoryTenantReviewDispatchLedger implements TenantReviewDi
       const mutable = state as TenantReviewDispatchState;
       const records = recordsFor(mutable);
       const record = records.find((candidate) => candidate.operationKey === operationKey);
-      if (!record || record.state !== 'claimed' || record.claimToken !== claimToken) return false;
+      if (!record || (record.state !== 'claimed' && record.state !== 'starting') || record.claimToken !== claimToken) return false;
       mutable.tenantReviewDispatches = records.filter((candidate) => candidate !== record);
       return true;
     });
@@ -436,6 +468,33 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
       retry.push(organizationId);
       continue;
     }
+    if (remainingBudgetMs() <= persistMarginMs || currentNow().getTime() >= deadlineMs) {
+      const released = await releaseAfterFailure(options.ledger, target.organizationId, operationKey, claimToken);
+      if (!released) throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not save its continuation');
+      retry.push(organizationId);
+      continue;
+    }
+    // Persist the external-call boundary before reserving cost or asking Eve
+    // to create a session. A host crash after the provider accepts the call
+    // can otherwise leave only an expired lease, allowing the next invocation
+    // to start a duplicate session. `starting` is intentionally fenced until
+    // an operator or reconciliation process resolves the outcome.
+    let starting: boolean;
+    try {
+      starting = await options.ledger.markStarting({
+        organizationId: target.organizationId,
+        operationKey,
+        claimToken,
+        now: currentNow(),
+      });
+    } catch {
+      throw new TenantReviewDispatchError('TENANTS_UNAVAILABLE', 'Tenant review dispatch could not persist its starting state');
+    }
+    if (!starting) {
+      outcomes.push({ ...base, status: 'failed', reason: 'lease-lost' });
+      retry.push(organizationId);
+      continue;
+    }
     let result: ReviewTriggerResult;
     try {
       const providerBudgetMs = Math.floor(remainingBudgetMs() - persistMarginMs);
@@ -493,8 +552,8 @@ export async function dispatchTenantDailyReviews(options: TenantReviewDispatcher
         outcomes.push({ ...base, status: 'started', ...(sessionId === undefined ? {} : { sessionId }) });
       }
     } catch {
-      // The provider has already accepted the session. Keep the claim and
-      // cost reservation for a retry/reconciliation rather than releasing it.
+      // The provider has already accepted the session. Fence the durable
+      // starting record for retry/reconciliation rather than releasing it.
       const held = await markUncertainAfterFailure(
         options.ledger,
         target.organizationId,
@@ -590,7 +649,7 @@ function recordsFor(state: TenantReviewDispatchState): TenantReviewDispatchRecor
   }
   if (!Array.isArray(state.tenantReviewDispatches)) throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review dispatch state is invalid', false);
   for (const record of state.tenantReviewDispatches) {
-    if (!record || typeof record !== 'object' || typeof record.operationKey !== 'string' || (record.state !== 'claimed' && record.state !== 'completed' && record.state !== 'uncertain') || typeof record.leaseExpiresAt !== 'string' || typeof record.updatedAt !== 'string') {
+    if (!record || typeof record !== 'object' || typeof record.operationKey !== 'string' || (record.state !== 'claimed' && record.state !== 'starting' && record.state !== 'completed' && record.state !== 'uncertain') || typeof record.leaseExpiresAt !== 'string' || typeof record.updatedAt !== 'string') {
       throw new TenantReviewDispatchError('DISPATCH_CONFIGURATION', 'Tenant review dispatch state is invalid', false);
     }
   }

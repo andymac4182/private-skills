@@ -120,6 +120,12 @@ instead of masking a delegation failure.
    first page. The route requires the deployment `CRON_SECRET`; it never
    accepts a tenant selector from the request. Do not share a candidate
    snapshot or review session across tenants.
+   Before reserving cost or calling Eve, the host durably changes the tenant's
+   dispatch record from `claimed` to `starting`. A `starting` or `uncertain`
+   record is fenced even after its lease expires and requires reconciliation;
+   it is never automatically retried after a host crash because the provider
+   may already have accepted the session. A definite provider rejection may
+   release its claim for the next scheduled attempt.
 4. Preserve the existing proposal-only boundary. Consolidation review cannot
    publish, merge, install, or bypass scanner admission.
 

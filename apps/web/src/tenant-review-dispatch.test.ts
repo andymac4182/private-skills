@@ -143,6 +143,61 @@ describe('tenant review dispatch', () => {
     expect(calls).toBe(1);
   });
 
+  it('fences a durable starting record after a crash between provider start and completion', async () => {
+    const repo = repository();
+    const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);
+    const operationKey = 'common-skill-review:2026-09-16';
+    const claim = await ledger.claim({
+      organizationId: 'acme',
+      operationKey,
+      now: DAY,
+      leaseMs: 5_000,
+    });
+    expect(claim.claimed).toBe(true);
+    await expect(ledger.markStarting({
+      organizationId: 'acme',
+      operationKey,
+      claimToken: claim.claimToken!,
+      now: DAY,
+    })).resolves.toBe(true);
+
+    // Model the provider accepting the session immediately before the host
+    // crashes, leaving the durable starting row without a completion write.
+    let providerStarts = 1;
+    let duplicateAttempts = 0;
+    const afterCrash = new Date(DAY.getTime() + 10_000);
+    const result = await dispatchTenantDailyReviews({
+      listTenants: async () => [target('acme')],
+      triggerForTenant: async () => async () => {
+        duplicateAttempts += 1;
+        providerStarts += 1;
+        return { sessionId: 'duplicate', status: 'started' as const };
+      },
+      ledger,
+      leaseMs: 5_000,
+      maxDurationMs: 1_000,
+      now: () => afterCrash,
+    });
+
+    expect(result.outcomes).toEqual([{
+      organizationId: 'acme',
+      operationKey,
+      status: 'in-progress',
+    }]);
+    expect(duplicateAttempts).toBe(0);
+    expect(providerStarts).toBe(1);
+    const held = await repo.read('acme') as {
+      tenantReviewDispatches?: Array<{ state: string; startingAt?: string; leaseExpiresAt?: string }>;
+    };
+    expect(held.tenantReviewDispatches).toEqual([
+      expect.objectContaining({
+        state: 'starting',
+        startingAt: DAY.toISOString(),
+        leaseExpiresAt: new Date(DAY.getTime() + 5_000).toISOString(),
+      }),
+    ]);
+  });
+
   it('refreshes the lease clock and fences a provider that returns after its lease', async () => {
     const repo = repository();
     const ledger = new StateRepositoryTenantReviewDispatchLedger(repo);

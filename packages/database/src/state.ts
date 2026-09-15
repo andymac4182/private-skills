@@ -188,14 +188,16 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
 
 function validTenantReviewDispatchRecord(value: unknown): boolean {
   if (!isObject(value) || typeof value.operationKey !== 'string' || value.operationKey.length === 0 || value.operationKey.length > 256 ||
-      (value.state !== 'claimed' && value.state !== 'completed' && value.state !== 'uncertain') || typeof value.leaseExpiresAt !== 'string' || value.leaseExpiresAt.length > 64 ||
+      (value.state !== 'claimed' && value.state !== 'starting' && value.state !== 'completed' && value.state !== 'uncertain') || typeof value.leaseExpiresAt !== 'string' || value.leaseExpiresAt.length > 64 ||
       typeof value.updatedAt !== 'string' || value.updatedAt.length > 64) return false;
   if (value.claimToken !== undefined && (typeof value.claimToken !== 'string' || value.claimToken.length === 0 || value.claimToken.length > 256)) return false;
   if (value.sessionId !== undefined && (typeof value.sessionId !== 'string' || value.sessionId.length === 0 || value.sessionId.length > 256)) return false;
+  if (value.startingAt !== undefined && (typeof value.startingAt !== 'string' || value.startingAt.length > 64)) return false;
   if (value.completedAt !== undefined && (typeof value.completedAt !== 'string' || value.completedAt.length > 64)) return false;
   if (value.uncertainAt !== undefined && (typeof value.uncertainAt !== 'string' || value.uncertainAt.length > 64)) return false;
   if (value.state === 'claimed' && value.claimToken === undefined) return false;
-  if (value.state !== 'claimed' && value.claimToken !== undefined) return false;
+  if (value.state !== 'claimed' && value.state !== 'starting' && value.claimToken !== undefined) return false;
+  if (value.state === 'starting' && value.startingAt === undefined) return false;
   return value.state !== 'uncertain' || value.uncertainAt !== undefined;
 }
 

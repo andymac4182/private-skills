@@ -446,12 +446,14 @@ export interface StateRepository { read(organizationId: string): Promise<Registr
 /** Durable scheduler bookkeeping; no prompts, credentials, or candidate text. */
 export interface TenantReviewDispatchRecord {
   operationKey: string;
+  /** `starting` is durably committed before an external provider call. */
   /** `uncertain` means the provider may have accepted the session; retries are fenced. */
-  state: 'claimed' | 'completed' | 'uncertain';
+  state: 'claimed' | 'starting' | 'completed' | 'uncertain';
   claimToken?: string;
   leaseExpiresAt: string;
   sessionId?: string;
   updatedAt: string;
+  startingAt?: string;
   completedAt?: string;
   uncertainAt?: string;
 }
