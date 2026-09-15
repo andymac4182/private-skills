@@ -19,7 +19,7 @@ import {
   createPostgresBillingRepository,
 } from './repository.js';
 import { createPlanCatalog, DEFAULT_PLAN_DEFINITIONS, planForPriceId, priceIdsFromEnv, validatePlanDefinition, validatePlanLimits } from './plans.js';
-import { createLocalBillingAdapter, createStripeBillingAdapter, LocalBillingAdapter, StripeBillingAdapter, StripeBillingError, type LocalBillingAdapterOptions, type StripeBillingAdapterOptions } from './stripe.js';
+import { createLocalBillingAdapter, createStripeBillingAdapter, LocalBillingAdapter, StripeBillingAdapter, StripeBillingError, type LocalBillingAdapterOptions, type LocalBillingTestSession, type StripeBillingAdapterOptions } from './stripe.js';
 import { BillingWebhookError, verifyWebhookSignature, signWebhookPayload, type VerifyWebhookOptions } from './webhooks.js';
 import {
   BILLING_PROTOCOL_VERSION,
@@ -81,6 +81,24 @@ export class BillingError extends Error {
     this.retryable = options.retryable ?? false;
     this.details = options.details;
   }
+}
+
+/** Browser-safe projection of a session created by the local test adapter. */
+export interface BillingLocalDemoSession {
+  provider: 'local';
+  mode: 'test';
+  kind: 'checkout' | 'portal';
+  id: string;
+  status: 'open' | 'completed';
+  planId?: PlanId;
+  planLabel?: string;
+  returnUrl: string;
+  cancelUrl?: string;
+}
+
+export interface BillingLocalDemoCompletion {
+  session: BillingLocalDemoSession;
+  webhookStatus: WebhookHandlingResult['status'];
 }
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set<BillingSubscriptionStatus>(['active', 'trialing']);
@@ -900,6 +918,103 @@ export class BillingService {
 
   portal(request: PortalRequest): Promise<HostedBillingSession> {
     return this.createCustomerPortalSession(request);
+  }
+
+  /**
+   * Return a safe, tenant-bound projection for a local test session. These
+   * sessions are process-local fixtures; live Stripe sessions never enter
+   * this surface.
+   */
+  getLocalDemoSession(
+    organizationId: string,
+    kind: LocalBillingTestSession['kind'],
+    sessionId: string,
+  ): BillingLocalDemoSession | null {
+    const normalizedOrganizationId = validateBillingOrganizationId(organizationId);
+    const normalizedSessionId = validateBillingIdentifier(sessionId, 'sessionId', 256);
+    const provider = this.localDemoProvider();
+    const session = provider.getTestSession(normalizedSessionId);
+    if (!session || session.kind !== kind || session.organizationId !== normalizedOrganizationId) return null;
+    if (session.kind === 'checkout') {
+      const plan = this.catalog.get(session.planId as PlanId);
+      if (!plan || plan.id === 'free') return null;
+      return {
+        provider: 'local',
+        mode: 'test',
+        kind: 'checkout',
+        id: session.id,
+        status: session.status,
+        planId: plan.id,
+        planLabel: plan.label,
+        returnUrl: session.successUrl,
+        cancelUrl: session.cancelUrl,
+      };
+    }
+    return {
+      provider: 'local',
+      mode: 'test',
+      kind: 'portal',
+      id: session.id,
+      status: session.status,
+      returnUrl: session.returnUrl,
+    };
+  }
+
+  /**
+   * Complete a local checkout through the same signed webhook path used by
+   * provider deliveries. The browser cannot supply a plan, customer, or
+   * signing secret, and retries remain safe because the event id is stable.
+   */
+  async completeLocalDemoCheckout(organizationId: string, sessionId: string): Promise<BillingLocalDemoCompletion> {
+    const normalizedOrganizationId = validateBillingOrganizationId(organizationId);
+    const normalizedSessionId = validateBillingIdentifier(sessionId, 'sessionId', 256);
+    const provider = this.localDemoProvider();
+    const source = provider.getTestSession(normalizedSessionId);
+    if (!source || source.kind !== 'checkout' || source.organizationId !== normalizedOrganizationId) {
+      throw new BillingError('BILLING_SESSION_NOT_FOUND', 'The local checkout session is unavailable.', 404);
+    }
+    const existing = this.getLocalDemoSession(normalizedOrganizationId, 'checkout', normalizedSessionId);
+    if (!existing) throw new BillingError('BILLING_SESSION_NOT_FOUND', 'The local checkout session is unavailable.', 404);
+    if (existing.status === 'completed') return { session: existing, webhookStatus: 'duplicate' };
+    if (!this.webhookSecret) throw new BillingError('BILLING_WEBHOOK_UNAVAILABLE', 'Local billing webhook verification is not configured.', 503, { retryable: true });
+    const created = Math.floor(this.now() / 1_000);
+    const rawBody = createTestSubscriptionEvent({
+      eventId: `evt_local_checkout_${source.id}`,
+      created,
+      organizationId: normalizedOrganizationId,
+      customerId: source.customerId,
+      // Keep the fixture identifier in the same `sub_` namespace accepted by
+      // the provider payload parser. It remains deterministic and scoped to
+      // this local session while exercising the real webhook path.
+      subscriptionId: `sub_local_${source.id}`,
+      priceId: source.priceId,
+      currentPeriodStart: created,
+      currentPeriodEnd: created + 30 * 86_400,
+    });
+    const signature = await signWebhookPayload(rawBody, this.webhookSecret, created);
+    const webhook = await this.handleWebhook(rawBody, signature);
+    const entitlement = await this.entitlement(normalizedOrganizationId);
+    const expectedSubscriptionId = `sub_local_${source.id}`;
+    if ((webhook.status !== 'applied' && webhook.status !== 'duplicate')
+      || entitlement.subscriptionId !== expectedSubscriptionId
+      || entitlement.planId !== source.planId
+      || entitlement.state !== 'active') {
+      throw new BillingError('BILLING_SESSION_NOT_COMPLETED', 'The signed local checkout event did not establish the requested entitlement.', 409, {
+        details: { webhookStatus: webhook.status },
+      });
+    }
+    provider.markTestCheckoutCompleted(source.id);
+    const completed = this.getLocalDemoSession(normalizedOrganizationId, 'checkout', normalizedSessionId);
+    if (!completed) throw new BillingError('BILLING_SESSION_NOT_FOUND', 'The local checkout session is unavailable.', 404);
+    return { session: completed, webhookStatus: webhook.status };
+  }
+
+  private localDemoProvider(): LocalBillingAdapter {
+    const status = this.status();
+    if (!status.enabled || status.provider !== 'local' || status.mode !== 'test' || !status.webhookVerification || !(this.provider instanceof LocalBillingAdapter)) {
+      throw new BillingError('BILLING_UNAVAILABLE', 'The local billing demo is available only in local test mode.', 404);
+    }
+    return this.provider;
   }
 
   /**

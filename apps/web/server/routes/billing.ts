@@ -30,6 +30,13 @@ export const BILLING_ROUTE_PATHS = Object.freeze({
   webhook: '/v1/billing/webhook',
 })
 
+/** API paths used only by the local, deterministic hosted billing demo. */
+export const BILLING_DEMO_ROUTE_PATHS = Object.freeze({
+  checkout: '/v1/billing/test-checkout',
+  checkoutComplete: '/v1/billing/test-checkout/complete',
+  portal: '/v1/billing/test-portal',
+})
+
 /** Capability carried only by the separately provisioned recovery operator credential. */
 export const BILLING_SEAT_RECOVERY_SCOPE = 'billing:seat-recovery' as const
 
@@ -101,6 +108,21 @@ export interface BillingConsoleResponse {
 export interface BillingSessionResponse {
   protocolVersion: typeof BILLING_PROTOCOL_VERSION
   session: HostedBillingSession
+}
+
+export interface BillingLocalDemoSessionResponse {
+  protocolVersion: typeof BILLING_PROTOCOL_VERSION
+  session: {
+    provider: 'local'
+    mode: 'test'
+    kind: 'checkout' | 'portal'
+    id: string
+    status: 'open' | 'completed'
+    planId?: PlanId
+    planLabel?: string
+    returnUrl: string
+    cancelUrl?: string
+  }
 }
 
 export interface BillingInvoiceLookup {
@@ -255,6 +277,12 @@ function optionalString(value: unknown, field: string, max = 256): string | unde
   return value.trim()
 }
 
+function queryString(request: Request, field: string, max = 256): string | undefined {
+  let value: string | null
+  try { value = new URL(request.url).searchParams.get(field) } catch { throw new BillingRouteError('INVALID_REQUEST', 'Billing session URL is invalid.', 400) }
+  return optionalString(value ?? undefined, field, max)
+}
+
 function invoiceText(value: unknown, field: string, max: number): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) throw new BillingRouteError('INVOICE_PROVIDER_ERROR', `Invoice ${field} is invalid.`, 502, true)
   return value.trim()
@@ -381,7 +409,8 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
     // Seat hold inspection/recovery is deliberately not part of the
     // owner/admin company surface. A tenant must not be able to release a
     // hold by posting a self-attested failure proof.
-    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal) return undefined
+    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal
+      && path !== BILLING_DEMO_ROUTE_PATHS.checkout && path !== BILLING_DEMO_ROUTE_PATHS.checkoutComplete && path !== BILLING_DEMO_ROUTE_PATHS.portal) return undefined
     try {
       const principal = await billingPrincipal(options, request)
       const organizationId = principal.organizationId.trim()
@@ -394,6 +423,23 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
         const status = options.service.status()
         const entitlement = await options.service.entitlement(organizationId)
         return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, invoices: await invoicesFor(options, organizationId, status, entitlement) }, { headers: { 'cache-control': 'no-store' } })
+      }
+      if (path === BILLING_DEMO_ROUTE_PATHS.checkout || path === BILLING_DEMO_ROUTE_PATHS.portal) {
+        if (method(request) !== 'GET') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Local billing demo sessions only accept GET.', 405)
+        const sessionId = queryString(request, 'session')
+        if (!sessionId) throw new BillingRouteError('INVALID_REQUEST', 'session is required.', 400)
+        const kind = path === BILLING_DEMO_ROUTE_PATHS.checkout ? 'checkout' : 'portal'
+        const session = options.service.getLocalDemoSession(organizationId, kind, sessionId)
+        if (!session) throw new BillingRouteError('BILLING_SESSION_NOT_FOUND', 'The local billing demo session is unavailable.', 404)
+        return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, session } satisfies BillingLocalDemoSessionResponse, { headers: { 'cache-control': 'no-store' } })
+      }
+      if (path === BILLING_DEMO_ROUTE_PATHS.checkoutComplete) {
+        if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Local checkout completion only accepts POST.', 405)
+        const body = await readJsonBody(request, maxBodyBytes)
+        const sessionId = optionalString(body.session, 'session')
+        if (!sessionId) throw new BillingRouteError('INVALID_REQUEST', 'session is required.', 400)
+        const completion = await options.service.completeLocalDemoCheckout(organizationId, sessionId)
+        return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, completed: true, webhookStatus: completion.webhookStatus, session: completion.session }, { headers: { 'cache-control': 'no-store' } })
       }
       if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Billing actions only accept POST.', 405)
       const body = await readJsonBody(request, maxBodyBytes)

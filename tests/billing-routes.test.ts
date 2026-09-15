@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BillingService,
   createMemoryBillingRepository,
+  createLocalBillingAdapter,
   createPlanCatalog,
   createTestSubscriptionEvent,
   signWebhookPayload,
@@ -9,7 +10,7 @@ import {
   type HostedBillingSession,
   type ProviderCustomer,
 } from '../packages/billing/src/index.js'
-import { createBillingRoutes, type BillingInvoiceRecord } from '../apps/web/server/routes/billing.js'
+import { BILLING_DEMO_ROUTE_PATHS, createBillingRoutes, type BillingInvoiceRecord } from '../apps/web/server/routes/billing.js'
 
 const NOW = Date.parse('2026-09-15T00:00:00.000Z')
 const NOW_SECONDS = Math.floor(NOW / 1_000)
@@ -74,6 +75,101 @@ async function seedSubscription(service: BillingService, organizationId = 'org-c
 }
 
 describe('company billing route factory', () => {
+  it('serves a tenant-bound local checkout completion and portal return demo', async () => {
+    const service = serviceWith(createLocalBillingAdapter({ baseUrl: 'https://private-skills.example' }))
+    const routes = createBillingRoutes({ service, authenticate: auth(principal()) })
+
+    const checkoutResponse = await routes(new Request('https://private-skills.example/v1/billing/checkout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: 'team' }),
+    }))
+    expect(checkoutResponse?.status).toBe(200)
+    const checkout = await json(checkoutResponse!)
+    const checkoutUrl = new URL((checkout.session as { url: string }).url)
+    expect(checkoutUrl.pathname).toBe('/billing/test-checkout')
+    const checkoutSessionId = checkoutUrl.searchParams.get('session')
+    expect(checkoutSessionId).toBeTruthy()
+
+    const checkoutPage = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkout}?session=${encodeURIComponent(checkoutSessionId!)}`))
+    expect(checkoutPage?.status).toBe(200)
+    await expect(json(checkoutPage!)).resolves.toMatchObject({ session: { provider: 'local', mode: 'test', kind: 'checkout', planId: 'team', status: 'open' } })
+
+    const completed = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkoutComplete}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session: checkoutSessionId }),
+    }))
+    expect(completed?.status).toBe(200)
+    await expect(json(completed!)).resolves.toMatchObject({ completed: true, webhookStatus: 'applied', session: { status: 'completed', planId: 'team' } })
+    await expect(service.entitlement('org-console')).resolves.toMatchObject({ planId: 'team', state: 'active', source: 'verified-webhook' })
+
+    const retried = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkoutComplete}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session: checkoutSessionId }),
+    }))
+    await expect(json(retried!)).resolves.toMatchObject({ completed: true, webhookStatus: 'duplicate', session: { status: 'completed' } })
+
+    const portalResponse = await routes(new Request('https://private-skills.example/v1/billing/portal', { method: 'POST', body: '{}' }))
+    expect(portalResponse?.status).toBe(200)
+    const portal = await json(portalResponse!)
+    const portalUrl = new URL((portal.session as { url: string }).url)
+    expect(portalUrl.pathname).toBe('/billing/test-portal')
+    const portalSessionId = portalUrl.searchParams.get('session')
+    expect(portalSessionId).toBeTruthy()
+    const portalPage = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.portal}?session=${encodeURIComponent(portalSessionId!)}`))
+    expect(portalPage?.status).toBe(200)
+    await expect(json(portalPage!)).resolves.toMatchObject({ session: { provider: 'local', mode: 'test', kind: 'portal', status: 'open' } })
+
+    const readerRoutes = createBillingRoutes({ service, authenticate: auth(principal('org-console', ['reader'])) })
+    const readerDemo = await readerRoutes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkout}?session=${encodeURIComponent(checkoutSessionId!)}`))
+    expect(readerDemo?.status).toBe(403)
+    const otherTenantRoutes = createBillingRoutes({ service, authenticate: auth(principal('org-other')) })
+    const otherTenantDemo = await otherTenantRoutes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkout}?session=${encodeURIComponent(checkoutSessionId!)}`))
+    expect(otherTenantDemo?.status).toBe(404)
+
+    const stripeProvider = { ...provider({ customers: [], checkouts: [], portals: [] }), id: 'stripe' as const }
+    const stripeService = serviceWith(stripeProvider)
+    const stripeRoutes = createBillingRoutes({ service: stripeService, authenticate: auth(principal()) })
+    const stripeDemo = await stripeRoutes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkout}?session=${encodeURIComponent(checkoutSessionId!)}`))
+    expect(stripeDemo?.status).toBe(404)
+  })
+
+  it('keeps a local checkout open when its signed fixture event is stale', async () => {
+    const adapter = createLocalBillingAdapter({ baseUrl: 'https://private-skills.example' })
+    const service = serviceWith(adapter)
+    const routes = createBillingRoutes({ service, authenticate: auth(principal()) })
+    const checkoutResponse = await routes(new Request('https://private-skills.example/v1/billing/checkout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: 'team' }),
+    }))
+    const checkout = await json(checkoutResponse!)
+    const checkoutSessionId = new URL((checkout.session as { url: string }).url).searchParams.get('session')!
+    const customerId = adapter.getTestSession(checkoutSessionId)
+    if (!customerId || customerId.kind !== 'checkout') throw new Error('local checkout fixture did not persist')
+    const newerBody = createTestSubscriptionEvent({
+      eventId: 'evt_newer_local_subscription',
+      created: NOW_SECONDS + 1,
+      organizationId: 'org-console',
+      customerId: customerId.customerId,
+      subscriptionId: 'sub_existing_local_subscription',
+      priceId: 'price_business_console',
+    })
+    await expect(service.handleWebhook(newerBody, await signWebhookPayload(newerBody, SECRET, NOW_SECONDS + 1))).resolves.toMatchObject({ status: 'applied' })
+
+    const completion = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkoutComplete}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session: checkoutSessionId }),
+    }))
+    expect(completion?.status).toBe(409)
+    await expect(json(completion!)).resolves.toMatchObject({ code: 'BILLING_SESSION_NOT_COMPLETED' })
+    const checkoutPage = await routes(new Request(`https://private-skills.example${BILLING_DEMO_ROUTE_PATHS.checkout}?session=${encodeURIComponent(checkoutSessionId)}`))
+    await expect(json(checkoutPage!)).resolves.toMatchObject({ session: { status: 'open' } })
+  })
+
   it('returns a tenant-bound console snapshot and verifies invoice customer mapping', async () => {
     const calls: { lookups: Array<{ organizationId: string; customerId: string }>; records: BillingInvoiceRecord[] } = {
       lookups: [],

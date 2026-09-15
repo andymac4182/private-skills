@@ -149,6 +149,12 @@ function readinessTone(readiness: BillingConsoleViewData['readiness']): 'good' |
   return 'muted'
 }
 
+function localBillingReturnState(): 'success' | 'cancelled' | undefined {
+  if (typeof window === 'undefined') return undefined
+  const value = new URLSearchParams(window.location.search).get('billing')
+  return value === 'success' || value === 'cancelled' ? value : undefined
+}
+
 function usageRows(snapshot: UsageSnapshot): Array<{ label: string; used: number; limit: number; format: (value: number) => string }> {
   return [
     { label: 'Seats', used: snapshot.usage.seats, limit: snapshot.limits.seats, format: (value) => String(value) },
@@ -203,6 +209,7 @@ export function BillingView({ fetcher = fetch }: BillingViewProps) {
   const currentPlan = data.plans.find((plan) => plan.id === data.entitlement.planId)
   const rows = usageRows(data.usage)
   const providerlessUsage = data.status.usageEnforcement && !data.status.providerReady
+  const localReturnState = localBillingReturnState()
   return <div className="view-heading billing-view">
     <div className="page-intro">
       <div><span className="eyebrow">Company billing</span><h1>Billing &amp; usage</h1><p className="muted">Plan, enforced limits, provider state, and invoices for the active company.</p></div>
@@ -212,6 +219,8 @@ export function BillingView({ fetcher = fetch }: BillingViewProps) {
     {data.readiness === 'unconfigured' && providerlessUsage && <Notice kind="info">Usage limits are enforced from the durable billing ledger. Hosted checkout, subscription management, and invoice history are unavailable until a billing provider is configured.</Notice>}
     {data.readiness === 'unconfigured' && !providerlessUsage && <Notice kind="warning">Billing is not configured for this company yet. Checkout and subscription management stay closed until server Price IDs and provider settings are present.</Notice>}
     {data.readiness === 'test' && <Notice kind="warning">Test mode is active. Provider sessions and webhooks are fixtures or test transactions; this view does not imply a live charge.</Notice>}
+    {localReturnState === 'success' && <Notice kind="success">Local test checkout completed. This plan is shown only when the signed fixture webhook has updated the server billing ledger.</Notice>}
+    {localReturnState === 'cancelled' && <Notice kind="info">Local test checkout was cancelled. No charge or entitlement change occurred.</Notice>}
     {!canManage && <Notice kind="info">Billing changes require an owner or admin role. The server enforces this role for every billing request.</Notice>}
     {actionError && <Notice kind="error">{actionError}</Notice>}
     <div className="grid-4 billing-summary-stats">
