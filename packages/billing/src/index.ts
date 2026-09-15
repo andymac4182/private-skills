@@ -33,6 +33,8 @@ import {
   type BillingProvider,
   type BillingProviderId,
   type BillingRepository,
+  type BillingSeatRecoveryProof,
+  type BillingSeatRecoveryResult,
   type BillingSeatReservation,
   type BillingServiceOptions,
   type BillingStatus,
@@ -323,6 +325,35 @@ function seatReservationSnapshot(
       usage: { ...usage },
       entitlement,
     },
+  };
+}
+
+function normalizeSeatRecoveryProof(value: BillingSeatRecoveryProof): BillingSeatRecoveryProof {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new BillingError('INVALID_SEAT_RECOVERY_PROOF', 'A seat recovery proof is required', 400);
+  }
+  if (value.kind !== 'known-failure' && value.kind !== 'writer-terminated') {
+    throw new BillingError('INVALID_SEAT_RECOVERY_PROOF', 'Seat recovery proof kind is invalid', 400);
+  }
+  let reference: string;
+  try {
+    reference = validateBillingIdentifier(value.reference, 'proof.reference', 256);
+  } catch {
+    throw new BillingError('INVALID_SEAT_RECOVERY_PROOF', 'Seat recovery proof reference is invalid', 400);
+  }
+  return { kind: value.kind, reference };
+}
+
+function cloneSeatReservation(reservation: BillingSeatReservation): BillingSeatReservation {
+  return {
+    operationKey: reservation.operationKey,
+    status: reservation.status,
+    ...(reservation.committed === undefined ? {} : { committed: reservation.committed }),
+    ...(reservation.subjectKey === undefined ? {} : { subjectKey: reservation.subjectKey }),
+    ...(reservation.revision === undefined ? {} : { revision: reservation.revision }),
+    ...(reservation.recoveryProof === undefined ? {} : { recoveryProof: { ...reservation.recoveryProof } }),
+    createdAt: reservation.createdAt,
+    updatedAt: reservation.updatedAt,
   };
 }
 
@@ -1129,6 +1160,86 @@ export class BillingService {
       }
       state.usage = next;
       return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, next, entitlement, false);
+    });
+  }
+
+  /**
+   * List active Better Auth holds for an authenticated company operator. An
+   * active hold is intentionally not inferred to be expired from its age;
+   * the writer may still be committing the identity row.
+   */
+  async activeSeatReservations(organizationId: string): Promise<readonly BillingSeatReservation[]> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const state = await this.repository.read(normalized);
+    return (state.seatReservations ?? [])
+      .filter((reservation) => reservation.status === 'active' && reservation.subjectKey === true)
+      .map(cloneSeatReservation);
+  }
+
+  /**
+   * Explicitly release a Better Auth hold after the host proves that the
+   * identity writer failed or was terminated. The proof is recorded beside
+   * the durable hold. A settled committed hold, or a settled hold released
+   * through another lifecycle hook, can never be released through this path.
+   */
+  async releaseSeatAfterFailure(
+    organizationId: string,
+    operationKey: string,
+    proof: BillingSeatRecoveryProof,
+  ): Promise<BillingSeatRecoveryResult> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const normalizedProof = normalizeSeatRecoveryProof(proof);
+    const nowMs = this.now();
+    return this.repository.transaction(normalized, (state) => {
+      state.usage = periodUsage(state.usage, nowMs);
+      const { reservations } = seatState(state);
+      const revision = seatRevision(state);
+      const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (!existing || existing.subjectKey !== true) {
+        throw new BillingError('SEAT_RESERVATION_NOT_FOUND', 'The Better Auth seat hold does not exist', 404);
+      }
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
+      if (existing.status === 'settled') {
+        if (existing.committed === true || existing.recoveryProof === undefined) {
+          throw new BillingError('SEAT_RESERVATION_SETTLED', 'The Better Auth seat hold is already settled', 409);
+        }
+        if (existing.recoveryProof.kind !== normalizedProof.kind || existing.recoveryProof.reference !== normalizedProof.reference) {
+          throw new BillingError('IDEMPOTENCY_CONFLICT', 'The seat hold was recovered with different proof', 409);
+        }
+        return {
+          operationKey: normalizedKey,
+          idempotent: true,
+          reservation: cloneSeatReservation(existing),
+          snapshot: {
+            organizationId: normalized,
+            limits: { ...entitlement.limits },
+            usage: { ...state.usage },
+            entitlement,
+          },
+        };
+      }
+      if (existing.committed === true) {
+        throw new BillingError('SEAT_RESERVATION_SETTLED', 'The Better Auth seat hold is already committed', 409);
+      }
+      state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
+      existing.status = 'settled';
+      existing.committed = false;
+      existing.subjectKey = true;
+      existing.revision = revision;
+      existing.recoveryProof = { ...normalizedProof };
+      existing.updatedAt = new Date(nowMs).toISOString();
+      return {
+        operationKey: normalizedKey,
+        idempotent: false,
+        reservation: cloneSeatReservation(existing),
+        snapshot: {
+          organizationId: normalized,
+          limits: { ...entitlement.limits },
+          usage: { ...state.usage },
+          entitlement,
+        },
+      };
     });
   }
 

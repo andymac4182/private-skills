@@ -516,6 +516,29 @@ describe('transactional usage enforcement', () => {
     await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
   });
 
+  it('exposes active failed-write holds and requires matching operator proof to release them', async () => {
+    const service = serviceWith();
+    await service.reserveSeat('org-seat-recovery', 'failed-member-hold', { subjectKey: true });
+    await expect(service.activeSeatReservations('org-seat-recovery')).resolves.toMatchObject([
+      { operationKey: 'failed-member-hold', status: 'active', subjectKey: true, committed: false },
+    ]);
+
+    const proof = { kind: 'known-failure' as const, reference: 'better-auth-create-member-err-1' };
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', proof)).resolves.toMatchObject({
+      idempotent: false,
+      reservation: { operationKey: 'failed-member-hold', status: 'settled', committed: false, recoveryProof: proof },
+      snapshot: { usage: { seats: 0 } },
+    });
+    await expect(service.activeSeatReservations('org-seat-recovery')).resolves.toEqual([]);
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', proof)).resolves.toMatchObject({ idempotent: true });
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', { kind: 'known-failure', reference: 'different-proof' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+
+    await service.reserveSeat('org-seat-recovery', 'committed-member-hold', { subjectKey: true });
+    await service.commitSeat('org-seat-recovery', 'committed-member-hold');
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'committed-member-hold', { kind: 'writer-terminated', reference: 'writer-terminated-1' })).rejects.toMatchObject({ code: 'SEAT_RESERVATION_SETTLED' });
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'missing-member-hold', proof)).rejects.toMatchObject({ code: 'SEAT_RESERVATION_NOT_FOUND' });
+  });
+
   it('resets monthly counters while retaining seats and storage', async () => {
     let now = Date.parse('2026-01-31T23:00:00.000Z');
     const service = serviceWith({ enabled: false, now: () => now });

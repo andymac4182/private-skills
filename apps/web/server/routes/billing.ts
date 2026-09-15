@@ -8,6 +8,7 @@ import type {
   BillingEntitlement,
   BillingMode,
   BillingProviderId,
+  BillingSeatRecoveryProof,
   BillingStatus,
   HostedBillingSession,
   PlanId,
@@ -20,6 +21,8 @@ import type {
 export const BILLING_ROUTE_PATHS = Object.freeze({
   root: '/v1/billing',
   invoices: '/v1/billing/invoices',
+  seatReservations: '/v1/billing/seat-reservations',
+  seatRecovery: '/v1/billing/seat-recovery',
   checkout: '/v1/billing/checkout',
   portal: '/v1/billing/portal',
   webhook: '/v1/billing/webhook',
@@ -350,7 +353,7 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
   return async (request: Request): Promise<Response | undefined> => {
     const path = safePath(request)
     if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return webhook(request)
-    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal) return undefined
+    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.seatReservations && path !== BILLING_ROUTE_PATHS.seatRecovery && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal) return undefined
     try {
       const principal = await billingPrincipal(options, request)
       const organizationId = principal.organizationId.trim()
@@ -363,6 +366,27 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
         const status = options.service.status()
         const entitlement = await options.service.entitlement(organizationId)
         return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, invoices: await invoicesFor(options, organizationId, status, entitlement) }, { headers: { 'cache-control': 'no-store' } })
+      }
+      if (path === BILLING_ROUTE_PATHS.seatReservations) {
+        if (method(request) !== 'GET') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat reservations only accept GET.', 405)
+        return Response.json({
+          protocolVersion: BILLING_PROTOCOL_VERSION,
+          reservations: await options.service.activeSeatReservations(organizationId),
+        }, { headers: { 'cache-control': 'no-store' } })
+      }
+      if (path === BILLING_ROUTE_PATHS.seatRecovery) {
+        if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat recovery only accepts POST.', 405)
+        const body = await readJsonBody(request, maxBodyBytes)
+        const operationKey = optionalString(body.operationKey, 'operationKey', 256)
+        if (!operationKey) throw new BillingRouteError('INVALID_REQUEST', 'operationKey is required.', 400)
+        const rawProof = body.proof
+        if (!rawProof || typeof rawProof !== 'object' || Array.isArray(rawProof)) throw new BillingRouteError('INVALID_REQUEST', 'proof is required.', 400)
+        const proof = rawProof as Partial<BillingSeatRecoveryProof>
+        if (proof.kind !== 'known-failure' && proof.kind !== 'writer-terminated') throw new BillingRouteError('INVALID_REQUEST', 'proof.kind is invalid.', 400)
+        const reference = optionalString(proof.reference, 'proof.reference', 256)
+        if (!reference) throw new BillingRouteError('INVALID_REQUEST', 'proof.reference is required.', 400)
+        const recovery = await options.service.releaseSeatAfterFailure(organizationId, operationKey, { kind: proof.kind, reference })
+        return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, recovery }, { headers: { 'cache-control': 'no-store' } })
       }
       if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Billing actions only accept POST.', 405)
       const body = await readJsonBody(request, maxBodyBytes)

@@ -151,8 +151,29 @@ export interface BillingSeatReservation {
   subjectKey?: boolean;
   /** Billing transaction revision that last changed this lifecycle entry. */
   revision?: number;
+  /** Operator proof recorded when a failed identity writer is released. */
+  recoveryProof?: BillingSeatRecoveryProof;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Explicit proof required to release a Better Auth seat hold whose after hook
+ * could not run. The reference is an operator-owned incident/request id; it
+ * is deliberately not an exception message or a client supplied tenant id.
+ */
+export type BillingSeatRecoveryProofKind = 'known-failure' | 'writer-terminated';
+
+export interface BillingSeatRecoveryProof {
+  kind: BillingSeatRecoveryProofKind;
+  reference: string;
+}
+
+export interface BillingSeatRecoveryResult {
+  operationKey: string;
+  idempotent: boolean;
+  reservation: BillingSeatReservation;
+  snapshot: UsageSnapshot;
 }
 
 export interface BillingOrganizationState {

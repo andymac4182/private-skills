@@ -195,6 +195,11 @@ export function assertBillingState(state: BillingOrganizationState): void {
       if (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation committed flag is invalid');
       if (reservation.subjectKey !== undefined && typeof reservation.subjectKey !== 'boolean') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation subject flag is invalid');
       if (reservation.revision !== undefined) nonnegativeInteger(reservation.revision, 'seatReservation.revision');
+      if (reservation.recoveryProof !== undefined) {
+        if (!reservation.recoveryProof || typeof reservation.recoveryProof !== 'object' || Array.isArray(reservation.recoveryProof)) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation recovery proof is invalid');
+        if (reservation.recoveryProof.kind !== 'known-failure' && reservation.recoveryProof.kind !== 'writer-terminated') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation recovery proof kind is invalid');
+        validateBillingIdentifier(reservation.recoveryProof.reference, 'seatReservation.recoveryProof.reference');
+      }
       if (!Number.isFinite(Date.parse(reservation.createdAt)) || !Number.isFinite(Date.parse(reservation.updatedAt))) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation timestamp is invalid');
     }
   }
@@ -731,12 +736,20 @@ function rowSeatReservations(row: Record<string, unknown>): BillingSeatReservati
     if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') || (reservation.subjectKey !== undefined && typeof reservation.subjectKey !== 'boolean') || (reservation.revision !== undefined && (!Number.isSafeInteger(reservation.revision) || reservation.revision < 0)) || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
       throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
     }
+    const recoveryProof = reservation.recoveryProof;
+    if (recoveryProof !== undefined) {
+      if (!recoveryProof || typeof recoveryProof !== 'object' || Array.isArray(recoveryProof) || (recoveryProof.kind !== 'known-failure' && recoveryProof.kind !== 'writer-terminated') || typeof recoveryProof.reference !== 'string') {
+        throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation recovery proof is invalid');
+      }
+      validateBillingIdentifier(recoveryProof.reference, 'seatReservation.recoveryProof.reference');
+    }
     return {
       operationKey: reservation.operationKey,
       status: reservation.status,
       ...(reservation.committed === undefined ? {} : { committed: reservation.committed }),
       ...(reservation.subjectKey === undefined ? {} : { subjectKey: reservation.subjectKey }),
       ...(reservation.revision === undefined ? {} : { revision: reservation.revision }),
+      ...(recoveryProof === undefined ? {} : { recoveryProof: { kind: recoveryProof.kind, reference: recoveryProof.reference } }),
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
     };

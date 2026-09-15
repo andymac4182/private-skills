@@ -44,13 +44,27 @@ work.
 The bounded route factory is `createBillingRoutes()` in
 `apps/web/server/routes/billing.ts`. It exposes the company snapshot at
 `GET /v1/billing`, the most recent 100 invoice records at
-`GET /v1/billing/invoices`, and POST
+`GET /v1/billing/invoices`, active Better Auth seat holds at
+`GET /v1/billing/seat-reservations`, and POST
 checkout, portal, and raw-body webhook paths. The route factory authenticates
 the request, requires an `owner` or `admin` role, derives the organization from
 the server principal, and never accepts a browser organization, customer, or
 subscription selector. Hosted actions are closed unless the service reports a
 provider, a configured recurring Price ID, trusted return URLs, and verified
 webhook signing.
+
+When a Better Auth member or invitation write fails after `beforeAddMember` or
+`beforeCreateInvitation` reserves a seat, the host can first inspect the exact
+opaque hold key through `GET /v1/billing/seat-reservations`, then call
+`POST /v1/billing/seat-recovery` with that key and a proof object whose kind is
+`known-failure` or `writer-terminated` plus a bounded operator incident or
+request reference. The route is owner/admin-only and takes the tenant only from
+the authenticated principal. Billing records the proof with the settled hold,
+retries with the same proof idempotently, rejects a different proof, and
+rejects a hold already committed or released by an identity lifecycle hook.
+The operator must establish that the identity writer returned a known failure
+or was terminated and verify that no member/invitation row was committed before
+calling recovery; an old hold is never expired automatically.
 
 The Node runtime now constructs this service from the environment, using the
 separate PostgreSQL billing repository whenever a PostgreSQL pool is present.
@@ -92,10 +106,12 @@ subscriptions, webhook event IDs, monthly/current usage, and idempotent usage
 operations. The migration does not alter identity or registry tables.
 
 Each mutation runs in a database transaction. The usage row is created if
-needed and locked with `FOR UPDATE`; the complete organization billing state
+needed and locked with `FOR UPDATE`; the bounded organization billing state
 is read, synchronously updated, validated, and committed or rolled back as one
-unit. Customer and subscription provider identifiers have database-wide
-unique constraints, and webhook `(provider, event_id)` claims are unique. A
+unit. Metered transactions additionally lock only the exact requested usage
+operation keys, so a replay of an aged key remains atomic without scanning an
+unbounded operation ledger. Customer and subscription provider identifiers have
+database-wide unique constraints, and webhook `(provider, event_id)` claims are unique. A
 losing concurrent event claim aborts before any entitlement mutation and is
 reported as a duplicate after the durable row is re-read.
 
@@ -166,9 +182,13 @@ re-invites can reuse a settled lifecycle key. Active identity holds do not
 expire automatically because the billing transaction cannot prove that a
 Better Auth write has stopped; they remain fail-closed until an explicit
 success/failure lifecycle hook or operator reconciliation resolves them. When
-a Better Auth write aborts before its after-hook, the host must call
-`releaseSeat()` with the exact generated subject key; that durable abort path
-is safe to retry and is covered by the disposable PostgreSQL lifecycle proof.
+a Better Auth write aborts before its after-hook, the host must use the
+owner/admin `seat-recovery` path with the exact generated subject key and
+explicit failure proof; that durable abort path is safe to retry and is covered
+by the disposable PostgreSQL lifecycle proof. The identity source currently
+calls `releaseSeat()` only from `afterRemoveMember`, `afterRejectInvitation`,
+and `afterCancelInvitation`; Better Auth has no failed-write after hook for
+`createMember` or `createInvitation`, so those failures use the recovery path.
 These adapters are omitted when billing explicitly reports disabled, preserving
 the legacy deployment path.
 

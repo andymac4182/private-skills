@@ -487,6 +487,38 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(second.reserveSeat(organizationId, 'pg-inflight-third')).resolves.toMatchObject({ idempotent: false })
   })
 
+  it('durably recovers an aborted Better Auth hold only with matching proof', async () => {
+    const catalog = planCatalog()
+    const first = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const second = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const organizationId = 'org-pg-seat-recovery'
+    const proof = { kind: 'known-failure' as const, reference: 'better-auth-member-write-err-pg' }
+    await first.reserveSeat(organizationId, 'pg-aborted-member', { subjectKey: true })
+    await expect(second.activeSeatReservations(organizationId)).resolves.toMatchObject([
+      { operationKey: 'pg-aborted-member', status: 'active', subjectKey: true },
+    ])
+    await expect(second.releaseSeatAfterFailure(organizationId, 'pg-aborted-member', proof)).resolves.toMatchObject({
+      idempotent: false,
+      reservation: { operationKey: 'pg-aborted-member', status: 'settled', committed: false, recoveryProof: proof },
+    })
+    await expect(first.releaseSeatAfterFailure(organizationId, 'pg-aborted-member', proof)).resolves.toMatchObject({ idempotent: true })
+    await expect(first.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 0 } })
+
+    await first.reserveSeat(organizationId, 'pg-committed-member', { subjectKey: true })
+    await first.commitSeat(organizationId, 'pg-committed-member')
+    await expect(second.releaseSeatAfterFailure(organizationId, 'pg-committed-member', { kind: 'writer-terminated', reference: 'writer-terminated-pg' })).rejects.toMatchObject({ code: 'SEAT_RESERVATION_SETTLED' })
+  })
+
   it('claims one signed webhook delivery across concurrent service instances', async () => {
     const catalog = planCatalog()
     const first = new BillingService({
