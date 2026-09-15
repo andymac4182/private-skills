@@ -359,10 +359,24 @@ describe('registry core handler', () => {
     test.setPrincipal({
       ...principalFor('reader', ['reader'], ['@team']),
       scopes: ['registry:read', 'proxy:resolve'],
+      display: {
+        userName: ' Alice Example ',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs',
+        organizationSlug: 'acme-labs',
+      },
     } as Principal);
     const me = await test.handler(new Request(`${ORIGIN}/v1/me`));
     expect(me.status).toBe(200);
-    expect((await json(me)).scopes).toEqual(['registry:read', 'proxy:resolve']);
+    expect((await json(me))).toMatchObject({
+      scopes: ['registry:read', 'proxy:resolve'],
+      display: {
+        userName: 'Alice Example',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs',
+        organizationSlug: 'acme-labs',
+      },
+    });
 
     test.setPrincipal({
       ...principalFor('read-only', ['reader'], ['@team']),

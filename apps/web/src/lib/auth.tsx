@@ -2,17 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { PropsWithChildren } from 'react'
 import { api, ApiError } from './api'
 import { invitationReturnTo, isInvitationReturnTo } from './invitations'
-import type { AuthSession, Principal } from './types'
+import type { AuthSession, BrowserPrincipal } from './types'
 
 type AuthStatus = 'loading' | 'signed-in' | 'signed-out'
 export interface AuthContextValue {
-  principal: Principal | null
+  principal: BrowserPrincipal | null
   session: AuthSession | null
   status: AuthStatus
   error: string | null
-  signIn: (token: string) => Promise<Principal>
+  signIn: (token: string) => Promise<BrowserPrincipal>
   signOut: () => Promise<void>
-  refresh: () => Promise<Principal | null>
+  refresh: () => Promise<BrowserPrincipal | null>
   switchOrganization: (organizationId: string) => Promise<AuthSession>
 }
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -55,14 +55,14 @@ export function safeLoginReturnTo(value: unknown): string | undefined {
   return invitationReturnTo(id)
 }
 
-function principalFromSession(session: AuthSession): Principal | null {
+function principalFromSession(session: AuthSession): BrowserPrincipal | null {
   const organization = session.activeOrganization
   if (!organization) return null
 
   // This is a display fallback for a brief identity/API handoff. Every
   // registry mutation is still authorized by the server's session principal.
   const role = session.activeMembership?.role && ['owner', 'admin', 'publisher', 'reader'].includes(session.activeMembership.role)
-    ? session.activeMembership.role as Principal['roles'][number]
+    ? session.activeMembership.role as BrowserPrincipal['roles'][number]
     : 'reader'
   return {
     organizationId: organization.id,
@@ -86,7 +86,7 @@ export function providerSignInHref(providerId: string, returnTo?: string, basePa
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
-  const [principal, setPrincipal] = useState<Principal | null>(null)
+  const [principal, setPrincipal] = useState<BrowserPrincipal | null>(null)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [error, setError] = useState<string | null>(null)

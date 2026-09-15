@@ -1,4 +1,4 @@
-import type { PackVersion, Policy, Principal, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
+import type { PackVersion, Policy, SkillBundle, Upstream } from '../../../../packages/contracts/src/index'
 import type {
   AuditListResponse, HealthResponse, ImportResponse, OperationListResponse, OperationResponse, OperationsStatusResponse, PackCreateResponse,
   InstallAnalytics, PackListResponse, PolicyResponse, PublishResponse, ReviewDecisionResponse, ReviewRunResponse, ReviewsResponse,
@@ -11,7 +11,7 @@ import type {
   DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
   AuthSession, OrganizationInvitation, OrganizationInvitationsResponse, OrganizationListResponse,
   OrganizationInvitationAcceptanceResponse, OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
-  ProviderSignInResponse,
+  ProviderSignInResponse, BrowserPrincipal,
 } from './types'
 
 export class ApiError extends Error {
@@ -101,7 +101,7 @@ export const identityRoutes = {
 
 export const api = {
   health() { return request<HealthResponse>('/health') },
-  me() { return request<Principal>('/v1/me').then(unwrap) },
+  me() { return request<BrowserPrincipal>('/v1/me').then(unwrap) },
   signIn(token: string) { return request<SessionResponse>('/auth/session', { method: 'POST', body: { token } }).then(unwrap) },
   signOut() { return request<void>('/auth/session', { method: 'DELETE' }) },
   /** Public metadata only; provider credentials never cross this boundary. */

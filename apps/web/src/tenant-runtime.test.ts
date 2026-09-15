@@ -147,7 +147,13 @@ describe('tenant runtime routing', () => {
   });
 
   it('routes a persisted-token session exchange from its verified body token without consuming the core body', async () => {
-    const issued = principal('org-b', 'api-user');
+    const issued = {
+      ...principal('org-b', 'api-user'),
+      display: {
+        userName: 'API User',
+        organizationName: 'Tenant B',
+      },
+    };
     const auth: Authenticator = {
       authenticate: async (incoming) => incoming.headers.get('authorization') === 'Bearer issued-api-token' ? issued : null,
       createSession: async (token) => token === 'issued-api-token'
@@ -171,7 +177,7 @@ describe('tenant runtime routing', () => {
         const body = await incoming.json() as { token?: unknown };
         const session = await context.auth.createSession?.(String(body.token));
         return session
-          ? Response.json({ organizationId: context.organizationId, subject: session.principal.subject })
+          ? Response.json({ organizationId: context.organizationId, subject: session.principal.subject, display: session.principal.display })
           : Response.json({ code: 'UNAUTHORIZED' }, { status: 401 });
       },
       defaultHandler: async () => Response.json({ code: 'UNAUTHENTICATED' }, { status: 401 }),
@@ -183,7 +189,11 @@ describe('tenant runtime routing', () => {
       body: JSON.stringify({ token: 'issued-api-token' }),
     }));
     expect(response.status).toBe(200);
-    expect(await json(response)).toEqual({ organizationId: 'org-b', subject: 'api-user' });
+    expect(await json(response)).toEqual({
+      organizationId: 'org-b',
+      subject: 'api-user',
+      display: { userName: 'API User', organizationName: 'Tenant B' },
+    });
   });
 
   it('sends unauthenticated requests to the default handler without fabricating a principal', async () => {

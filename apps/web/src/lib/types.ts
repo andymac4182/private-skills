@@ -6,6 +6,7 @@ import type {
   PackVersion,
   Policy,
   Principal,
+  PrincipalDisplayMetadata,
   Resolution,
   ScanResult,
   SkillBundle,
@@ -140,6 +141,7 @@ export type OrganizationSummary = IdentityOrganization
 export type AuthUser = IdentityUser
 export type OrganizationRole = IdentityRole
 export type AuthSession = IdentitySession
+export type BrowserPrincipal = Principal & { display?: PrincipalDisplayMetadata }
 
 export interface ProviderSignInResponse {
   redirect?: boolean
@@ -291,7 +293,7 @@ export interface SourceResolveResponse {
   operation?: Job
   resolution?: Resolution
 }
-export interface SessionResponse { principal?: Principal }
+export interface SessionResponse { principal?: BrowserPrincipal }
 export interface ReviewsResponse { runs: ReviewRunView[]; suggestions: ReviewSuggestionView[] }
 export interface ReviewRunResponse { sessionId: string; status: 'started' }
 export interface ReviewDecisionResponse { suggestion: ReviewSuggestionView }

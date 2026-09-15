@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { formatDate } from '../lib/format'
-import type { AuthSession, Job, PackVersion, Policy, Principal, SkillVersion } from '../lib/types'
+import type { AuthSession, BrowserPrincipal, Job, PackVersion, Policy, SkillVersion } from '../lib/types'
 import { Badge, EmptyState, ErrorState, LoadingState, Panel } from '../components/Primitives'
 import '../styles/experience-pages.css'
 
@@ -64,7 +64,7 @@ export function OverviewView() {
   const visibleReleases = releaseView === 'attention' ? needsAttention : skills
   const visibleOperations = activityView === 'active' ? activeOperations : operations
   const isFirstRun = skills.length === 0 && packs.length === 0 && operations.length === 0
-  const companyName = session?.activeOrganization?.name ?? 'this company'
+  const companyName = session?.activeOrganization?.name ?? principal?.display?.organizationName ?? 'this company'
   const canPublish = canPublishFromSession(principal, session)
 
   return <div className="view-heading overview-view">
@@ -118,16 +118,16 @@ export function OverviewView() {
   </div>
 }
 
-function canPublishFromSession(principal: Principal | null, session: AuthSession | null): boolean {
+function canPublishFromSession(principal: BrowserPrincipal | null, session: AuthSession | null): boolean {
   const activeRole = session?.activeMembership?.role
   if (activeRole) return activeRole === 'owner' || activeRole === 'admin' || activeRole === 'publisher'
   return principal?.roles.some((candidate) => candidate === 'owner' || candidate === 'admin' || candidate === 'publisher') ?? false
 }
 
-function OverviewIntro({ canPublish, firstRun = false, principal, session, showActions = true }: { canPublish: boolean; firstRun?: boolean; principal: Principal | null; session: AuthSession | null; showActions?: boolean }) {
+function OverviewIntro({ canPublish, firstRun = false, principal, session, showActions = true }: { canPublish: boolean; firstRun?: boolean; principal: BrowserPrincipal | null; session: AuthSession | null; showActions?: boolean }) {
   const organization = session?.activeOrganization
-  const companyName = organization?.name ?? 'Private registry'
-  const companyIdentifier = organization?.slug ?? principal?.organizationId
+  const companyName = organization?.name ?? principal?.display?.organizationName ?? 'Private registry'
+  const companyIdentifier = organization?.slug ?? principal?.display?.organizationSlug ?? principal?.organizationId
   const role = session?.activeMembership?.role ?? principal?.roles.find((candidate) => candidate !== 'worker')
   const description = firstRun
     ? 'This company is ready for its first private skill.'

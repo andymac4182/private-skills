@@ -191,4 +191,30 @@ describe('OverviewView', () => {
     expect(container.textContent).not.toContain('Browse catalog')
     expect(container.textContent).toContain('Activity appears as your team publishes or imports skills.')
   })
+
+  it('uses server-derived company labels for a persisted-token session', async () => {
+    harness.auth.session = null
+    harness.auth.principal = {
+      organizationId: 'org-opaque-42',
+      subject: 'user_opaque_7f2a',
+      roles: ['reader'],
+      display: {
+        userName: 'Alice Example',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs Demo',
+        organizationSlug: 'acme-labs-demo',
+      },
+    }
+    vi.spyOn(api, 'skills').mockResolvedValue({ skills: [] })
+    vi.spyOn(api, 'packs').mockResolvedValue({ packs: [] })
+    vi.spyOn(api, 'operations').mockResolvedValue({ operations: [] })
+    vi.spyOn(api, 'policy').mockResolvedValue({ policy })
+
+    const container = await renderView()
+
+    expect(container.querySelector('h1')?.textContent).toBe('Acme Labs Demo')
+    expect(container.textContent).toContain('acme-labs-demo')
+    expect(container.textContent).not.toContain('org-opaque-42')
+    expect(container.textContent).not.toContain('user_opaque_7f2a')
+  })
 })

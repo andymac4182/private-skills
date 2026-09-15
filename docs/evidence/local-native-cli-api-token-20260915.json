@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-loopback-native-cli-api-token",
+  "verifiedAt": "2026-09-15T14:35:00Z",
+  "fixture": {
+    "origin": "http://127.0.0.1:5405",
+    "sourceCheckout": "/private/tmp/private-skills-identity-89ef195-5405",
+    "sourceHead": "89ef1956c0cd797edce317fa22d6c8843737fb6c",
+    "persistence": {
+      "adapter": "postgres",
+      "database": "identity_demo_5405"
+    },
+    "identity": "synthetic local OIDC Acme Alice owner membership"
+  },
+  "cliBuild": {
+    "binary": "/private/tmp/private-skills-cli-proof-target/release/pskills",
+    "command": "CARGO_TARGET_DIR=/private/tmp/private-skills-cli-proof-target cargo build --release -p pskills",
+    "exitCode": 0,
+    "builtFromSourceHead": "89ef1956c0cd797edce317fa22d6c8843737fb6c"
+  },
+  "tokenIssuance": {
+    "method": "POST",
+    "path": "/v1/tokens",
+    "status": 201,
+    "tokenId": "st_654acff3-bc33-4e36-a90c-9a7dcc26e211",
+    "organizationId": "w6EyWEwGvCmOaUQXq9MA06E85gE5NlGC",
+    "roleCeiling": "reader",
+    "scopes": [
+      "registry:read",
+      "skills:read",
+      "resolve:read",
+      "operations:read",
+      "install:authorize",
+      "install:receipt",
+      "artifacts:download",
+      "packs:read",
+      "scans:read",
+      "upstreams:read"
+    ],
+    "listedWithoutSecret": true,
+    "credentialTransport": "PSKILLS_TOKEN environment variable to the native CLI; raw value omitted"
+  },
+  "nativeCommands": [
+    {
+      "phase": "before-revoke",
+      "command": "/private/tmp/private-skills-cli-proof-target/release/pskills --registry http://127.0.0.1:5405 --json whoami",
+      "exitCode": 0,
+      "result": {
+        "organizationId": "w6EyWEwGvCmOaUQXq9MA06E85gE5NlGC",
+        "roles": ["reader"],
+        "subject": "redacted",
+        "scopes": "not serialized by the Rust Principal output; issued scope set is recorded above"
+      }
+    },
+    {
+      "phase": "before-revoke",
+      "command": "/private/tmp/private-skills-cli-proof-target/release/pskills --registry http://127.0.0.1:5405 --json search acme",
+      "exitCode": 0,
+      "result": {
+        "approvedResultCount": 0
+      }
+    },
+    {
+      "phase": "after-revoke",
+      "command": "/private/tmp/private-skills-cli-proof-target/release/pskills --registry http://127.0.0.1:5405 --json whoami",
+      "exitCode": 1,
+      "result": "authentication denied after persisted-token revocation"
+    },
+    {
+      "phase": "after-revoke",
+      "command": "/private/tmp/private-skills-cli-proof-target/release/pskills --registry http://127.0.0.1:5405 --json search acme",
+      "exitCode": 1,
+      "result": "authentication denied after persisted-token revocation"
+    }
+  ],
+  "revocation": {
+    "method": "DELETE",
+    "path": "/v1/tokens/st_654acff3-bc33-4e36-a90c-9a7dcc26e211",
+    "status": 200,
+    "revoked": true
+  },
+  "install": {
+    "attempted": false,
+    "approvedSkillCount": 0,
+    "reason": "The disposable 5405 registry had no approved skill release; this record does not claim install acceptance."
+  },
+  "secrets": {
+    "rawApiTokenLogged": false,
+    "rawApiTokenPersisted": false,
+    "browserCookiesLogged": false
+  }
+}

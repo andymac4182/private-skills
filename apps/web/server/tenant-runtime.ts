@@ -3,6 +3,7 @@ import type {
   Principal,
   Role,
 } from '../../../packages/contracts/src/index.js';
+import { normalizePrincipalDisplayMetadata } from '../../../packages/contracts/src/index.js';
 import type { RegistryHandler } from '../../../packages/core/src/index.js';
 import type {
   EveTenantDelegationBinding,
@@ -394,12 +395,14 @@ function clonePrincipal(principal: Principal): Principal {
     eveTenant?: unknown;
   };
   const eveTenant = cloneEveTenantMetadata(extended.eveTenant);
+  const display = normalizePrincipalDisplayMetadata(principal.display);
   return {
     organizationId: principal.organizationId,
     subject: principal.subject,
     roles: [...principal.roles],
     ...(principal.namespaces === undefined ? {} : { namespaces: [...principal.namespaces] }),
     ...(principal.scopes === undefined ? {} : { scopes: [...principal.scopes] }),
+    ...(display === undefined ? {} : { display }),
     ...(typeof extended.authMethod === 'string' ? { authMethod: extended.authMethod } : {}),
     ...(eveTenant === undefined ? {} : { eveTenant }),
   };

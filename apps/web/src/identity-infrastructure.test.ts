@@ -12,6 +12,15 @@ function poolReturningRole(role: unknown): ApiTokenPgPool {
   };
 }
 
+function poolReturningRoleAndDisplay(role: unknown): ApiTokenPgPool {
+  return {
+    query: vi.fn()
+      .mockResolvedValueOnce({ rows: [{ organizationId: 'org-1', userId: 'user-1', role }] })
+      .mockResolvedValueOnce({ rows: [{ userName: 'Alice Example', userEmail: 'alice@example.test', organizationName: 'Acme Labs', organizationSlug: 'acme-labs' }] }),
+    connect: vi.fn(),
+  };
+}
+
 describe('Better Auth membership authorization', () => {
   it.each([
     ['member', 'reader'],
@@ -38,6 +47,48 @@ describe('Better Auth membership authorization', () => {
     );
 
     await expect(authorizer.getMembership('org-1', 'user-1')).resolves.toBeNull();
+  });
+
+  it('adds identity-record display labels after the live membership check', async () => {
+    const pool = poolReturningRoleAndDisplay('owner');
+    const authorizer = new PostgresBetterAuthMembershipAuthorizer(
+      {} as IdentityRuntimeAdmin,
+      pool,
+    );
+
+    await expect(authorizer.getMembership('org-1', 'user-1')).resolves.toMatchObject({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: 'owner',
+      active: true,
+      display: {
+        userName: 'Alice Example',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs',
+        organizationSlug: 'acme-labs',
+      },
+    });
+    expect(pool.query).toHaveBeenCalledTimes(2);
+    expect(pool.query).toHaveBeenNthCalledWith(2, expect.stringContaining('organization'), ['org-1', 'user-1']);
+  });
+
+  it('keeps a valid membership when identity label lookup is unavailable', async () => {
+    const pool: ApiTokenPgPool = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ organizationId: 'org-1', userId: 'user-1', role: 'reader' }] })
+        .mockRejectedValueOnce(new Error('labels unavailable')),
+      connect: vi.fn(),
+    };
+    const authorizer = new PostgresBetterAuthMembershipAuthorizer(
+      {} as IdentityRuntimeAdmin,
+      pool,
+    );
+
+    const membership = await authorizer.getMembership('org-1', 'user-1');
+    expect(membership).toMatchObject({
+      organizationId: 'org-1', userId: 'user-1', role: 'reader', active: true,
+    });
+    expect(membership).not.toHaveProperty('display');
   });
 });
 

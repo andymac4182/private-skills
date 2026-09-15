@@ -25,6 +25,7 @@ import {
   type PackVersion,
   type Policy,
   type Principal,
+  normalizePrincipalDisplayMetadata,
   type Provenance,
   type RegistryConfiguration,
   type RegistryDependencies,
@@ -1243,12 +1244,14 @@ function scopesForRoute(method: HttpMethod, path: string, segments: string[]): r
 
 function publicPrincipal(principal: Principal): Principal {
   const scopes = principalScopes(principal);
+  const display = normalizePrincipalDisplayMetadata(principal.display);
   return {
     organizationId: principal.organizationId,
     subject: principal.subject,
     roles: [...principal.roles],
     namespaces: principal.namespaces ? [...principal.namespaces] : undefined,
     ...(scopes === undefined ? {} : { scopes: [...scopes] }),
+    ...(display === undefined ? {} : { display }),
   };
 }
 

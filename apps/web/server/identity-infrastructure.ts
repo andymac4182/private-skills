@@ -23,6 +23,7 @@ import {
   type MembershipSnapshot,
   type OrganizationSessionLike,
 } from '../../../packages/api-tokens/src/index.js';
+import type { PrincipalDisplayMetadata } from '../../../packages/contracts/src/index.js';
 import { canonicalOriginFromEnv } from './identity-origin.js';
 
 export { canonicalOriginFromEnv } from './identity-origin.js';
@@ -67,11 +68,15 @@ export class PostgresBetterAuthMembershipAuthorizer implements MembershipAuthori
   private readonly identity: IdentityRuntimeAdmin;
   private readonly pool: ApiTokenPgPool;
   private readonly memberTable: string;
+  private readonly userTable: string;
+  private readonly organizationTable: string;
 
   constructor(identity: IdentityRuntimeAdmin, pool: ApiTokenPgPool, schemaName?: string) {
     this.identity = identity;
     this.pool = pool;
     this.memberTable = qualifiedMemberTable(schemaName);
+    this.userTable = qualifiedIdentityTable(schemaName, 'user');
+    this.organizationTable = qualifiedIdentityTable(schemaName, 'organization');
   }
 
   async getOrganizationSession(request: Request): Promise<OrganizationSessionLike | null> {
@@ -106,12 +111,42 @@ export class PostgresBetterAuthMembershipAuthorizer implements MembershipAuthori
         // sessions. Better Auth's built-in member role is normalized to
         // reader; unknown roles, including manager, fail closed.
         const role: ApiTokenIdentityRole = normalizeIdentityRole(row.role);
-        return { organizationId, userId, role, active: true };
+        const display = await this.lookupDisplayMetadata(organizationId, userId);
+        return { organizationId, userId, role, active: true, ...(display === undefined ? {} : { display }) };
       } catch {
         return null;
       }
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Resolve labels only after the membership row has passed the live role
+   * check. A metadata query failure must not alter an otherwise valid access
+   * decision, so this helper intentionally returns no display block on error.
+   */
+  private async lookupDisplayMetadata(organizationId: string, userId: string): Promise<PrincipalDisplayMetadata | undefined> {
+    try {
+      const result = await this.pool.query<{
+        userName?: unknown;
+        userEmail?: unknown;
+        organizationName?: unknown;
+        organizationSlug?: unknown;
+      }>(
+        `SELECT u."name" AS "userName", u."email" AS "userEmail", o."name" AS "organizationName", o."slug" AS "organizationSlug" FROM ${this.userTable} AS u JOIN ${this.organizationTable} AS o ON o."id" = $1 WHERE u."id" = $2 LIMIT 1`,
+        [organizationId, userId],
+      );
+      const row = result.rows[0];
+      if (!row) return undefined;
+      return {
+        ...(typeof row.userName === 'string' ? { userName: row.userName } : {}),
+        ...(typeof row.userEmail === 'string' ? { userEmail: row.userEmail } : {}),
+        ...(typeof row.organizationName === 'string' ? { organizationName: row.organizationName } : {}),
+        ...(typeof row.organizationSlug === 'string' ? { organizationSlug: row.organizationSlug } : {}),
+      };
+    } catch {
+      return undefined;
     }
   }
 }
@@ -282,9 +317,13 @@ async function providerIdFromSsoRequest(request: Request | undefined): Promise<s
 }
 
 function qualifiedMemberTable(schemaName: string | undefined): string {
-  if (!schemaName) return '"member"';
+  return qualifiedIdentityTable(schemaName, 'member');
+}
+
+function qualifiedIdentityTable(schemaName: string | undefined, tableName: 'member' | 'user' | 'organization'): string {
+  if (!schemaName) return `"${tableName}"`;
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/u.test(schemaName)) throw new Error('Better Auth schema name is invalid');
-  return `"${schemaName}"."member"`;
+  return `"${schemaName}"."${tableName}"`;
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
