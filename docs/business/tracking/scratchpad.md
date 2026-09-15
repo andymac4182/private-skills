@@ -127,3 +127,9 @@ Extended Nitro fixture21701b7 adds packs, draft revisions/files, search through 
 ### Composed authoring and pack acceptance
 
 Integrated47f10a8/82ccaea and independently ran both Nitro+PostgreSQL+Files SDK scenarios at root a50f0c9: two tests passed in20.99seconds. New proof verifies exact edited SKILL.md bytes, changed revision digest, persisted revision2, stale-revision denial, rejected foreign PUT with unchanged owner content, isolated same-name packs/search and synthetic client-confirmed pack receipts. Evidence: docs/evidence/local-composed-tenant-authoring-root-20260916.json. External scanner/Gateway, native pack install and hosted identity remain separate gates.
+
+### Recovery/adoption regression checkpoint
+
+Root verificationa50f0c9 passed the loopback PostgreSQL operations restore rehearsal and Better Auth bootstrap-adoption integration together: two files / two tests,3.01seconds. The current implementation preserves restored identity/SSO/token/billing/registry/filesystem object state and exercises protected owner adoption with replay/concurrency denials. This is local evidence, not a hosted restore.
+
+B19 follow-through is assigned to tenant_eve: extend recovery inventory for the upcoming billing lifecycle fields, seat revision/holds, Eve dispatch fences, worker retry/lease state and identity operational events once their owners finalize contracts. Current recovery evidence does not cover those unintegrated additions.
