@@ -199,3 +199,11 @@ User-confirmed on 15 September 2026: every company has a complete isolated porta
 - Billing console: plan and subscription status, measured usage and enforced limits, invoices, checkout and subscription management. Restrict billing operations to authorized company roles and derive customer identifiers server-side. Before Stripe setup, explicitly show unavailable/test states; never imply live billing works.
 - Company SSO: company-admin-managed identity-provider configuration and company-specific sign-in/discovery, supporting OIDC and SAML integration paths. Prove separate companies using separate configured providers, correct callback/session/membership binding, unauthorized configuration rejection and recovery access. Platform social login alone does not satisfy this requirement. Never grant company membership based solely on an unverified email domain.
 - Acceptance evidence: browser journeys for company administrator and member; denied cross-company portal, billing and SSO access; provider callback and persistence evidence. Label local SSO fixtures separately from actual customer IdP setup.
+
+## Verified increment — 15 September 2026
+
+- Origin/main `6c8b958a088c6924c6c204aae530c41ce5d0c05c`: identity foundation and separate marketing source merged.
+- Release agent verified Git-triggered Vercel production deployment `dpl_9fXQEjtsWrM6epgXVVMeTFGh9DRM` READY for that exact SHA, aliased to `private-skills-theta.vercel.app`; unauthenticated read-only checks passed. Separate marketing project provisioning is still outstanding.
+- Integration `2211bdd` before merging main: typecheck and app build passed; 946 tests passed, 8 skipped. This includes tenant runtime and delegation primitives beyond the deployed foundation.
+- Local Acme OIDC browser login and explicit company selection reached the company registry. Two-provider HTTP/persistence tests passed. Actual browser sign-out exposed a missing JSON content type; logout and the complete second-provider browser journey remain open. Local fixture evidence does not demonstrate a real customer SSO configuration.
+- Company portal administration, billing console and company-managed SSO remain required work; these evidence entries do not constitute launch acceptance.
