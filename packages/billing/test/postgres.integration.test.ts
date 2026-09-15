@@ -223,6 +223,41 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(service.findUsageOperation(organizationId, 'pg-aged-stable')).resolves.toMatchObject({ operationKey: 'pg-aged-stable', status: 'reserved', reservationGeneration: 2 })
   })
 
+  it('scopes operation constraints to the target schema when prefixes repeat', async () => {
+    const schemaBase = `billing_it_schema_${process.pid}_${Math.floor(Math.random() * 10_000)}`
+    const schemas = [`${schemaBase}_a`, `${schemaBase}_b`]
+    const generationConstraint = `${prefix}_op_generation_check`
+    try {
+      for (const schema of schemas) await sql!.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+      for (const schema of schemas) await sql!.unsafe(`CREATE SCHEMA "${schema}"`)
+
+      for (const schema of schemas) {
+        const client = await sql!.reserve()
+        try {
+          await client.unsafe(`SET search_path TO "${schema}", public`)
+          await client.unsafe(billingPostgresSchemaSql(prefix))
+        } finally {
+          await client.release()
+        }
+      }
+
+      const constraints = await sql!.unsafe<{ schema_name: string; table_name: string }[]>(
+        `SELECT target_schema.nspname AS schema_name, target_table.relname AS table_name
+           FROM pg_constraint AS existing_constraint
+           JOIN pg_class AS target_table ON target_table.oid = existing_constraint.conrelid
+           JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
+          WHERE existing_constraint.conname = $1
+          ORDER BY target_schema.nspname`,
+        [generationConstraint],
+      )
+      expect(constraints.filter(({ schema_name }) => schemas.includes(schema_name))).toEqual(
+        schemas.map((schema) => ({ schema_name: schema, table_name: `${prefix}_usage_operations` })),
+      )
+    } finally {
+      for (const schema of schemas) await sql!.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+    }
+  })
+
   it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {
     const catalog = planCatalog()
     const first = new BillingService({
