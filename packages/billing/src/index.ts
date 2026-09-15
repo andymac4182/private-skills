@@ -42,6 +42,7 @@ import {
   type BillingSubscriptionStatus,
   type BillingUsage,
   type BillingUsageOperation,
+  type BillingUsageRestoration,
   type BillingWebhookEvent,
   type CheckoutRequest,
   type CreateCheckoutSessionInput,
@@ -55,6 +56,7 @@ import {
   type UsageDelta,
   type UsageLimitDetails,
   type UsageReservation,
+  type UsageRestoration,
   type UsageSnapshot,
   type WebhookHandlingResult,
 } from './types.js';
@@ -259,6 +261,19 @@ function normalizedDelta(input: UsageDelta): UsageDelta {
 
 function sameDelta(left: UsageDelta, right: UsageDelta): boolean {
   return (left.seats ?? 0) === (right.seats ?? 0) && (left.storageBytes ?? 0) === (right.storageBytes ?? 0) && (left.scans ?? 0) === (right.scans ?? 0) && (left.eveCostCents ?? 0) === (right.eveCostCents ?? 0);
+}
+
+function storageRestorationDelta(input: UsageDelta): UsageDelta & { storageBytes: number } {
+  const normalized = normalizedDeltaInput(input);
+  if (
+    Object.keys(normalized).length !== 1 ||
+    normalized.storageBytes === undefined ||
+    !Number.isSafeInteger(normalized.storageBytes) ||
+    normalized.storageBytes <= 0
+  ) {
+    throw new BillingError('INVALID_USAGE', 'storage restoration must contain a positive storageBytes delta only', 400);
+  }
+  return { storageBytes: normalized.storageBytes };
 }
 
 function normalizeReservationGeneration(value: unknown): number {
@@ -981,6 +996,147 @@ export class BillingService {
     // The repository reloads this exact key inside the organization lock, so
     // an aged idempotency row cannot be missed or raced by a pre-lock lookup.
     return this.transactionWithUsageOperations(normalized, [normalizedKey], (state) => this.reserveUsageInState(state, normalized, normalizedDelta, normalizedKey, nowMs));
+  }
+
+  /**
+   * Restore the exact retained storage bytes from a released reservation.
+   *
+   * This is deliberately separate from reserveUsage: a recovery inverse must
+   * repair accounting even when a concurrent admission has filled the plan
+   * cap. The successful inverse advances the reservation lifecycle, so an
+   * old zero reconciliation cannot erase the restored bytes. The compensation
+   * operation records its source and generation fence for durable, no-write
+   * retries after a lost response, restart, or operation-window eviction.
+   */
+  async restoreUsage(
+    organizationId: string,
+    reservationKey: string,
+    delta: UsageDelta,
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<UsageRestoration> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedReservationKey = validateBillingIdentifier(reservationKey, 'reservationKey', MAX_OPERATION_KEY_BYTES);
+    const normalizedDelta = storageRestorationDelta(delta);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const expectedGeneration = normalizeReservationGeneration(reservationGeneration);
+    const nowMs = this.now();
+
+    return this.transactionWithUsageOperations(normalized, [normalizedReservationKey, normalizedKey], (state) => {
+      const reservation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedReservationKey);
+      if (!reservation) throw new BillingError('USAGE_RESERVATION_NOT_FOUND', 'The usage reservation does not exist', 404);
+      const currentGeneration = operationReservationGeneration(reservation);
+      const existing = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+
+      if (existing) {
+        const restoration = existing.restoration;
+        if (!restoration || restoration.reservationKey !== normalizedReservationKey || !sameDelta(existing.delta, normalizedDelta) || !sameDelta(restoration.delta, normalizedDelta)) {
+          throw new BillingError('IDEMPOTENCY_CONFLICT', 'The restoration operation key was already used for another inverse', 409);
+        }
+        const storedFromGeneration = normalizeReservationGeneration(restoration.fromGeneration);
+        const storedToGeneration = normalizeReservationGeneration(restoration.toGeneration);
+        if (storedToGeneration !== storedFromGeneration + 1 || existing.status !== 'committed' || operationReservationGeneration(existing) !== storedToGeneration) {
+          throw new BillingError('BILLING_LEDGER_CORRUPT', 'The usage restoration lifecycle is invalid', 500, { retryable: false });
+        }
+        // A retry may carry the pre-inverse generation when the first response
+        // was lost. It is safe only because the durable operation and source
+        // reservation prove the exact inverse already committed. A later
+        // lifecycle cannot be mutated by this replay.
+        if (expectedGeneration !== storedFromGeneration) {
+          throw staleReservationGeneration(currentGeneration, expectedGeneration);
+        }
+        const originalStorage = reservation.delta.storageBytes;
+        if (
+          typeof originalStorage !== 'number' ||
+          !Number.isSafeInteger(originalStorage) ||
+          originalStorage !== normalizedDelta.storageBytes ||
+          Object.keys(reservation.delta).length !== 1 ||
+          reservation.delta.storageBytes === undefined ||
+          currentGeneration < storedToGeneration
+        ) {
+          throw new BillingError('BILLING_LEDGER_CORRUPT', 'The usage restoration source lifecycle no longer matches its inverse', 500, { retryable: false });
+        }
+        const entitlement = entitlementFromState(this.catalog, state, this.enabled);
+        const restorationMetadata: BillingUsageRestoration = {
+          reservationKey: normalizedReservationKey,
+          fromGeneration: storedFromGeneration,
+          toGeneration: storedToGeneration,
+          delta: { ...normalizedDelta },
+        };
+        return {
+          operationKey: normalizedKey,
+          idempotent: true,
+          delta: { ...normalizedDelta },
+          restoredFromGeneration: storedFromGeneration,
+          reservationGeneration: storedToGeneration,
+          restoration: restorationMetadata,
+          snapshot: { organizationId: normalized, limits: { ...entitlement.limits }, usage: { ...existing.usage }, entitlement },
+        };
+      }
+
+      if (expectedGeneration !== currentGeneration) throw staleReservationGeneration(currentGeneration, expectedGeneration);
+      if ((reservation.status ?? 'reserved') !== 'released') {
+        throw new BillingError('USAGE_RESTORATION_INVALID', 'Only a released usage reservation can be restored', 409);
+      }
+      const originalStorage = reservation.delta.storageBytes;
+      if (
+        typeof originalStorage !== 'number' ||
+        !Number.isSafeInteger(originalStorage) ||
+        originalStorage <= 0 ||
+        originalStorage !== normalizedDelta.storageBytes ||
+        Object.keys(reservation.delta).length !== 1 ||
+        reservation.delta.storageBytes === undefined
+      ) {
+        throw new BillingError('USAGE_RESTORATION_INVALID', 'Storage restoration must exactly match the released reservation', 409);
+      }
+      if ((reservation.reconciled?.storageBytes ?? 0) !== 0) {
+        throw new BillingError('USAGE_RESTORATION_INVALID', 'The released reservation does not have a zero storage reconciliation', 409);
+      }
+
+      state.usage = periodUsage(state.usage, nowMs);
+      const nextGeneration = nextReservationGeneration(reservation);
+      // Do not call reserveUsageInState here: this inverse intentionally
+      // bypasses the quota check, but still uses the same nonnegative ledger
+      // arithmetic and the same organization transaction lock.
+      state.usage = applyDelta(state.usage, normalizedDelta, nowMs);
+      // The inverse starts a fresh measurement lifecycle at the next
+      // generation. Keep any other metric measurements, but remove the old
+      // zero for storage so a later cleanup can report storageBytes: 0 using
+      // the returned generation without tripping reconciliation idempotency.
+      const nextReconciled = { ...(reservation.reconciled ?? {}) };
+      delete nextReconciled.storageBytes;
+      reservation.reconciled = Object.keys(nextReconciled).length === 0 ? undefined : nextReconciled;
+      reservation.status = 'committed';
+      reservation.reservationGeneration = nextGeneration;
+      reservation.usage = { ...state.usage };
+      const restorationMetadata: BillingUsageRestoration = {
+        reservationKey: normalizedReservationKey,
+        fromGeneration: expectedGeneration,
+        toGeneration: nextGeneration,
+        delta: { ...normalizedDelta },
+      };
+      state.usageOperations.push({
+        organizationId: normalized,
+        operationKey: normalizedKey,
+        delta: { ...normalizedDelta },
+        usage: { ...state.usage },
+        createdAt: new Date(nowMs).toISOString(),
+        status: 'committed',
+        reservationGeneration: nextGeneration,
+        restoration: restorationMetadata,
+      });
+      if (state.usageOperations.length > 20_000) state.usageOperations.splice(0, state.usageOperations.length - 20_000);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
+      return {
+        operationKey: normalizedKey,
+        idempotent: false,
+        delta: { ...normalizedDelta },
+        restoredFromGeneration: expectedGeneration,
+        reservationGeneration: nextGeneration,
+        restoration: restorationMetadata,
+        snapshot: { organizationId: normalized, limits: { ...entitlement.limits }, usage: { ...state.usage }, entitlement },
+      };
+    });
   }
 
   /**

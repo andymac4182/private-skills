@@ -565,6 +565,16 @@ export interface MeteredUsageReservation {
   idempotent: boolean;
   reservationGeneration?: number;
 }
+
+/**
+ * Result of restoring the exact retained storage bytes from a released
+ * reservation. The returned generation is required for any later cleanup.
+ */
+export interface MeteredUsageRestoration extends MeteredUsageReservation {
+  /** Generation that was released before the inverse was applied. */
+  restoredFromGeneration: number;
+  reservationGeneration: number;
+}
 export interface BillingUsageAdmission {
   status(): { enabled: boolean };
   reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation>;
@@ -574,6 +584,19 @@ export interface BillingUsageAdmission {
    * usage; callers must retain the value across retries.
    */
   reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string, reservationGeneration?: number): Promise<unknown>;
+  /**
+   * Restore the exact storage estimate from a released lifecycle. This is a
+   * compensation capability, not ordinary quota admission: it may put the
+   * organization above its current cap, while future admissions remain
+   * subject to the cap. Implementations must require the exact generation.
+   */
+  restoreUsage?(
+    organizationId: string,
+    reservationKey: string,
+    delta: Pick<MeteredUsageDelta, 'storageBytes'>,
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<MeteredUsageRestoration>;
   setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
 }
 

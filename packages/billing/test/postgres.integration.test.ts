@@ -223,6 +223,68 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(service.findUsageOperation(organizationId, 'pg-aged-stable')).resolves.toMatchObject({ operationKey: 'pg-aged-stable', status: 'reserved', reservationGeneration: 2 })
   })
 
+  it('durably restores exact released storage above a refilled cap and fences delayed zero callbacks', async () => {
+    let now = NOW
+    const catalog = planCatalog()
+    const repository = new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now })
+    const service = new BillingService({ repository, catalog, enabled: true, now: () => now })
+    const organizationId = 'org-pg-storage-restoration'
+    const initial = await service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-storage-reservation')
+    expect(initial.reservationGeneration).toBe(1)
+    await service.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-zero', initial.reservationGeneration)
+
+    // A separate admission can refill the cap after the original zero. A
+    // normal positive reserve is denied at this point, proving why recovery
+    // must use the inverse seam rather than ordinary quota admission.
+    await service.reserveUsage(organizationId, { storageBytes: 1_000 }, 'pg-storage-refill')
+    await expect(service.reserveUsage(organizationId, { storageBytes: 1 }, 'pg-storage-would-not-fit')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED', status: 429 })
+    await expect(service.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 39 }, 'pg-storage-wrong-delta', initial.reservationGeneration!)).rejects.toMatchObject({ code: 'USAGE_RESTORATION_INVALID', status: 409 })
+    await expect(service.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-wrong-generation', 2)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+
+    const restored = await service.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-restore', initial.reservationGeneration!)
+    expect(restored).toMatchObject({ idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2, snapshot: { usage: { storageBytes: 1_040 } } })
+    const persisted = await sql!.unsafe<Record<string, unknown>[]>(`SELECT status, reservation_generation::int AS reservation_generation, restoration FROM "${prefix}_usage_operations" WHERE organization_id = $1 AND operation_key = $2`, [organizationId, 'pg-storage-restore'])
+    expect(persisted[0]).toMatchObject({ status: 'committed', reservation_generation: 2, restoration: { reservationKey: 'pg-storage-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } } })
+    await expect(service.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { storageBytes: 1_040 } })
+    await expect(service.reserveUsage(organizationId, { storageBytes: 1 }, 'pg-storage-future-admission')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED', status: 429 })
+    const usageBeforeDelayedZero = await service.usageSnapshot(organizationId)
+    await expect(service.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-zero', initial.reservationGeneration)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+    await expect(service.usageSnapshot(organizationId)).resolves.toEqual(usageBeforeDelayedZero)
+
+    // Release the independent refill so a harmless metric admission can age
+    // the restoration operation out of the bounded recent window.
+    await service.reconcileUsage(organizationId, 'pg-storage-refill', { storageBytes: 0 }, 'pg-storage-refill-release', 1)
+    now += 1_000
+    await service.reserveUsage(organizationId, { scans: 1 }, 'pg-storage-age')
+    const bounded = await repository.read(organizationId)
+    expect(bounded.usageOperations).toHaveLength(1)
+    expect(bounded.usageOperations[0]?.operationKey).toBe('pg-storage-age')
+
+    // A fresh repository instance exercises the durable exact-key path after
+    // the restoration operation has aged out of the bounded read window.
+    const restarted = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+      catalog,
+      enabled: true,
+      now: () => now,
+    })
+    const usageBeforeRestartedDelayedZero = await restarted.usageSnapshot(organizationId)
+    await expect(restarted.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-zero', initial.reservationGeneration)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+    await expect(restarted.usageSnapshot(organizationId)).resolves.toEqual(usageBeforeRestartedDelayedZero)
+    await expect(restarted.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-restore', initial.reservationGeneration!)).resolves.toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 })
+    await expect(restarted.usageSnapshot(organizationId)).resolves.toEqual(usageBeforeRestartedDelayedZero)
+
+    // The returned G2 is the only generation that may perform later cleanup.
+    // Once that lifecycle is cleaned and reopened as G3, replaying the old
+    // inverse is still a no-write result and cannot affect the new admission.
+    await restarted.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-cleanup', 2)
+    await expect(restarted.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-storage-reservation')).resolves.toMatchObject({ idempotent: false, reservationGeneration: 3 })
+    const usageBeforeOldReplay = await restarted.usageSnapshot(organizationId)
+    await expect(restarted.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-restore', 1)).resolves.toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 })
+    await expect(restarted.usageSnapshot(organizationId)).resolves.toEqual(usageBeforeOldReplay)
+    await expect(restarted.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+  })
+
   it('scopes operation constraints to the target schema when prefixes repeat', async () => {
     const schemaBase = `billing_it_schema_${process.pid}_${Math.floor(Math.random() * 10_000)}`
     const schemas = [`${schemaBase}_a`, `${schemaBase}_b`]

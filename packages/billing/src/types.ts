@@ -119,6 +119,18 @@ export interface BillingWebhookEvent {
 
 export type BillingUsageOperationStatus = 'reserved' | 'committed' | 'released';
 
+/**
+ * Durable identity for a storage accounting inverse.  This is kept on the
+ * compensation operation rather than inferred from its key so a retry after
+ * eviction or restart remains bound to the released lifecycle it restored.
+ */
+export interface BillingUsageRestoration {
+  reservationKey: string;
+  fromGeneration: number;
+  toGeneration: number;
+  delta: UsageDelta;
+}
+
 export interface BillingUsageOperation {
   organizationId: string;
   operationKey: string;
@@ -134,6 +146,8 @@ export interface BillingUsageOperation {
    * omit it and are interpreted as generation 1 for compatibility.
    */
   reservationGeneration?: number;
+  /** Present only for a ledger-owned inverse of a released reservation. */
+  restoration?: BillingUsageRestoration;
 }
 
 /**
@@ -345,6 +359,13 @@ export interface UsageReservation {
   snapshot: UsageSnapshot;
   /** Exact lifecycle identity to carry into a later reconciliation. */
   reservationGeneration?: number;
+}
+
+/** Result returned by the bounded storage compensation seam. */
+export interface UsageRestoration extends UsageReservation {
+  restoration: BillingUsageRestoration;
+  restoredFromGeneration: number;
+  reservationGeneration: number;
 }
 
 export interface UsageLimitDetails {

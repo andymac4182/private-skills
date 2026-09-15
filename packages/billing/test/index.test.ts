@@ -614,6 +614,71 @@ describe('transactional usage enforcement', () => {
     await expect(service.usageSnapshot('org-generation-fence')).resolves.toMatchObject({ usage: { scans: 0 } });
   });
 
+  it('restores exact released storage above the cap, fences old zeroes, and replays without a write', async () => {
+    const catalog = createPlanCatalog({
+      plans: [{
+        id: 'free' as PlanId,
+        label: 'Free',
+        description: 'Small restoration test plan.',
+        limits: { seats: 2, storageBytes: 100, scansPerMonth: 10, eveCostCentsPerMonth: 10 },
+        public: true,
+      }],
+    });
+    const service = serviceWith({ catalog, enabled: true });
+    const organizationId = 'org-storage-restoration';
+    const initial = await service.reserveUsage(organizationId, { storageBytes: 40 }, 'storage-reservation');
+    expect(initial.reservationGeneration).toBe(1);
+    await service.reconcileUsage(organizationId, 'storage-reservation', { storageBytes: 0 }, 'storage-zero', initial.reservationGeneration);
+
+    // Refill the cap after the zero. Ordinary admission is correctly closed,
+    // but the ledger-owned inverse must still restore the retained bytes.
+    await service.reserveUsage(organizationId, { storageBytes: 100 }, 'quota-refill');
+    await expect(service.reserveUsage(organizationId, { storageBytes: 1 }, 'would-not-fit')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED', status: 429 });
+    await expect(service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 39 }, 'storage-wrong-delta', initial.reservationGeneration!)).rejects.toMatchObject({ code: 'USAGE_RESTORATION_INVALID', status: 409 });
+    await expect(service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40, scans: 1 }, 'storage-extra-metric', initial.reservationGeneration!)).rejects.toMatchObject({ code: 'INVALID_USAGE', status: 400 });
+    await expect(service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40 }, 'storage-wrong-generation', 2)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+
+    // The failed assertion above must leave the released lifecycle untouched;
+    // the valid inverse is the only operation that can advance it.
+    const restored = await service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40 }, 'storage-restore', initial.reservationGeneration!);
+    expect(restored).toMatchObject({
+      idempotent: false,
+      restoredFromGeneration: 1,
+      reservationGeneration: 2,
+      restoration: { reservationKey: 'storage-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } },
+      snapshot: { usage: { storageBytes: 140 } },
+    });
+    await expect(service.findUsageOperation(organizationId, 'storage-restore')).resolves.toMatchObject({
+      status: 'committed',
+      reservationGeneration: 2,
+      restoration: { reservationKey: 'storage-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } },
+    });
+    await expect(service.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { storageBytes: 140 } });
+    await expect(service.reserveUsage(organizationId, { storageBytes: 1 }, 'future-admission-over-cap')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED', status: 429 });
+
+    const beforeDelayedZero = await service.usageSnapshot(organizationId);
+    await expect(service.reconcileUsage(organizationId, 'storage-reservation', { storageBytes: 0 }, 'storage-zero', initial.reservationGeneration)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+    await expect(service.usageSnapshot(organizationId)).resolves.toEqual(beforeDelayedZero);
+
+    // A lost response can safely be replayed with the original source
+    // generation. The durable metadata proves this exact inverse, and replay
+    // does not touch usage or the reservation row; G2 is reserved for cleanup.
+    const replayed = await service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40 }, 'storage-restore', initial.reservationGeneration!);
+    expect(replayed).toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2, snapshot: { usage: { storageBytes: 140 } } });
+    await expect(service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40 }, 'storage-restore', 2)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+
+    // Cleanup is a new measurement under G2. Reopening the same reservation
+    // then advances to G3; replaying the old inverse remains a no-write result
+    // and cannot resurrect or erase this later lifecycle.
+    await service.reconcileUsage(organizationId, 'storage-reservation', { storageBytes: 0 }, 'storage-cleanup', 2);
+    await service.reconcileUsage(organizationId, 'quota-refill', { storageBytes: 0 }, 'quota-release', 1);
+    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'storage-reservation')).resolves.toMatchObject({ idempotent: false, reservationGeneration: 3 });
+    const beforeOldReplay = await service.usageSnapshot(organizationId);
+    await expect(service.restoreUsage(organizationId, 'storage-reservation', { storageBytes: 40 }, 'storage-restore', 1)).resolves.toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 });
+    await expect(service.usageSnapshot(organizationId)).resolves.toEqual(beforeOldReplay);
+    await expect(service.reconcileUsage(organizationId, 'storage-reservation', { storageBytes: 0 }, 'storage-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+  });
+
   it('releases a reserved metric when reconciliation explicitly reports zero', async () => {
     const service = serviceWith({ enabled: false });
     await service.reserveUsage('org-zero-reconcile', { eveCostCents: 40 }, 'estimate');
@@ -702,9 +767,9 @@ describe('PostgreSQL repository contract', () => {
         return { rows: [row] as Row[], rowCount: 1 };
       }
       if (text.includes('INSERT INTO "billing_contract_usage_operations"')) {
-        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled, reservationGeneration] = parameters;
+        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled, restoration, reservationGeneration] = parameters;
         const key = `${organizationId}:${operationKey}`;
-        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null, reservation_generation: reservationGeneration ?? 1 });
+        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null, restoration: restoration ?? null, reservation_generation: reservationGeneration ?? 1 });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id FROM "billing_contract_customers"')) {

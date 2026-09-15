@@ -182,6 +182,19 @@ releases it. A fully released reservation can be admitted again with the same
 operation key after the ledger reopens its lifecycle. UTC month rollover resets
 scans and Eve spend while retaining current seats and storage.
 
+Storage recovery has a separate `restoreUsage()` compensation seam. It accepts
+only the exact positive `storageBytes` quantity from a released, storage-only
+reservation and the caller's source generation. The inverse bypasses the
+current quota check so a concurrent refill cannot strand retained accounting,
+then advances the reservation to the next generation and records the source
+key, source generation, destination generation, and delta in a durable
+compensation operation. It returns the new generation as well as the source
+generation; a later cleanup must reconcile with that new generation. A retry
+of the same compensation key with the original source generation returns the
+same result without changing usage, including after restart or operation-window
+eviction. Old zero callbacks remain fenced and future admissions still observe
+the over-cap usage.
+
 The core registry reserves scan work before native publish, rescan, source
 import, and OpenClaw queue admission. It reserves retained bytes before a
 publish blob write and before import completion stores an acquired bundle.
