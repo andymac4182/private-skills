@@ -22,6 +22,9 @@ import {
   type MembershipSnapshot,
   type OrganizationSessionLike,
 } from '../../../packages/api-tokens/src/index.js';
+import { canonicalOriginFromEnv } from './identity-origin.js';
+
+export { canonicalOriginFromEnv } from './identity-origin.js';
 
 /** The identity package intentionally keeps its database implementation private. */
 export interface IdentityInfrastructureOptions {
@@ -39,25 +42,6 @@ export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
-}
-
-/**
- * Resolve the origin used by server-side CSRF checks from deployment
- * configuration. A request Host or Origin header is never used as the
- * canonical value.
- */
-export function canonicalOriginFromEnv(env: IdentityEnvironment): string {
-  const value = env.BETTER_AUTH_URL?.trim() || env.PSKILLS_PUBLIC_ORIGIN?.trim() || env.PSKILLS_API_URL?.trim() || 'http://localhost:5173';
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error('Trusted identity origin is invalid');
-  }
-  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.origin === 'null' || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('Trusted identity origin is invalid');
-  }
-  return parsed.origin;
 }
 
 /**

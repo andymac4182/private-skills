@@ -51,7 +51,7 @@ import {
   createBootstrapAdoptionHandler,
   type BootstrapAdoptionStore,
 } from './bootstrap-adoption.js';
-import { canonicalOriginFromEnv } from './identity-infrastructure.js';
+import { canonicalOriginFromEnv } from './identity-origin.js';
 import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
