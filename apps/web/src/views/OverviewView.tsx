@@ -107,7 +107,7 @@ export function OverviewView() {
       </Panel>
 
       <Panel className="overview-table-panel" title="Recent activity" description={`Publishing, imports, and checks for ${companyName}.`} action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Activity table view"><button aria-pressed={activityView === 'all'} className={activityView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('all')}>All <span>{operations.length}</span></button><button aria-pressed={activityView === 'active'} className={activityView === 'active' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('active')}>Active <span>{activeOperations.length}</span></button></div><Link className="button button-quiet" params={{ section: 'operations' }} to="/app/$section">View activity ↗</Link></div>}>
-        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : isFirstRun ? 'Activity starts here' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : isFirstRun ? canPublish ? 'Publish or import a skill to see its review and scan progress.' : 'Browse or install a skill to see its review and scan progress.' : canPublish ? 'Work will appear here when you publish or import a skill.' : 'Work will appear here when you install a skill.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
+        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : isFirstRun ? 'Activity starts here' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : 'Activity appears as your team publishes or imports skills.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
       </Panel>
     </div>
 
@@ -119,8 +119,9 @@ export function OverviewView() {
 }
 
 function canPublishFromSession(principal: Principal | null, session: AuthSession | null): boolean {
-  const role = session?.activeMembership?.role ?? principal?.roles.find((candidate) => candidate !== 'worker')
-  return role === 'owner' || role === 'admin' || role === 'publisher'
+  const activeRole = session?.activeMembership?.role
+  if (activeRole) return activeRole === 'owner' || activeRole === 'admin' || activeRole === 'publisher'
+  return principal?.roles.some((candidate) => candidate === 'owner' || candidate === 'admin' || candidate === 'publisher') ?? false
 }
 
 function OverviewIntro({ canPublish, firstRun = false, principal, session, showActions = true }: { canPublish: boolean; firstRun?: boolean; principal: Principal | null; session: AuthSession | null; showActions?: boolean }) {

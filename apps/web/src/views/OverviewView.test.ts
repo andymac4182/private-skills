@@ -176,4 +176,19 @@ describe('OverviewView', () => {
     expect(container.textContent).not.toContain('Add skill')
     expect(container.textContent).not.toContain('Publish or import a skill')
   })
+
+  it('keeps publish access when a legacy principal has publisher after reader', async () => {
+    harness.auth.session = makeSession({ activeMembership: null })
+    harness.auth.principal = { organizationId: organization.id, subject: 'legacy-owner', roles: ['reader', 'publisher'] }
+    vi.spyOn(api, 'skills').mockResolvedValue({ skills: [] })
+    vi.spyOn(api, 'packs').mockResolvedValue({ packs: [] })
+    vi.spyOn(api, 'operations').mockResolvedValue({ operations: [] })
+    vi.spyOn(api, 'policy').mockResolvedValue({ policy })
+
+    const container = await renderView()
+
+    expect(container.textContent).toContain('Add skill')
+    expect(container.textContent).not.toContain('Browse catalog')
+    expect(container.textContent).toContain('Activity appears as your team publishes or imports skills.')
+  })
 })
