@@ -434,7 +434,7 @@ export interface ImportRequest {
 }
 /** Durable settlement intent for the one scan reservation attached to a job. */
 export type MeteredScanSettlement = 'unused' | 'executed' | 'released';
-export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; /** Server-owned metered reservation owner; workers must reuse this key across retries. */ meteredReservationKey?: string; /** Terminal worker intent; `unused` is reconciled only after the job transaction commits. */ meteredScanSettlement?: MeteredScanSettlement; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; /** Server-owned metered reservation owner; workers must reuse this key across retries. */ meteredReservationKey?: string; /** Exact billing reservation lifecycle returned by server-side admission. */ meteredReservationGeneration?: number; /** Terminal worker intent; `unused` is reconciled only after the job transaction commits. */ meteredScanSettlement?: MeteredScanSettlement; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
 /**
  * Durable ownership for a reserved artifact write.  The billing reservation
  * remains charged while an attempt is pending or orphaned; a reconciler may
@@ -471,6 +471,8 @@ export interface MeteredReservationOwner {
   updatedAt: string;
   jobId?: string;
   releaseToken?: string;
+  /** Exact billing reservation lifecycle fenced by this owner row. */
+  reservationGeneration?: number;
 }
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
 export interface RegistryState {
@@ -545,7 +547,7 @@ export interface MeteredUsageDelta {
 export interface BillingUsageAdmission {
   status(): { enabled: boolean };
   reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<unknown>;
-  reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string): Promise<unknown>;
+  reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string, reservationGeneration?: number): Promise<unknown>;
   setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
 }
 

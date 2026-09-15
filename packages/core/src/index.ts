@@ -435,10 +435,12 @@ export function createOpenClawImportQueue(
       const reservationDelta: MeteredUsageDelta = { scans: 1 };
       let billing: BillingUsageAdmission | undefined;
       let reservationIdempotent = false;
+      let reservationGeneration: number | undefined;
       if (options.billing?.status().enabled === true) {
         try {
           const reservation = await options.billing.reserveUsage(options.organizationId, reservationDelta, reservationKey);
           reservationIdempotent = isObject(reservation) && reservation.idempotent === true;
+          reservationGeneration = meteredReservationGeneration(reservation);
           billing = options.billing;
         } catch (error) {
           throw meteredError(error);
@@ -451,7 +453,7 @@ export function createOpenClawImportQueue(
         if (mutable.policy.revision !== initialState.policy.revision) {
           throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
         }
-        if (billing) prepareMeteredReservationOwner(mutable, reservationKey, reservationIdempotent);
+        if (billing) prepareMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, reservationGeneration);
         const sameSource = (job: Job): boolean => {
           if (job.organizationId !== options.organizationId || job.kind !== 'import' || !job.import || !isObject(job.openclawSource)) return false;
           if (job.import.externalId !== input.externalId || job.import.name !== managedName || !job.upstream) return false;
@@ -469,7 +471,8 @@ export function createOpenClawImportQueue(
           // same transaction that joins the durable job.  A late duplicate
           // must see this fence before it attempts cleanup.
           active.meteredReservationKey ??= reservationKey;
-          if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, active.id);
+          active.meteredReservationGeneration ??= reservationGeneration;
+          if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, active.id, reservationGeneration);
           return { operationId: active.id, state: active.state === 'queued' ? 'queued' : 'running' };
         }
         const completed = candidates.find((job) => job.state === 'completed' && job.resourceId);
@@ -495,12 +498,13 @@ export function createOpenClawImportQueue(
           upstream,
           openclawSource: sourceDescriptor,
           meteredReservationKey: reservationKey,
+          ...(reservationGeneration === undefined ? {} : { meteredReservationGeneration: reservationGeneration }),
           createdAt: new Date(queueNow).toISOString(),
           updatedAt: new Date(queueNow).toISOString(),
           attempts: 0,
         };
         mutable.jobs.push(job);
-        if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, job.id);
+        if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, job.id, reservationGeneration);
         appendAudit(mutable, audit(input.principal, 'openclaw.import.queued', job.id, {
           feedId: input.feedId,
           feedSequence: input.feedSequence,
@@ -511,11 +515,11 @@ export function createOpenClawImportQueue(
         return { operationId: job.id, state: 'queued' as const };
         });
       } catch (error) {
-        if (!reservationIdempotent) await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent);
+        if (!reservationIdempotent) await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent, undefined, reservationGeneration);
         throw error;
       }
       if (!reservationIdempotent && result.operationId !== candidateJobId) {
-        await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent);
+        await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent, undefined, reservationGeneration);
       }
       return result;
     },
@@ -1983,7 +1987,7 @@ async function queueSourceCatalogImport(
     if (mutable.policy.revision !== initialState.policy.revision) {
       throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
     }
-    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
     if (sourceCatalog.configRevision(mapping.sourceId) !== mapping.importRequest.sourceCatalogConfigRevision) {
       throw new RegistryApiError('SOURCE_CONFIGURATION_CHANGED', 'Source configuration changed while this import was being queued', 409, { retryable: true });
     }
@@ -2008,7 +2012,8 @@ async function queueSourceCatalogImport(
     const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
     if (active) {
       active.meteredReservationKey ??= reservationKey;
-      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      active.meteredReservationGeneration ??= reservation?.reservationGeneration;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id, reservation.reservationGeneration);
       return { status: 202, job: active, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
     }
     for (const candidate of candidates) {
@@ -2028,7 +2033,8 @@ async function queueSourceCatalogImport(
     const physicalActive = physicalCandidates.find((job) => job.state === 'queued' || job.state === 'running');
     if (physicalActive) {
       physicalActive.meteredReservationKey ??= reservationKey;
-      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, physicalActive.id);
+      physicalActive.meteredReservationGeneration ??= reservation?.reservationGeneration;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, physicalActive.id, reservation.reservationGeneration);
       addSourceCatalogAlias(physicalActive, mapping);
       return { status: 202, job: physicalActive, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
     }
@@ -2065,12 +2071,13 @@ async function queueSourceCatalogImport(
       upstream: mapping.upstream,
       sourceAcquisition: mapping.acquisition,
       meteredReservationKey: reservationKey,
+      ...(reservation?.reservationGeneration === undefined ? {} : { meteredReservationGeneration: reservation.reservationGeneration }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
-    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id, reservation.reservationGeneration);
     appendAudit(mutable, audit(principal, 'source.import.queued', job.id, {
       sourceId: mapping.sourceId,
       externalId: mapping.externalId,
@@ -2082,12 +2089,12 @@ async function queueSourceCatalogImport(
     });
   } catch (error) {
     if (reservation && !reservation.idempotent) {
-      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
     }
     throw error;
   }
   if (reservation && !reservation.idempotent && (committed.status !== 202 || committed.job.id !== candidateJobId)) {
-    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
   }
   return committed;
 }
@@ -2899,21 +2906,21 @@ async function publishSkill(
   const skillId = randomId('skill');
   const storageReservationKey = meteredOperationKey('publish-storage', jobId);
   const storageReservationDelta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
-  const storageBilling = await reserveMeteredUsage(deps, config.organizationId, storageReservationDelta, storageReservationKey);
+  const storageReservation = await reserveMeteredUsage(deps, config.organizationId, storageReservationDelta, storageReservationKey);
   const scanReservationKey = meteredOperationKey('scan', jobId);
-  let scanBilling: BillingUsageAdmission | undefined;
+  let scanReservation: MeteredUsageReservation | undefined;
   try {
     // Keep the scan reservation on the same durable job key used by the
     // worker. A queued job is therefore charged once across queue admission,
     // retries, and worker execution rather than once per phase.
-    scanBilling = await reserveMeteredUsage(
+    scanReservation = await reserveMeteredUsage(
       deps,
       config.organizationId,
       { scans: 1 },
       scanReservationKey,
     );
   } catch (error) {
-    await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
+    await releaseMeteredUsage(storageReservation?.billing, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`, storageReservation?.reservationGeneration);
     throw error;
   }
   let storageAttempt: StorageAttempt | undefined;
@@ -2954,19 +2961,20 @@ async function publishSkill(
       policyRevision: policy.revision,
       policy,
       meteredReservationKey: scanReservationKey,
+      ...(scanReservation?.reservationGeneration === undefined ? {} : { meteredReservationGeneration: scanReservation.reservationGeneration }),
       createdAt: now,
       updatedAt: now,
       attempts: 0,
     };
     const result = await deps.repository.transaction(config.organizationId, (current) => {
       const mutable = ensureState(current, state.policy);
-      if (scanBilling) prepareMeteredReservationOwner(mutable, scanReservationKey, false);
+      if (scanReservation) prepareMeteredReservationOwner(mutable, scanReservationKey, false, scanReservation.reservationGeneration);
       if (mutable.skills.some((candidate) => candidate.name === name && candidate.version === version)) {
         throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
       }
       mutable.skills.push(skill);
       mutable.jobs.push(job);
-      if (scanBilling) claimMeteredReservationOwner(mutable, scanReservationKey, false, job.id);
+      if (scanReservation) claimMeteredReservationOwner(mutable, scanReservationKey, false, job.id, scanReservation.reservationGeneration);
       commitStorageAttempt(mutable, storageAttempt!.id, stored!);
       appendAudit(mutable, audit(principal, 'skill.publish.queued', skillId, {
         digest,
@@ -2982,9 +2990,9 @@ async function publishSkill(
       // beginStorageAttempt completed no provider call.  If its transaction
       // failed after an uncertain metadata write, the external object is still
       // known absent, so reconcile the admission back to zero safely.
-      await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
+      await releaseMeteredUsage(storageReservation?.billing, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`, storageReservation?.reservationGeneration);
     }
-    await releaseMeteredUsageIfUnowned(deps.repository, scanBilling, config.organizationId, scanReservationKey, { scans: 1 }, false);
+    await releaseMeteredUsageIfUnowned(deps.repository, scanReservation?.billing, config.organizationId, scanReservationKey, { scans: 1 }, false, undefined, scanReservation?.reservationGeneration);
     throw error;
   }
 }
@@ -3936,16 +3944,19 @@ async function rescanSkill(
   const reservationKey = meteredOperationKey('scan', jobId);
   job.meteredReservationKey = reservationKey;
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
-  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  const reservation = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  if (reservation?.reservationGeneration !== undefined) {
+    job.meteredReservationGeneration = reservation.reservationGeneration;
+  }
   try {
     const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
       const mutable = ensureState(mutableState, state.policy);
-      if (billing) prepareMeteredReservationOwner(mutable, reservationKey, false);
+      if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
       const currentSkill = mutable.skills.find((candidate) => candidate.id === id);
       if (!currentSkill || !canReadNamespace(principal, currentSkill.name)) throw unavailable();
       if (currentSkill.state !== 'revoked') currentSkill.state = 'pending';
       mutable.jobs.push(job);
-      if (billing) claimMeteredReservationOwner(mutable, reservationKey, false, job.id);
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id, reservation.reservationGeneration);
       appendAudit(mutable, audit(principal, 'skill.rescan.queued', id, {
         digest: skill.artifact.digest,
         requestId,
@@ -3954,7 +3965,7 @@ async function rescanSkill(
     });
     return jsonResponse({ operation: result }, 202);
   } catch (error) {
-    await releaseMeteredUsageIfUnowned(deps.repository, billing, config.organizationId, reservationKey, reservationDelta, false);
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation?.billing, config.organizationId, reservationKey, reservationDelta, false, undefined, reservation?.reservationGeneration);
     throw error;
   }
 }
@@ -5377,7 +5388,7 @@ async function queueSourceReferenceImport(
     if (mutable.policy.revision !== state.policy.revision) {
       throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
     }
-    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
     const current = mutable.upstreams.find((candidate) => candidate.id === upstream.id);
     if (!current || !current.enabled || !sameUpstreamOrigin(current, upstream) || !canReadNamespace(principal, current.namespace)) {
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'The source mapping changed while this import was being resolved', 409);
@@ -5398,7 +5409,8 @@ async function queueSourceReferenceImport(
     const active = candidates.find((candidate) => candidate.state === 'queued' || candidate.state === 'running');
     if (active) {
       active.meteredReservationKey ??= reservationKey;
-      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      active.meteredReservationGeneration ??= reservation?.reservationGeneration;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id, reservation.reservationGeneration);
       return { status: 202 as const, job: active };
     }
     for (const candidate of candidates) {
@@ -5430,12 +5442,13 @@ async function queueSourceReferenceImport(
       import: importRequest,
       upstream: current,
       meteredReservationKey: reservationKey,
+      ...(reservation?.reservationGeneration === undefined ? {} : { meteredReservationGeneration: reservation.reservationGeneration }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
-    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id, reservation.reservationGeneration);
     appendAudit(mutable, audit(principal, 'source.proxy.queued', job.id, {
       reference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
       upstreamId: upstream.id,
@@ -5446,12 +5459,12 @@ async function queueSourceReferenceImport(
     });
   } catch (error) {
     if (reservation && !reservation.idempotent) {
-      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
     }
     throw error;
   }
   if (reservation && !reservation.idempotent && (result.status !== 202 || result.job.id !== candidateJobId)) {
-    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
   }
   return result;
 }
@@ -5817,7 +5830,7 @@ async function queueTransparentImport(
     if (!sameUpstreamOrigin(currentUpstream, upstream)) {
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'The upstream mapping changed while this import was being resolved', 409);
     }
-    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
     const candidates = mutable.jobs
       .filter((job) => {
         if (job.organizationId !== config.organizationId || job.kind !== 'import') return false;
@@ -5840,7 +5853,8 @@ async function queueTransparentImport(
     const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
     if (active) {
       active.meteredReservationKey ??= reservationKey;
-      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      active.meteredReservationGeneration ??= reservation?.reservationGeneration;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id, reservation.reservationGeneration);
       return { value: { status: 202 as const, job: active }, created: false };
     }
 
@@ -5878,12 +5892,13 @@ async function queueTransparentImport(
       import: importRequest,
       upstream: currentUpstream,
       meteredReservationKey: reservationKey,
+      ...(reservation?.reservationGeneration === undefined ? {} : { meteredReservationGeneration: reservation.reservationGeneration }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
-    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id, reservation.reservationGeneration);
     appendAudit(mutable, audit(principal, 'skill.proxy.queued', job.id, {
       externalId: template.externalId,
       feed: template.feedName,
@@ -5898,12 +5913,12 @@ async function queueTransparentImport(
     });
   } catch (error) {
     if (reservation && !reservation.idempotent) {
-      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
     }
     throw error;
   }
   if (reservation && !reservation.idempotent && !committed.created) {
-    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
   }
   // The transaction may retry or roll back. Count only the committed result,
   // after the repository has returned successfully, so one request cannot
@@ -5997,8 +6012,9 @@ async function resolveOrQueueImport(
           // Joining an existing job still acquires the same durable ownership
           // fence as creating one. This keeps a late duplicate from releasing
           // the reservation while the joined worker is running.
-          prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
-          claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, activeTarget.id);
+          prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
+          activeTarget.meteredReservationGeneration ??= reservation.reservationGeneration;
+          claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, activeTarget.id, reservation.reservationGeneration);
         }
         appendAudit(mutable, audit(principal, 'skill.import.joined', activeTarget.id, {
           cacheKey,
@@ -6074,13 +6090,14 @@ async function resolveOrQueueImport(
       import: importRequest,
       upstream: currentUpstream,
       meteredReservationKey: reservationKey,
+      ...(reservation?.reservationGeneration === undefined ? {} : { meteredReservationGeneration: reservation.reservationGeneration }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
-    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, reservation.reservationGeneration);
     mutable.jobs.push(job);
-    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id, reservation.reservationGeneration);
     appendAudit(mutable, audit(principal, 'skill.import.queued', job.id, {
       cacheKey,
       upstreamId: importRequest.upstreamId,
@@ -6092,12 +6109,12 @@ async function resolveOrQueueImport(
     });
   } catch (error) {
     if (reservation && !reservation.idempotent) {
-      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
     }
     throw error;
   }
   if (reservation && !reservation.idempotent && (result.status !== 202 || result.job.id !== candidateJobId)) {
-    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent, undefined, reservation.reservationGeneration);
   }
   return result;
 }
@@ -6496,7 +6513,7 @@ async function completeJob(
   }
 
   let imported: { bundle: SkillBundle; bytes: Uint8Array; stored: StoredBlob; digest: Digest; metadata: { skillName?: string; description?: string } } | undefined;
-  let importedStorageAdmission: { billing: BillingUsageAdmission; reservationKey: string; delta: MeteredUsageDelta } | undefined;
+  let importedStorageAdmission: { billing: BillingUsageAdmission; reservationKey: string; delta: MeteredUsageDelta; reservationGeneration?: number } | undefined;
   let importedStorageAttempt: StorageAttempt | undefined;
   let importedStored: StoredBlob | undefined;
   if (job.kind === 'import' && !body.error) {
@@ -6507,8 +6524,13 @@ async function completeJob(
       const digest = await digestBytes(bytes);
       const reservationKey = meteredOperationKey('import-storage', job.id);
       const delta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
-      const billing = await reserveMeteredUsage(deps, config.organizationId, delta, reservationKey);
-      if (billing) importedStorageAdmission = { billing, reservationKey, delta };
+      const reservation = await reserveMeteredUsage(deps, config.organizationId, delta, reservationKey);
+      if (reservation) importedStorageAdmission = {
+        billing: reservation.billing,
+        reservationKey,
+        delta,
+        ...(reservation.reservationGeneration === undefined ? {} : { reservationGeneration: reservation.reservationGeneration }),
+      };
       importedStorageAttempt = await beginStorageAttempt(deps, {
         organizationId: config.organizationId,
         reservationKey,
@@ -6534,6 +6556,7 @@ async function completeJob(
           importedStorageAdmission.reservationKey,
           importedStorageAdmission.delta,
           `${importedStorageAdmission.reservationKey}:release`,
+          importedStorageAdmission.reservationGeneration,
         );
         importedStorageAdmission = undefined;
       }
@@ -6565,6 +6588,7 @@ async function completeJob(
           importedStorageAdmission.reservationKey,
           importedStorageAdmission.delta,
           `${importedStorageAdmission.reservationKey}:release`,
+          importedStorageAdmission.reservationGeneration,
         );
         importedStorageAdmission = undefined;
       }
@@ -6693,6 +6717,7 @@ async function completeJob(
         importedStorageAdmission.reservationKey,
         importedStorageAdmission.delta,
         `${importedStorageAdmission.reservationKey}:release`,
+        importedStorageAdmission.reservationGeneration,
       );
       importedStorageAdmission = undefined;
     }
@@ -7403,6 +7428,9 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (job.meteredReservationKey !== undefined && !isMeteredReservationKey(job.meteredReservationKey)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered reservation key is invalid', 500);
     }
+    if (job.meteredReservationGeneration !== undefined && (!Number.isSafeInteger(job.meteredReservationGeneration) || job.meteredReservationGeneration < 1)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered reservation generation is invalid', 500);
+    }
     if (job.meteredScanSettlement !== undefined && !METERED_SCAN_SETTLEMENTS.has(job.meteredScanSettlement)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered scan settlement is invalid', 500);
     }
@@ -7441,6 +7469,9 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
       (owner.state === 'releasing' && !owner.releaseToken)
     ) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Metered reservation owner state is invalid', 500);
+    }
+    if (owner.reservationGeneration !== undefined && (!Number.isSafeInteger(owner.reservationGeneration) || owner.reservationGeneration < 1)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Metered reservation owner generation is invalid', 500);
     }
     reservationOwnerKeys.add(owner.reservationKey);
   }
@@ -7765,12 +7796,16 @@ async function reserveMeteredUsage(
   organizationId: string,
   delta: MeteredUsageDelta,
   operationKey: string,
-): Promise<BillingUsageAdmission | undefined> {
+): Promise<MeteredUsageReservation | undefined> {
   const billing = meteredAdmission(deps);
   if (!billing) return undefined;
   try {
-    await billing.reserveUsage(organizationId, delta, operationKey);
-    return billing;
+    const result = await billing.reserveUsage(organizationId, delta, operationKey);
+    return {
+      billing,
+      idempotent: isObject(result) && result.idempotent === true,
+      reservationGeneration: meteredReservationGeneration(result),
+    };
   } catch (error) {
     throw meteredError(error);
   }
@@ -7779,6 +7814,16 @@ async function reserveMeteredUsage(
 interface MeteredUsageReservation {
   readonly billing: BillingUsageAdmission;
   readonly idempotent: boolean;
+  readonly reservationGeneration?: number;
+}
+
+function meteredReservationGeneration(result: unknown): number | undefined {
+  if (!isObject(result) || result.reservationGeneration === undefined) return undefined;
+  const generation = result.reservationGeneration;
+  if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1) {
+    throw new RegistryApiError('BILLING_UNAVAILABLE', 'Billing returned an invalid reservation generation', 503, { retryable: true });
+  }
+  return generation;
 }
 
 async function reserveMeteredUsageResult(
@@ -7794,6 +7839,7 @@ async function reserveMeteredUsageResult(
     return {
       billing,
       idempotent: isObject(result) && result.idempotent === true,
+      reservationGeneration: meteredReservationGeneration(result),
     };
   } catch (error) {
     throw meteredError(error);
@@ -7835,12 +7881,13 @@ async function releaseMeteredUsage(
   reservationKey: string,
   delta: MeteredUsageDelta,
   operationKey: string,
+  reservationGeneration?: number,
 ): Promise<boolean> {
   if (!billing) return true;
   const actual = releaseDelta(delta);
   if (Object.keys(actual).length === 0) return true;
   try {
-    await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+    await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey, reservationGeneration);
     return true;
   } catch {
     // The caller's durable transaction error is more useful than a cleanup
@@ -7887,6 +7934,7 @@ async function settleUnusedMeteredScanReservation(
     { scans: 1 },
     false,
     job.id,
+    job.meteredReservationGeneration,
   );
 
   try {
@@ -7933,9 +7981,10 @@ export async function releaseMeteredUsageIfUnowned(
   delta: MeteredUsageDelta,
   reservationIdempotent = false,
   expectedJobId?: string,
+  expectedReservationGeneration?: number,
 ): Promise<void> {
   if (!billing) return;
-  let decision: { kind: 'keep' | 'busy' | 'already-released' | 'release'; token?: string };
+  let decision: { kind: 'keep' | 'busy' | 'already-released' | 'release'; token?: string; reservationGeneration?: number };
   try {
     decision = await repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
@@ -7958,18 +8007,24 @@ export async function releaseMeteredUsageIfUnowned(
         // that caller before it reaches billing.
         const existingOwner = findMeteredReservationOwner(mutable, reservationKey);
         if (existingOwner?.state === 'releasing') return { kind: 'busy' as const };
-        const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned');
+        const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned', active.id, expectedReservationGeneration);
         owner.jobId = active.id;
         return { kind: 'keep' as const };
       }
       const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (
+        owner &&
+        expectedReservationGeneration !== undefined &&
+        owner.reservationGeneration !== undefined &&
+        owner.reservationGeneration !== expectedReservationGeneration
+      ) return { kind: 'keep' as const };
       if (expectedJobId !== undefined) {
         if (owner?.jobId !== undefined && owner.jobId !== expectedJobId) return { kind: 'keep' as const };
         if (owner?.jobId === undefined && owner !== undefined) return { kind: 'keep' as const };
         if (owner?.state === 'released') return { kind: 'already-released' as const };
         if (owner?.state === 'releasing') {
           if (!owner.releaseToken) return { kind: 'busy' as const };
-          return { kind: 'release' as const, token: owner.releaseToken };
+          return { kind: 'release' as const, token: owner.releaseToken, reservationGeneration: owner.reservationGeneration ?? expectedReservationGeneration };
         }
       }
       if (owner?.state === 'releasing') {
@@ -7977,7 +8032,7 @@ export async function releaseMeteredUsageIfUnowned(
         // correction and its final owner transaction. The deterministic
         // billing operation key makes the retry idempotent.
         if (!owner.releaseToken) return { kind: 'busy' as const };
-        return { kind: 'release' as const, token: owner.releaseToken };
+        return { kind: 'release' as const, token: owner.releaseToken, reservationGeneration: owner.reservationGeneration ?? expectedReservationGeneration };
       }
       const token = randomId('metered-release');
       if (owner) {
@@ -7985,6 +8040,7 @@ export async function releaseMeteredUsageIfUnowned(
         owner.releaseToken = token;
         owner.updatedAt = nowIso();
         owner.jobId = expectedJobId;
+        owner.reservationGeneration = expectedReservationGeneration;
       } else {
         mutable.meteredReservationOwners!.push({
           reservationKey,
@@ -7992,6 +8048,7 @@ export async function releaseMeteredUsageIfUnowned(
           releaseToken: token,
           updatedAt: nowIso(),
           ...(expectedJobId === undefined ? {} : { jobId: expectedJobId }),
+          ...(expectedReservationGeneration === undefined ? {} : { reservationGeneration: expectedReservationGeneration }),
         });
       }
       return { kind: 'release' as const, token };
@@ -8009,6 +8066,7 @@ export async function releaseMeteredUsageIfUnowned(
       reservationKey,
       delta,
       meteredReleaseOperationKey(reservationKey, decision.token),
+      decision.reservationGeneration ?? expectedReservationGeneration,
     );
     return;
   }
@@ -8018,12 +8076,14 @@ export async function releaseMeteredUsageIfUnowned(
     reservationKey,
     delta,
     meteredReleaseOperationKey(reservationKey, decision.token),
+    decision.reservationGeneration ?? expectedReservationGeneration,
   );
   try {
     await repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
       const owner = findMeteredReservationOwner(mutable, reservationKey);
       if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token) return;
+      if (decision.reservationGeneration !== undefined && owner.reservationGeneration !== decision.reservationGeneration) return;
       if (expectedJobId !== undefined) {
         if (owner.jobId !== expectedJobId) return;
         const newerActiveJob = mutable.jobs.find((job) =>
@@ -8075,17 +8135,28 @@ function upsertMeteredReservationOwner(
   reservationKey: string,
   ownerState: 'owned' | 'released',
   jobId?: string,
+  reservationGeneration?: number,
 ): MeteredReservationOwner {
   state.meteredReservationOwners ??= [];
   const existing = findMeteredReservationOwner(state, reservationKey);
   if (existing?.state === 'releasing') {
     throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered operation is settling; retry shortly', 503, { retryable: true });
   }
+  if (
+    existing &&
+    existing.state !== 'released' &&
+    existing.reservationGeneration !== undefined &&
+    reservationGeneration !== undefined &&
+    existing.reservationGeneration !== reservationGeneration
+  ) {
+    throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503, { retryable: true });
+  }
   if (existing) {
     existing.state = ownerState;
     existing.updatedAt = nowIso();
     existing.releaseToken = undefined;
     if (jobId !== undefined) existing.jobId = jobId;
+    if (reservationGeneration !== undefined) existing.reservationGeneration = reservationGeneration;
     return existing;
   }
   const created: MeteredReservationOwner = {
@@ -8093,6 +8164,7 @@ function upsertMeteredReservationOwner(
     state: ownerState,
     updatedAt: nowIso(),
     ...(jobId === undefined ? {} : { jobId }),
+    ...(reservationGeneration === undefined ? {} : { reservationGeneration }),
   };
   state.meteredReservationOwners.push(created);
   return created;
@@ -8102,6 +8174,7 @@ function prepareMeteredReservationOwner(
   state: RegistryState,
   reservationKey: string,
   reservationIdempotent: boolean,
+  reservationGeneration?: number,
 ): void {
   const owner = findMeteredReservationOwner(state, reservationKey);
   if (owner?.state === 'releasing' || (owner?.state === 'released' && reservationIdempotent)) {
@@ -8112,6 +8185,16 @@ function prepareMeteredReservationOwner(
     owner.updatedAt = nowIso();
     owner.releaseToken = undefined;
     owner.jobId = undefined;
+    owner.reservationGeneration = reservationGeneration;
+  } else if (
+    owner &&
+    reservationGeneration !== undefined &&
+    owner.reservationGeneration !== undefined &&
+    owner.reservationGeneration !== reservationGeneration
+  ) {
+    throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503, { retryable: true });
+  } else if (owner && reservationGeneration !== undefined) {
+    owner.reservationGeneration = reservationGeneration;
   }
 }
 
@@ -8120,9 +8203,10 @@ export function claimMeteredReservationOwner(
   reservationKey: string,
   reservationIdempotent: boolean,
   jobId: string,
+  reservationGeneration?: number,
 ): void {
-  prepareMeteredReservationOwner(state, reservationKey, reservationIdempotent);
-  const owner = upsertMeteredReservationOwner(state, reservationKey, 'owned', jobId);
+  prepareMeteredReservationOwner(state, reservationKey, reservationIdempotent, reservationGeneration);
+  const owner = upsertMeteredReservationOwner(state, reservationKey, 'owned', jobId, reservationGeneration);
   owner.jobId = jobId;
 }
 

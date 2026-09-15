@@ -170,6 +170,7 @@ function validMeteredReservationOwner(value: unknown): value is Record<string, u
     typeof value.updatedAt === 'string' && value.updatedAt.length > 0 && value.updatedAt.length <= 64 &&
     (value.jobId === undefined || (typeof value.jobId === 'string' && value.jobId.length > 0 && value.jobId.length <= 256)) &&
     (value.releaseToken === undefined || (typeof value.releaseToken === 'string' && value.releaseToken.length > 0 && value.releaseToken.length <= 256)) &&
+    (value.reservationGeneration === undefined || (typeof value.reservationGeneration === 'number' && Number.isSafeInteger(value.reservationGeneration) && value.reservationGeneration >= 1)) &&
     (value.state !== 'releasing' || value.releaseToken !== undefined)
   );
 }

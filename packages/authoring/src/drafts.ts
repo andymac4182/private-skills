@@ -72,6 +72,8 @@ interface DraftUsageAdmission {
   readonly reservationKey: string;
   readonly delta: { storageBytes?: number; scans?: number };
   readonly idempotent: boolean;
+  /** Exact billing reservation lifecycle to carry through cleanup. */
+  readonly reservationGeneration?: number;
 }
 
 function authoringBilling(deps: AuthoringHandlerDependencies): BillingUsageAdmission | undefined {
@@ -96,6 +98,15 @@ function authoringMeteredError(error: unknown): AuthoringApiError {
   return new AuthoringApiError('BILLING_UNAVAILABLE', 'Usage enforcement is temporarily unavailable', 503);
 }
 
+function authoringReservationGeneration(result: unknown): number | undefined {
+  if (typeof result !== 'object' || result === null || !('reservationGeneration' in result)) return undefined;
+  const generation = (result as { reservationGeneration?: unknown }).reservationGeneration;
+  if (!Number.isSafeInteger(generation) || (generation as number) < 1) {
+    throw new AuthoringApiError('BILLING_UNAVAILABLE', 'Billing returned an invalid reservation generation', 503);
+  }
+  return generation as number;
+}
+
 async function draftUsageKey(draftId: string, requestDigest: Digest, kind: string): Promise<string> {
   // Billing operation keys are deliberately bounded independently of caller
   // supplied draft and idempotency identifiers.
@@ -113,7 +124,7 @@ async function reserveDraftUsage(
   try {
     const result = await billing.reserveUsage(deps.config.organizationId, delta, reservationKey);
     const idempotent = typeof result === 'object' && result !== null && (result as { idempotent?: unknown }).idempotent === true;
-    return { billing, reservationKey, delta, idempotent };
+    return { billing, reservationKey, delta, idempotent, reservationGeneration: authoringReservationGeneration(result) };
   } catch (error) {
     throw authoringMeteredError(error);
   }
@@ -131,6 +142,7 @@ async function releaseDraftUsage(
       admission.reservationKey,
       Object.fromEntries(Object.keys(admission.delta).map((metric) => [metric, 0])) as DraftUsageAdmission['delta'],
       `${admission.reservationKey}:release${releaseToken === undefined ? '' : `:${releaseToken}`}`,
+      admission.reservationGeneration,
     );
     return true;
   } catch {
@@ -161,6 +173,16 @@ function prepareDraftReservationOwner(
     owner.releaseToken = undefined;
     owner.jobId = undefined;
     owner.updatedAt = new Date().toISOString();
+    owner.reservationGeneration = admission.reservationGeneration;
+  } else if (
+    owner &&
+    admission.reservationGeneration !== undefined &&
+    owner.reservationGeneration !== undefined &&
+    owner.reservationGeneration !== admission.reservationGeneration
+  ) {
+    throw new AuthoringApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503);
+  } else if (owner && admission.reservationGeneration !== undefined) {
+    owner.reservationGeneration = admission.reservationGeneration;
   }
 }
 
@@ -177,6 +199,7 @@ function claimDraftReservationOwner(
     owner.jobId = jobId;
     owner.releaseToken = undefined;
     owner.updatedAt = new Date().toISOString();
+    owner.reservationGeneration = admission.reservationGeneration;
     return;
   }
   state.meteredReservationOwners.push({
@@ -184,6 +207,7 @@ function claimDraftReservationOwner(
     state: 'owned',
     jobId,
     updatedAt: new Date().toISOString(),
+    ...(admission.reservationGeneration === undefined ? {} : { reservationGeneration: admission.reservationGeneration }),
   });
 }
 
@@ -208,10 +232,17 @@ async function releaseDraftUsageIfUnowned(
         job.meteredReservationKey === admission.reservationKey,
       );
       if (active) {
+        active.meteredReservationGeneration ??= admission.reservationGeneration;
         claimDraftReservationOwner(state, admission, active.id);
         return 'keep' as const;
       }
       const owner = draftReservationOwner(state, admission.reservationKey);
+      if (
+        owner &&
+        admission.reservationGeneration !== undefined &&
+        owner.reservationGeneration !== undefined &&
+        owner.reservationGeneration !== admission.reservationGeneration
+      ) return 'busy' as const;
       if (owner?.state === 'releasing') {
         // A previous process may have completed the external correction but
         // crashed before its terminal owner transaction committed. Reuse the
@@ -228,6 +259,7 @@ async function releaseDraftUsageIfUnowned(
         owner.state = 'releasing';
         owner.releaseToken = token;
         owner.jobId = undefined;
+        owner.reservationGeneration = admission.reservationGeneration;
         owner.updatedAt = new Date().toISOString();
       } else {
         state.meteredReservationOwners.push({
@@ -235,6 +267,7 @@ async function releaseDraftUsageIfUnowned(
           state: 'releasing',
           releaseToken: token,
           updatedAt: new Date().toISOString(),
+          ...(admission.reservationGeneration === undefined ? {} : { reservationGeneration: admission.reservationGeneration }),
         });
       }
       return 'release' as const;
@@ -248,6 +281,10 @@ async function releaseDraftUsageIfUnowned(
     await deps.repository.transaction(deps.config.organizationId, (state) => {
       const owner = draftReservationOwner(state, admission.reservationKey);
       if (!owner || owner.state !== 'releasing' || owner.releaseToken !== token) return;
+      if (
+        admission.reservationGeneration !== undefined &&
+        owner.reservationGeneration !== admission.reservationGeneration
+      ) return;
       owner.updatedAt = new Date().toISOString();
       if (released) {
         owner.state = 'released';
@@ -2051,6 +2088,9 @@ async function publishDraft(
     `private-skills:scan:${jobId}`,
   );
   job.meteredReservationKey = `private-skills:scan:${jobId}`;
+  if (scanAdmission?.reservationGeneration !== undefined) {
+    job.meteredReservationGeneration = scanAdmission.reservationGeneration;
+  }
   let result: { operation: DraftPublishOperation; idempotent: boolean };
   try {
     result = await deps.repository.transaction(deps.config.organizationId, (state) => {

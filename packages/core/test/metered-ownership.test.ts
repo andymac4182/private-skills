@@ -101,7 +101,7 @@ class FinalTransitionFailureRepository implements StateRepository {
 
 class RecordingBilling implements BillingUsageAdmission {
   readonly reservations = new Set<string>();
-  readonly reconciliations: Array<{ key: string; actual: MeteredUsageDelta }> = [];
+  readonly reconciliations: Array<{ key: string; actual: MeteredUsageDelta; reservationGeneration?: number }> = [];
   readonly reconciliationOperationKeys: string[] = [];
   failReconciliation = false;
 
@@ -112,7 +112,7 @@ class RecordingBilling implements BillingUsageAdmission {
   async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, key: string): Promise<unknown> {
     const idempotent = this.reservations.has(key);
     this.reservations.add(key);
-    return { idempotent };
+    return { idempotent, reservationGeneration: 7 };
   }
 
   async reconcileUsage(
@@ -120,8 +120,9 @@ class RecordingBilling implements BillingUsageAdmission {
     key: string,
     actual: MeteredUsageDelta,
     operationKey: string,
+    reservationGeneration?: number,
   ): Promise<unknown> {
-    this.reconciliations.push({ key, actual });
+    this.reconciliations.push({ key, actual, ...(reservationGeneration === undefined ? {} : { reservationGeneration }) });
     this.reconciliationOperationKeys.push(operationKey);
     if (this.failReconciliation) throw new Error('simulated uncertain billing correction');
     if (actual.scans === 0) this.reservations.delete(key);
@@ -359,6 +360,39 @@ describe('durable metered reservation ownership', () => {
         expect.objectContaining({ id: 'job-new-generation', state: 'queued' }),
       ],
       meteredReservationOwners: [expect.objectContaining({ reservationKey: RESERVATION_KEY, state: 'owned', jobId: 'job-new-generation' })],
+    });
+  });
+
+  it('forwards the admitted reservation generation through durable release recovery', async () => {
+    const repository = new MemoryRepository(defaultRegistryState({ production: false, allowUnscanned: true }));
+    const billing = new RecordingBilling();
+    await billing.reserveUsage(ORGANIZATION, { scans: 1 }, RESERVATION_KEY);
+    await repository.transaction(ORGANIZATION, (state) => {
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, 'job-generation', 7);
+    });
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+      false,
+      'job-generation',
+      7,
+    );
+
+    expect(billing.reconciliations).toEqual([{
+      key: RESERVATION_KEY,
+      actual: { scans: 0 },
+      reservationGeneration: 7,
+    }]);
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      meteredReservationOwners: [{
+        reservationKey: RESERVATION_KEY,
+        state: 'released',
+        reservationGeneration: 7,
+      }],
     });
   });
 });

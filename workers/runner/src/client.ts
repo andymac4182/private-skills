@@ -33,6 +33,8 @@ export interface WorkerClaimedJob {
   sourceAcquisition?: unknown;
   /** Server-owned metered reservation owner; retries must reuse this key. */
   meteredReservationKey?: string;
+  /** Exact billing reservation lifecycle; retries must preserve this value. */
+  meteredReservationGeneration?: number;
   /** Durable server settlement intent; workers only receive this for observability. */
   meteredScanSettlement?: 'unused' | 'executed' | 'released';
   [key: string]: unknown;
