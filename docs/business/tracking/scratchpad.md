@@ -32,6 +32,8 @@ Overview implementation integrated 491ddc7: compact company header, useful prima
 
 ## Market positioning research — 15 September 2026
 
+Browser verification follow-up: clean source 6f878b5 fixture at port 5402 started, but root browser and `/auth/identity/config` both show enabled=false and providers=[] despite the supplied two-provider fixture URL. foundation_release owns investigating the existing live launcher 91360 and correcting the setup. Do not count fixture startup or build success as identity-enabled browser proof. Production remains 668f53e.
+
 User reiterated market research and domain checks as launch work (B14–B16). Current primary-source observations: [Tessl registry](https://tessl.io/registry) positions around agent skills and evaluation; [JFrog MCP Registry](https://jfrog.com/ai-catalog/mcp-registry/) explicitly includes agent skills in its broader AI Catalog; [Cloudsmith artifact management](https://cloudsmith.com/platform-features/artifact-management) includes AI artifacts. Governance or scanning alone is not an evidenced unique differentiator.
 
 Working hypothesis to test: an approachable company skills platform for engineering teams, combining transparent upstream ingestion, private authoring and distribution, and portable hosting. This is a positioning hypothesis, not a validated buyer preference or a claim that competitors lack these features. Marketing agent owns the source-backed comparison and naming/domain shortlist. Include buyer versus daily user, switching friction, purchase triggers, pricing hypotheses, and low-cost validation tasks. No outreach or purchases are authorized by this research task.
