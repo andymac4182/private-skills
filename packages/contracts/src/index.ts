@@ -607,6 +607,20 @@ export interface MeteredUsageRestoration extends MeteredUsageReservation {
   restoredFromGeneration: number;
   reservationGeneration: number;
 }
+
+export type MeteredStorageRecoveryAction = 'restored' | 'fenced';
+
+/**
+ * Result of resolving an uncertain storage release. `fenced` advances only
+ * the lifecycle generation because the original charge is still present;
+ * `restored` inverses a committed zero reconciliation.
+ */
+export interface MeteredStorageRecoveryResolution {
+  action: MeteredStorageRecoveryAction;
+  idempotent: boolean;
+  restoredFromGeneration: number;
+  reservationGeneration: number;
+}
 export interface BillingUsageAdmission {
   status(): { enabled: boolean };
   reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation>;
@@ -629,6 +643,18 @@ export interface BillingUsageAdmission {
     operationKey: string,
     reservationGeneration: number,
   ): Promise<MeteredUsageRestoration>;
+  /**
+   * Resolve the retain/reference branch of an uncertain storage release in
+   * one ledger transaction. A released source is restored above quota; a
+   * still-charged source is fenced without changing usage.
+   */
+  resolveStorageRecovery?(
+    organizationId: string,
+    reservationKey: string,
+    delta: Pick<MeteredUsageDelta, 'storageBytes'>,
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<MeteredStorageRecoveryResolution>;
   setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
 }
 

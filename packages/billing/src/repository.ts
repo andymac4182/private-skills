@@ -266,6 +266,7 @@ export function assertBillingState(state: BillingOrganizationState): void {
       const restoration = operation.restoration;
       if (!restoration || typeof restoration !== 'object' || Array.isArray(restoration)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation restoration is invalid');
       validateBillingIdentifier(restoration.reservationKey, 'usage.restoration.reservationKey', MAX_OPERATION_KEY_BYTES);
+      if (restoration.action !== undefined && restoration.action !== 'restored' && restoration.action !== 'fenced') throw new BillingRepositoryError('INVALID_STATE', 'usage operation restoration action is invalid');
       if (
         !Number.isSafeInteger(restoration.fromGeneration) ||
         !Number.isSafeInteger(restoration.toGeneration) ||
@@ -276,6 +277,11 @@ export function assertBillingState(state: BillingOrganizationState): void {
       if (!restoration.delta || typeof restoration.delta !== 'object' || Array.isArray(restoration.delta) || Object.keys(restoration.delta).length !== 1 || restoration.delta.storageBytes === undefined || !Number.isSafeInteger(restoration.delta.storageBytes) || restoration.delta.storageBytes <= 0) {
         throw new BillingRepositoryError('INVALID_STATE', 'usage operation restoration delta is invalid');
       }
+      const action = restoration.action ?? 'restored';
+      if (
+        (action === 'restored' && (Object.keys(operation.delta).length !== 1 || operation.delta.storageBytes !== restoration.delta.storageBytes)) ||
+        (action === 'fenced' && Object.keys(operation.delta).length !== 0)
+      ) throw new BillingRepositoryError('INVALID_STATE', 'usage operation restoration action does not match its delta');
     }
   }
 }
@@ -863,6 +869,7 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid restoration');
       const source = value as Record<string, unknown>;
       if (typeof source.reservationKey !== 'string' || !Number.isSafeInteger(source.fromGeneration) || !Number.isSafeInteger(source.toGeneration)) throw new Error('invalid restoration identity');
+      if (source.action !== undefined && source.action !== 'restored' && source.action !== 'fenced') throw new Error('invalid restoration action');
       const rawDelta = source.delta;
       if (!rawDelta || typeof rawDelta !== 'object' || Array.isArray(rawDelta)) throw new Error('invalid restoration delta');
       const deltaValue = rawDelta as Record<string, unknown>;
@@ -872,6 +879,7 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
         fromGeneration: source.fromGeneration as number,
         toGeneration: source.toGeneration as number,
         delta: { storageBytes: deltaValue.storageBytes as number },
+        ...(source.action === undefined ? {} : { action: source.action as 'restored' | 'fenced' }),
       };
     } catch {
       throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation restoration is invalid JSON');

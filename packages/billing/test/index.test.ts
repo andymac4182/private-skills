@@ -679,6 +679,68 @@ describe('transactional usage enforcement', () => {
     await expect(service.reconcileUsage(organizationId, 'storage-reservation', { storageBytes: 0 }, 'storage-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
   });
 
+  it('resolves an uncertain storage release by restoring or fencing the exact source generation', async () => {
+    const service = serviceWith({ enabled: true });
+
+    const fenced = await service.reserveUsage('org-storage-resolution-fenced', { storageBytes: 40 }, 'resolution-fenced-reservation');
+    const fencedBefore = await service.usageSnapshot('org-storage-resolution-fenced');
+    await expect(service.resolveStorageRecovery(
+      'org-storage-resolution-fenced',
+      'resolution-fenced-reservation',
+      { storageBytes: 40 },
+      'resolution-fenced-operation',
+      fenced.reservationGeneration!,
+    )).resolves.toMatchObject({
+      action: 'fenced',
+      idempotent: false,
+      restoredFromGeneration: 1,
+      reservationGeneration: 2,
+      snapshot: { usage: { storageBytes: 40 } },
+      restoration: { action: 'fenced', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } },
+    });
+    await expect(service.usageSnapshot('org-storage-resolution-fenced')).resolves.toEqual(fencedBefore);
+    await expect(service.reconcileUsage('org-storage-resolution-fenced', 'resolution-fenced-reservation', { storageBytes: 0 }, 'resolution-fenced-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+    await expect(service.resolveStorageRecovery(
+      'org-storage-resolution-fenced',
+      'resolution-fenced-reservation',
+      { storageBytes: 40 },
+      'resolution-fenced-operation',
+      1,
+    )).resolves.toMatchObject({ action: 'fenced', idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 });
+
+    const restored = await service.reserveUsage('org-storage-resolution-restored', { storageBytes: 40 }, 'resolution-restored-reservation');
+    await service.reconcileUsage('org-storage-resolution-restored', 'resolution-restored-reservation', { storageBytes: 0 }, 'resolution-restored-zero', restored.reservationGeneration);
+    const restoredResult = await service.resolveStorageRecovery(
+      'org-storage-resolution-restored',
+      'resolution-restored-reservation',
+      { storageBytes: 40 },
+      'resolution-restored-operation',
+      restored.reservationGeneration!,
+    );
+    expect(restoredResult).toMatchObject({
+      action: 'restored',
+      idempotent: false,
+      restoredFromGeneration: 1,
+      reservationGeneration: 2,
+      snapshot: { usage: { storageBytes: 40 } },
+      restoration: { action: 'restored', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } },
+    });
+    await expect(service.reconcileUsage('org-storage-resolution-restored', 'resolution-restored-reservation', { storageBytes: 0 }, 'resolution-restored-late-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+    const restoredBeforeReplay = await service.usageSnapshot('org-storage-resolution-restored');
+    await expect(service.resolveStorageRecovery(
+      'org-storage-resolution-restored',
+      'resolution-restored-reservation',
+      { storageBytes: 40 },
+      'resolution-restored-operation',
+      1,
+    )).resolves.toMatchObject({ action: 'restored', idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 });
+    await expect(service.usageSnapshot('org-storage-resolution-restored')).resolves.toEqual(restoredBeforeReplay);
+
+    const invalid = await service.reserveUsage('org-storage-resolution-invalid', { storageBytes: 40 }, 'resolution-invalid-reservation');
+    await expect(service.resolveStorageRecovery('org-storage-resolution-invalid', 'resolution-invalid-reservation', { storageBytes: 39 }, 'resolution-wrong-delta', invalid.reservationGeneration!)).rejects.toMatchObject({ code: 'USAGE_RESTORATION_INVALID', status: 409 });
+    await expect(service.resolveStorageRecovery('org-storage-resolution-restored', 'resolution-restored-reservation', { storageBytes: 40 }, 'resolution-wrong-generation', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 });
+  });
+
   it('releases a reserved metric when reconciliation explicitly reports zero', async () => {
     const service = serviceWith({ enabled: false });
     await service.reserveUsage('org-zero-reconcile', { eveCostCents: 40 }, 'estimate');

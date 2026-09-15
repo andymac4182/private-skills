@@ -119,16 +119,24 @@ export interface BillingWebhookEvent {
 
 export type BillingUsageOperationStatus = 'reserved' | 'committed' | 'released';
 
+/** Outcome of the storage recovery resolution fence. */
+export type BillingStorageRecoveryAction = 'restored' | 'fenced';
+
 /**
- * Durable identity for a storage accounting inverse.  This is kept on the
- * compensation operation rather than inferred from its key so a retry after
- * eviction or restart remains bound to the released lifecycle it restored.
+ * Durable identity for a storage recovery resolution. This is kept on the
+ * operation rather than inferred from its key so a retry after eviction or
+ * restart remains bound to the source lifecycle it restored or fenced.
  */
 export interface BillingUsageRestoration {
   reservationKey: string;
   fromGeneration: number;
   toGeneration: number;
   delta: UsageDelta;
+  /**
+   * `restored` is omitted on legacy rows written before the recovery fence
+   * distinguished a no-op generation advance from an inverse.
+   */
+  action?: BillingStorageRecoveryAction;
 }
 
 export interface BillingUsageOperation {
@@ -146,7 +154,7 @@ export interface BillingUsageOperation {
    * omit it and are interpreted as generation 1 for compatibility.
    */
   reservationGeneration?: number;
-  /** Present only for a ledger-owned inverse of a released reservation. */
+  /** Present only for a ledger-owned storage recovery resolution. */
   restoration?: BillingUsageRestoration;
 }
 
@@ -366,6 +374,21 @@ export interface UsageRestoration extends UsageReservation {
   restoration: BillingUsageRestoration;
   restoredFromGeneration: number;
   reservationGeneration: number;
+}
+
+/**
+ * Result of resolving an uncertain storage release. `fenced` means the
+ * original reservation was still charged and only its generation advanced;
+ * `restored` means a committed zero was inversed without quota admission.
+ */
+export interface UsageRecoveryResolution {
+  operationKey: string;
+  action: BillingStorageRecoveryAction;
+  idempotent: boolean;
+  restoredFromGeneration: number;
+  reservationGeneration: number;
+  restoration: BillingUsageRestoration;
+  snapshot: UsageSnapshot;
 }
 
 export interface UsageLimitDetails {

@@ -82,6 +82,33 @@ function provider(): BillingProvider {
   }
 }
 
+/**
+ * Expose the point at which a real Postgres transaction has reached the
+ * organization usage-row lock. The test holds that row in another reserved
+ * connection, starts both operations in a chosen order, and then releases it
+ * so the database—not an in-memory scheduler—decides the serialized result.
+ */
+function usageLockBarrier(base: BillingPgPoolLike, usageTable: string): { pool: BillingPgPoolLike; waitForUsageLock(): Promise<void> } {
+  const waiters: Array<() => void> = []
+  const pool: BillingPgPoolLike = {
+    query: <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => base.query<Row>(statement, parameters),
+    connect: async () => {
+      const client = await base.connect()
+      return {
+        query: async <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => {
+          if (statement.includes(`FROM ${usageTable}`) && statement.includes('FOR UPDATE')) waiters.shift()?.()
+          return client.query<Row>(statement, parameters)
+        },
+        release: () => client.release?.(),
+      }
+    },
+  }
+  return {
+    pool,
+    waitForUsageLock: () => new Promise<void>((resolve) => waiters.push(resolve)),
+  }
+}
+
 describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGRES_URL)', () => {
   let sql: SqlClient | undefined
   let pool: BillingPgPoolLike
@@ -244,7 +271,7 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     const restored = await service.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-restore', initial.reservationGeneration!)
     expect(restored).toMatchObject({ idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2, snapshot: { usage: { storageBytes: 1_040 } } })
     const persisted = await sql!.unsafe<Record<string, unknown>[]>(`SELECT status, reservation_generation::int AS reservation_generation, restoration FROM "${prefix}_usage_operations" WHERE organization_id = $1 AND operation_key = $2`, [organizationId, 'pg-storage-restore'])
-    expect(persisted[0]).toMatchObject({ status: 'committed', reservation_generation: 2, restoration: { reservationKey: 'pg-storage-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } } })
+    expect(persisted[0]).toMatchObject({ status: 'committed', reservation_generation: 2, restoration: { action: 'restored', reservationKey: 'pg-storage-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } } })
     await expect(service.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { storageBytes: 1_040 } })
     await expect(service.reserveUsage(organizationId, { storageBytes: 1 }, 'pg-storage-future-admission')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED', status: 429 })
     const usageBeforeDelayedZero = await service.usageSnapshot(organizationId)
@@ -283,6 +310,111 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(restarted.restoreUsage(organizationId, 'pg-storage-reservation', { storageBytes: 40 }, 'pg-storage-restore', 1)).resolves.toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 })
     await expect(restarted.usageSnapshot(organizationId)).resolves.toEqual(usageBeforeOldReplay)
     await expect(restarted.reconcileUsage(organizationId, 'pg-storage-reservation', { storageBytes: 0 }, 'pg-storage-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+  })
+
+  it('resolves storage recovery under a real usage-row lock in either operation order', async () => {
+    let now = NOW
+    const catalog = planCatalog()
+    const baseService = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+      catalog,
+      enabled: true,
+      now: () => now,
+    })
+    const usageTable = `"${prefix}_usage"`
+
+    async function runOrdered(
+      organizationId: string,
+      first: (service: BillingService) => Promise<unknown>,
+      second: (service: BillingService) => Promise<unknown>,
+    ): Promise<PromiseSettledResult<unknown>[]> {
+      const barrier = usageLockBarrier(pool, usageTable)
+      const firstService = new BillingService({
+        repository: new PostgresBillingRepository(barrier.pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+        catalog,
+        enabled: true,
+        now: () => now,
+      })
+      const secondService = new BillingService({
+        repository: new PostgresBillingRepository(barrier.pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+        catalog,
+        enabled: true,
+        now: () => now,
+      })
+      const holder = await sql!.reserve()
+      let committed = false
+      try {
+        await holder.unsafe('BEGIN')
+        await holder.unsafe(`SELECT organization_id FROM ${usageTable} WHERE organization_id = $1 FOR UPDATE`, [organizationId])
+        const firstResult = first(firstService)
+        await barrier.waitForUsageLock()
+        const secondResult = second(secondService)
+        await barrier.waitForUsageLock()
+        await holder.unsafe('COMMIT')
+        committed = true
+        return await Promise.allSettled([firstResult, secondResult])
+      } finally {
+        if (!committed) {
+          try { await holder.unsafe('ROLLBACK') } catch { /* preserve the test failure */ }
+        }
+        await holder.release()
+      }
+    }
+
+    const fencedOrganizationId = 'org-pg-storage-resolution-fenced'
+    const fencedAdmission = await baseService.reserveUsage(fencedOrganizationId, { storageBytes: 40 }, 'pg-resolution-fenced-reservation')
+    const fencedResults = await runOrdered(
+      fencedOrganizationId,
+      (service) => service.resolveStorageRecovery(fencedOrganizationId, 'pg-resolution-fenced-reservation', { storageBytes: 40 }, 'pg-resolution-fenced-operation', fencedAdmission.reservationGeneration!),
+      (service) => service.reconcileUsage(fencedOrganizationId, 'pg-resolution-fenced-reservation', { storageBytes: 0 }, 'pg-resolution-fenced-zero', fencedAdmission.reservationGeneration!),
+    )
+    expect(fencedResults[0]).toMatchObject({ status: 'fulfilled', value: { action: 'fenced', idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2 } })
+    expect(fencedResults[1]).toMatchObject({ status: 'rejected', reason: { code: 'STALE_RESERVATION_GENERATION', status: 409 } })
+    const persistedFence = await sql!.unsafe<Record<string, unknown>[]>(`SELECT status, reservation_generation::int AS reservation_generation, restoration FROM "${prefix}_usage_operations" WHERE organization_id = $1 AND operation_key = $2`, [fencedOrganizationId, 'pg-resolution-fenced-operation'])
+    expect(persistedFence[0]).toMatchObject({ status: 'committed', reservation_generation: 2, restoration: { action: 'fenced', reservationKey: 'pg-resolution-fenced-reservation', fromGeneration: 1, toGeneration: 2, delta: { storageBytes: 40 } } })
+    await expect(baseService.usageSnapshot(fencedOrganizationId)).resolves.toMatchObject({ usage: { storageBytes: 40 } })
+
+    // Finish the fenced lifecycle, reopen it, and age the resolution out of
+    // the bounded read window before replaying it through a new repository.
+    await baseService.reconcileUsage(fencedOrganizationId, 'pg-resolution-fenced-reservation', { storageBytes: 0 }, 'pg-resolution-fenced-cleanup', 2)
+    await baseService.reserveUsage(fencedOrganizationId, { storageBytes: 40 }, 'pg-resolution-fenced-reservation')
+    now += 1_000
+    await baseService.reserveUsage(fencedOrganizationId, { scans: 1 }, 'pg-resolution-fenced-age')
+    const fencedRestarted = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+      catalog,
+      enabled: true,
+      now: () => now,
+    })
+    const fencedBeforeReplay = await fencedRestarted.usageSnapshot(fencedOrganizationId)
+    await expect(fencedRestarted.resolveStorageRecovery(fencedOrganizationId, 'pg-resolution-fenced-reservation', { storageBytes: 40 }, 'pg-resolution-fenced-operation', 1)).resolves.toMatchObject({ action: 'fenced', idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 })
+    await expect(fencedRestarted.usageSnapshot(fencedOrganizationId)).resolves.toEqual(fencedBeforeReplay)
+
+    const restoredOrganizationId = 'org-pg-storage-resolution-restored'
+    const restoredAdmission = await baseService.reserveUsage(restoredOrganizationId, { storageBytes: 40 }, 'pg-resolution-restored-reservation')
+    const restoredResults = await runOrdered(
+      restoredOrganizationId,
+      (service) => service.reconcileUsage(restoredOrganizationId, 'pg-resolution-restored-reservation', { storageBytes: 0 }, 'pg-resolution-restored-zero', restoredAdmission.reservationGeneration!),
+      (service) => service.resolveStorageRecovery(restoredOrganizationId, 'pg-resolution-restored-reservation', { storageBytes: 40 }, 'pg-resolution-restored-operation', restoredAdmission.reservationGeneration!),
+    )
+    expect(restoredResults[0]).toMatchObject({ status: 'fulfilled', value: { reservationGeneration: 1 } })
+    expect(restoredResults[1]).toMatchObject({ status: 'fulfilled', value: { action: 'restored', idempotent: false, restoredFromGeneration: 1, reservationGeneration: 2 } })
+    await expect(baseService.usageSnapshot(restoredOrganizationId)).resolves.toMatchObject({ usage: { storageBytes: 40 } })
+    await expect(baseService.reconcileUsage(restoredOrganizationId, 'pg-resolution-restored-reservation', { storageBytes: 0 }, 'pg-resolution-restored-late-zero', 1)).rejects.toMatchObject({ code: 'STALE_RESERVATION_GENERATION', status: 409 })
+
+    await baseService.reconcileUsage(restoredOrganizationId, 'pg-resolution-restored-reservation', { storageBytes: 0 }, 'pg-resolution-restored-cleanup', 2)
+    await baseService.reserveUsage(restoredOrganizationId, { storageBytes: 40 }, 'pg-resolution-restored-reservation')
+    now += 1_000
+    await baseService.reserveUsage(restoredOrganizationId, { scans: 1 }, 'pg-resolution-restored-age')
+    const restoredRestarted = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now }),
+      catalog,
+      enabled: true,
+      now: () => now,
+    })
+    const restoredBeforeReplay = await restoredRestarted.usageSnapshot(restoredOrganizationId)
+    await expect(restoredRestarted.resolveStorageRecovery(restoredOrganizationId, 'pg-resolution-restored-reservation', { storageBytes: 40 }, 'pg-resolution-restored-operation', 1)).resolves.toMatchObject({ action: 'restored', idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 })
+    await expect(restoredRestarted.usageSnapshot(restoredOrganizationId)).resolves.toEqual(restoredBeforeReplay)
   })
 
   it('scopes operation constraints to the target schema when prefixes repeat', async () => {

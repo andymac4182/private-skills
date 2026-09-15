@@ -195,6 +195,16 @@ same result without changing usage, including after restart or operation-window
 eviction. Old zero callbacks remain fenced and future admissions still observe
 the over-cap usage.
 
+When storage recovery finds a metadata reference after its release fence,
+`resolveStorageRecovery()` closes the crash window in one usage-row transaction.
+It records the same source and destination generation metadata with an explicit
+`action`: `restored` inverses a committed G1 zero, while `fenced` advances an
+still-reserved or committed G1 to G2 without changing usage. A late G1 zero is
+then rejected, and a lost response can replay the exact operation key and
+source generation without mutating a later lifecycle. The bounded storage
+recovery caller must retain the attempt when this capability is unavailable or
+the transaction result is uncertain.
+
 The core registry reserves scan work before native publish, rescan, source
 import, and OpenClaw queue admission. It reserves retained bytes before a
 publish blob write and before import completion stores an acquired bundle.
