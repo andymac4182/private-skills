@@ -130,7 +130,33 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, [])
   useEffect(() => { void refresh() }, [refresh])
   const signIn = useCallback(async (token: string) => { setError(null); await api.signIn(token); const current = await refresh(); if (!current) throw new Error('The token was accepted but no principal was returned.'); return current }, [refresh])
-  const signOut = useCallback(async () => { try { await api.signOut() } finally { setPrincipal(null); setSession(null); setStatus('signed-out') } }, [])
+  const signOut = useCallback(async () => {
+    try {
+      if (session) {
+        let config: Awaited<ReturnType<typeof api.authProviders>> | null = null
+        let configError: unknown = null
+        try {
+          config = await api.authProviders()
+        } catch (cause) {
+          configError = cause
+        }
+        const results = await Promise.allSettled([
+          config
+            ? Promise.resolve().then(() => api.authSignOut(config.basePath))
+            : Promise.reject(configError),
+          Promise.resolve().then(() => api.signOut()),
+        ])
+        const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (failure) throw failure.reason
+      } else {
+        await api.signOut()
+      }
+    } catch (cause) {
+      setError(getErrorMessage(cause))
+      throw cause
+    }
+    setPrincipal(null); setSession(null); setStatus('signed-out'); setError(null)
+  }, [session])
   const switchOrganization = useCallback(async (organizationId: string) => {
     if (!organizationId.trim()) throw new Error('Choose a company to continue.')
     await api.switchOrganization(organizationId)

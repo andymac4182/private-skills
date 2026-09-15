@@ -77,6 +77,18 @@ describe('multi-source discovery API', () => {
 })
 
 describe('identity API', () => {
+  it('posts Better Auth sign-out to the configured base path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.authSignOut('/identity/auth/')
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/identity/auth/sign-out')
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
+  })
+
   it('uses the sanitized identity routes and normalizes Better Auth organization payloads', async () => {
     const organization = { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' }
     const fetchMock = vi.fn()

@@ -72,6 +72,12 @@ function unwrapProviders(value: unknown): PublicProviderConfig {
   return payload as PublicProviderConfig
 }
 
+function identityBasePath(value: string): string {
+  if (value.startsWith('//') || !/^\/[a-z0-9/_-]*$/iu.test(value)) throw new Error('The identity authentication base path is invalid.')
+  const normalized = value.replace(/\/+$/u, '')
+  return normalized || identityRoutes.betterAuthBase
+}
+
 /**
  * Keep identity endpoints in one place. `/auth/session` remains the legacy
  * registry-token exchange; identity session/config are sanitized Nitro
@@ -101,9 +107,12 @@ export const api = {
   /** Better Auth session data is sanitized by the server before it reaches the browser. */
   authSession() { return request<AuthSession | { session?: AuthSession }>(identityRoutes.session).then(unwrapSession) },
   authSignIn(provider: string, callbackURL: string, basePath: string = identityRoutes.betterAuthBase) {
-    return request<ProviderSignInResponse>(`${basePath.replace(/\/$/u, '')}/sign-in/social`, {
+    return request<ProviderSignInResponse>(`${identityBasePath(basePath)}/sign-in/social`, {
       method: 'POST', body: { provider, callbackURL },
     }).then(unwrap)
+  },
+  authSignOut(basePath: string = identityRoutes.betterAuthBase) {
+    return request<void>(`${identityBasePath(basePath)}/sign-out`, { method: 'POST' })
   },
   listOrganizations() {
     return request<OrganizationSummary[] | OrganizationListResponse>(identityRoutes.listOrganizations).then((value) => {
