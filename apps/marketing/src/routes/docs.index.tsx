@@ -23,7 +23,7 @@ function DocsPage() {
         <a className="marketing-doc-card" href="/docs/getting-started#cli"><span className="marketing-doc-card-index">04 / CLI</span><h2>Install workflow</h2><p>See the commands for login, discovery, release selection, pack operations, and frozen reproduction.</p><span>See the CLI path ↗</span></a>
         <a className="marketing-doc-card" href="/pricing"><span className="marketing-doc-card-index">05 / EVALUATE</span><h2>Plans and rollout</h2><p>Compare the pricing preview and decide which team should run the first real workflow.</p><span>View pricing preview ↗</span></a>
       </div>
-      <div className="marketing-docs-note"><strong>Current product status</strong><span>The baseline includes registry, pull-through, packs, and Eve paths. Hosted source import, approved transfer and install, and scanner availability still depend on deployment inputs and current acceptance evidence.</span></div>
+      <div className="marketing-docs-note"><strong>Current product status</strong><span>The product includes private registry, source pull-through, packs, scanner checks, and Eve review paths. Available source connections and options depend on your application workspace.</span></div>
     </article>
     <aside className="marketing-docs-sidebar" aria-label="Documentation navigation"><strong>On this page</strong><a aria-current="page" href="/docs">Docs overview</a><a href="/demo">Demo walkthrough</a><a href="/docs/getting-started">Getting started</a><a href="/docs/getting-started#cli">CLI workflow</a><a href="/docs/getting-started#boundaries">Boundaries</a><a href="/pricing">Pricing preview</a></aside>
   </div>

@@ -65,7 +65,7 @@ export function ProductFlowDemo() {
       number: '01',
       label: 'Source',
       title: 'Bring the source into view',
-      description: 'Search a configured catalog and confirm the source record before any bytes enter your registry.',
+      description: 'Search a connected catalog and confirm the source record before any bytes enter your registry.',
       code: 'pskills sources search --source skills-sh "release notes"',
       status: 'Metadata only',
     },
@@ -73,7 +73,7 @@ export function ProductFlowDemo() {
       number: '02',
       label: 'Scan',
       title: 'Check the candidate',
-      description: 'The registry validates the bundle and records scanner evidence. Configured policy can admit a release after required checks, or route it through a separate review gate. A required failure keeps it unavailable.',
+      description: 'The registry validates the bundle and records scanner evidence. Your policy can admit a release after required checks or route it through a separate review gate. A required failure keeps it unavailable.',
       code: 'pskills scan status sha256:<release-digest>',
       status: 'Policy gate',
     },
@@ -81,7 +81,7 @@ export function ProductFlowDemo() {
       number: '03',
       label: 'Pack',
       title: 'Make the install repeatable',
-      description: 'Group approved releases into a fixed pack so the team can review one deliberate install plan.',
+      description: 'Group releases that pass your policy into a fixed pack so the team can review one deliberate install plan.',
       code: 'pskills pack show @team/frontend',
       status: 'Selected releases',
     },
@@ -217,7 +217,7 @@ function MarketingFooter() {
       <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>A clear release path for engineering teams rolling out AI-agent skills.</p></div>
       <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/demo">Demo walkthrough</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
       <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Open app sign-in</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
-      <div><span className="marketing-footer-label">Before rollout</span><span className="marketing-footer-note">Source access and scanner setup depend on the deployment.</span><span className="marketing-footer-note">Eve can suggest review and draft changes; people control publishing.</span><a href="/legal#publication-status">Legal and privacy status</a></div>
+      <div><span className="marketing-footer-label">Plan the first run</span><span className="marketing-footer-note">Start with one source and one engineering team.</span><span className="marketing-footer-note">Required checks follow your policy; people control publishing.</span><a href="/legal#publication-status">Legal and privacy status</a></div>
     </div>
     <div className="marketing-footer-bottom"><span>© {new Date().getFullYear()} {brand.name}</span><span>Working name · launch preview</span></div>
   </footer>

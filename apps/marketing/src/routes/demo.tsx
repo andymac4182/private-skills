@@ -19,13 +19,13 @@ function DemoPage() {
         <div>
           <span className="marketing-eyebrow">Demo walkthrough · about 8 minutes</span>
           <h1 id="demo-page-title">See one skill move from <em>source to install.</em></h1>
-          <p>Use this short story with an engineering teammate. It uses example records and placeholder identifiers, so it can be presented before a registry environment is connected.</p>
+          <p>Use this short story with an engineering teammate. It uses example records and placeholder identifiers, so it can be presented before a live registry is connected.</p>
           <div className="marketing-hero-actions">
             <a className="marketing-button marketing-button-primary" href="#demo-flow">Start the walkthrough <span aria-hidden="true">↓</span></a>
             <a className="marketing-hero-link" href="/docs/getting-started">Open setup guide <span aria-hidden="true">→</span></a>
           </div>
         </div>
-        <div className="marketing-page-hero-note"><strong>Example records only</strong>Replace the source, release, digest, and pack identifiers with values from your configured registry before using the CLI commands.</div>
+        <div className="marketing-page-hero-note"><strong>Example records only</strong>Replace the source, release, digest, and pack identifiers with values from your application workspace before using the CLI commands.</div>
       </div>
     </section>
 
@@ -33,11 +33,11 @@ function DemoPage() {
       <div className="marketing-section-heading">
         <span className="marketing-eyebrow">The story to tell</span>
         <h2 id="demo-flow-title">A release trail your team can read.</h2>
-        <p>Keep the walkthrough focused on one concrete workflow: where the skill came from, what the configured policy decided, and what the developer installed.</p>
+        <p>Keep the walkthrough focused on one concrete workflow: where the skill came from, what your policy decided, and what the developer installed.</p>
         <ol className="marketing-demo-script-list">
           <li><span>01</span><div><strong>Name the starting problem</strong><p>Different people find skills in different places, and the install decision loses its context.</p></div></li>
           <li><span>02</span><div><strong>Follow the four handoffs</strong><p>Show source, scan, pack, and install. Pause at each handoff so the next decision is visible.</p></div></li>
-          <li><span>03</span><div><strong>Close with the boundary</strong><p>Required checks and any configured review gate control release availability; Eve suggests, while people choose what to apply or publish.</p></div></li>
+          <li><span>03</span><div><strong>Close with the boundary</strong><p>Required checks and any review gate control release availability; Eve suggests, while people choose what to apply or publish.</p></div></li>
         </ol>
       </div>
       <ProductFlowDemo />
@@ -45,7 +45,7 @@ function DemoPage() {
 
     <section className="marketing-section" aria-labelledby="demo-cli-title">
       <div className="marketing-section-heading">
-        <span className="marketing-eyebrow">Use your own environment</span>
+        <span className="marketing-eyebrow">Use your own workspace</span>
         <h2 id="demo-cli-title">The same story, with the current CLI.</h2>
         <p>These snippets mirror the supported Rust CLI commands. Replace angle-bracket values and example references with identities your registry returns.</p>
       </div>
@@ -59,7 +59,7 @@ function DemoPage() {
         <article className="marketing-demo-script-card">
           <span className="marketing-feature-index">02 / INSPECT</span>
           <h3>Inspect the decision</h3>
-          <p>Discover an enabled source, inspect the release, and read the scanner status before choosing an install.</p>
+          <p>Discover a connected source, inspect the release, and read the scanner status before choosing an install.</p>
           <pre><code>pskills sources list{ '\n' }pskills sources search --source skills-sh &quot;frontend&quot;{ '\n' }pskills scan status sha256:&lt;release-digest&gt;</code></pre>
         </article>
         <article className="marketing-demo-script-card">
@@ -79,7 +79,7 @@ function DemoPage() {
       <div className="marketing-section-heading">
         <span className="marketing-eyebrow">Ready for a real run?</span>
         <h2 id="demo-next-title">Bring one source and one teammate.</h2>
-        <p>Follow the setup guide with your deployment inputs, then use the configured app sign-in when the pilot environment is ready. The marketing site never asks for a credential.</p>
+        <p>Follow the setup guide for your workspace, then open app sign-in when you are ready for a real run. The marketing site never asks for a credential.</p>
         <div className="marketing-hero-actions">
           <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the setup guide <span aria-hidden="true">↗</span></a>
           <a className="marketing-hero-link" href={appLoginHref()}>Open app sign-in <span aria-hidden="true">→</span></a>

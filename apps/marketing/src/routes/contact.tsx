@@ -22,9 +22,9 @@ function ContactPage() {
         <div>
           <span className="marketing-eyebrow">Talk through the workflow</span>
           <h1 id="contact-page-title">Plan a practical <em>first run.</em></h1>
-          <p>Bring one source, one team, and one install question. The guide shows the path; when a walkthrough link is available, use it to continue the conversation.</p>
+          <p>Start with one source and one engineering team. Use the guide or demo to see the workflow, then follow the walkthrough link when it is available.</p>
         </div>
-        <div className="marketing-page-hero-note"><strong>Launch preview</strong>A direct walkthrough link is published here only when the launch team has chosen a real destination.</div>
+        <div className="marketing-page-hero-note"><strong>Launch preview</strong>A walkthrough request page is coming soon.</div>
       </div>
     </section>
 
@@ -48,8 +48,10 @@ function ContactPage() {
             <a className="marketing-button marketing-button-primary" href={contactUrl} rel="noreferrer" target="_blank">Open request page <span aria-hidden="true">↗</span></a>
           </div>
         </> : <>
-          <p>A walkthrough request page is not published yet. Start with the guide or demo while the launch team prepares a durable contact destination.</p>
-          <div className="marketing-contact-status" role="status"><strong>Walkthrough link coming soon</strong><span>For now, the pilot guide and demo are the available next steps.</span></div>
+          <p>A walkthrough request page is coming soon. Until then, see the demo.</p>
+          <div className="marketing-contact-actions">
+            <a className="marketing-button marketing-button-primary" href="/demo">View the demo <span aria-hidden="true">↗</span></a>
+          </div>
         </>}
       </article>
     </section>
@@ -58,7 +60,7 @@ function ContactPage() {
       <div className="marketing-section-heading">
         <span className="marketing-eyebrow">Make the first conversation useful</span>
         <h2 id="contact-details-title">Bring one workflow to the conversation.</h2>
-        <p>When a request page is available, bring the source you want to manage, the agent scope you need, and the team that should review the first release. The setup guide explains the product boundaries before a rollout decision.</p>
+        <p>For a useful rollout conversation, bring the source you want to manage, the agent scope you need, and the team for the first release. Start with the guide while the request page is being prepared.</p>
         <a className="marketing-text-link" href="/docs/getting-started#rollout">Plan the next team <span aria-hidden="true">↗</span></a>
       </div>
     </section>
