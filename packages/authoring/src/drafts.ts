@@ -347,9 +347,7 @@ async function beginDraftStorageAttempt(
     const sameLifecycle = state.storageAttempts.filter((candidate) =>
       candidate.organizationId === deps.config.organizationId &&
       candidate.reservationKey === input.reservationKey &&
-      candidate.reservationGeneration === input.reservationGeneration &&
-      candidate.objectKey !== undefined &&
-      attempt.objectKey !== undefined,
+      candidate.reservationGeneration === input.reservationGeneration,
     );
     for (const existing of sameLifecycle) {
       if (existing.digest !== input.digest || existing.size !== input.size) {
