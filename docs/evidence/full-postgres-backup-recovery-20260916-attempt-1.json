@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "status": "blocked",
+  "capturedAt": "2026-09-15T23:36:55.284Z",
+  "source": {
+    "kind": "Vercel production DATABASE_URL environment-variable lookup by ID",
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "environmentId": "1kbqAECTTd0rolIf",
+    "credentialHandling": "value held in process memory only; never printed or written to evidence"
+  },
+  "stage": "postgresql-isolated-restore",
+  "target": {
+    "containerName": "pskills-full-pg-restore-mu3b9rl1-cadfb4857d",
+    "host": "127.0.0.1",
+    "port": 61447,
+    "retained": true,
+    "reason": "plain postgres:18 target lacked the source vector extension; no source or existing container was changed"
+  },
+  "reason": "bounded read-only full PostgreSQL backup/restore proof did not complete",
+  "limitations": [
+    "No hosted DDL, DML, environment update, deployment, or Blob mutation was attempted.",
+    "A blocked proof is not a recovery point and must not be used as a migration gate."
+  ],
+  "artifact": {
+    "format": "pg_dump-custom",
+    "pgDumpImage": "postgres:18",
+    "backupPath": "/private/tmp/pskills-full-postgres-recovery-pqV5Fd/database.dump.age-gcm",
+    "keyPath": "/private/tmp/pskills-full-postgres-recovery-pqV5Fd/backup.key",
+    "encryptedBytes": 590279,
+    "encryptedDigest": "sha256:8e7e14fa26d56c3ec26dc4088cdb28881acf958369b3d082cf4317faa8e7a4cc",
+    "backupFileMode": "0600",
+    "keyFileMode": "0600",
+    "plaintextTemporaryRemoved": true
+  }
+}
