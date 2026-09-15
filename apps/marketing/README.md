@@ -11,6 +11,14 @@ public calls to action cannot accidentally point back to the marketing site.
 Development uses the explicit app default `http://localhost:5173` when the
 variable is unset. Links use `/login?returnTo=%2Fapp` on that origin.
 
+Set `MARKETING_ORIGIN` to the origin of this deployment. Production and
+preview builds require it so canonical URLs and the sitemap never guess a
+hostname. Set `MARKETING_INDEXING=noindex` for local and preview deployments;
+set `MARKETING_INDEXING=public` explicitly for the production deployment. A
+public indexing build must use an HTTPS `MARKETING_ORIGIN`. The noindex mode
+serves a disallow-all `robots.txt` and an empty sitemap, while the public mode
+lists only the nine public marketing routes.
+
 The optional `PUBLIC_CONTACT_URL` may point to a real public intake form or
 scheduling page. It must be an HTTPS URL in Preview and Production. When it
 is unset, `/contact` shows the setup guide and app sign-in paths and clearly
@@ -25,7 +33,7 @@ For local work from the repository root:
 
 ```sh
 pnpm --filter @private-skills/marketing dev
-APP_ORIGIN=https://app.example.com pnpm --filter @private-skills/marketing build
+APP_ORIGIN=https://app.example.com MARKETING_ORIGIN=https://marketing.example.com MARKETING_INDEXING=noindex pnpm --filter @private-skills/marketing build
 ```
 
 For Vercel, create a dedicated project for this app with these settings:
@@ -36,9 +44,12 @@ For Vercel, create a dedicated project for this app with these settings:
   repository root and are needed by the package manager.
 - **Framework Preset:** TanStack Start
 - **Node.js:** 24.x
-- **Environment variable:** set `APP_ORIGIN` to the public origin of the
+- **Environment variables:** set `APP_ORIGIN` to the public origin of the
   authenticated app in both Preview and Production, for example
-  `https://app.example.com`. Do not place secrets in this deployment.
+  `https://app.example.com`; set `MARKETING_ORIGIN` to the exact marketing
+  deployment origin; set `MARKETING_INDEXING=noindex` for Preview and
+  `MARKETING_INDEXING=public` for Production. Do not place secrets in this
+  deployment.
 
 The checked-in [`vercel.json`](vercel.json) is the project configuration. With
 `apps/marketing` as the Root Directory, Vercel runs these commands from that
@@ -54,8 +65,12 @@ You can verify the same commands locally from the app directory:
 ```sh
 cd apps/marketing
 pnpm install --frozen-lockfile
-APP_ORIGIN=https://app.example.com pnpm --filter @private-skills/marketing build
+APP_ORIGIN=https://app.example.com MARKETING_ORIGIN=https://marketing.example.com MARKETING_INDEXING=public pnpm --filter @private-skills/marketing build
 ```
+
+The public discovery endpoints are `/robots.txt` and `/sitemap.xml`. Their
+contents follow `MARKETING_INDEXING`; a preview or local build is intentionally
+not discoverable.
 
 See Vercel's [monorepo Root Directory guidance](https://vercel.com/docs/monorepos/monorepo-faq)
 and [build configuration reference](https://vercel.com/docs/builds/configure-a-build)

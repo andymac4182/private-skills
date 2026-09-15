@@ -1,11 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/docs/')({
-  head: () => ({
-    meta: [
-      { title: 'Docs · Private Skills' },
-      { name: 'description', content: 'Start and evaluate a Private Skills registry workflow with a practical rollout and CLI guide.' },
-    ],
+  head: () => marketingHead({
+    path: '/docs',
+    title: 'Docs · Private Skills',
+    description: 'Start and evaluate a Private Skills registry workflow with a practical rollout and CLI guide.',
   }),
   component: DocsPage,
 })

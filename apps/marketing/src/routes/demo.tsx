@@ -1,13 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { InstallWalkthrough, ProductFlowDemo, PublicLayout } from '../components/PublicLayout'
 import { appLoginHref } from '../lib/appHref'
+import { marketingHead } from '../lib/marketingSeo'
 
 export const Route = createFileRoute('/demo')({
-  head: () => ({
-    meta: [
-      { title: 'Demo walkthrough · Private Skills' },
-      { name: 'description', content: 'Walk through a source-to-install Private Skills workflow with example records and the current CLI path.' },
-    ],
+  head: () => marketingHead({
+    path: '/demo',
+    title: 'Demo walkthrough · Private Skills',
+    description: 'Walk through a source-to-install Private Skills workflow with example records and the current CLI path.',
   }),
   component: DemoPage,
 })
