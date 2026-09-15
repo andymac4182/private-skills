@@ -80,11 +80,12 @@ describePostgres('billing-backed Eve reservation recovery (requires PSKILLS_BILL
   });
 
   it('reconciles a reservation after adapter restart and in-memory eviction', async () => {
+    let nowMs = NOW;
     const firstBilling = new BillingService({
-      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => nowMs }),
       provider: provider(),
       enabled: true,
-      now: () => NOW,
+      now: () => nowMs,
     });
     const first = createBillingEveCostReservation(firstBilling, { estimateCents: 17, maxInMemoryReservations: 1 });
     const held = await first.reserve({
@@ -93,35 +94,41 @@ describePostgres('billing-backed Eve reservation recovery (requires PSKILLS_BILL
       operation: 'daily-review',
       idempotencyKey: 'common-skill-review:2026-09-16',
     });
-    // Evict the only in-memory copy while the durable operation remains in PG.
+    // Evict the only in-memory copy and the operation from the repository's
+    // newest-N view while both durable rows remain in PG.
+    nowMs += 1_000;
     await first.reserve({
-      tenantId: 'eve-recovery-globex',
+      tenantId: 'eve-recovery-acme',
       service: 'consolidation-reviewer',
-      operation: 'daily-review',
-      idempotencyKey: 'common-skill-review:2026-09-16',
+      operation: 'daily-review-follow-up',
+      idempotencyKey: 'common-skill-review-follow-up:2026-09-16',
     });
 
     // A new BillingService and adapter model a fresh host process. Recovery
     // must derive the tenant and estimate from the retained billing row.
     const restartedBilling = new BillingService({
-      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => nowMs }),
       provider: provider(),
       enabled: true,
-      now: () => NOW,
+      now: () => nowMs,
     });
     const restarted = createBillingEveCostReservation(restartedBilling, { estimateCents: 17, maxInMemoryReservations: 1 });
+    await expect(restartedBilling.reserveUsage('eve-recovery-acme', { eveCostCents: 17 }, held.reservationId)).resolves.toMatchObject({
+      operationKey: held.reservationId,
+      idempotent: true,
+    });
     await expect(restarted.reconcile?.({
       reservationId: held.reservationId,
       actualCostCents: 11,
       operationKey: 'operator-reconcile-eve-recovery-acme',
     })).resolves.toBeUndefined();
 
-    await expect(restartedBilling.usageSnapshot('eve-recovery-acme')).resolves.toMatchObject({ usage: { eveCostCents: 11 } });
+    await expect(restartedBilling.usageSnapshot('eve-recovery-acme')).resolves.toMatchObject({ usage: { eveCostCents: 28 } });
     const rows = await sql!.unsafe<{ eve_cost_cents_delta: number }[]>(
       `SELECT eve_cost_cents_delta FROM "${prefix}_usage_operations" WHERE organization_id = $1 ORDER BY created_at ASC`,
       ['eve-recovery-acme'],
     );
-    expect(rows).toHaveLength(2);
-    expect(rows.map((row) => Number(row.eve_cost_cents_delta))).toEqual([17, -6]);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => Number(row.eve_cost_cents_delta))).toEqual([17, 17, -6]);
   });
 });

@@ -858,6 +858,21 @@ export class BillingService {
     return { organizationId: normalized, limits: { ...entitlement.limits }, usage: periodUsage(state.usage, this.now()), entitlement };
   }
 
+  private transactionWithUsageOperations<T>(
+    organizationId: string,
+    operationKeys: readonly string[],
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T> {
+    const transactionWithOperations = this.repository.transactionWithUsageOperations;
+    if (transactionWithOperations) return transactionWithOperations.call(this.repository, organizationId, operationKeys, updater) as Promise<T>;
+    const transactionWithOperation = this.repository.transactionWithUsageOperation;
+    if (transactionWithOperation && operationKeys.length === 1) return transactionWithOperation.call(this.repository, organizationId, operationKeys[0]!, updater) as Promise<T>;
+    // Compatibility fallback for small custom repositories. Production
+    // repositories implement the exact-row transaction above; a repository
+    // without it cannot provide the same aged-operation guarantee.
+    return this.repository.transaction(organizationId, updater);
+  }
+
   /**
    * Recover a retained usage reservation after a host restart. The operation
    * record is the billing system's durable source of tenant identity and
@@ -882,14 +897,9 @@ export class BillingService {
     const normalizedDelta = normalizedDeltaInput(delta);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
-    // Read snapshots intentionally retain a bounded recent history. Fetch the
-    // exact durable row before locking so a retry whose key aged out of a
-    // memory/read window can be reloaded into the atomic transaction.
-    const durableOperation = await this.repository.findUsageOperation(normalized, normalizedKey);
-    return this.repository.transaction(normalized, (state) => {
-      appendDurableUsageOperation(state, durableOperation, normalized, normalizedKey);
-      return this.reserveUsageInState(state, normalized, normalizedDelta, normalizedKey, nowMs);
-    });
+    // The repository reloads this exact key inside the organization lock, so
+    // an aged idempotency row cannot be missed or raced by a pre-lock lookup.
+    return this.transactionWithUsageOperations(normalized, [normalizedKey], (state) => this.reserveUsageInState(state, normalized, normalizedDelta, normalizedKey, nowMs));
   }
 
   /**
@@ -908,9 +918,10 @@ export class BillingService {
     const normalizedActual = nonnegativeDeltaInput(actual);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
-    const durableReservation = await this.repository.findUsageOperation(normalized, normalizedReservationKey);
-    return this.repository.transaction(normalized, (state) => {
-      appendDurableUsageOperation(state, durableReservation, normalized, normalizedReservationKey);
+    // Reload both the reservation and correction rows inside the organization
+    // lock so a bounded snapshot cannot miss an aged operation or race a
+    // concurrent reconciliation.
+    return this.transactionWithUsageOperations(normalized, [normalizedReservationKey, normalizedKey], (state) => {
       const reservation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedReservationKey);
       if (!reservation) throw new BillingError('USAGE_RESERVATION_NOT_FOUND', 'The usage reservation does not exist', 404);
       const reservationStatus = reservation.status ?? 'reserved';

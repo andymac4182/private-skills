@@ -379,6 +379,16 @@ export class MemoryBillingRepository implements BillingRepository {
     }));
   }
 
+  async transactionWithUsageOperation<T>(organizationId: string, operationKey: string, updater: (state: BillingOrganizationState) => T): Promise<T> {
+    // The memory repository retains its complete in-process operation list;
+    // this alias keeps the transaction contract symmetric with PostgreSQL.
+    return this.transaction(organizationId, updater);
+  }
+
+  async transactionWithUsageOperations<T>(organizationId: string, operationKeys: readonly string[], updater: (state: BillingOrganizationState) => T): Promise<T> {
+    return this.transaction(organizationId, updater);
+  }
+
   async findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined> {
     const normalizedProvider = validateBillingProviderId(provider);
     const normalizedCustomer = validateBillingIdentifier(customerId, 'customerId');
@@ -825,9 +835,15 @@ export class PostgresBillingRepository implements BillingRepository {
     await this.migrationPromise;
   }
 
-  private async load(executor: Pick<BillingPgPoolLike, 'query'>, organizationId: string, lock = false): Promise<BillingOrganizationState> {
+  private async load(
+    executor: Pick<BillingPgPoolLike, 'query'>,
+    organizationId: string,
+    lock = false,
+    requestedOperationKeys: readonly string[] = [],
+  ): Promise<BillingOrganizationState> {
     const normalized = validateBillingOrganizationId(organizationId);
     const suffix = lock ? ' FOR UPDATE' : '';
+    const normalizedOperationKeys = [...new Set(requestedOperationKeys.map((key) => validateBillingIdentifier(key, 'operationKey', MAX_OPERATION_KEY_BYTES)))];
     // Query sequentially. pg clients support one in-flight query at a time;
     // this remains a single transaction while avoiding driver-specific
     // protocol races on transaction-scoped clients.
@@ -835,14 +851,20 @@ export class PostgresBillingRepository implements BillingRepository {
     const subscriptionResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, subscription_id, customer_id, price_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end, event_created_at, last_event_id, source, updated_at FROM ${this.tables.subscriptions} WHERE organization_id = $1${suffix}`, [normalized]);
     const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, seat_baseline, seat_reservations, seat_revision, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
     const eventsResult = await executor.query<Record<string, unknown>>(`SELECT provider, event_id, event_type, organization_id, created_at, received_at, payload_digest, handled, ignored_reason FROM ${this.tables.events} WHERE organization_id = $1 ORDER BY received_at DESC LIMIT ${this.maxWebhookEvents}${suffix}`, [normalized]);
-    // A transaction reloads the complete durable operation ledger so an old
-    // idempotency key can be found while the organization row is locked. A
-    // bounded recent window is still used for ordinary read snapshots; it is
-    // a response-size limit, never a correctness boundary for admission.
-    const operationsQuery = lock
-      ? `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC FOR UPDATE`
-      : `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}`;
-    const operationsResult = await executor.query<Record<string, unknown>>(operationsQuery, [normalized]);
+    // Keep ordinary reads bounded. Transactions pass only the exact keys that
+    // must be replayed into this window, avoiding an unbounded ledger scan
+    // while retaining aged idempotency rows under the organization lock.
+    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
+    const operationRows = [...operationsResult.rows];
+    for (const normalizedOperationKey of normalizedOperationKeys) {
+      if (operationRows.some((row) => row.operation_key === normalizedOperationKey)) continue;
+      const requestedResult = await executor.query<Record<string, unknown>>(
+        `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2${suffix}`,
+        [normalized, normalizedOperationKey],
+      );
+      if (requestedResult.rows.length > 1) throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation is duplicated');
+      if (requestedResult.rows[0]) operationRows.push(requestedResult.rows[0]);
+    }
     const base = cloneBillingState(this.stateFactory(normalized));
     if (base.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
     const usageRow = usageResult.rows[0];
@@ -853,7 +875,7 @@ export class PostgresBillingRepository implements BillingRepository {
       subscription: subscriptionResult.rows[0] ? rowSubscription(subscriptionResult.rows[0], normalized) : undefined,
       usage,
       webhookEvents: eventsResult.rows.map(rowEvent),
-      usageOperations: operationsResult.rows.map((row) => rowOperation(row, normalized)),
+      usageOperations: operationRows.map((row) => rowOperation(row, normalized)),
       seatBaseline: usageRow?.seat_baseline === undefined || usageRow.seat_baseline === null
         ? usage.seats
         : asNumber(usageRow.seat_baseline, 'usage.seat_baseline'),
@@ -953,6 +975,40 @@ export class PostgresBillingRepository implements BillingRepository {
       await this.ensureUsageRow(client, normalized);
       const state = await this.load(client, normalized, true);
       state.seatRevision = (state.seatRevision ?? 0) + 1;
+      const initialEventKeys = new Set(state.webhookEvents.map(eventKey));
+      const result = updater(state);
+      syncResult(result);
+      assertBillingState(state);
+      await this.write(client, state, initialEventKeys);
+      await client.query('COMMIT');
+      began = false;
+      return result;
+    } catch (error) {
+      if (began) {
+        try { await client.query('ROLLBACK'); } catch { /* preserve the original error */ }
+      }
+      throw error;
+    } finally {
+      await client.release?.();
+    }
+  }
+
+  async transactionWithUsageOperation<T>(organizationId: string, operationKey: string, updater: (state: BillingOrganizationState) => T): Promise<T> {
+    return this.transactionWithUsageOperations(organizationId, [operationKey], updater);
+  }
+
+  async transactionWithUsageOperations<T>(organizationId: string, operationKeys: readonly string[], updater: (state: BillingOrganizationState) => T): Promise<T> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    if (!Array.isArray(operationKeys) || operationKeys.length > 16) throw new BillingRepositoryError('INVALID_OPERATION', 'usage operation key list is invalid');
+    const normalizedOperationKeys = [...new Set(operationKeys.map((key) => validateBillingIdentifier(key, 'operationKey', MAX_OPERATION_KEY_BYTES)))];
+    await this.ensureSchema();
+    const client = await this.pool.connect();
+    let began = false;
+    try {
+      await client.query('BEGIN');
+      began = true;
+      await this.ensureUsageRow(client, normalized);
+      const state = await this.load(client, normalized, true, normalizedOperationKeys);
       const initialEventKeys = new Set(state.webhookEvents.map(eventKey));
       const result = updater(state);
       syncResult(result);

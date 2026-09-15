@@ -176,6 +176,22 @@ export interface BillingRepository {
   transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T>;
   /** Locate a retained usage operation by its durable idempotency key. */
   findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
+  /**
+   * Run a transaction while retaining one requested usage operation even when
+   * the repository bounds its normal newest-operation read window.
+   */
+  transactionWithUsageOperation?<T>(
+    organizationId: string,
+    operationKey: string,
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T>;
+  /** Variant used by reconciliation, which must retain both the reservation
+   * and its correction idempotency row inside the same transaction. */
+  transactionWithUsageOperations?<T>(
+    organizationId: string,
+    operationKeys: readonly string[],
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T>;
   findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined>;
   findOrganizationBySubscriptionId(provider: BillingProviderId, subscriptionId: string): Promise<string | undefined>;
   /**
