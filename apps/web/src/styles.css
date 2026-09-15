@@ -116,6 +116,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .field { display: grid; gap: 7px; }
 .field-label { color: var(--ink-soft); font-size: 12px; font-weight: 750; }
 .field-hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.admin-form-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 input, select, textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--ink); outline: none; transition: border-color .15s, box-shadow .15s, background .15s; }
 input, select { height: 42px; padding: 0 12px; }
 textarea { min-height: 104px; padding: 11px 12px; line-height: 1.45; resize: vertical; }
@@ -168,7 +169,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .nav-subitem-copy small { overflow: hidden; color: color-mix(in srgb, var(--nav-muted) 76%, transparent); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-nav-close, .mobile-nav-scrim, .mobile-nav-trigger { display: none; }
 .sidebar-note { margin-top: auto; padding: 14px; border: 1px solid var(--nav-line); border-radius: 12px; background: var(--nav-surface-elevated); }
-.sidebar-note .eyebrow { color: var(--accent); font-size: 9px; }
+.sidebar-note .eyebrow { color: #9abaff; font-size: 9px; }
 .sidebar-note p { margin: 8px 0 0; color: var(--nav-muted); font-size: 11px; line-height: 1.5; }
 .sidebar-account { display: flex; align-items: center; gap: 9px; padding: 18px 9px 0; }
 .account-avatar { display: grid; width: 29px; height: 29px; flex: none; place-items: center; border-radius: 50%; background: var(--lavender-strong); color: var(--purple); font-size: 11px; font-weight: 800; }

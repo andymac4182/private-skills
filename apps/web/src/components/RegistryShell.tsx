@@ -7,6 +7,11 @@ import { CompanySwitcher } from './CompanySwitcher'
 import { HealthStatus } from './HealthStatus'
 import { Button, LoadingState } from './Primitives'
 
+// These destinations are guarded by the company-admin boundary. A reader can
+// still open a bookmarked URL and receive the server's denial, but the normal
+// navigation should not advertise controls they cannot use.
+const READER_HIDDEN_COMPANY_SECTIONS = new Set(['company-sso', 'billing', 'audit'])
+
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled])'))
     .filter((element) => {
@@ -32,9 +37,23 @@ export function RegistryShell() {
   const routeSection = location.pathname.split('/')[2] || 'overview'
   const activeSection = routeSection === 'topic' ? 'topics' : routeSection
   const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
-  const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
-  const canManageCompany = session?.activeMembership?.role === 'owner' || session?.activeMembership?.role === 'admin'
-  const readonlyCompanyNavigation = Boolean(session?.activeMembership && !canManageCompany)
+  const sessionCompanyRole = session?.activeMembership?.role
+  const principalHasCompanyRole = principal?.roles.some((role) => ['owner', 'admin', 'publisher', 'reader'].includes(role)) ?? false
+  const canManageCompany = sessionCompanyRole !== undefined
+    ? sessionCompanyRole === 'owner' || sessionCompanyRole === 'admin'
+    : principal?.roles.some((role) => role === 'owner' || role === 'admin') ?? false
+  const readonlyCompanyNavigation = (sessionCompanyRole !== undefined || principalHasCompanyRole) && !canManageCompany
+  const navigationGroups = readonlyCompanyNavigation
+    ? registryNavGroups
+      .map((group) => group.id === 'company-admin'
+        ? { ...group, sections: group.sections.filter((section) => !READER_HIDDEN_COMPANY_SECTIONS.has(section.id)) }
+        : group)
+      .filter((group) => group.sections.length > 0)
+    : registryNavGroups
+  const navigationSections = readonlyCompanyNavigation
+    ? registrySections.filter((section) => !READER_HIDDEN_COMPANY_SECTIONS.has(section.id))
+    : registrySections
+  const activeGroup = navigationGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? navigationGroups[0] ?? registryNavGroups[0]
   const activeNavItemRef = useRef<HTMLAnchorElement>(null)
   // Identity sessions carry the human-facing account label. The legacy
   // principal subject is often an opaque id, so only use it after the
@@ -171,7 +190,7 @@ export function RegistryShell() {
           </Link>
 
           <nav className="primary-nav" aria-label="Registry sections">
-            {registryNavGroups.map((group) => {
+            {navigationGroups.map((group) => {
               const defaultSection = group.sections.find((section) => section.id === group.defaultSectionId)
               if (!defaultSection) return null
               const isActiveGroup = group.id === activeGroup.id
@@ -196,7 +215,7 @@ export function RegistryShell() {
                   </Link>
 
                   {group.sections.length > 1 && (isActiveGroup || mobileNavOpen) && (
-                    <div aria-label={`${groupLabel} sections`} className="nav-subnav">
+                    <div aria-label={`${groupLabel} sections`} className="nav-subnav" role="group">
                       {group.sections.map((section) => (
                         <Link
                           activeProps={{ className: 'nav-subitem nav-subitem-active' }}
@@ -260,7 +279,7 @@ export function RegistryShell() {
             </div>
 
             <div className="topbar-status">
-              <CommandPalette sections={registrySections} />
+              <CommandPalette sections={navigationSections} />
               <CompanySwitcher />
               <HealthStatus />
               <span className="divider" aria-hidden="true" />
