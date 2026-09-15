@@ -48,11 +48,11 @@ function makeSession(overrides: Partial<AuthSession> = {}): AuthSession {
   }
 }
 
-function renderView(): { root: Root; container: HTMLDivElement } {
+async function renderView(): Promise<{ root: Root; container: HTMLDivElement }> {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  root.render(createElement(CompanyView))
+  await act(async () => { root.render(createElement(CompanyView)) })
   return { root, container }
 }
 
@@ -90,7 +90,7 @@ describe('CompanyView', () => {
       needsOnboarding: true,
     })
     const createOrganization = vi.spyOn(api, 'createOrganization').mockResolvedValue({ organization })
-    root = renderView().root
+    root = (await renderView()).root
     await flushEffects()
 
     const input = document.querySelector<HTMLInputElement>('input[name="companyName"]')
@@ -124,10 +124,11 @@ describe('CompanyView', () => {
       activeOrganization: null,
       activeMembership: null,
     })
-    root = renderView().root
+    root = (await renderView()).root
     await flushEffects()
 
     expect(document.body.textContent).toContain('Choose a company')
+    expect(document.body.textContent).toContain('Your account belongs to more than one company.')
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')].filter((button) => button.textContent?.includes('Open company'))
     expect(buttons).toHaveLength(2)
     await act(async () => { buttons[1]?.click() })
@@ -137,13 +138,27 @@ describe('CompanyView', () => {
     expect(harness.navigate).toHaveBeenCalledWith({ to: '/app', search: {}, replace: true })
   })
 
+  it('uses singular copy when one company needs an active selection', async () => {
+    harness.auth.session = makeSession({
+      organizations: [membership],
+      activeOrganizationId: null,
+      activeOrganization: null,
+      activeMembership: null,
+    })
+    root = (await renderView()).root
+    await flushEffects()
+
+    expect(document.body.textContent).toContain('Choose this company to open the registry.')
+    expect(document.body.textContent).not.toContain('more than one company')
+  })
+
   it('loads owner team controls and invitation links from server responses', async () => {
     harness.auth.session = makeSession()
     const member: TeamMember = { id: 'member-2', userId: 'user-2', name: 'Publisher', email: 'publisher@acme.test', role: 'publisher', status: 'active' }
     const invitation: OrganizationInvitation = { id: 'invite-1', email: 'new@acme.test', role: 'reader', status: 'pending' }
     vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [member] })
     vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [invitation] })
-    root = renderView().root
+    root = (await renderView()).root
     await flushEffects()
 
     expect(document.body.textContent).toContain('publisher@acme.test')
@@ -152,13 +167,42 @@ describe('CompanyView', () => {
     expect(document.querySelector('select[aria-label="Role for Publisher"]')).not.toBeNull()
   })
 
+  it('derives a same-origin copy link from the Better Auth invitation id', async () => {
+    harness.auth.session = makeSession()
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
+    const createInvitation = vi.spyOn(api, 'inviteOrganizationMember').mockResolvedValue({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending' })
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const input = document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')
+    const form = document.querySelector('form')
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setValue?.call(input, 'new@acme.test')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await vi.waitFor(() => expect(createInvitation).toHaveBeenCalledWith({ email: 'new@acme.test', role: 'reader' }))
+
+    const expectedLink = new URL('/organization/accept-invitation?id=invite%2F1', window.location.origin).toString()
+    await vi.waitFor(() => expect(document.body.textContent).toContain(expectedLink))
+    const copyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy invitation link')
+    await act(async () => { copyButton?.click() })
+
+    expect(writeText).toHaveBeenCalledWith(expectedLink)
+    expect(document.body.textContent).toContain('Copied')
+  })
+
   it('keeps member access read-only and does not request restricted invitations for readers', async () => {
     const readerMembership: IdentityMembership = { ...membership, role: 'reader' }
     harness.auth.session = makeSession({ activeMembership: readerMembership })
     const member: TeamMember = { id: 'member-2', userId: 'user-2', name: 'Reader', email: 'reader@acme.test', role: 'reader', status: 'active' }
     const members = vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [member] })
     const invitations = vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
-    root = renderView().root
+    root = (await renderView()).root
     await flushEffects()
 
     expect(members).toHaveBeenCalledOnce()

@@ -91,6 +91,27 @@ describe('identity API', () => {
     expect(JSON.parse(String(init.body))).toEqual({})
   })
 
+  it('gets and accepts invitations through the Better Auth organization endpoints', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending', organizationName: 'Acme Skills' }))
+      .mockResolvedValueOnce(response({ invitation: { id: 'invite/1', status: 'accepted' }, member: { id: 'member-2', role: 'reader' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.getOrganizationInvitation('invite/1')
+    await api.acceptOrganizationInvitation('invite/1')
+
+    const [getPath, getInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const getUrl = new URL(getPath, 'https://registry.test')
+    expect(getUrl.pathname).toBe('/api/auth/organization/get-invitation')
+    expect(getUrl.searchParams.get('id')).toBe('invite/1')
+    expect(getInit.credentials).toBe('include')
+
+    const [acceptPath, acceptInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(acceptPath).toBe('/api/auth/organization/accept-invitation')
+    expect(acceptInit.method).toBe('POST')
+    expect(JSON.parse(String(acceptInit.body))).toEqual({ invitationId: 'invite/1' })
+  })
+
   it('uses the sanitized identity routes and normalizes Better Auth organization payloads', async () => {
     const organization = { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' }
     const fetchMock = vi.fn()

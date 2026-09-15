@@ -14,6 +14,7 @@ import { Route as AppRouteImport } from './routes/app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppSectionRouteImport } from './routes/app.$section'
+import { Route as OrganizationAcceptInvitationRouteImport } from './routes/organization.accept-invitation'
 import { Route as AppTopicSlugRouteImport } from './routes/app.topic.$slug'
 
 const IndexRoute = IndexRouteImport.update({
@@ -41,6 +42,12 @@ const AppSectionRoute = AppSectionRouteImport.update({
   path: '/$section',
   getParentRoute: () => AppRoute,
 } as any)
+const OrganizationAcceptInvitationRoute =
+  OrganizationAcceptInvitationRouteImport.update({
+    id: '/organization/accept-invitation',
+    path: '/organization/accept-invitation',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppTopicSlugRoute = AppTopicSlugRouteImport.update({
   id: '/topic/$slug',
   path: '/topic/$slug',
@@ -52,6 +59,7 @@ export interface FileRoutesByFullPath {
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app/': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
 }
@@ -59,6 +67,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
 }
@@ -68,21 +77,35 @@ export interface FileRoutesById {
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app/': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/app' | '/login' | '/app/$section' | '/app/' | '/app/topic/$slug'
+    | '/'
+    | '/app'
+    | '/login'
+    | '/app/$section'
+    | '/organization/accept-invitation'
+    | '/app/'
+    | '/app/topic/$slug'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/app/$section' | '/app' | '/app/topic/$slug'
+  to:
+    | '/'
+    | '/login'
+    | '/app/$section'
+    | '/organization/accept-invitation'
+    | '/app'
+    | '/app/topic/$slug'
   id:
     | '__root__'
     | '/'
     | '/app'
     | '/login'
     | '/app/$section'
+    | '/organization/accept-invitation'
     | '/app/'
     | '/app/topic/$slug'
   fileRoutesById: FileRoutesById
@@ -91,6 +114,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
+  OrganizationAcceptInvitationRoute: typeof OrganizationAcceptInvitationRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -130,6 +154,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSectionRouteImport
       parentRoute: typeof AppRoute
     }
+    '/organization/accept-invitation': {
+      id: '/organization/accept-invitation'
+      path: '/organization/accept-invitation'
+      fullPath: '/organization/accept-invitation'
+      preLoaderRoute: typeof OrganizationAcceptInvitationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/topic/$slug': {
       id: '/app/topic/$slug'
       path: '/topic/$slug'
@@ -158,6 +189,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
+  OrganizationAcceptInvitationRoute: OrganizationAcceptInvitationRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,13 +1,13 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { LoginForm } from '../components/LoginForm'
-import { needsCompanySetup, safeAppReturnTo, useAuth } from '../lib/auth'
+import { needsCompanySetup, safeLoginReturnTo, useAuth } from '../lib/auth'
 
 export interface LoginSearch {
   returnTo?: string
 }
 
 function parseSearch(search: Record<string, unknown>): LoginSearch {
-  const returnTo = safeAppReturnTo(search.returnTo)
+  const returnTo = safeLoginReturnTo(search.returnTo)
   return returnTo ? { returnTo } : {}
 }
 

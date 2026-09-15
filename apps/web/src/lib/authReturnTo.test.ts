@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { providerSignInHref, safeAppReturnTo } from './auth'
+import { providerSignInHref, safeAppReturnTo, safeLoginReturnTo } from './auth'
 
 describe('safeAppReturnTo', () => {
   it('keeps an app destination and its draft query intact', () => {
@@ -21,5 +21,14 @@ describe('safeAppReturnTo', () => {
     expect(providerSignInHref('github', '/app/catalog?draft=draft-42', '/api/auth')).toBe('/api/auth/sign-in/social?provider=github&callbackURL=%2Fapp%2Fcatalog%3Fdraft%3Ddraft-42')
     expect(providerSignInHref('github', 'https://attacker.example/app', '/api/auth')).toBe('/api/auth/sign-in/social?provider=github')
     expect(providerSignInHref('bad provider', '/app', '/api/auth')).toBeUndefined()
+  })
+
+  it('preserves a validated invitation through token or provider login', () => {
+    const invitation = '/organization/accept-invitation?id=invite%2F123'
+
+    expect(safeLoginReturnTo(invitation)).toBe(invitation)
+    expect(safeLoginReturnTo(`${invitation}&returnTo=/app`)).toBeUndefined()
+    expect(safeLoginReturnTo('https://attacker.example/organization/accept-invitation?id=invite-1')).toBeUndefined()
+    expect(providerSignInHref('github', invitation, '/api/auth')).toBe('/api/auth/sign-in/social?provider=github&callbackURL=%2Forganization%2Faccept-invitation%3Fid%3Dinvite%252F123')
   })
 })

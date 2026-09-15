@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { api, ApiError } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { createInvitationLink } from '../lib/invitations'
 import { clearTenantScopedClientState } from '../lib/tenant'
 import type { IdentityMembership, OrganizationInvitation, OrganizationRole, TeamMember } from '../lib/types'
 import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
@@ -79,7 +80,10 @@ function OnboardingPanel({ onCreated }: { onCreated: (organizationId?: string) =
 function CompanySelection({ memberships, onSelect }: { memberships: readonly IdentityMembership[]; onSelect: (organizationId: string) => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null)
   const choose = async (organizationId: string) => { setBusy(organizationId); try { await onSelect(organizationId) } finally { setBusy(null) } }
-  return <div className="company-selection"><div className="view-heading"><div><span className="eyebrow">Company access</span><h1>Choose a company</h1><p className="muted">Your account belongs to more than one company. Choose where this registry session should work.</p></div></div><div className="company-card-grid">{memberships.map((membership) => <article className="company-card" key={membership.organization.id}><div className="company-card-mark" aria-hidden="true">{membership.organization.name.slice(0, 1).toUpperCase()}</div><div className="company-card-copy"><h2>{membership.organization.name}</h2><p>{membership.organization.slug}</p><span className="badge badge-muted">{displayRole(membership.role)}</span></div><Button busy={busy === membership.organization.id} kind="secondary" onClick={() => void choose(membership.organization.id)}>Open company</Button></article>)}</div></div>
+  const selectionDescription = memberships.length === 1
+    ? 'Choose this company to open the registry.'
+    : 'Your account belongs to more than one company. Choose where this registry session should work.'
+  return <div className="company-selection"><div className="view-heading"><div><span className="eyebrow">Company access</span><h1>Choose a company</h1><p className="muted">{selectionDescription}</p></div></div><div className="company-card-grid">{memberships.map((membership) => <article className="company-card" key={membership.organization.id}><div className="company-card-mark" aria-hidden="true">{membership.organization.name.slice(0, 1).toUpperCase()}</div><div className="company-card-copy"><h2>{membership.organization.name}</h2><p>{membership.organization.slug}</p><span className="badge badge-muted">{displayRole(membership.role)}</span></div><Button busy={busy === membership.organization.id} kind="secondary" onClick={() => void choose(membership.organization.id)}>Open company</Button></article>)}</div></div>
 }
 
 function CompanyManagement({ activeMembership, organization }: { activeMembership: IdentityMembership; organization: IdentityMembership['organization'] }) {
@@ -126,9 +130,12 @@ function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: ()
     setBusy(true); setMessage(null); setInviteLink(null); setCopied(false)
     try {
       const invitation = await api.inviteOrganizationMember({ email: trimmedEmail, role })
+      const link = createInvitationLink(invitation.id)
       setEmail('')
-      setInviteLink(invitation.url ?? null)
-      setMessage({ kind: 'success', text: invitation.url ? 'Invitation created. Copy the link to share it securely.' : 'Invitation created. Copy-link delivery is controlled by the identity service.' })
+      setInviteLink(link ?? null)
+      setMessage(link
+        ? { kind: 'success', text: 'Invitation created. Copy the link to share it securely.' }
+        : { kind: 'error', text: 'The invitation was created, but its link could not be generated.' })
       onInvited()
     }
     catch (cause) { setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not create the invitation.' }) }

@@ -473,6 +473,16 @@ tr.row-selected td { background: var(--accent-soft); }
 .invitation-row > div { display: grid; min-width: 0; gap: 3px; }
 .invitation-row strong { overflow: hidden; color: var(--ink-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .invitation-row span { color: var(--muted); font-size: 10px; }
+.invite-link-block { display: grid; gap: 10px; margin-top: 2px; padding: 11px; border: 1px solid #cbdaf8; border-radius: 9px; background: var(--accent-soft); }
+.invite-link-block code { overflow-wrap: anywhere; color: var(--accent-strong); font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.invitation-card-content { max-width: 620px; margin: 0 auto; text-align: left; }
+.invitation-card-content > .eyebrow, .invitation-card-content > h1, .invitation-card-content > .lede { display: block; text-align: center; }
+.invitation-card-content > h1 { margin: 14px auto 16px; font-family: Georgia, "Times New Roman", serif; font-size: clamp(38px, 5vw, 58px); font-weight: 600; letter-spacing: -.06em; line-height: .98; }
+.invitation-card-content > .lede { max-width: 520px; margin: 0 auto 26px; }
+.invitation-card { text-align: left; }
+.invitation-message-body { display: grid; justify-items: center; gap: 14px; }
+.invitation-message-body .notice { width: 100%; text-align: left; }
+.invitation-actions { justify-content: flex-end; padding: 21px 23px 23px; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

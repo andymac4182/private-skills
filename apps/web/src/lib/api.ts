@@ -10,7 +10,7 @@ import type {
   BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
   DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
   AuthSession, OrganizationInvitation, OrganizationInvitationsResponse, OrganizationListResponse,
-  OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
+  OrganizationInvitationAcceptanceResponse, OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
   ProviderSignInResponse,
 } from './types'
 
@@ -94,6 +94,8 @@ export const identityRoutes = {
   members: '/api/auth/organization/list-members',
   invitations: '/api/auth/organization/list-invitations',
   inviteMember: '/api/auth/organization/invite-member',
+  getInvitation: '/api/auth/organization/get-invitation',
+  acceptInvitation: '/api/auth/organization/accept-invitation',
   updateMemberRole: '/api/auth/organization/update-member-role',
 } as const
 
@@ -143,6 +145,12 @@ export const api = {
       if (isRecord(payload) && 'invitation' in payload && isRecord(payload.invitation)) return payload.invitation as OrganizationInvitation
       return payload as OrganizationInvitation
     })
+  },
+  getOrganizationInvitation(invitationId: string) {
+    return request<OrganizationInvitation>(identityRoutes.getInvitation, { query: { id: invitationId } }).then(unwrap)
+  },
+  acceptOrganizationInvitation(invitationId: string) {
+    return request<OrganizationInvitationAcceptanceResponse>(identityRoutes.acceptInvitation, { method: 'POST', body: { invitationId } }).then(unwrap)
   },
   updateOrganizationMemberRole(memberId: string, role: string) {
     return request<void>(identityRoutes.updateMemberRole, { method: 'POST', body: { memberId, role } })

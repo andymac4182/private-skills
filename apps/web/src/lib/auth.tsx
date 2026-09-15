@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { PropsWithChildren } from 'react'
 import { api, ApiError } from './api'
+import { invitationReturnTo, isInvitationReturnTo } from './invitations'
 import type { AuthSession, Principal } from './types'
 
 type AuthStatus = 'loading' | 'signed-in' | 'signed-out'
@@ -41,6 +42,19 @@ export function safeAppReturnTo(value: unknown): string | undefined {
   return `${target.pathname}${target.search}${target.hash}`
 }
 
+/**
+ * Login may return to an app route or to one validated invitation route. The
+ * invitation route is kept separate from safeAppReturnTo so existing app
+ * navigation remains constrained to authenticated registry pages.
+ */
+export function safeLoginReturnTo(value: unknown): string | undefined {
+  const appReturnTo = safeAppReturnTo(value)
+  if (appReturnTo) return appReturnTo
+  if (!isInvitationReturnTo(value)) return undefined
+  const id = new URL(value, 'https://private-skills.invalid').searchParams.get('id')
+  return invitationReturnTo(id)
+}
+
 function principalFromSession(session: AuthSession): Principal | null {
   const organization = session.activeOrganization
   if (!organization) return null
@@ -65,7 +79,7 @@ export function needsCompanySetup(session: AuthSession | null | undefined): bool
 export function providerSignInHref(providerId: string, returnTo?: string, basePath = '/api/auth'): string | undefined {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/iu.test(providerId)) return undefined
   if (!/^\/[a-z0-9/_-]*$/iu.test(basePath)) return undefined
-  const safeReturnTo = safeAppReturnTo(returnTo)
+  const safeReturnTo = safeLoginReturnTo(returnTo)
   const params = new URLSearchParams({ provider: providerId })
   if (safeReturnTo) params.set('callbackURL', safeReturnTo)
   return `${basePath.replace(/\/$/u, '')}/sign-in/social?${params.toString()}`

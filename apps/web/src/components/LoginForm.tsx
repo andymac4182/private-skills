@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { providerSignInHref, safeAppReturnTo, useAuth } from '../lib/auth'
+import { providerSignInHref, safeLoginReturnTo, useAuth } from '../lib/auth'
 import { api, ApiError } from '../lib/api'
 import type { IdentityProviderPublicConfig, PublicProviderConfig } from '../lib/types'
 import { Button, Field, Notice } from './Primitives'
@@ -22,11 +22,11 @@ export function LoginForm({ returnTo }: LoginFormProps) {
     catch (cause) { setProviderConfig(null); setProviderError(cause instanceof ApiError ? cause.message : 'Identity providers are unavailable.') }
   }, [])
   useEffect(() => { void checkHealth(); void loadProviders() }, [checkHealth, loadProviders])
-  async function submit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!token.trim()) { setError('Enter a registry token to continue.'); return }; setBusy(true); setError(null); try { await signIn(token.trim()); setToken(''); await navigate({ href: safeAppReturnTo(returnTo) ?? '/app' }) } catch (cause) { setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Sign-in failed.') } finally { setBusy(false) } }
+  async function submit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!token.trim()) { setError('Enter a registry token to continue.'); return }; setBusy(true); setError(null); try { await signIn(token.trim()); setToken(''); await navigate({ href: safeLoginReturnTo(returnTo) ?? '/app' }) } catch (cause) { setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Sign-in failed.') } finally { setBusy(false) } }
   async function signInWithProvider(provider: IdentityProviderPublicConfig) {
     if (!provider.enabled || providerBusy) return
     const basePath = providerConfig?.basePath && /^\/[a-z0-9/_-]*$/iu.test(providerConfig.basePath) ? providerConfig.basePath : '/api/auth'
-    const callbackPath = safeAppReturnTo(returnTo) ?? '/app'
+    const callbackPath = safeLoginReturnTo(returnTo) ?? '/app'
     const callbackURL = typeof window === 'undefined' ? callbackPath : new URL(callbackPath, window.location.origin).toString()
     setProviderBusy(provider.id); setError(null)
     try {

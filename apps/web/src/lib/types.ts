@@ -167,10 +167,15 @@ export interface OrganizationInvitation {
   status?: string
   expiresAt?: string
   createdAt?: string
+  organizationId?: string
+  organizationName?: string
+  organizationSlug?: string
+  inviterEmail?: string
 }
 
 export interface OrganizationMembersResponse { members: TeamMember[] }
 export interface OrganizationInvitationsResponse { invitations: OrganizationInvitation[] }
+export interface OrganizationInvitationAcceptanceResponse { invitation: OrganizationInvitation; member: TeamMember }
 export interface OrganizationResponse { organization: OrganizationSummary }
 export interface OrganizationListResponse { organizations: OrganizationSummary[] }
 
