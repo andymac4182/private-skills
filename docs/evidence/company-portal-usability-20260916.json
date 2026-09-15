@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
   "kind": "local-company-portal-usability-acceptance",
-  "capturedAt": "2026-09-15T22:59:00Z",
+  "capturedAt": "2026-09-15T23:11:05Z",
   "source": {
     "sourceHead": "4c51d269a779a265427bc7e8e93d6618d04484cc",
     "sourceHeadRole": "clean candidate base before the tested UI implementation",
-    "testedImplementationCommit": "d172cf75a6c19b808cc197e4480b18896721a7e2",
+    "testedImplementationCommit": "93b1c03a174eec87e9d862874817a771e99a00b9",
+    "testedImplementationParentCommit": "d172cf75a6c19b808cc197e4480b18896721a7e2",
     "checkout": "/private/tmp/private-skills-company-portal-usability",
     "origin": "http://127.0.0.1:5308",
     "identityFixture": "disposable local identity fixture",
@@ -51,6 +52,10 @@
       "passed": true,
       "observed": "The owner drawer opened at 390x844, retained all company-admin destinations, scrolled within its bounded navigation region, and Escape closed it while restoring focus to Open navigation."
     },
+    "mobileNavigationAccordion": {
+      "passed": true,
+      "observed": "At 390x844 only the active Skills group was expanded initially. Keyboard Enter focused and expanded Discover through its separate button with aria-expanded=true and aria-controls=registry-nav-discover-sections; collapsed groups had zero visible or focusable sublinks. Escape closed the drawer and restored focus to Open navigation."
+    },
     "ownerKeyboard": {
       "passed": true,
       "observed": "The desktop command palette found Billing & usage; Enter navigated to /app/billing, and browser Back returned to /app with the overview rendered."
@@ -80,6 +85,7 @@
     "/private/tmp/private-skills-company-portal-review-owner-company-desktop-after.png",
     "/private/tmp/private-skills-company-portal-review-owner-company-mobile-after.png",
     "/private/tmp/private-skills-company-portal-review-owner-mobile-nav-after.png",
+    "/private/tmp/private-skills-company-portal-review-owner-mobile-nav-accordion.png",
     "/private/tmp/private-skills-company-portal-review-reader-mobile-nav-after.png",
     "/private/tmp/private-skills-company-portal-review-reader-billing-denial-after.png"
   ],
