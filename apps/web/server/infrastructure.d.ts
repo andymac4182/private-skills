@@ -34,6 +34,23 @@ declare module '#pskills-infrastructure' {
     /** Optional Node-owned company SSO registry and Better Auth bridge. */
     companySso?: {
       handler: (request: Request) => Promise<Response | undefined>;
+      listPublicProviders?: (organizationId: string) => Promise<readonly {
+        providerId: string;
+        displayName: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      }[]>;
+      getProviderForOrganization?: (organizationId: string, providerId: string) => Promise<{
+        providerId: string;
+        organizationId: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      } | null>;
+      selectProvider?: (organizationId: string, providerId: string, appOrigin: string, allowLoopbackHttp?: boolean) => Promise<{
+        organizationId: string;
+        providerId: string;
+        callbackURL: string;
+      } | null>;
     };
     /** Explicit Better Auth user + bootstrap-owner adoption transaction. */
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;

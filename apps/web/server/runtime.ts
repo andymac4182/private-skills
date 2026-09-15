@@ -114,8 +114,38 @@ async function createRuntime(env: RuntimeEnvironment) {
   const companySsoRuntime = (infrastructure as typeof infrastructure & {
     companySso?: {
       handler: (request: Request) => Promise<Response | undefined>;
+      listPublicProviders?: (organizationId: string) => Promise<readonly {
+        providerId: string;
+        displayName: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      }[]>;
+      getProviderForOrganization?: (organizationId: string, providerId: string) => Promise<{
+        providerId: string;
+        organizationId: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      } | null>;
+      selectProvider?: (organizationId: string, providerId: string, appOrigin: string, allowLoopbackHttp?: boolean) => Promise<{
+        organizationId: string;
+        providerId: string;
+        callbackURL: string;
+      } | null>;
     };
   }).companySso;
+  const companySsoLoginRuntime = identityRuntime && companySsoRuntime
+    ? {
+        identityHandler: identityRuntime.handler,
+        basePath: (() => {
+          const config = identityRuntime.publicProviderConfig();
+          return config && typeof config === 'object' && 'basePath' in config && typeof config.basePath === 'string'
+            ? config.basePath
+            : '/api/auth';
+        })(),
+        appOrigin: canonicalOriginFromEnv(env),
+        allowLoopbackHttp: env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test',
+      }
+    : undefined;
   const signedWorkerAuthenticator = createSignedWorkerAuthenticatorFromEnv(env);
   // Source discovery is server-owned. The catalog receives only this host's
   // environment snapshot; provider credentials are retained by adapters and
@@ -511,7 +541,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     const path = new URL(request.url).pathname;
     const identityResponse = await handleIdentityRoute(request, identityRuntime, bootstrapAdoption);
     if (identityResponse) return identityResponse;
-    const companySsoResponse = await handleCompanySsoRoute(request, companySsoRuntime);
+    const companySsoResponse = await handleCompanySsoRoute(request, companySsoRuntime, companySsoLoginRuntime);
     if (companySsoResponse) return companySsoResponse;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
