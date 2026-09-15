@@ -311,6 +311,8 @@ describe('CompanyView', () => {
     expect(document.body.textContent).toContain('Team access is view-only.')
     expect(document.body.textContent).toContain('Owners and admins manage invitations and role changes.')
     expect(document.body.textContent).toContain('Invitation management is available to owners and admins.')
+    expect(document.body.textContent).toContain('View team access for this company. Owners and admins manage roles and invitations.')
+    expect(document.body.textContent).not.toContain('Manage who can use this company.')
     expect(document.body.textContent).not.toContain('Invite a teammate')
     expect(document.querySelector('select[aria-label="Role for Reader"]')).toBeNull()
   })

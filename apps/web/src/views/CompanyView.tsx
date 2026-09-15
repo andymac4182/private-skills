@@ -173,7 +173,10 @@ function CompanyManagement({ activeMembership, organization }: { activeMembershi
     void reload()
     return () => { requestGeneration.current += 1 }
   }, [reload, reloadKey])
-  return <div className="company-management"><div className="page-intro"><div><span className="eyebrow">Company</span><h1>{organization.name}</h1><p className="muted">Manage who can use this company. Role changes and invitations are checked before they take effect.</p></div><div className="company-heading-meta"><span className="badge badge-good">Active</span><code>{organization.slug}</code></div></div>{error && <Notice kind="error">{error}</Notice>}<div className="company-management-grid">{canManage && <InvitePanel disabled={false} onInvited={() => setReloadKey((current) => current + 1)} />}<TeamPanel canManage={canManage} invitations={invitations} members={members} onChanged={() => setReloadKey((current) => current + 1)} /></div></div>
+  const description = canManage
+    ? 'Manage who can use this company. Role changes and invitations are checked before they take effect.'
+    : 'View team access for this company. Owners and admins manage roles and invitations.'
+  return <div className="company-management"><div className="page-intro"><div><span className="eyebrow">Company</span><h1>{organization.name}</h1><p className="muted">{description}</p></div><div className="company-heading-meta"><span className="badge badge-good">Active</span><code>{organization.slug}</code></div></div>{error && <Notice kind="error">{error}</Notice>}<div className="company-management-grid">{canManage && <InvitePanel disabled={false} onInvited={() => setReloadKey((current) => current + 1)} />}<TeamPanel canManage={canManage} invitations={invitations} members={members} onChanged={() => setReloadKey((current) => current + 1)} /></div></div>
 }
 
 function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: () => void }) {

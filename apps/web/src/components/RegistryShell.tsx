@@ -35,6 +35,7 @@ export function RegistryShell() {
   const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
   const canManageCompany = session?.activeMembership?.role === 'owner' || session?.activeMembership?.role === 'admin'
   const readonlyCompanyNavigation = Boolean(session?.activeMembership && !canManageCompany)
+  const activeNavItemRef = useRef<HTMLAnchorElement>(null)
   // Identity sessions carry the human-facing account label. The legacy
   // principal subject is often an opaque id, so only use it after the
   // sanitized identity name/email fields and retain it for token sessions.
@@ -85,6 +86,16 @@ export function RegistryShell() {
     // on the same shell route.
     setMobileNavOpen(false)
   }, [location.pathname, location.searchStr, tenantKey])
+
+  useEffect(() => {
+    // Keep the selected destination visible when the navigation has more items
+    // than the viewport. This does not move focus, so keyboard users retain
+    // the normal drawer and link focus behavior.
+    const frame = window.requestAnimationFrame(() => {
+      activeNavItemRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'auto' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeSection, mobileNavOpen, tenantKey])
 
   useEffect(() => {
     if (!mobileNavOpen) return
@@ -173,6 +184,7 @@ export function RegistryShell() {
                     className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
                     params={{ section: defaultSection.id }}
                     to="/app/$section"
+                    ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
                     onClick={closeMobileNav}
                   >
                     <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
@@ -192,6 +204,7 @@ export function RegistryShell() {
                           key={section.id}
                           params={{ section: section.id }}
                           to="/app/$section"
+                          ref={section.id === activeSection ? activeNavItemRef : undefined}
                           onClick={closeMobileNav}
                         >
                           <span aria-hidden="true" className="nav-subitem-glyph">{section.glyph}</span>
