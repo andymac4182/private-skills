@@ -69,3 +69,13 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B29 — Recover queued worker jobs for every company after initial request-drain failure or timeout. Current operator cron selects only the default company; implement fair bounded durable company dispatch with leases/cursors, server-selected scoped credentials and actual PostgreSQL retry/isolation tests. Owners: tenant_ui (worker scheduler), runtime_finish (coordinate Eve scheduler/runtime/cron seams).
 
 - [ ] B30 — Marketing discoverability: page-specific titles/descriptions, validated canonical marketing origin, social sharing metadata, public sitemap and robots rules with preview/local noindex. Verify rendered HTML and route inventory; retain working brand and avoid unsupported company/review claims. Owner: marketing_finish.
+
+### Market research delivery criteria — 16 September follow-up
+
+B14–B16 remain launch work and must deliver:
+- A dated primary-source comparison of developer tooling, AI coding-agent ecosystems, skill registries and existing artifact platforms, separating direct competitors from substitutes.
+- Buyer versus daily-user roles, adoption and purchase triggers, switching friction, distribution channels, positioning and pricing hypotheses, and concrete validation experiments.
+- A ranked brand shortlist with rationale, pronunciation, package/company collisions, domain alternatives, timestamped registrar availability, premium/renewal prices where visible, and source links. Recheck finalists immediately before selection; unregistered does not mean purchasable or secured.
+- An explicit mapping from findings to homepage copy, launch offer and product priorities. Keep claims bounded by product evidence, and keep Private Skills until the user chooses a brand.
+
+Existing research lives in [market research](../market-research.md), [brand options](../brand-options.md) and [domain shortlist](../brand-domain-shortlist.md). Owner: marketing_finish; root reviews evidence and application.
