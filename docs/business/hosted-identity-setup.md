@@ -7,6 +7,11 @@ opt-in Node runtime backed by PostgreSQL. The existing bearer-token login and
 migrated. A local fixture, a configuration response, or a successful build is
 not proof of a real provider login.
 
+The later local increments `4e4ce2d` (company SSO server wiring) and `3950816`
+(Files SDK restore rehearsal) add source and test coverage after this audit
+target. They have no hosted provider or deployment proof; repeat the metadata
+and hosted checks after integrating them.
+
 ## Audit snapshot
 
 The following is a redacted metadata audit made on 16 September 2026. Vercel
