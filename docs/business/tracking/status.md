@@ -44,3 +44,5 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - Clean integration e13600d: typecheck passed; full suite 1,031 passed, 9 skipped (139 passing files, 7 skipped). Adoption/worker modules integrated, but live database adoption remains unproven.
 
 - Root ran multi-tenant-postgres-acceptance.test.ts against disposable loopback PostgreSQL after integration b5d48b8: 1 broad scenario passed with populated tenant records. Covers fixed-handler core registry isolation; it does not prove Better Auth live membership or the outer tenant router. Those remain L10 work.
+
+- Root browser on fixed 65c5637 fixture: owner successfully created a reader invitation and UI showed copyable link plus one pending invite. Owner denial B12 fixed in integrated668f53e; invitee browser acceptance remains pending.
