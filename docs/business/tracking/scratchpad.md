@@ -12,9 +12,12 @@ Observations are not completion evidence. Turn concrete next actions into backlo
 ## Next coordinator actions
 
 1. Keep the `ef8922c` PR #58 production record, the unreleased runtime
-   candidate line `3713f14` / `59c8f69`, and local platform evidence separated
-   by source and environment. The recovery record distinguishes 86 focused
-   local tests, 49 mixed checks, and one PostgreSQL recovery test.
+   candidate snapshot `c32f4a8`, and local platform evidence separated by
+   source and environment. The full recovery record at source `036fb746`
+   reports 178 test files passed / 18 skipped, 1,281 tests passed / 44
+   skipped, 34 direct PostgreSQL tests, and 2 composed Nitro tests; the earlier
+   86-focused/49-mixed/one-PostgreSQL result remains historical bounded
+   evidence.
 2. Have `tenant_auth_backend` and Hosting/Operations review the committed
    hosted identity schema preparation and its 12 empty-table/registry
    readback. Keep Better Auth disabled with `providers: []` until separately
@@ -26,6 +29,10 @@ Observations are not completion evidence. Turn concrete next actions into backlo
 4. Complete the hosted browser archive install and worker/scanner acceptance;
    keep native Linux hardware/CI and Windows separate from the passing macOS
    and emulated Linux CLI checks.
+5. Have `oauth_demo_finish` and Hosting/Operations resolve the observed
+   Hobby/Fluid team configuration against the candidate's 615-second function
+   budget and 5/15-minute cron schedules. The user decision between Pro and
+   adapting those settings is pending; do not deploy the candidate meanwhile.
 
 ## Capture template
 
@@ -250,13 +257,17 @@ record](../../evidence/production-release-ef8922c-20260916.json) is the source
 for deployment, public readback, and native-CI-waiver claims. The waiver records
 jobs blocked before runner execution; it is not a native test pass.
 
-The unreleased runtime candidate line is `3713f14` with the atomic billing
-ledger `59c8f69`, authoring/core ownership fixes `17f0414`, `5e4268d`,
-`1ab98c2`, and `a223961`, and receipt/provider-binding work `f24813f` /
-`f3de225`. The [local recovery record](../../evidence/local-storage-billing-restoration-20260916.json)
-reports 86 focused local tests, 49 mixed checks, and one PostgreSQL recovery
-test. These results are local and bounded; they do not establish hosted or
-commercial readiness.
+The unreleased runtime candidate snapshot is `c32f4a8`, based on bounded
+recovery source `036fb746` and incorporating billing schema review `6affd56`
+plus the production auto-migration guard `1cda201`. The [full local recovery
+record](../../evidence/local-storage-billing-restoration-20260916.json) reports
+178 test files passed / 18 skipped and 1,281 tests passed / 44 skipped;
+typecheck, Node production, Vercel Build Output, and Cloudflare edge builds
+passed; 34 tests passed directly against disposable loopback PostgreSQL and 2
+through the composed Nitro/PostgreSQL/Files SDK HTTP runtime. The bounded
+migration guard source `9ca72ce` passed 14 focused tests plus TypeScript. These
+results are local and bounded; final validation is running and no candidate
+deployment is claimed.
 
 The [native macOS CLI record](../../evidence/local-macos-arm64-cli-qualification-20260916.json)
 passes direct Apple Silicon version/help and isolated install → verify →
@@ -271,6 +282,14 @@ modes. The [boundary record](../../evidence/edge-portability-boundary-cleanup-9b
 shows removal of executable PostgreSQL, runtime-node, and Files SDK imports;
 hosted edge acceptance remains separate.
 
+The [Vercel entitlement record](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
+is a sanitized read-only capture of the current Hobby/Fluid team and its
+Git-linked projects; the separate reviewer project is not Git-linked. The
+candidate's Vercel output uses a 615-second function budget while the repository
+cron schedules run every 5 and 15 minutes, which is incompatible with the
+observed team configuration. The user decision between Pro and adapting the
+candidate schedule/budget is pending; no candidate deployment was made.
+
 Hosted identity remains deliberately inactive. Read-only evidence `7140029`
 is the pre-preparation comparison. The later [schema-preparation evidence](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json)
 records 12 empty target tables with verified columns/indexes, unchanged registry
@@ -282,25 +301,33 @@ The earlier [identity readback](../../evidence/hosted-identity-migration-review-
 and [SQL manifest](../../evidence/hosted-identity-migration-review-20260916.sql-manifest.json)
 remain historical review artifacts.
 
+The [billing schema review](../../evidence/billing-schema-migration-review-20260916.json)
+at `6affd56` / `15acfde` records a sanitized read-only Vercel production
+baseline: all five expected billing relations are absent, no hosted DDL ran,
+and migration preparation is underway. A post-application read-only billing
+readback remains pending.
+
 Billing restore/over-cap handling, known-completed-write recovery, and durable
 billing compensation remain active. The [local billing demo](../../evidence/local-billing-console-demo-acceptance-20260916.json)
 passes checkout/portal completion, signed test billing, PostgreSQL readback,
 and Reader denial through `LocalBillingAdapter`; it has no Stripe account or
-live charge. The local recovery record reports one PostgreSQL test, 86 focused
-local tests, and 49 mixed checks. The storage provider review says an aborted or
-lost write response is not terminal proof for Vercel Blob or generic
+live charge. The earlier recovery record reports one PostgreSQL test, 86
+focused local tests, and 49 mixed checks; the newer full record above remains
+local and bounded. The storage provider review says an aborted or lost write
+response is not terminal proof for Vercel Blob or generic
 S3-compatible paths, so a charge must remain until provider finality or a
 durable reconciliation result exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
 [storage review](../../evidence/storage-recovery-finality-review.md), and
 [provider research](../../evidence/storage-provider-finality-research.md).
 
-The local billing-console browser record at source `2348002` passes owner
-onboarding, free/Team entitlement readback, PostgreSQL persistence, signed
-webhook handling, reader denial, and browser-console cleanliness. Both local
-test checkout and portal URLs return 404 and require a fix plus rerun; this is
-not a Stripe or live-charge result. The ledger candidate `1d3ca34` reports 32
-unit tests, 14 PostgreSQL tests, and typecheck, but the executed recovery races
-above remain open. See the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json).
+An earlier local billing-console browser record at source `2348002` passes
+owner onboarding, free/Team entitlement readback, PostgreSQL persistence,
+signed webhook handling, reader denial, and browser-console cleanliness. Its
+test checkout and portal URLs returned 404 at that older snapshot; the later
+`3548be2` demo above resolves those local routes. This remains local test-mode
+evidence, not a Stripe or live-charge result. The ledger candidate `1d3ca34`
+reports 32 unit tests, 14 PostgreSQL tests, and typecheck, but the executed
+recovery races above remain open. See the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json).
 
 ### Additional billing recovery repros — 16 September 2026
 
