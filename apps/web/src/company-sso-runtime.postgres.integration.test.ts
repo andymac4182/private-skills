@@ -68,6 +68,51 @@ async function listen(server: ReturnType<typeof createServer>): Promise<number> 
 }
 
 describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime', () => {
+  it('waits for opted-in Better Auth and private SSO migrations before returning infrastructure', async () => {
+    if (!databaseURL) return;
+    const suffix = `${process.pid}_${Date.now().toString(36)}`;
+    const schema = `sso_startup_${suffix}`;
+    const companyTable = `sso_startup_registry_${suffix}`;
+    const statePath = `/tmp/private-skills-sso-startup-state-${suffix}`;
+    const storagePath = `/tmp/private-skills-sso-startup-storage-${suffix}`;
+    const direct = postgres(databaseURL, { max: 20, prepare: false });
+    let infrastructure: Awaited<ReturnType<typeof createInfrastructure>> | undefined;
+    try {
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      infrastructure = await createInfrastructure({
+        PSKILLS_BETTER_AUTH_ENABLED: 'true',
+        DATABASE_URL: databaseURL,
+        BETTER_AUTH_SECRET: 'company-sso-startup-test-secret-0123456789',
+        BETTER_AUTH_URL: ORIGIN,
+        PSKILLS_PUBLIC_ORIGIN: ORIGIN,
+        PSKILLS_ENVIRONMENT: 'test',
+        PSKILLS_STATE_PROVIDER: 'file',
+        PSKILLS_SINGLE_PROCESS: 'true',
+        PSKILLS_STATE_PATH: statePath,
+        PSKILLS_STORAGE_PROVIDER: 'filesystem',
+        PSKILLS_STORAGE_ROOT: storagePath,
+        PSKILLS_BETTER_AUTH_SCHEMA: schema,
+        PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: 'false',
+        PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'true',
+        PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'true',
+        PSKILLS_COMPANY_SSO_TABLE_NAME: companyTable,
+      });
+
+      const tables = await direct.unsafe(
+        'SELECT to_regclass($1) AS better_auth_table, to_regclass($2) AS company_sso_table',
+        [`${schema}.user`, `${schema}.${companyTable}`],
+      );
+      expect(tables[0] as unknown as { better_auth_table: string | null; company_sso_table: string | null }).toEqual({
+        better_auth_table: `${schema}."user"`,
+        company_sso_table: `${schema}.${companyTable}`,
+      });
+    } finally {
+      await infrastructure?.identity?.close();
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.end({ timeout: 5 });
+    }
+  }, 45_000);
+
   it('serves the mounted admin route from PostgreSQL and mirrors a provider into Better Auth', async () => {
     if (!databaseURL) return;
     const suffix = `${process.pid}_${Date.now().toString(36)}`;
@@ -91,10 +136,11 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
       PSKILLS_STORAGE_ROOT: storagePath,
       PSKILLS_BETTER_AUTH_SCHEMA: schema,
       PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: 'false',
-      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
+      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'true',
       PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'true',
       PSKILLS_COMPANY_SSO_TABLE_NAME: companyTable,
     };
+    await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
     const infrastructure = await createInfrastructure(environment);
     const identity = infrastructure.identity;
     const companySso = infrastructure.companySso;
@@ -108,10 +154,6 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
 
     let fixture: ReturnType<typeof createServer> | undefined;
     try {
-      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
-      await direct.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(companyTable)}`);
-      await identity.runMigrations();
-
       const nowDate = new Date();
       const now = nowDate.toISOString();
       const expiresAt = new Date(nowDate.getTime() + 60 * 60 * 1000).toISOString();
@@ -237,7 +279,6 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
       fixture?.close();
       await identity.close();
       await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
-      await direct.unsafe(`DROP TABLE IF EXISTS ${quoteIdentifier(companyTable)}`);
       await direct.end({ timeout: 5 });
     }
   }, 45_000);

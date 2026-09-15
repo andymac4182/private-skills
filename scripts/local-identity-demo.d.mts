@@ -90,5 +90,16 @@ export declare function startLocalOidcProvider(options: {
 }): Promise<LocalIdentityProvider>
 export declare function startLocalOidcProviders(options: { appOrigin: string; acmePort?: number; globexPort?: number }): Promise<[LocalIdentityProvider, LocalIdentityProvider]>
 export declare function buildIdentityProviderEnvironment(providers: readonly LocalIdentityProvider[], persistence?: { adapter: string; databaseConfigured: boolean }): Record<string, string>
+export declare function buildAppEnvironment(options: {
+  origin: string
+  stateRoot: string
+  blobRoot: string
+  sessionSecret: string
+  identitySecret: string
+  bootstrapToken: string
+  providerEnvironment: Record<string, string>
+  persistence: { adapter: string; databaseConfigured: boolean }
+  databaseUrl?: string
+}): Record<string, string>
 export declare function createSourceSnapshot(options: { sourceRoot: string; destinationRoot: string }): { sourceRoot: string; destinationRoot: string; manifest: SourceSnapshotManifest }
 export declare function redactSecrets(value: string, secrets: readonly string[]): string

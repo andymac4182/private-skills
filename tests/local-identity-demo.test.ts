@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertDemoEnvironment,
+  buildAppEnvironment,
   buildIdentityProviderEnvironment,
   createPkcePair,
   createSourceSnapshot,
@@ -298,6 +299,33 @@ describe('local identity demo launcher contract', () => {
     expect(acme.descriptor).not.toHaveProperty('clientSecret')
     expect(environment.PSKILLS_AUTH_BACKEND).toBe('packages/identity')
     expect(environment.PSKILLS_IDENTITY_MODE).toBe('better-auth')
+  })
+
+  it('opts the PostgreSQL fixture into both Better Auth and private SSO startup migrations', () => {
+    const common = {
+      origin: APP_ORIGIN,
+      stateRoot: '/tmp/identity-demo-state',
+      blobRoot: '/tmp/identity-demo-blobs',
+      sessionSecret: 'session-secret',
+      identitySecret: 'identity-secret',
+      bootstrapToken: 'bootstrap-token',
+      providerEnvironment: {},
+    }
+    const postgresEnvironment = buildAppEnvironment({
+      ...common,
+      persistence: { adapter: 'postgres', databaseConfigured: true },
+      databaseUrl: 'postgres://postgres:postgres@127.0.0.1:5432/identity_demo',
+    })
+    expect(postgresEnvironment.PSKILLS_BETTER_AUTH_AUTO_MIGRATE).toBe('true')
+    expect(postgresEnvironment.PSKILLS_COMPANY_SSO_AUTO_MIGRATE).toBe('true')
+
+    const testEnvironment = buildAppEnvironment({
+      ...common,
+      persistence: { adapter: 'test', databaseConfigured: false },
+      databaseUrl: undefined,
+    })
+    expect(testEnvironment.PSKILLS_BETTER_AUTH_AUTO_MIGRATE).toBe('false')
+    expect(testEnvironment.PSKILLS_COMPANY_SSO_AUTO_MIGRATE).toBe('false')
   })
 
   it('redacts generated secrets even when text is split across log chunks', () => {

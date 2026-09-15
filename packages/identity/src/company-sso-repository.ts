@@ -33,6 +33,8 @@ export interface CompanySsoPostgresJsClient {
 
 export interface CompanySsoRepositoryOptions {
   tableName?: string;
+  /** PostgreSQL schema shared with Better Auth when one is configured. */
+  schemaName?: string;
   autoMigrate?: boolean;
 }
 
@@ -43,11 +45,22 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier}"`;
 }
 
-export function companySsoSchemaSql(tableName = DEFAULT_COMPANY_SSO_TABLE): string {
-  const table = quoteIdentifier(tableName);
+function qualifiedTable(tableName: string, schemaName?: string): string {
+  const tableIdentifier = quoteIdentifier(tableName);
+  const normalizedSchema = schemaName?.trim();
+  return normalizedSchema === undefined || normalizedSchema === ''
+    ? tableIdentifier
+    : `${quoteIdentifier(normalizedSchema)}.${tableIdentifier}`;
+}
+
+export function companySsoSchemaSql(tableName = DEFAULT_COMPANY_SSO_TABLE, schemaName?: string): string {
+  const table = qualifiedTable(tableName, schemaName);
   const organizationIndex = quoteIdentifier(`${tableName}_organization_created_idx`);
   const issuerIndex = quoteIdentifier(`${tableName}_issuer_idx`);
+  const schema = schemaName?.trim();
+  const schemaStatement = schema === undefined || schema === '' ? '' : `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)};\n`;
   return `
+${schemaStatement}
 CREATE TABLE IF NOT EXISTS ${table} (
   id text PRIMARY KEY,
   organization_id text NOT NULL,
@@ -146,6 +159,8 @@ function isUniqueViolation(error: unknown): boolean {
 export class PostgresCompanySsoRepository implements CompanySsoProviderRepository {
   private readonly pool: CompanySsoPgPool;
   private readonly table: string;
+  private readonly tableName: string;
+  private readonly schemaName?: string;
   private readonly autoMigrate: boolean;
   private migration?: Promise<void>;
 
@@ -157,13 +172,20 @@ export class PostgresCompanySsoRepository implements CompanySsoProviderRepositor
   ) {
     const supplied = 'pool' in poolOrOptions ? poolOrOptions : options;
     this.pool = 'pool' in poolOrOptions ? poolOrOptions.pool : poolOrOptions;
-    this.table = quoteIdentifier(supplied.tableName ?? DEFAULT_COMPANY_SSO_TABLE);
+    this.tableName = supplied.tableName ?? DEFAULT_COMPANY_SSO_TABLE;
+    this.schemaName = supplied.schemaName?.trim() || undefined;
+    this.table = qualifiedTable(this.tableName, this.schemaName);
     this.autoMigrate = supplied.autoMigrate ?? false;
   }
 
   private async ensureSchema(): Promise<void> {
     if (!this.autoMigrate) return;
-    this.migration ??= this.pool.query(companySsoSchemaSql(this.table.slice(1, -1))).then(() => undefined);
+    await this.runMigrations();
+  }
+
+  /** Run the reviewed private-table migration explicitly at deployment startup. */
+  async runMigrations(): Promise<void> {
+    this.migration ??= this.pool.query(companySsoSchemaSql(this.tableName, this.schemaName)).then(() => undefined);
     await this.migration;
   }
 

@@ -1047,7 +1047,7 @@ async function linkDependenciesAsync(sourceRoot, buildRoot) {
   }
 }
 
-function buildAppEnvironment({ origin, stateRoot, blobRoot, sessionSecret, identitySecret, bootstrapToken, providerEnvironment, persistence, databaseUrl }) {
+export function buildAppEnvironment({ origin, stateRoot, blobRoot, sessionSecret, identitySecret, bootstrapToken, providerEnvironment, persistence, databaseUrl }) {
   const pathValue = typeof process.env.PATH === 'string' && process.env.PATH.length > 0 ? process.env.PATH : '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
   return {
     PATH: pathValue,
@@ -1079,6 +1079,10 @@ function buildAppEnvironment({ origin, stateRoot, blobRoot, sessionSecret, ident
     BETTER_AUTH_SECRET: identitySecret,
     PSKILLS_BETTER_AUTH_ENABLED: persistence.databaseConfigured === true ? 'true' : 'false',
     PSKILLS_BETTER_AUTH_AUTO_MIGRATE: persistence.databaseConfigured === true ? 'true' : 'false',
+    // Company SSO owns an additive table alongside Better Auth's mirrored
+    // ssoProvider model. Keep the disposable PostgreSQL fixture's startup
+    // migration contract explicit for both stores.
+    PSKILLS_COMPANY_SSO_AUTO_MIGRATE: persistence.databaseConfigured === true ? 'true' : 'false',
     // The disposable PostgreSQL path owns its schema for the run. Disable
     // Better Auth's preflight validator so startup can finish the documented
     // auto-migration before serving browser requests.
