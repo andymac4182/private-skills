@@ -175,3 +175,7 @@ Root rebuilt the verification app with the actual marketing HTTPS origin and exp
 ### Billing/Eve integration handoff — 16 September, 02:02 AEST
 
 Editor delivered 85b3d68 and 9e56c40 after 11 PostgreSQL/Eve tests and TypeScript passed on its composition. Root applied the prerequisite ledger/Eve commit chain through verification 54c2f6c, preserving CLI provider and identity operational-events fields in additive runtime conflicts. Final identity seat-hook cherry-pick9e56c40 has two conflicts against newer identity telemetry; editor now owns the verification checkout to resolve them and compose the already-tested scheduler/runtime and caller lifecycle fixes. Shared integration has not received this incomplete billing batch, and customer-facing unverified seat recovery remains excluded.
+
+### SEO root type gate resolved — 16 September, 02:04 AEST
+
+Reviewed and integrated type-only fix0fcc803 as36385d0. Root independently ran TypeScript and all seven SEO tests successfully on the integration checkout. The fix includes the marketing ambient declarations in the root compiler input and narrows test metadata fields before rendering; it does not exclude source or suppress type errors. Release owner was instructed to prepare the corrected immutable candidate PR and preview checks. Billing/recovery composition remains independent and unmerged.
