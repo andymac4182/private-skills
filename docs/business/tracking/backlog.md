@@ -6,7 +6,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [x] B01 — L09: restart the local fixture gracefully from dc836e7 or later, preserve the disposable database, verify sign-out returns to login and then complete Globex browser login. Completed on dc836e7 with local PostgreSQL fixture; simultaneous legacy-plus-identity session revocation remains separately covered by component tests, not this browser sequence.
 - [ ] B02 — L03: make Overview distinct from Discover; group directory/topics/official/audits contextually and separate company administration from daily work. Keep existing deep links and command search working.
-- [ ] B03 — L03: reduce overview hero/CTA height so useful releases and activity appear sooner; verify 712px and phone widths, keyboard focus, drawer dismissal and reduced motion.
+- [ ] B03 — L03: reduce overview hero/CTA height so useful releases and activity appear sooner; verify 712px and phone widths, keyboard focus, drawer dismissal and reduced motion. Integration `388a7ed` adds keyboard skip-focus and reduced-motion handling; compact mobile navigation and complete responsive/accessibility review remain open, with no full accessibility pass claimed.
 - [x] B04 — L04: one-company chooser must not say the account belongs to multiple companies.
 - [ ] B05 — L10: create two populated disposable company registries and verify denied cross-company files, drafts, packs, imports, scans, downloads, search, analytics, tokens and Eve callbacks.
 - [ ] B06 — L07/L08: connect atomic usage reservations to costly scan/AI actions; test retries, concurrent quota exhaustion and reconciliation.
@@ -32,9 +32,9 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 ## Market and brand research — user requested
 
-- [ ] B14 — Research current developer tools, AI agent tools and private package registries using primary sources; distinguish competitors from adjacent categories. Identify the engineering-team buyer, adoption triggers, alternatives, defensible differentiation and claims supported by actual product behavior. Owner: marketing_finish.
-- [ ] B15 — Develop a detailed brand shortlist with name rationale, pronunciation, category fit, collision risks and domain options. Check live domain registration/registrar availability with timestamps and source links; explicitly separate unregistered, purchasable, premium, reserved, taken and unverified. DNS absence is not availability. Domain checks are not trademark clearance. No purchases or registrations without a separate user decision. Owner: marketing_finish.
-- [ ] B16 — Use market findings to revise positioning, homepage messaging, launch offer and prioritized roadmap; obtain user brand selection before replacing the working name.
+- [ ] B14 — Research current developer tools, AI agent tools and private package registries using primary sources; distinguish competitors from adjacent categories. Identify the engineering-team buyer, adoption triggers, alternatives, defensible differentiation and claims supported by actual product behavior. The dated [developer and AI market update](../developer-ai-market-update-20260916.md) is owned by `business_billing`; customer validation remains open.
+- [ ] B15 — Develop a detailed brand shortlist with name rationale, pronunciation, category fit, collision risks and domain options. Check live domain registration/registrar availability with timestamps and source links; explicitly separate unregistered, purchasable, premium, reserved, taken and unverified. DNS absence is not availability. Domain checks are not trademark clearance. No purchases or registrations without a separate user decision. The dated [brand-clearance and domain follow-up](../brand-clearance-next-steps.md) is owned by `oauth_demo_finish`; user selection remains open.
+- [ ] B16 — Use market findings to revise positioning, homepage messaging, launch offer and prioritized roadmap; obtain user brand selection before replacing the working name. Owners: business_billing / oauth_demo_finish; customer validation and the user's brand decision remain open.
 
 - [x] B17 — L03: account display fix integrated 2de3e2f; identity name/email preferred with legacy fallback. Reader overview role-order correction ff2d0ab also integrated. Root seven focused tests passed. New build browser proof remains part of B03.
 
@@ -42,7 +42,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
   Dated local follow-up on 5405 / candidate `89ef195`: scoped Reader token creation, sign-in/use, owner revoke, existing-session denial, fresh-sign-in denial, and native CLI metadata/revocation readback all passed. This supersedes the earlier 5403 / `205a28e` “Session token is invalid” observation for that fixture. No raw token is recorded here.
 
-- [ ] B19 — Restore rehearsal must include Better Auth organizations/memberships, token revocations, both company SSO configuration and mirrored provider rows, billing mappings/reservations/webhook state, and registry/blob consistency. Existing registry-only restore is insufficient. tenant_eve owns isolated local PostgreSQL rehearsal and post-restore tenant boundary checks; hosted proof remains separate.
+- [ ] B19 — Restore rehearsal must include Better Auth organizations/memberships, token revocations, both company SSO configuration and mirrored provider rows, billing mappings/reservations/webhook state, and registry/blob consistency. A bounded hosted Blob check in `ac86076` copied 11 non-CLI registry objects (37,741 bytes) from a stable 14-object source inventory into a fresh private prefix, with source-hash/no-drift checks and fresh-client exact-byte readback; it is object-storage evidence only and does not replace a coordinated PostgreSQL snapshot/fence or whole-database restore. tenant_eve owns isolated local PostgreSQL rehearsal and post-restore tenant boundary checks; B19 remains open.
 - [x] B20 — L05 (local protocol): the initial SAML issuer trust-anchor defect is corrected. The signed local PostgreSQL flow accepts one configured IdP assertion, assigns the user to its company, and rejects signed callbacks with the wrong issuer or audience; `fea919d` records the protocol fix and `784f39a`/`4e4ce2d` mount it in the runtime. See the [signed Better Auth integration test](../../../packages/identity/test/company-sso.better-auth.integration.test.ts). This closes the local protocol proof only; hosted/customer SAML configuration and callback verification remain B07/L05 gates.
 
 ## Research follow-through
@@ -70,6 +70,8 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [ ] B30 — Marketing discoverability: page-specific titles/descriptions, validated canonical marketing origin, social sharing metadata, public sitemap and robots rules with preview/local noindex. Verify rendered HTML and route inventory; retain working brand and avoid unsupported company/review claims. Owner: marketing_finish.
 
+- [ ] B31 — Identity-write capacity: measure contention from the shared global PostgreSQL organization-mutation advisory lock across companies. Consider company-scoped fences only after authoritative tenant IDs are resolved for company create, invite, accept, and SSO paths; preserve the last-owner and recovery barriers while comparing throughput. Owner: tenant_auth_backend.
+
 ### Market research delivery criteria — 16 September follow-up
 
 B14–B16 remain launch work and must deliver:
@@ -78,4 +80,4 @@ B14–B16 remain launch work and must deliver:
 - A ranked brand shortlist with rationale, pronunciation, package/company collisions, domain alternatives, timestamped registrar availability, premium/renewal prices where visible, and source links. Recheck finalists immediately before selection; unregistered does not mean purchasable or secured.
 - An explicit mapping from findings to homepage copy, launch offer and product priorities. Keep claims bounded by product evidence, and keep Private Skills until the user chooses a brand.
 
-Existing research lives in [market research](../market-research.md), [brand options](../brand-options.md) and [domain shortlist](../brand-domain-shortlist.md). Owner: marketing_finish; root reviews evidence and application.
+Existing research lives in [market research](../market-research.md), [brand options](../brand-options.md) and [domain shortlist](../brand-domain-shortlist.md). Current follow-up owners are `business_billing` for the developer/AI market update and `oauth_demo_finish` for brand clearance/domain checks; root reviews evidence and application.

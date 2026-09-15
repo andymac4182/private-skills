@@ -77,7 +77,7 @@ Explicit token migration candidate 5ca2365 is held because inheriting the Better
 
 ### Billing retention review and browser host pause
 
-Reviewed billing635d112. Seat subject/revision reconciliation is implemented, but root identified two remaining acceptance questions: active holds with no committed identity row require safe failed-write recovery, and newest-N usage-operation loading cannot be the authority for old-key idempotency. B28 records the exact durable-lookup/replay proof needed. Billing and Eve owners are coordinating; no billing candidate is integrated on this evidence alone.
+Reviewed billing `635d112`. Seat subject/revision reconciliation is implemented, but root identified two remaining acceptance questions: active holds with no committed identity row require safe failed-write recovery, and newest-N usage-operation loading cannot be the authority for old-key idempotency. B28 records the exact durable-lookup/replay proof needed. Billing and Eve owners are coordinating; no billing candidate is integrated on this evidence alone.
 
 The token-display browser owner reports CUA host locked with automatic unlock paused. User unlock requested asynchronously. This pauses the browser-dependent proof only; no fixture session or production configuration was changed.
 
@@ -89,7 +89,7 @@ Integrated e978ae3/aeb85a8: the explicit migration entrypoint covers Better Auth
 
 At d11f6cb, root also reran populated PostgreSQL tenant acceptance, source tenant isolation, and live identity-route PostgreSQL integration: three files / three tests passed in 2.25 seconds. The populated matrix uses bootstrap identities/core composition, source catalog responses are fixtures, and hosted acceptance remains separate.
 
-Release owner is authorized to publish prepared37ddf6f while explicitly retaining the Reader friendly-label browser check as pending due the locked host. That local display check does not block the independently verified operations/copy increment while production identity remains disabled. Billing and newer migration candidates are excluded from that release.
+Release owner is authorized to publish prepared `37ddf6f` while explicitly retaining the Reader friendly-label browser check as pending due the locked host. That local display check does not block the independently verified operations/copy increment while production identity remains disabled. Billing and newer migration candidates are excluded from that release.
 
 ### Full regression and native CLI checkpoint
 
@@ -99,9 +99,9 @@ Native Mac CLI proof is integrated from 5d7a645 plus correction e6465ab. Against
 
 ### Existing token survival and worker recovery
 
-Integrated dff442f (0669c9e) and independently passed four PostgreSQL tests at root cc50c62. The regression issues a public-table token before composed migration, reruns migration, creates fresh infrastructure, and authenticates the same unchanged token without a custom-schema token table. B27 is closed for local implementation/regression; production migration remains unperformed.
+Integrated `dff442f` (`0669c9e`) and independently passed four PostgreSQL tests at root `cc50c62`. The regression issues a public-table token before composed migration, reruns migration, creates fresh infrastructure, and authenticates the same unchanged token without a custom-schema token table. B27 is closed for local implementation/regression; production migration remains unperformed.
 
-PR53 is merged at92d2f0b (GitHub mergedAt2026-09-15T15:21:07Z), verified by root. Integration merged origin/main successfully. Production deployment verification remains with foundation_release. Root found B29 by tracing hosted-worker.ts/runtime.ts: new companies get only best-effort two-job POST drains, while /internal/worker/run cron selects default tenant. Durable cross-company retry scheduling assigned to tenant_ui with Eve owner coordination.
+PR53 is merged at `92d2f0b` (GitHub merged at 2026-09-15T15:21:07Z), verified by root. Integration merged `origin/main` successfully. Production deployment verification remains with foundation_release. Root found B29 by tracing `hosted-worker.ts` / `runtime.ts`: new companies get only best-effort two-job POST drains, while `/internal/worker/run` cron selects the default tenant. Durable cross-company retry scheduling is assigned to tenant_ui with Eve owner coordination.
 
 ### Reconciliation note — 16 September 2026
 
@@ -120,17 +120,17 @@ against the separately retained a8ab65a fixture. Neither follow-up proves hosted
 
 B21 concurrent import review found a shared-reservation race: the first reserving request can release the shared scan charge after another request queues the job and a worker begins scanning. Caller owner is adding a durable ownership fence and barrier tests. Definite failure before blob put also needs explicit zero reconciliation.
 
-B25 identity telemetry candidate03c73bb needs request-lifetime persistence rather than fire-and-forget writes, operational retention cleanup rather than migration-only cleanup, and actual loopback PostgreSQL proof. CLI acquisition needs an in-app sign-in/download flow instead of public links landing on JSON401 responses. Neither candidate is accepted yet.
+B25 identity telemetry candidate `03c73bb` needs request-lifetime persistence rather than fire-and-forget writes, operational retention cleanup rather than migration-only cleanup, and actual loopback PostgreSQL proof. CLI acquisition needs an in-app sign-in/download flow instead of public links landing on JSON 401 responses. Neither candidate is accepted yet.
 
-Extended Nitro fixture21701b7 adds packs, draft revisions/files, search through local embedding fixture and synthetic confirmed-install receipts. Follow-up strengthens exact edited content and foreign edit denial before root runs combined scenarios. B30 tracks missing marketing metadata/sitemap discovered in root source review.
+Extended Nitro fixture `21701b7` adds packs, draft revisions/files, search through a local embedding fixture and synthetic confirmed-install receipts. Follow-up strengthens exact edited content and foreign edit denial before root runs combined scenarios. B30 tracks missing marketing metadata/sitemap discovered in root source review.
 
 ### Composed authoring and pack acceptance
 
-Integrated47f10a8/82ccaea and independently ran both Nitro+PostgreSQL+Files SDK scenarios at root a50f0c9: two tests passed in20.99seconds. New proof verifies exact edited SKILL.md bytes, changed revision digest, persisted revision2, stale-revision denial, rejected foreign PUT with unchanged owner content, isolated same-name packs/search and synthetic client-confirmed pack receipts. Evidence: docs/evidence/local-composed-tenant-authoring-root-20260916.json. External scanner/Gateway, native pack install and hosted identity remain separate gates.
+Integrated `47f10a8` / `82ccaea` and independently ran both Nitro, PostgreSQL, and Files SDK scenarios at root `a50f0c9`: two tests passed in 20.99 seconds. New proof verifies exact edited SKILL.md bytes, changed revision digest, persisted revision 2, stale-revision denial, rejected foreign PUT with unchanged owner content, isolated same-name packs/search and synthetic client-confirmed pack receipts. Evidence: `docs/evidence/local-composed-tenant-authoring-root-20260916.json`. External scanner/Gateway, native pack install and hosted identity remain separate gates.
 
 ### Recovery/adoption regression checkpoint
 
-Root verificationa50f0c9 passed the loopback PostgreSQL operations restore rehearsal and Better Auth bootstrap-adoption integration together: two files / two tests,3.01seconds. The current implementation preserves restored identity/SSO/token/billing/registry/filesystem object state and exercises protected owner adoption with replay/concurrency denials. This is local evidence, not a hosted restore.
+Root verification `a50f0c9` passed the loopback PostgreSQL operations restore rehearsal and Better Auth bootstrap-adoption integration together: two files / two tests, 3.01 seconds. The current implementation preserves restored identity/SSO/token/billing/registry/filesystem object state and exercises protected owner adoption with replay/concurrency denials. This is local evidence, not a hosted restore.
 
 B19 follow-through is assigned to tenant_eve: extend recovery inventory for the upcoming billing lifecycle fields, seat revision/holds, Eve dispatch fences, worker retry/lease state and identity operational events once their owners finalize contracts. Current recovery evidence does not cover those unintegrated additions.
 
@@ -174,11 +174,11 @@ Root rebuilt the verification app with the actual marketing HTTPS origin and exp
 
 ### Billing/Eve integration handoff — 16 September, 02:02 AEST
 
-Editor delivered 85b3d68 and 9e56c40 after 11 PostgreSQL/Eve tests and TypeScript passed on its composition. Root applied the prerequisite ledger/Eve commit chain through verification 54c2f6c, preserving CLI provider and identity operational-events fields in additive runtime conflicts. Final identity seat-hook cherry-pick9e56c40 has two conflicts against newer identity telemetry; editor now owns the verification checkout to resolve them and compose the already-tested scheduler/runtime and caller lifecycle fixes. Shared integration has not received this incomplete billing batch, and customer-facing unverified seat recovery remains excluded.
+Editor delivered `85b3d68` and `9e56c40` after 11 PostgreSQL/Eve tests and TypeScript passed on its composition. Root applied the prerequisite ledger/Eve commit chain through verification `54c2f6c`, preserving CLI provider and identity operational-events fields in additive runtime conflicts. The final identity seat-hook cherry-pick `9e56c40` has two conflicts against newer identity telemetry; editor now owns the verification checkout to resolve them and compose the already-tested scheduler/runtime and caller lifecycle fixes. Shared integration has not received this incomplete billing batch, and customer-facing unverified seat recovery remains excluded.
 
 ### SEO root type gate resolved — 16 September, 02:04 AEST
 
-Reviewed and integrated type-only fix0fcc803 as36385d0. Root independently ran TypeScript and all seven SEO tests successfully on the integration checkout. The fix includes the marketing ambient declarations in the root compiler input and narrows test metadata fields before rendering; it does not exclude source or suppress type errors. Release owner was instructed to prepare the corrected immutable candidate PR and preview checks. Billing/recovery composition remains independent and unmerged.
+Reviewed and integrated type-only fix `0fcc803` as `36385d0`. Root independently ran TypeScript and all seven SEO tests successfully on the integration checkout. The fix includes the marketing ambient declarations in the root compiler input and narrows test metadata fields before rendering; it does not exclude source or suppress type errors. Release owner was instructed to prepare the corrected immutable candidate PR and preview checks. Billing/recovery composition remains independent and unmerged.
 
 ### Commercial decision checkpoint — 16 September
 
@@ -186,24 +186,40 @@ Source review confirms contact page still uses the honest launch-preview fallbac
 
 ### Main merge and anonymous production readback — 16 September
 
-Root independently confirmed PR54 merged to main11b5e1d7888d28e65e37143fc7d3da940c37a318 and merged origin/main into the integration branch. Subsequent anonymous requests returned marketing homepage200, marketing robots.txt200, and registry /v1/cli/releases401. This proves public-route availability and anonymous inventory denial at observation time; exact deployment-SHA correlation and authenticated archive byte checks remain with the release owner. Do not treat these anonymous checks as full CLI or identity acceptance.
+Root independently confirmed PR54 merged to `main` at `11b5e1d7888d28e65e37143fc7d3da940c37a318` and merged `origin/main` into the integration branch. Subsequent anonymous requests returned marketing homepage 200, marketing robots.txt 200, and registry `/v1/cli/releases` 401. This proves public-route availability and anonymous inventory denial at observation time; exact deployment-SHA correlation and authenticated archive byte checks remain with the release owner. Do not treat these anonymous checks as full CLI or identity acceptance.
 
 ### Combined ledger/Eve/scheduler database verification — 16 September, 02:14 AEST
 
-Root independently ran three PostgreSQL-enabled suites at coherent verification snapshot8cff18f: billing repository/lifecycle, Eve durable reservation recovery, and hosted worker dispatch. All22tests passed in2.72seconds. Editor separately reported161focusedtests and TypeScript passing on this snapshot. It remains unreleased: caller StorageAttempt/atomic reservation ownership work is pending, operatorseat recovery is being strengthened, and generatedVercelconfiguration lacks an explicit duration while reviewerdefaultis600seconds. A dedicated owner is aligning deployment andruntimebudgets before release; componentpasses do not close those gaps.
+Root independently ran three PostgreSQL-enabled suites at coherent verification snapshot `8cff18f`: billing repository/lifecycle, Eve durable reservation recovery, and hosted worker dispatch. All 22 tests passed in 2.72 seconds. Editor separately reported 161 focused tests and TypeScript passing on this snapshot. It remains unreleased: caller StorageAttempt/atomic reservation ownership work is pending, operator seat recovery is being strengthened, and generated Vercel configuration lacks an explicit duration while the reviewer default is 600 seconds. A dedicated owner is aligning deployment and runtime budgets before release; component passes do not close those gaps.
 
 ### Expanded local restore root proof — 16 September, 02:15 AEST
 
-Root applied recovery testf3ab981 asd4f8640 atop coherent8cff18f and ran the real disposable PostgreSQL rehearsal:1test passed in3.08seconds. The test exercises identity operations persistence, billing reserve/reconcile replay, Eve starting/uncertain ledger claims, job lease/retry denials, restored identity/token boundaries and FilesSDK filesystem object bytes. It does not yet copy separate private_skills_hosted_worker_dispatch and private_skills_hosted_worker_dispatch_retry tables present in the current schema; owner is extending that coverage. StorageAttempt fields in this interim test are compatibility-shaped JSON, not acceptance of the pending caller lifecycle implementation. Hosted object restore remains open.
+Root applied recovery test `f3ab981` as `d4f8640` atop coherent `8cff18f` and ran the real disposable PostgreSQL rehearsal: one test passed in 3.08 seconds. The test exercises identity operations persistence, billing reserve/reconcile replay, Eve starting/uncertain ledger claims, job lease/retry denials, restored identity/token boundaries and Files SDK filesystem object bytes. It does not yet copy separate `private_skills_hosted_worker_dispatch` and `private_skills_hosted_worker_dispatch_retry` tables present in the current schema; the owner is extending that coverage. StorageAttempt fields in this interim test are compatibility-shaped JSON, not acceptance of the pending caller lifecycle implementation. Hosted object restore remains open.
 
 ### Combined runtime full regression — 16 September, 02:18 AEST
 
-Root full Vitest run on verification d4f8640 passed168files/1,197tests, with17files/36tests skipped, in23.54seconds. Opt-in PostgreSQL tests were separately activated in the22-test ledger/Eve/worker checkpoint and expandedrestore proof. The snapshot still excludes pending atomic caller ownership, operatorrecovery and deploymentbudget fixes; fullregressionpassing doesnotremove those releaseholds. Release owner reported production11b5e1d authenticatedCLIcatalog/allthreeexactarchive downloads passed, anonymousdownload401; durable production record is beingprepared.
+Root full Vitest run on verification `d4f8640` passed 168 files / 1,197 tests, with 17 files / 36 tests skipped, in 23.54 seconds. Opt-in PostgreSQL tests were separately activated in the 22-test ledger/Eve/worker checkpoint and expanded restore proof. The snapshot still excludes pending atomic caller ownership, operator recovery and deployment budget fixes; full regression passing does not remove those release holds. The release owner reported that production `11b5e1d` authenticated CLI catalog and all three exact archive downloads passed, with an anonymous download returning 401; the durable production record was being prepared.
 
 ### Function duration source refresh — 16 September
 
-Root opened [Vercel’s 15 June 2026 duration announcement](https://vercel.com/changelog/vercel-functions-can-now-run-up-to-30-minutes): Node/Python on Pro/Enterprise can opt into up to1,800seconds, while durations above800seconds are beta and require Fluid compute. Older search snippets still show800as the maximum. Budget owner was notified to use live primarydocs and distinguish a conservative launch setting from platform maximum. The product still needs explicit emitted duration plus bounded runtime work and response headroom; increased platform capability does not resolve missing deployment configuration by itself.
+Root opened [Vercel’s 15 June 2026 duration announcement](https://vercel.com/changelog/vercel-functions-can-now-run-up-to-30-minutes): Node/Python on Pro/Enterprise can opt into up to 1,800 seconds, while durations above 800 seconds are beta and require Fluid compute. Older search snippets still show 800 as the maximum. The budget owner was notified to use live primary docs and distinguish a conservative launch setting from the platform maximum. The product still needs explicit emitted duration plus bounded runtime work and response headroom; increased platform capability does not resolve missing deployment configuration by itself.
 
 ### 100-company dispatch root rehearsal — 16 September
 
-Root independently executed e0613617 against disposable loopbackPostgreSQL:100companies,200jobs,5dispatchinvocations,201workercalls,200claims/completions,0duplicateclaims,1forcedfailure recovered. Firsttraversal stayed32/32/32/4 and atmost2workercalls/company. Dispatch took5.153seconds; total6.129seconds. These are localdeterministic-worker measurements, notscanners orhostedcapacity. Evidence:local-worker-dispatch-capacity-root-20260916.json; scriptintegration awaits the scheduler/runtimebatch.
+Root independently executed `e0613617` against disposable loopback PostgreSQL: 100 companies, 200 jobs, 5 dispatch invocations, 201 worker calls, 200 claims/completions, 0 duplicate claims, and 1 forced failure recovered. The first traversal stayed at 32/32/32/4 and at most 2 worker calls per company. Dispatch took 5.153 seconds; total time was 6.129 seconds. These are local deterministic-worker measurements, not scanner or hosted-capacity measurements. Evidence: `docs/evidence/local-worker-dispatch-capacity-root-20260916.json`; script integration awaits the scheduler/runtime batch.
+
+### PostgreSQL operator and recovery verification — 16 September
+
+Root independently ran `packages/billing/test/postgres.integration.test.ts`, `packages/billing/test/routes.test.ts`, and `tests/operations-postgres-rehearsal.test.ts` at clean verification source `7f45b81` against disposable loopback Docker PostgreSQL. Three files and 16 tests passed in 4.01 seconds with no skips. The checks cover the composed operator route, fenced recovery, ordinary-credential denial, and restored dispatcher state. This is local evidence; it does not prove hosted database/blob restore, production identity or billing configuration, or the remaining launch gates. Evidence: `docs/evidence/local-billing-operator-restore-root-20260916.json`.
+
+### Hosted Blob restore proof — 16 September
+
+The bounded hosted Blob check recorded in `ac86076` copied 11 non-CLI registry-candidate objects (37,741 bytes) into a new private restore prefix. The source inventory remained 14 objects, with three CLI assets excluded; source hashes and before/after inventories showed no drift, and a fresh-client destination readback matched exact bytes. This is object-storage evidence only and does not prove a PostgreSQL snapshot/fence or whole-database restore, so B19 remains open. Evidence: `docs/evidence/hosted-blob-restore-proof-20260916.json`.
+
+### Combined candidate verification — 16 September
+
+Root's combined verification snapshot `4917215`, with caller changes from `40783cd`, passed 170 files with 17 skipped and 1,211 tests with 38 skipped in 27.64 seconds. Root and reviewer TypeScript checks passed. PostgreSQL opt-in suites were not enabled in this full run; the separate `7f45b81` verification above remains the PostgreSQL evidence. This does not make a release claim while independent caller review, runtime budget, and test-fixture fixes remain open.
+
+### Brand domain recheck — 16 September
+
+Root independently repeated the authoritative Google RDAP checks at 2026-09-15 16:42:35 UTC for `releaseloom.dev` and `vouchpack.dev`. Both returned HTTP 404 JSON with `errorCode: 404` and no domain object. This supports “unregistered at check” only; it does not establish purchasability, pricing, legal clearance, or a secured domain. The dated [brand-clearance and domain follow-up](../brand-clearance-next-steps.md) remains the source document, and B15 stays open.

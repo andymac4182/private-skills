@@ -14,7 +14,7 @@ Last reconciled: 16 September 2026, Brisbane. Target: 18 September; contingency 
 
 Latest published increment: origin/main `11b5e1d7888d28e65e37143fc7d3da940c37a318`, merged from PR #54 (`0fcc803d89aaece0184921e339d84dfbd1cfadd0`). The Git-triggered app, builder, marketing, and upload-reviewer production deployments are all READY for this SHA; exact IDs and URLs are recorded in [production-release-11b5e1d.json](../../evidence/production-release-11b5e1d.json). Frozen install, typecheck, 1,145 tests passed / 27 skipped, web build, and marketing build passed against the candidate snapshot. App `/health` returned 200 and `/auth/identity/config` returned 200 with identity deliberately disabled, no providers, and organization/bootstrap disabled. The authenticated registry route returned all three private v0.4.0 archives with exact pinned bytes and digests; an anonymous download returned 401. Nine anonymous marketing routes returned 200. Native CI was blocked before runner execution by the account billing admission message and is explicitly waived; hosted browser chooser/install and native Linux/Windows execution remain unverified. This is an incremental release record, not a full launch or hosted identity proof.
 
-Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar purchase-availability/price checks remain active; no brand selection or domain purchase made.
+Market research and eight-name RDAP shortlist integrated as `1a7edfe`. The dated [developer and AI market update](../developer-ai-market-update-20260916.md) is owned by `business_billing`, and the [brand-clearance and domain follow-up](../brand-clearance-next-steps.md) is owned by `oauth_demo_finish`. B14–B16 remain open: customer validation and the user's brand decision are required, and no brand selection or domain purchase has been made.
 
 Company SSO settings UI integrated `cba7f63`; invitation clipboard/manual-selection fallback integrated `c7e4671`. Root verification: 16 SSO/client/command-palette/company tests plus 6 invitation acceptance tests passed, and typecheck passed. The 5407 browser readback confirms the settings surface locally; configured provider callback and hosted browser verification remain open. These are local integration changes after the published foundation.
 
@@ -22,8 +22,9 @@ Public marketing browser check on published 668f53e: root clicked release-path I
 
 ## Current checkpoint — 16 September 2026
 
-The authoritative documentation snapshot for this reconciliation is `5582d0c`,
-with production executable source `11b5e1d`. Root's
+The current integration snapshot for this reconciliation is `dd903de`, with
+hosted release evidence in `7fbcf92` and production executable source
+`11b5e1d`. Root's
 local candidate rerun after `acca451` passed 1,087 tests, skipped 20, with no
 failures at `d93a1e6`. The separate PR #52 / `e32161a` production record reports
 1,098 passed, 20 skipped, typecheck/build success, four READY deployments, and
@@ -54,10 +55,33 @@ These local checks supersede the earlier token-session observation for that
 fixture; hosted identity/provider callbacks and hosted browser archive install
 remain open.
 
+Root's clean `7f45b81` verification ran
+`packages/billing/test/postgres.integration.test.ts`,
+`packages/billing/test/routes.test.ts`, and
+`tests/operations-postgres-rehearsal.test.ts` against disposable loopback
+Docker PostgreSQL: 3 files and 16 tests passed in 4.01 seconds with no skips.
+This is local evidence for the composed operator route and durable recovery /
+dispatcher state; it does not prove hosted database or blob restore, production
+identity or billing configuration, or the remaining launch gates.
+
+A bounded hosted Blob check recorded in `ac86076` copied 11 non-CLI registry
+objects (37,741 bytes) into a new private restore prefix. The source inventory
+contained 14 objects, including three excluded CLI assets; before/after
+inventories and source hashes showed no drift, and a fresh-client destination
+readback matched exact bytes. This is object-storage evidence only: it does not
+prove a PostgreSQL snapshot/fence or whole-database restore, so B19 remains open.
+
+Root's combined verification snapshot `4917215`, with caller changes from
+`40783cd`, passed 170 files with 17 skipped and 1,211 tests with 38 skipped in
+27.64 seconds; root and reviewer TypeScript checks passed. PostgreSQL opt-in
+suites were not enabled in that run, so the separate `7f45b81` result remains
+the PostgreSQL evidence. Independent caller review, runtime budget, and
+test-fixture fixes remain open, and this is not a release claim.
+
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
 | L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing production deployment `dpl_78XgsK9ByfKEnAerMXAi1coNUcsy` is READY from `11b5e1d`; nine public routes returned 200 with private noindex/robots behavior; full interactive/mobile review remains open |
-| L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
+| L02 | Marketing usability, support and accurate claims | marketing_finish | Active; integration `388a7ed` adds keyboard skip-focus and reduced-motion handling, while compact mobile navigation and full responsive/accessibility review remain open; review support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Navigation, overview, and connected token console are integrated (`d529e42`, `491ddc7`, `d30fcc8`); fresh 5407 operations readback passed locally, while final invitee/admin browser proof remains open |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
 | L05 | Company-managed SSO | editor_test_stability / oauth_demo_finish | Bridge committed 01a3650, UI cba7f63. Root's signed local OIDC/SAML and PostgreSQL checks pass (16 focused tests); fresh 5407 settings readback is clean. Authenticated customer-provider callback and hosted browser flow remain open; no customer IdP claim |
@@ -70,6 +94,8 @@ remain open.
 ## Verified evidence
 
 - Release `11b5e1d`: PR #54 merged from `0fcc803`; all four Git-triggered Vercel production deployments are READY at the exact source SHA. The registry production environment has the sensitive `PSKILLS_CLI_RELEASE_MANIFEST` value configured for production from the pinned v0.4.0 manifest; the value and private object keys are omitted. Registry `/health` returned 200, identity config returned 200 with Better Auth deliberately disabled and no providers or organization/bootstrap runtime, and the authenticated CLI catalog returned all three assets as ready. An anonymous archive request returned 401; authenticated requests for macOS ARM64, Linux x86_64, and Windows x86_64 returned 200 with `no-store`, exact Content-Length, and SHA-256 matches to the pinned manifest. The hosted browser chooser/install journey and native Linux/Windows execution remain open. See [sanitized evidence](../../evidence/production-release-11b5e1d.json).
+- Root's clean local verification at `7f45b81` passed the three PostgreSQL-enabled files `packages/billing/test/postgres.integration.test.ts`, `packages/billing/test/routes.test.ts`, and `tests/operations-postgres-rehearsal.test.ts`: 16 tests passed, 0 skipped, in 4.01 seconds. It covers the composed operator route, fenced recovery, ordinary-credential denial, and restored dispatcher state. See [local operator/recovery evidence](../../evidence/local-billing-operator-restore-root-20260916.json); this does not close hosted restore, production configuration, B21/B22/B28, or full launch acceptance.
+- The bounded hosted Blob object-store check at `ac86076` copied 11 non-CLI registry objects (37,741 bytes) from a stable 14-object source inventory into a fresh private prefix; source hashes and inventories showed no drift, and a fresh-client readback matched exact bytes. See [hosted Blob restore evidence](../../evidence/hosted-blob-restore-proof-20260916.json). This does not prove coordinated PostgreSQL/Blob restore or close B19.
 - Release `92d2f0b`: PR #53 merged from `37ddf6f`; all four Git-triggered Vercel production deployments are READY at the exact source SHA. Frozen install, typecheck, 1,110 tests passed / 21 skipped, web build, and marketing build passed. The 5407 disposable PostgreSQL browser fixture passed fresh Acme company creation, SSO settings load, and operations rendering; persisted Reader friendly-label browser proof is pending because the tenant UI CUA host was locked. App `/health` returned 200 and identity config is explicitly disabled in production. Marketing's nine anonymous routes returned 200. Builder and upload-reviewer `/health` returned 302, so no 200 health claim is made for those services. Native GitHub CI was blocked before runner execution by the documented billing admission message and is recorded as waived, not passed. See [sanitized evidence](../../evidence/production-release-92d2f0b.json).
 - Release `e32161a`: PR #52 merged from `3809277`; all four Git-triggered Vercel production deployments are READY at the exact source SHA. Frozen install, typecheck, 1,098 tests passed / 20 skipped, and build passed against the same executable snapshot. Disposable Acme/Globex PostgreSQL browser token create/use/revoke and native CLI metadata/revocation proof passed. App `/health` returned 200; identity config is explicitly disabled with no providers; nine anonymous marketing routes returned 200. Native GitHub CI was blocked before runner execution by the documented billing admission message and is recorded as waived, not passed. See [sanitized evidence](../../evidence/production-release-e32161a.json).
 - Local 5405 evidence ([local-native-cli-api-token-20260915.json](../../evidence/local-native-cli-api-token-20260915.json), observed 15 September) records scoped token creation, sign-in/use, owner revoke, existing-session denial, fresh-sign-in denial, and native CLI metadata/revocation readback. It is disposable local evidence; the production archive route is now verified separately, while hosted identity and browser install remain open.
