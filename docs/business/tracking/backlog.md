@@ -14,6 +14,8 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B08 — L01/L02: check separate marketing project has public configuration only, working app links, responsive pages and truthful unavailable billing/legal states.
 - [ ] B09 — L10: reconcile all acceptance rows against actual evidence before claiming beta or paid readiness; keep skipped native CI and local fixtures explicitly limited.
 
+- [ ] B10 — L07: prove billing reservations and webhook deduplication on actual disposable PostgreSQL with competing transactions, not only the SQL test double.
+
 ## Later roadmap — preserve, reassess after launch essentials
 
 - [ ] F01 — MCP as both a source for consuming skills and a distribution interface.
