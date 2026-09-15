@@ -167,3 +167,7 @@ Root independently tested c759d6e as verification commit f64c7ea: all 11 dispatc
 ### Exact release-candidate gate — 16 September
 
 Release owner verified clean candidate 7ab3cfc522ced9f591381967d264ee74a0f0aaf4 with frozen install and 1,145 tests passed / 27 skipped. Reviewer and marketing TypeScript checks passed, but root TypeScript fails on newly integrated SEO global declarations and test descriptor types. This supersedes any implication that the combined SEO candidate had passed the root type gate: earlier root type checks preceded SEO, and the later check was marketing-only. Marketing owner is correcting the exact types; release remains held until the revised immutable candidate passes. Hosted CLI provisioning owner is checking targeted production storage access; filesystem proof alone does not close that gate.
+
+### Explicit public marketing rendering proof — 16 September
+
+Root rebuilt the verification app with the actual marketing HTTPS origin and explicit public indexing. Through loopback Nitro, all nine routes rendered exactly one correct marketing canonical URL and no noindex metadata. Sitemap contained exactly the nine public marketing URLs; robots referenced that sitemap. This complements the earlier safe-default noindex proof. It is local rendered evidence, not production configuration, and does not waive the separate root TypeScript error being fixed by the marketing owner. Temporary server was stopped gracefully.
