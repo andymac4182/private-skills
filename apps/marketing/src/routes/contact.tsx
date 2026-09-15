@@ -24,7 +24,7 @@ function ContactPage() {
           <h1 id="contact-page-title">Plan a practical <em>first run.</em></h1>
           <p>Start with one source and one engineering team. Use the guide or demo to see the workflow, then follow the walkthrough link when it is available.</p>
         </div>
-        <div className="marketing-page-hero-note"><strong>Launch preview</strong>A walkthrough request page is coming soon.</div>
+        <div className="marketing-page-hero-note"><strong>{contactUrl ? 'Walkthrough available' : 'Launch preview'}</strong>{contactUrl ? 'Use the published request page to continue the conversation.' : 'A walkthrough request page is coming soon.'}</div>
       </div>
     </section>
 
