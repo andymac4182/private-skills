@@ -6,7 +6,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | --- | --- | --- | --- |
 | L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous public reachability still open |
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
-| L03 | Company portal navigation | tenant_ui | Active; replace 16 equal menu items with task groups and accessible mobile drawer |
+| L03 | Company portal navigation | tenant_ui | Navigation integrated d529e42, four focused tests pass; browser proof pending; compact overview refinement active |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
 | L05 | Company-managed SSO | oauth_demo_finish | Active; pinned Better Auth SSO integration, company-bound configuration, OIDC/SAML proofs |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Active; explicit owner proof, atomic adoption and signed worker routing |
