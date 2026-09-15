@@ -203,3 +203,7 @@ Root full Vitest run on verification d4f8640 passed168files/1,197tests, with17fi
 ### Function duration source refresh — 16 September
 
 Root opened [Vercel’s 15 June 2026 duration announcement](https://vercel.com/changelog/vercel-functions-can-now-run-up-to-30-minutes): Node/Python on Pro/Enterprise can opt into up to1,800seconds, while durations above800seconds are beta and require Fluid compute. Older search snippets still show800as the maximum. Budget owner was notified to use live primarydocs and distinguish a conservative launch setting from platform maximum. The product still needs explicit emitted duration plus bounded runtime work and response headroom; increased platform capability does not resolve missing deployment configuration by itself.
+
+### 100-company dispatch root rehearsal — 16 September
+
+Root independently executed e0613617 against disposable loopbackPostgreSQL:100companies,200jobs,5dispatchinvocations,201workercalls,200claims/completions,0duplicateclaims,1forcedfailure recovered. Firsttraversal stayed32/32/32/4 and atmost2workercalls/company. Dispatch took5.153seconds; total6.129seconds. These are localdeterministic-worker measurements, notscanners orhostedcapacity. Evidence:local-worker-dispatch-capacity-root-20260916.json; scriptintegration awaits the scheduler/runtimebatch.
