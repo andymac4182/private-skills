@@ -179,3 +179,7 @@ Editor delivered 85b3d68 and 9e56c40 after 11 PostgreSQL/Eve tests and TypeScrip
 ### SEO root type gate resolved — 16 September, 02:04 AEST
 
 Reviewed and integrated type-only fix0fcc803 as36385d0. Root independently ran TypeScript and all seven SEO tests successfully on the integration checkout. The fix includes the marketing ambient declarations in the root compiler input and narrows test metadata fields before rendering; it does not exclude source or suppress type errors. Release owner was instructed to prepare the corrected immutable candidate PR and preview checks. Billing/recovery composition remains independent and unmerged.
+
+### Commercial decision checkpoint — 16 September
+
+Source review confirms contact page still uses the honest launch-preview fallback when PUBLIC_CONTACT_URL is absent. It is not a working support channel and remains a launch input alongside legal/entity details. Root presented concrete brand options (keep Private Skills, ReleaseLoom, Vouchpack) and a positioning approval question via asynchronous input; no selection is inferred while waiting. Proposed positioning: a private registry taking AI-agent skills from source to a checked, repeatable install, initially for platform/DevEx leads. Domain observations are snapshots, not secured assets. GitHub readback at this checkpoint showed no open PR; release owner is preparing the corrected candidate.
