@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { makeSignature } from 'better-auth/crypto';
@@ -15,10 +15,25 @@ import {
 import {
   companySsoSchemaSql,
 } from '../../packages/identity/src/company-sso.js';
+import {
+  PostgresApiTokenRepository,
+  postgresApiTokenSchemaSql,
+  type ApiTokenPgPool,
+  type ApiTokenRecord,
+} from '../../packages/api-tokens/src/index.js';
 import type { PgPoolLike } from '../../packages/database/src/index.js';
 import { bundleFor } from './harness.js';
 import { digestBytes, encodeBundle } from '../../packages/storage/src/index.js';
 import type { Job, SkillBundle, SkillVersion } from '../../packages/contracts/src/index.js';
+import { WorkerRunner } from '../../workers/runner/src/worker.js';
+import {
+  enumerateRegularFiles,
+  resultBase,
+  sha256,
+  type AdapterScan,
+  type ScanRequest,
+  type ScannerAdapter,
+} from '../../packages/scanners/src/index.js';
 
 /**
  * This is an opt-in loopback acceptance probe. It starts the actual built
@@ -43,21 +58,25 @@ const DATABASE_URL = loopbackDatabaseUrl(
     ?? process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL,
 );
 const ENABLED = DATABASE_URL !== undefined && process.env.PSKILLS_NITRO_POSTGRES_ACCEPTANCE === 'true';
+const RETAIN_FIXTURE = ENABLED && process.env.PSKILLS_NITRO_POSTGRES_RETAIN_FIXTURE === 'true';
 const local = describe.skipIf(!ENABLED);
 
-const DEFAULT_ORGANIZATION = 'nitro-runtime-default';
-const TENANT_A = 'nitro-runtime-company-a';
-const TENANT_B = 'nitro-runtime-company-b';
-const USER_A = 'nitro-runtime-user-a';
-const USER_B = 'nitro-runtime-user-b';
-const SESSION_A = 'nitro-runtime-session-a';
-const SESSION_B = 'nitro-runtime-session-b';
-const SESSION_TOKEN_A = 'nitro-runtime-session-token-a';
-const SESSION_TOKEN_B = 'nitro-runtime-session-token-b';
-const WORKER_A = 'nitro-runtime-worker-a';
-const WORKER_B = 'nitro-runtime-worker-b';
-const SKILL_NAME_A = '@nitro/company-a-skill';
-const SKILL_NAME_B = '@nitro/company-b-skill';
+// Retained mode leaves one process alive by design. Per-process identity and
+// skill IDs keep that disposable fixture isolated from later local runs.
+const INSTANCE_ID = randomUUID().replaceAll('-', '').slice(0, 12);
+const DEFAULT_ORGANIZATION = `nitro-runtime-default-${INSTANCE_ID}`;
+const TENANT_A = `nitro-runtime-company-a-${INSTANCE_ID}`;
+const TENANT_B = `nitro-runtime-company-b-${INSTANCE_ID}`;
+const USER_A = `nitro-runtime-user-a-${INSTANCE_ID}`;
+const USER_B = `nitro-runtime-user-b-${INSTANCE_ID}`;
+const SESSION_A = `nitro-runtime-session-a-${INSTANCE_ID}`;
+const SESSION_B = `nitro-runtime-session-b-${INSTANCE_ID}`;
+const SESSION_TOKEN_A = `nitro-runtime-session-token-a-${INSTANCE_ID}`;
+const SESSION_TOKEN_B = `nitro-runtime-session-token-b-${INSTANCE_ID}`;
+const WORKER_A = `nitro-runtime-worker-a-${INSTANCE_ID}`;
+const WORKER_B = `nitro-runtime-worker-b-${INSTANCE_ID}`;
+const SKILL_NAME_A = `@nitro/company-a-skill-${INSTANCE_ID}`;
+const SKILL_NAME_B = `@nitro/company-b-skill-${INSTANCE_ID}`;
 
 type SqlClient = ReturnType<typeof postgres>;
 
@@ -66,12 +85,44 @@ interface SeededIdentity {
   readonly ssoTable: string;
   readonly cookieA: string;
   readonly cookieB: string;
+  readonly apiTokenA: string;
+  readonly apiTokenB: string;
+  readonly apiTokenIdA: string;
+  readonly apiTokenIdB: string;
 }
 
 interface RuntimeProcess {
   readonly origin: string;
   readonly storageRoot: string;
+  readonly workerTokenA: string;
+  readonly workerTokenB: string;
+  readonly retained: boolean;
   readonly child: ReturnType<typeof spawn>;
+}
+
+interface RetainedFixture {
+  readonly path: string;
+  readonly organizationId: string;
+  readonly skillId: string;
+  readonly skillName: string;
+  readonly artifactDigest: string;
+  readonly registryOrigin: string;
+  readonly apiToken: string;
+  readonly sessionCookie: string;
+  readonly runtimePid: number | undefined;
+  readonly storageRoot: string;
+  readonly databaseSchema: string;
+  readonly ssoTable: string;
+}
+
+type WorkerScanResult = NonNullable<Awaited<ReturnType<WorkerRunner['runOnce']>>['scannerResults']>[number];
+
+function retainedFixturePath(runId: string): string {
+  const configured = process.env.PSKILLS_NITRO_POSTGRES_RETAIN_FIXTURE_PATH?.trim();
+  if (configured !== undefined && configured !== '' && !isAbsolute(configured)) {
+    throw new Error('PSKILLS_NITRO_POSTGRES_RETAIN_FIXTURE_PATH must be absolute');
+  }
+  return configured || join(tmpdir(), `private-skills-nitro-fixture-${runId}.json`);
 }
 
 interface HttpResponse<T = unknown> {
@@ -79,7 +130,7 @@ interface HttpResponse<T = unknown> {
   readonly value?: T;
 }
 
-function pgPool(sql: SqlClient): PgPoolLike {
+function pgPool(sql: SqlClient): PgPoolLike & ApiTokenPgPool {
   const query = async (
     connection: SqlClient,
     text: string,
@@ -97,12 +148,36 @@ function pgPool(sql: SqlClient): PgPoolLike {
         release: () => connection.release(),
       };
     },
-  } as PgPoolLike;
+  } as PgPoolLike & ApiTokenPgPool;
 }
 
 function identifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) || value.length > 63) throw new Error('invalid local rehearsal identifier');
   return `"${value}"`;
+}
+
+function tokenHash(token: string): string {
+  return `sha256:${createHash('sha256').update(token).digest('hex')}`;
+}
+
+function tokenRecord(
+  organizationId: string,
+  userId: string,
+  id: string,
+  token: string,
+): ApiTokenRecord {
+  const now = new Date();
+  return {
+    id,
+    organizationId,
+    userId,
+    name: id,
+    tokenHash: tokenHash(token),
+    roleCeiling: 'owner',
+    scopes: ['registry:*'],
+    expiresAt: new Date(now.getTime() + 60 * 60 * 1_000).toISOString(),
+    createdAt: now.toISOString(),
+  };
 }
 
 async function seedBetterAuth(
@@ -111,6 +186,7 @@ async function seedBetterAuth(
   secret: string,
   schema: string,
   ssoTable: string,
+  runId: string,
 ): Promise<SeededIdentity> {
   const sql = postgres(databaseURL, { max: 8, prepare: false, onnotice: () => undefined });
   const environment = {
@@ -139,7 +215,7 @@ async function seedBetterAuth(
     if (!identity) throw new Error('Better Auth did not initialize for the local rehearsal');
     // Keep the private company SSO registry available to the exact runtime
     // composition even though this journey does not invoke an SSO callback.
-    await sql.unsafe(companySsoSchemaSql(ssoTable));
+    await sql.unsafe(companySsoSchemaSql(ssoTable, schema));
     await identity.runMigrations();
     const context = await identity.auth.$context;
     const now = new Date();
@@ -184,11 +260,23 @@ async function seedBetterAuth(
     const cookieName = context.authCookies.sessionToken.name;
     const signatureA = await makeSignature(SESSION_TOKEN_A, context.secret);
     const signatureB = await makeSignature(SESSION_TOKEN_B, context.secret);
+    const apiTokenA = `psk_nitro_runtime_${runId}_a`;
+    const apiTokenB = `psk_nitro_runtime_${runId}_b`;
+    const apiTokenIdA = `nitro_api_token_${runId}_a`;
+    const apiTokenIdB = `nitro_api_token_${runId}_b`;
+    await sql.unsafe(postgresApiTokenSchemaSql());
+    const apiTokens = new PostgresApiTokenRepository(pgPool(sql), { autoMigrate: false });
+    await apiTokens.create(tokenRecord(TENANT_A, USER_A, apiTokenIdA, apiTokenA));
+    await apiTokens.create(tokenRecord(TENANT_B, USER_B, apiTokenIdB, apiTokenB));
     return {
       schema,
       ssoTable,
       cookieA: `${cookieName}=${SESSION_TOKEN_A}.${signatureA}`,
       cookieB: `${cookieName}=${SESSION_TOKEN_B}.${signatureB}`,
+      apiTokenA,
+      apiTokenB,
+      apiTokenIdA,
+      apiTokenIdB,
     };
   } finally {
     await identity?.close().catch(() => undefined);
@@ -313,6 +401,7 @@ async function startRuntime(
       PORT: String(port),
       NITRO_PORT: String(port),
     },
+    detached: RETAIN_FIXTURE,
     stdio: 'ignore',
   });
   try {
@@ -320,7 +409,10 @@ async function startRuntime(
       if (child.exitCode !== null) throw new Error(`Nitro process exited before health check (${child.exitCode})`);
       try {
         const response = await fetch(`${origin}/health`);
-        if (response.ok) return { origin, storageRoot, child };
+        if (response.ok) {
+          if (RETAIN_FIXTURE) child.unref();
+          return { origin, storageRoot, workerTokenA, workerTokenB, retained: RETAIN_FIXTURE, child };
+        }
       } catch {
         // The process may need a few seconds to initialize the bundled runtime.
       }
@@ -336,6 +428,7 @@ async function startRuntime(
 
 async function stopRuntime(runtime: RuntimeProcess | undefined): Promise<void> {
   if (!runtime) return;
+  if (runtime.retained) return;
   if (runtime.child.exitCode === null) {
     runtime.child.kill('SIGTERM');
     await new Promise<void>((resolve) => {
@@ -391,31 +484,110 @@ function expectNoDigest(response: Response, digest: string): Promise<void> {
   return response.clone().text().then((text) => expect(text).not.toContain(digest));
 }
 
-function deterministicScan(job: Job): Record<string, unknown> {
-  if (!job.artifact) throw new Error('scan fixture requires a published artifact');
+function createFilesystemScannerFixture(): ScannerAdapter {
   return {
-    id: `scan-local-skillsguard-${job.id}`,
-    organizationId: job.organizationId,
-    jobId: job.id,
-    artifactDigest: job.artifact.digest,
-    scannerId: 'skillsguard',
-    engineVersion: 'local-deterministic-skillsguard-v1',
-    rulesRevision: 'local-deterministic-rules-v1',
-    configurationHash: 'local-deterministic-configuration-v1',
-    status: 'completed',
-    findings: [],
-    coverage: {
-      filesEnumerated: 2,
-      filesAnalyzed: 2,
-      filesSkipped: 0,
-      filesUnsupported: 0,
-      limitations: [],
-      externalDestinations: [],
+    id: 'skillsguard',
+    metadata: {
+      id: 'skillsguard',
+      version: 'local-filesystem-reader-v1',
+      engineVersion: 'local-deterministic-skillsguard-v1',
+      rulesRevision: 'local-deterministic-rules-v1',
     },
-    policyRevision: job.policyRevision,
-    createdAt: new Date().toISOString(),
-    durationMs: 1,
+    command: 'local-filesystem-reader',
+    async scan(request: ScanRequest): Promise<AdapterScan> {
+      const started = Date.now();
+      if (request.mode !== 'required') throw new Error('local scanner fixture must run as a required scanner');
+      const files = await enumerateRegularFiles(request.inputDir);
+      const observations: string[] = [];
+      for (const relativePath of files) {
+        // The fixture consumes the materialized files and hashes their bytes;
+        // it never accepts a caller-supplied file count or prebuilt report.
+        const bytes = new Uint8Array(await readFile(join(request.inputDir, ...relativePath.split('/'))));
+        observations.push(`${relativePath}\u0000${sha256(bytes)}`);
+      }
+      const configurationHash = sha256(observations.join('\n'));
+      return {
+        result: resultBase(
+          request,
+          'skillsguard',
+          {
+            id: 'skillsguard',
+            version: 'local-filesystem-reader-v1',
+            engineVersion: 'local-deterministic-skillsguard-v1',
+            rulesRevision: 'local-deterministic-rules-v1',
+            configurationHash,
+          },
+          'completed',
+          Math.max(1, Date.now() - started),
+          {
+            filesEnumerated: files.length,
+            filesAnalyzed: files.length,
+            filesSkipped: 0,
+            filesUnsupported: 0,
+            limitations: [],
+            externalDestinations: [],
+          },
+          [],
+        ),
+      };
+    },
   };
+}
+
+async function runWorkerScan(
+  runtime: RuntimeProcess,
+  workerToken: string,
+  tenantId: string,
+  expectedJobId: string,
+): Promise<{ scannerResults: readonly WorkerScanResult[]; events: string[] }> {
+  const events: string[] = [];
+  const runner = new WorkerRunner({
+    baseUrl: runtime.origin,
+    workerToken,
+    workerId: `${tenantId}-worker`,
+    tenantId,
+    adapters: [createFilesystemScannerFixture()],
+    // This assertion ensures the deterministic fixture is reached through
+    // the adapter path and does not silently fall back to command execution.
+    executor: { async run() { throw new Error('local acceptance fixture executor must not run'); } },
+    onEvent: (event) => { events.push(event.type); },
+  });
+  const result = await runner.runOnce();
+  expect(result.claimed).toBe(true);
+  expect(result.jobId).toBe(expectedJobId);
+  expect(result.error).toBeUndefined();
+  expect(result.allow).toBe(true);
+  expect(events).toEqual(['claimed', 'completed']);
+  if (!result.scannerResults) throw new Error('worker completion omitted scanner results');
+  return { scannerResults: result.scannerResults, events };
+}
+
+async function writeRetainedFixture(
+  path: string,
+  runtime: RuntimeProcess,
+  seeded: SeededIdentity,
+  skill: SkillVersion,
+): Promise<void> {
+  const fixture: RetainedFixture = {
+    path,
+    organizationId: TENANT_B,
+    skillId: skill.id,
+    skillName: SKILL_NAME_B,
+    artifactDigest: skill.artifact.digest,
+    registryOrigin: runtime.origin,
+    apiToken: seeded.apiTokenB,
+    sessionCookie: seeded.cookieB,
+    runtimePid: runtime.child.pid,
+    storageRoot: runtime.storageRoot,
+    databaseSchema: seeded.schema,
+    ssoTable: seeded.ssoTable,
+  };
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify({ version: 1, ...fixture })}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
 }
 
 async function publishAndApprove(
@@ -444,31 +616,12 @@ async function publishAndApprove(
   expect(beforeScan.response.status).toBe(202);
   expect(beforeScan.value?.operation?.id).toBe(job.id);
 
-  const claimed = await http<{ job: (Job & { fencingToken?: string }) | null }>(runtime, '/internal/jobs/claim', '', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${workerToken}` },
-  });
-  expect(claimed.response.status).toBe(200);
-  expect(claimed.value?.job?.id).toBe(job.id);
-  const running = claimed.value?.job;
-  if (!running) throw new Error('worker did not claim the tenant scan job');
-  const leaseToken = running.leaseToken ?? running.fencingToken;
-  if (!leaseToken) throw new Error('claimed job omitted its lease token');
+  const workerResult = await runWorkerScan(runtime, workerToken, job.organizationId, job.id);
+  const requiredScan = workerResult.scannerResults.find((scan) => scan.scannerId === 'skillsguard');
+  expect(requiredScan?.status).toBe('completed');
+  expect(requiredScan?.coverage.filesEnumerated).toBeGreaterThan(0);
 
-  const completed = await http<{ operation: Job }>(runtime, `/internal/jobs/${encodeURIComponent(job.id)}/complete`, '', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${workerToken}`,
-      'x-worker-fencing-token': leaseToken,
-    },
-    json: { leaseToken, scanResults: [deterministicScan(running)] },
-  });
-  if (completed.response.status !== 200) {
-    throw new Error(`worker completion failed with ${completed.response.status}: ${JSON.stringify(completed.value)}`);
-  }
-  expect(completed.value?.operation?.state).toBe('completed');
-
-  const skillResponse = await http<{ skill: SkillVersion }>(runtime, `/v1/skills/${encodeURIComponent(running.resourceId ?? '')}`, cookie, { method: 'GET' });
+  const skillResponse = await http<{ skill: SkillVersion }>(runtime, `/v1/skills/${encodeURIComponent(job.resourceId ?? '')}`, cookie, { method: 'GET' });
   expect(skillResponse.response.status).toBe(200);
   const skill = skillResponse.value?.skill;
   if (!skill) throw new Error('approved skill response omitted its skill');
@@ -479,22 +632,34 @@ async function publishAndApprove(
 }
 
 let runtime: RuntimeProcess | undefined;
-let cleanupDatabase: { schema: string; ssoTable: string } | undefined;
+let cleanupDatabase: { schema: string; ssoTable: string; apiTokenIdA: string; apiTokenIdB: string } | undefined;
+let retainedFixtureWritten = false;
 
 afterEach(async () => {
-  await stopRuntime(runtime);
+  if (runtime?.retained && retainedFixtureWritten) {
+    // Opt-in fixture mode deliberately leaves the local runtime, database
+    // rows, and Files SDK root available for the native install proof.
+    runtime = undefined;
+    cleanupDatabase = undefined;
+    retainedFixtureWritten = false;
+    return;
+  }
+  // If opt-in startup succeeded but the journey failed before its fixture was
+  // written, clean up just as the default mode does.
+  await stopRuntime(runtime?.retained ? { ...runtime, retained: false } : runtime);
   runtime = undefined;
   if (cleanupDatabase && DATABASE_URL) {
     const sql = postgres(DATABASE_URL, { max: 2, prepare: false, onnotice: () => undefined });
     try {
       await sql.unsafe('DELETE FROM "private_skills_registry_state" WHERE organization_id IN ($1, $2)', [TENANT_A, TENANT_B]).catch(() => undefined);
-      await sql.unsafe(`DROP TABLE IF EXISTS ${identifier(cleanupDatabase.ssoTable)}`);
+      await sql.unsafe('DELETE FROM "private_skills_service_tokens" WHERE id IN ($1, $2)', [cleanupDatabase.apiTokenIdA, cleanupDatabase.apiTokenIdB]).catch(() => undefined);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${identifier(cleanupDatabase.schema)} CASCADE`);
     } finally {
       await sql.end({ timeout: 5 });
     }
   }
   cleanupDatabase = undefined;
+  retainedFixtureWritten = false;
 });
 
 local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
@@ -505,13 +670,18 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
     const schema = `nitro_auth_${runId}`;
     const ssoTable = `nitro_sso_${runId}`;
     const secret = `nitro-runtime-acceptance-secret-${runId}-0123456789`;
-    cleanupDatabase = { schema, ssoTable };
+    cleanupDatabase = {
+      schema,
+      ssoTable,
+      apiTokenIdA: `nitro_api_token_${runId}_a`,
+      apiTokenIdB: `nitro_api_token_${runId}_b`,
+    };
     const port = await freePort();
     const origin = `http://127.0.0.1:${port}`;
     // Better Auth signs the session cookie with the deployment secret and
     // uses this exact origin for trusted-origin checks. Seed against the
     // reserved runtime origin before starting the bundled Nitro process.
-    const seeded = await seedBetterAuth(DATABASE_URL, origin, secret, schema, ssoTable);
+    const seeded = await seedBetterAuth(DATABASE_URL, origin, secret, schema, ssoTable, runId);
     await runBuild(repoRoot);
     runtime = await startRuntime(repoRoot, DATABASE_URL, seeded, secret, runId, origin);
 
@@ -523,8 +693,8 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
     expect(policyB.response.status).toBe(200);
     expect(policyB.value?.policy.allowUnscanned).toBe(false);
 
-    const approvedA = await publishAndApprove(runtime, seeded.cookieA, `local-worker-a-${runId}`, SKILL_NAME_A, 'Company A local Nitro fixture');
-    const approvedB = await publishAndApprove(runtime, seeded.cookieB, `local-worker-b-${runId}`, SKILL_NAME_B, 'Company B local Nitro fixture');
+    const approvedA = await publishAndApprove(runtime, seeded.cookieA, runtime.workerTokenA, SKILL_NAME_A, 'Company A local Nitro fixture');
+    const approvedB = await publishAndApprove(runtime, seeded.cookieB, runtime.workerTokenB, SKILL_NAME_B, 'Company B local Nitro fixture');
     expect(approvedA.skill.organizationId).not.toBe(approvedB.skill.organizationId);
     expect(approvedA.skill.artifact.digest).not.toBe(approvedB.skill.artifact.digest);
 
@@ -567,6 +737,22 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
     const transferBytes = new Uint8Array(await transferA.arrayBuffer());
     expect(transferBytes).toEqual(approvedA.bytes);
     expect(await digestBytes(transferBytes)).toBe(approvedA.skill.artifact.digest);
+
+    const tokenResolutionB = await http<{ resolution: { organizationId: string; digest: string } }>(runtime, '/v1/resolve', '', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${seeded.apiTokenB}` },
+      json: { kind: 'skill', ref: SKILL_NAME_B, version: '1.0.0' },
+    });
+    expect(tokenResolutionB.response.status).toBe(200);
+    expect(tokenResolutionB.value?.resolution.organizationId).toBe(TENANT_B);
+    expect(tokenResolutionB.value?.resolution.digest).toBe(approvedB.skill.artifact.digest);
+    const tokenForeignResolution = await http(runtime, '/v1/resolve', '', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${seeded.apiTokenB}` },
+      json: { kind: 'skill', ref: SKILL_NAME_A, version: '1.0.0' },
+    });
+    expect(tokenForeignResolution.response.status).toBe(404);
+    await expectNoDigest(tokenForeignResolution.response, approvedA.skill.artifact.digest);
 
     const foreignInstall = await http(runtime, '/v1/install-authorizations', seeded.cookieB, {
       method: 'POST',
@@ -614,5 +800,10 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
     });
     expect(revokedTransfer.status).toBe(409);
     await expectNoDigest(revokedTransfer, approvedA.skill.artifact.digest);
+
+    if (RETAIN_FIXTURE) {
+      await writeRetainedFixture(retainedFixturePath(runId), runtime, seeded, approvedB.skill);
+      retainedFixtureWritten = true;
+    }
   }, 180_000);
 });
