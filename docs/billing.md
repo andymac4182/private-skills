@@ -181,7 +181,7 @@ worker reports whether a scanner adapter was entered, but never performs a
 client-side release. The core records a terminal `unused` or `executed` intent
 atomically with job completion; a bounded server maintenance pass may apply
 an explicit-zero reconciliation only for a definite pre-scanner failure,
-fenced to that exact job generation. A newer queued/running job reusing the
+fenced to that job and the exact billing reservation generation. A newer queued/running job reusing the
 canonical key keeps its charge. After a provider or blob write may have
 succeeded, the charged reservation remains held for durable object
 reconciliation. Release corrections are fenced by a durable per-generation

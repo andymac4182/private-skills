@@ -13,6 +13,7 @@ import type {
   BillingUsageAdmission,
   BlobStore,
   MeteredUsageDelta,
+  MeteredUsageReservation,
   Principal,
   RegistryState,
   StateRepository,
@@ -160,7 +161,7 @@ class RecordingBillingAdmission implements BillingUsageAdmission {
     return { enabled: true };
   }
 
-  async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, operationKey: string): Promise<unknown> {
+  async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation> {
     const idempotent = this.reservations.has(operationKey);
     this.reservations.add(operationKey);
     return { idempotent };
@@ -328,7 +329,7 @@ describe('runtime billing admission', () => {
     const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-worker-fencing-token': job.leaseToken },
-      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'source acquisition failed', scanInvocationStarted: false }),
+      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'source acquisition failed', scanInvocationStarted: false, meteredReservationGeneration: 1 }),
     }));
     expect(complete.status).toBe(200);
     expect((await json(complete)).operation).toMatchObject({
@@ -393,7 +394,7 @@ describe('runtime billing admission', () => {
     const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-worker-fencing-token': job.leaseToken },
-      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'pre-scanner failure', scanInvocationStarted: false }),
+      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'pre-scanner failure', scanInvocationStarted: false, meteredReservationGeneration: 1 }),
     }));
     expect(complete.status).toBe(200);
     expect((await repository.read(ORGANIZATION)).jobs[0]).toMatchObject({
@@ -456,7 +457,7 @@ describe('runtime billing admission', () => {
     const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${retryJob.id}/complete`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-worker-fencing-token': retryJob.leaseToken },
-      body: JSON.stringify({ leaseToken: retryJob.leaseToken, error: 'retry failed before scanner', scanInvocationStarted: false }),
+      body: JSON.stringify({ leaseToken: retryJob.leaseToken, error: 'retry failed before scanner', scanInvocationStarted: false, meteredReservationGeneration: 1 }),
     }));
     expect(complete.status).toBe(200);
     expect((await test.repository.read(ORGANIZATION)).jobs[0]).toMatchObject({

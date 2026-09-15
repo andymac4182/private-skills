@@ -136,7 +136,7 @@ describe('worker import acquisition', () => {
       status: () => ({ enabled: true }),
       reserveUsage: async (_organizationId, _delta, operationKey) => {
         reservationKey = operationKey;
-        return { idempotent: false };
+        return { idempotent: false, reservationGeneration: 7 };
       },
       reconcileUsage: async (_organizationId, reservationKey, actual, operationKey) => {
         reconciles.push({ reservationKey, actual, operationKey });
@@ -172,6 +172,7 @@ describe('worker import acquisition', () => {
     expect(reservationKey).toBe('private-skills:scan:queue-owner');
     expect(reconciles).toHaveLength(0);
     expect(completion?.scanInvocationStarted).toBe(false);
+    expect(completion?.meteredReservationGeneration).toBe(7);
     expect(completion?.error).toBeDefined();
   });
 
@@ -201,7 +202,7 @@ describe('worker import acquisition', () => {
     const reconciles: unknown[] = [];
     const billing: BillingUsageAdmission = {
       status: () => ({ enabled: true }),
-      reserveUsage: async () => ({ idempotent: false }),
+      reserveUsage: async () => ({ idempotent: false, reservationGeneration: 11 }),
       reconcileUsage: async (...args) => { reconciles.push(args); },
     };
     const apiFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -238,6 +239,7 @@ describe('worker import acquisition', () => {
     expect(scannerCalls).toBe(1);
     expect(reconciles).toHaveLength(0);
     expect(completion?.scanInvocationStarted).toBe(true);
+    expect(completion?.meteredReservationGeneration).toBe(11);
     expect(completion?.error).toContain('scanner timed out');
   });
 

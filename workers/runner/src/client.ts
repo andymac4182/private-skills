@@ -33,7 +33,11 @@ export interface WorkerClaimedJob {
   sourceAcquisition?: unknown;
   /** Server-owned metered reservation owner; retries must reuse this key. */
   meteredReservationKey?: string;
+<<<<<<< HEAD
   /** Exact billing reservation lifecycle; retries must preserve this value. */
+=======
+  /** Exact billing reservation lifecycle returned by worker admission. */
+>>>>>>> 46d18ae (fix(worker): carry metered reservation generations)
   meteredReservationGeneration?: number;
   /** Durable server settlement intent; workers only receive this for observability. */
   meteredScanSettlement?: 'unused' | 'executed' | 'released';
@@ -74,6 +78,8 @@ export interface CompletionPayload {
   provenance?: Provenance;
   /** Set before the first scanner adapter invocation; omission is fail-closed. */
   scanInvocationStarted?: boolean;
+  /** Exact billing reservation lifecycle captured before acquisition/scanning. */
+  meteredReservationGeneration?: number;
 }
 
 export interface WorkerCompletionResponse {

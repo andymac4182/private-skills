@@ -12,6 +12,7 @@ import {
   type BillingUsageAdmission,
   type HookConfiguration,
   type ImportRequest,
+  type MeteredUsageReservation,
   type SkillBundle,
   type Upstream,
 } from '../../../packages/contracts/src/index.js';
@@ -137,6 +138,7 @@ export class WorkerRunner {
     let completionSubmitted = false;
     let billing: BillingUsageAdmission | undefined;
     let scanReservationKey: string | undefined;
+    let scanReservationGeneration: number | undefined;
     let scanInvocationStarted = false;
     try {
       billing = this.options.billing?.status().enabled === true ? this.options.billing : undefined;
@@ -145,7 +147,8 @@ export class WorkerRunner {
       // so queue-time reservations and worker retries are idempotent.
       if (billing) {
         scanReservationKey = await scanReservationKeyForJob(job);
-        await billing.reserveUsage(job.organizationId, { scans: 1 }, scanReservationKey);
+        const reservation = await billing.reserveUsage(job.organizationId, { scans: 1 }, scanReservationKey);
+        scanReservationGeneration = reservationGenerationFromAdmission(reservation);
       }
       let bundleForScan: SkillBundleInput;
       if (job.kind === 'import') {
@@ -230,6 +233,7 @@ export class WorkerRunner {
       const completion = await this.client.complete(job, {
         scanResults,
         scanInvocationStarted,
+        ...(scanReservationGeneration === undefined ? {} : { meteredReservationGeneration: scanReservationGeneration }),
         artifactDigest: scanArtifactDigest,
         attempt: job.attempt,
         ...(importedBundle === undefined ? {} : { bundle: importedBundle, provenance: importedProvenance }),
@@ -252,7 +256,7 @@ export class WorkerRunner {
       return { claimed: true, jobId: job.id, scannerResults: scanResults, allow: evaluation.allow };
     } catch (error) {
       const message = sanitizeError(error);
-      if (!completionSubmitted) await this.completeFailure(job, token, message, signal, scanInvocationStarted);
+      if (!completionSubmitted) await this.completeFailure(job, token, message, signal, scanInvocationStarted, scanReservationGeneration);
       await this.emit({ type: 'failed', jobId: job.id, error: message });
       return { claimed: true, jobId: job.id, error: message };
     } finally {
@@ -269,11 +273,19 @@ export class WorkerRunner {
     }
   }
 
-  private async completeFailure(job: WorkerClaimedJob, _token: string, error: string, signal?: AbortSignal, scanInvocationStarted = false): Promise<void> {
+  private async completeFailure(
+    job: WorkerClaimedJob,
+    _token: string,
+    error: string,
+    signal?: AbortSignal,
+    scanInvocationStarted = false,
+    scanReservationGeneration?: number,
+  ): Promise<void> {
     try {
       await this.client.complete(job, {
         error,
         scanInvocationStarted,
+        ...(scanReservationGeneration === undefined ? {} : { meteredReservationGeneration: scanReservationGeneration }),
         artifactDigest: job.artifactDigest ?? job.artifact?.digest,
         attempt: job.attempt,
       }, signal);
@@ -400,6 +412,20 @@ function workerMeteredUpstream(value: unknown): Pick<Upstream, 'id' | 'kind' | '
 
 function isWorkerObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Billing owns reservation lifecycle identity. A missing generation is
+ * tolerated for legacy adapters so terminal cleanup stays fail-closed; a
+ * malformed value is rejected rather than being replaced with a guessed one.
+ */
+function reservationGenerationFromAdmission(value: MeteredUsageReservation): number | undefined {
+  const generation = value.reservationGeneration;
+  if (generation === undefined) return undefined;
+  if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1) {
+    throw new Error('billing reservation returned an invalid reservation generation');
+  }
+  return generation;
 }
 
 function sanitizeError(error: unknown): string {
