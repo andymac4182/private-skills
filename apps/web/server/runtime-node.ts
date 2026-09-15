@@ -410,7 +410,7 @@ export function createBillingRuntime(
   };
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; bootstrapAdoptionStore?: BootstrapAdoptionStore; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -561,6 +561,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(uploadReview === undefined ? {} : { uploadReview }),
     ...(identityInfrastructure.identity === null ? {} : { identity: identityInfrastructure.identity }),
     ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
+    ...(identityInfrastructure.companySso === null ? {} : { companySso: identityInfrastructure.companySso }),
     ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),
     createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');

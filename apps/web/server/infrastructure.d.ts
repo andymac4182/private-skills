@@ -31,6 +31,10 @@ declare module '#pskills-infrastructure' {
       handler: import('../../../packages/api-tokens/src/index').ApiTokenHandler;
       authenticator: import('../../../packages/contracts/src/index').Authenticator;
     };
+    /** Optional Node-owned company SSO registry and Better Auth bridge. */
+    companySso?: {
+      handler: (request: Request) => Promise<Response | undefined>;
+    };
     /** Explicit Better Auth user + bootstrap-owner adoption transaction. */
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;

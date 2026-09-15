@@ -52,6 +52,7 @@ import {
   type BootstrapAdoptionStore,
 } from './bootstrap-adoption.js';
 import { canonicalOriginFromEnv } from './identity-infrastructure.js';
+import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
@@ -110,6 +111,11 @@ async function createRuntime(env: RuntimeEnvironment) {
       authenticator: Authenticator;
     };
   }).apiTokens;
+  const companySsoRuntime = (infrastructure as typeof infrastructure & {
+    companySso?: {
+      handler: (request: Request) => Promise<Response | undefined>;
+    };
+  }).companySso;
   const signedWorkerAuthenticator = createSignedWorkerAuthenticatorFromEnv(env);
   // Source discovery is server-owned. The catalog receives only this host's
   // environment snapshot; provider credentials are retained by adapters and
@@ -505,6 +511,8 @@ async function createRuntime(env: RuntimeEnvironment) {
     const path = new URL(request.url).pathname;
     const identityResponse = await handleIdentityRoute(request, identityRuntime, bootstrapAdoption);
     if (identityResponse) return identityResponse;
+    const companySsoResponse = await handleCompanySsoRoute(request, companySsoRuntime);
+    if (companySsoResponse) return companySsoResponse;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
     if (path.startsWith('/internal/upload-review/')) {
