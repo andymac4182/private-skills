@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "kind": "identity-browser-acceptance",
+  "capturedAt": "2026-09-15T16:54:06Z",
+  "source": {
+    "sourceHead": "e18ad47b34fa1edfad46d0c12549cf2aa5258d5a",
+    "appVersion": "0.4.0",
+    "fixture": "local-identity-demo",
+    "origin": "http://127.0.0.1:5407",
+    "providers": {
+      "acme": "http://127.0.0.1:58294",
+      "globex": "http://127.0.0.1:58295"
+    },
+    "persistence": "postgres"
+  },
+  "runtime": {
+    "browser": "agent-browser isolated headless session",
+    "localOnly": true,
+    "productionWrites": false,
+    "hostedAcceptance": false,
+    "fixtureLeftRunning": true,
+    "browserSessionsClosed": true
+  },
+  "flows": {
+    "providerSelection": {
+      "passed": true,
+      "observed": "Acme Identity and Globex Identity were available from the registry sign-in page."
+    },
+    "acmeInvitation": {
+      "passed": true,
+      "observed": "An Acme owner created a Reader invitation; the UI showed a copyable invitation link and pending count 1."
+    },
+    "acmeAcceptance": {
+      "passed": true,
+      "observed": "The invited Acme user accepted through /organization/accept-invitation and appeared as an active Reader member."
+    },
+    "invitationHistory": {
+      "passed": true,
+      "observed": "The Acme owner view showed pending count 0 and Invitation history count 1 with the accepted Reader invitation."
+    },
+    "globexInvitation": {
+      "passed": true,
+      "observed": "A Globex owner created a local Globex Research Demo company and a Reader invitation."
+    },
+    "globexAcceptance": {
+      "passed": true,
+      "observed": "The invited Globex user accepted and the Company page showed active Owner and Reader members."
+    },
+    "readerControls": {
+      "passed": true,
+      "observed": "Reader Company pages showed the Reader role, disabled invitation controls, and owner/admin guidance."
+    },
+    "crossCompanyIsolation": {
+      "passed": true,
+      "observed": "Authenticated attempts to set Acme active in the Globex session and Globex active in the Acme session each returned HTTP 403 USER_IS_NOT_A_MEMBER_OF_THE_ORGANIZATION."
+    },
+    "organizationEnumeration": {
+      "passed": true,
+      "observed": "The Acme session listed only Acme Candidate Demo and the Globex session listed only Globex Research Demo."
+    },
+    "health": {
+      "passed": true,
+      "observed": "GET /health returned ok true, service private-skills, version 0.4.0 after the flows."
+    }
+  },
+  "screenshots": [
+    "/private/tmp/private-skills-5407-home.png",
+    "/private/tmp/private-skills-5407-company-invite.png",
+    "/private/tmp/private-skills-5407-ben-reader.png",
+    "/private/tmp/private-skills-5407-dave-reader.png",
+    "/private/tmp/private-skills-5407-alice-history-detail.png",
+    "/private/tmp/private-skills-5407-ben-acme-menu.png"
+  ],
+  "limits": [
+    "The app was built from the historical source snapshot identified above; this evidence does not validate a newer billing or Eve composition.",
+    "Provider company metadata exposed Acme Labs, Acme Retail, Globex Research, and Globex Retail, while the local identity database initially contained Acme Candidate Demo; Globex Research Demo was created through the local UI for the second-company flow.",
+    "The local issuers are deterministic protocol fixtures and are not production identity providers."
+  ]
+}
