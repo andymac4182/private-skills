@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "mode": "hosted-execution-plan",
+  "generatedAt": "2026-09-15T23:00:14.760Z",
+  "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+  "target": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "provider": "vercel-blob",
+    "access": "private",
+    "prefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+    "objectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+    "providerBinding": "files-sdk:vercel-blob:store_C0EMhnU7DH3uSMaw"
+  },
+  "payload": {
+    "fixture": "canonical-receipt-rehearsal-bundle-v1",
+    "digest": "sha256:dfa0d9a1bb9841a2cdf6fe3e771bef3865834d4c9dce2dc8cbe2e1af83982caa",
+    "size": 177
+  },
+  "local": {
+    "database": "loopback-postgresql-only",
+    "metadataFailure": "core-commit-failure-leaves-durable-orphan",
+    "billing": "postgresql-backed-billing-service",
+    "freshClientRecovery": true
+  },
+  "safety": {
+    "exactPrefixMustBeEmptyBeforeUpload": true,
+    "cleanupConfirmedRequired": true,
+    "deleteOnlyPlanObject": true,
+    "noExistingObjectMutation": true,
+    "credentialsReadInProcessOnly": true,
+    "productionAcceptanceClaim": false
+  }
+}

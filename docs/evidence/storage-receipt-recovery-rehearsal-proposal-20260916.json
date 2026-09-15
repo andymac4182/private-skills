@@ -1,18 +1,18 @@
 {
   "schemaVersion": 2,
   "status": "prepared-local-and-guarded-hosted-executor",
-  "sourceRevision": "pending-hosted-executor-commit",
+  "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
   "localExecution": {
     "script": "scripts/storage-receipt-recovery-rehearsal.ts",
-    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=<reviewed-source-sha> pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
+    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=49f31eace58149e5d7b4349a0465012f0facde39 pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
     "databaseTarget": "loopback PostgreSQL only; unique state and billing tables are verified and dropped after the local run",
     "storageTarget": "temporary Files SDK filesystem root only",
     "credentials": "provided in process; never logged or written to evidence"
   },
   "hostedExecution": {
     "script": "scripts/hosted-storage-receipt-recovery-rehearsal.ts",
-    "planCommand": "pnpm exec tsx scripts/hosted-storage-receipt-recovery-rehearsal.ts --source-sha <reviewed-source-sha> --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json",
-    "executeCommand": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_ALLOW_HOSTED_STORAGE_RECEIPT_REHEARSAL=I_UNDERSTAND_NEW_PREFIX_ONLY vercel env run -e production -- /absolute/path/to/worktree/node_modules/.bin/tsx /absolute/path/to/worktree/scripts/hosted-storage-receipt-recovery-rehearsal.ts --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-<date>.json",
+    "planCommand": "pnpm exec tsx scripts/hosted-storage-receipt-recovery-rehearsal.ts --source-sha 49f31eace58149e5d7b4349a0465012f0facde39 --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json",
+    "executeCommand": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_ALLOW_HOSTED_STORAGE_RECEIPT_REHEARSAL=I_UNDERSTAND_NEW_PREFIX_ONLY vercel env run -e production -- /absolute/path/to/worktree/node_modules/.bin/tsx /absolute/path/to/worktree/scripts/hosted-storage-receipt-recovery-rehearsal.ts --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-20260916.json",
     "runFrom": "the linked Vercel project directory so the production Blob credential is injected only into the child process",
     "databaseTarget": "loopback PostgreSQL only; the production registry database is refused",
     "providerSwitch": {

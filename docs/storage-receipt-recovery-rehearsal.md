@@ -14,7 +14,7 @@ filesystem root; no existing registry state or provider object is used.
 
 ```sh
 PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL='postgresql://<credentials>@127.0.0.1:<port>/<disposable-db>' \
-PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA='f4eea80d4d9ffa228c9e450fa53ae5942cfb383c' \
+PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA='49f31eace58149e5d7b4349a0465012f0facde39' \
 pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts
 ```
 
@@ -25,7 +25,7 @@ temporary paths, artifact bytes, or receipt tokens. The test form is:
 
 ```sh
 PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL='postgresql://<credentials>@127.0.0.1:<port>/<disposable-db>' \
-PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA='f4eea80d4d9ffa228c9e450fa53ae5942cfb383c' \
+PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA='49f31eace58149e5d7b4349a0465012f0facde39' \
 pnpm exec vitest run packages/storage/test/recovery.receipt.postgres.integration.test.ts
 ```
 
@@ -83,16 +83,16 @@ evidence. Run the hosted command from the linked Vercel project directory so
 
 ```sh
 pnpm exec tsx scripts/hosted-storage-receipt-recovery-rehearsal.ts \
-  --source-sha <reviewed-source-sha> \
-  --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json
+  --source-sha 49f31eace58149e5d7b4349a0465012f0facde39 \
+  --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json
 
 PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL='postgresql://<credentials>@127.0.0.1:<port>/<disposable-db>' \
 PSKILLS_ALLOW_HOSTED_STORAGE_RECEIPT_REHEARSAL=I_UNDERSTAND_NEW_PREFIX_ONLY \
 vercel env run -e production -- \
   /absolute/path/to/worktree/node_modules/.bin/tsx \
   /absolute/path/to/worktree/scripts/hosted-storage-receipt-recovery-rehearsal.ts \
-  --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-<date>.json \
-  --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-<date>.json
+  --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json \
+  --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-20260916.json
 ```
 
 Execution refuses a non-loopback database, a plan for any other project/store,
