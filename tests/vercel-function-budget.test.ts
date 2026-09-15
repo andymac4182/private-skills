@@ -22,13 +22,18 @@ describe('Vercel function duration budget', () => {
     });
   });
 
-  it('keeps source defaults covered when build-only overrides are lower', () => {
+  it('honors explicit lower budgets so a Hobby plan can fit with headroom', () => {
     const budget = resolveVercelFunctionBudget({
-      PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS: '1000',
-      PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS: '1',
+      PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS: '240000',
+      PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS: '240000',
+      PSKILLS_VERCEL_PLAN_MAX_DURATION_SECONDS: '300',
     });
-    expect(budget.runtimeDurationMs).toBe(600_000);
-    expect(budget.maxDurationSeconds).toBe(615);
+    expect(budget).toMatchObject({
+      runtimeDurationMs: 240_000,
+      runtimeDurationSeconds: 240,
+      planMaxDurationSeconds: 300,
+      maxDurationSeconds: 255,
+    });
   });
 
   it('accepts a larger declared platform limit and rejects the stable limit when needed', () => {
@@ -81,6 +86,8 @@ describe('Vercel runtime duration guard', () => {
     expect(assertVercelRuntimeDuration(undefined, 600_000, 'reviewer', 615, 15)).toBeUndefined();
     expect(assertVercelRuntimeDuration(600_000, 600_000, 'reviewer', 615, 15)).toBe(600_000);
     expect(() => assertVercelRuntimeDuration(600_001, 600_000, 'reviewer', 615, 15)).toThrow(/after headroom/u);
+    expect(assertVercelRuntimeDuration(240_000, 600_000, 'reviewer', 255, 15)).toBe(240_000);
+    expect(() => assertVercelRuntimeDuration(undefined, 600_000, 'reviewer', 255, 15)).toThrow(/after headroom/u);
     expect(assertVercelRuntimeDuration(900_000, 240_000, 'worker', undefined, undefined)).toBe(900_000);
   });
 });

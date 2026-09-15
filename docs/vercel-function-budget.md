@@ -9,9 +9,12 @@ finishes and again after it is relocated to the repository-root
 
 The defaults are a 240-second hosted worker budget and a 600-second reviewer
 budget. The default headroom is 15 seconds, so the normal generated function
-configuration is `maxDuration: 615`. A lower build-time dispatcher override
-does not shorten that value because the corresponding runtime environment may
-be absent and the source defaults must remain covered.
+configuration is `maxDuration: 615`. Explicit lower dispatcher budgets are
+honored: setting both runtime budgets to 240 seconds emits `maxDuration: 255`,
+which fits the 300-second Hobby Fluid Compute limit with the 15-second
+headroom. The same lower settings must be present at runtime; if an override
+is absent, the source default is used and the immutable runtime guard rejects
+the deployment when that default would exceed the generated function budget.
 
 The build accepts these settings:
 
@@ -31,11 +34,12 @@ extended beta and Fluid Compute. The 1,800-second value is therefore an
 explicit opt-in for an eligible Pro or Enterprise project, not a default.
 
 At runtime, the Vercel build injects the generated duration and headroom into
-the Node bundle. Hosted worker and reviewer setup rejects a runtime override
-that would exceed the generated duration after headroom. This prevents a
-runtime environment change after the build from extending work past the
-immutable function budget. Node/container and edge builds receive no Vercel
-value and retain their normal portable runtime limits.
+the Node bundle. Hosted worker and reviewer setup rejects a runtime value that
+would exceed the generated duration after headroom, including a source default
+when a lower build-time override is missing. This prevents a runtime
+environment change after the build from extending work past the immutable
+function budget. Node/container and edge builds receive no Vercel value and
+retain their normal portable runtime limits.
 
 The duration setting is part of the Vercel Build Output API function config,
 not a client-visible response or a secret. The authoritative platform

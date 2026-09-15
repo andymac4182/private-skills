@@ -23,9 +23,10 @@ const PLAN_LIMIT_ENV = 'PSKILLS_VERCEL_PLAN_MAX_DURATION_SECONDS'
 
 /**
  * Resolve the maximum invocation time that the generated Vercel function
- * should advertise. Lower runtime overrides do not reduce the generated
- * value: when a build-only environment variable is absent at runtime, the
- * dispatchers still use their source defaults.
+ * should advertise. Explicit runtime overrides are honored so a smaller plan
+ * can use smaller bounded dispatches; the runtime guard fails closed if those
+ * overrides are absent when the deployed bundle still has larger source
+ * defaults.
  */
 export function resolveVercelFunctionBudget(environment = process.env) {
   const configuredWorkerMs = parseOptionalInteger(environment[WORKER_DURATION_ENV], WORKER_DURATION_ENV)
@@ -54,12 +55,8 @@ export function resolveVercelFunctionBudget(environment = process.env) {
     PLAN_LIMIT_ENV,
   )
 
-  // Always account for the source defaults so build-only overrides cannot
-  // produce a function shorter than a later runtime with no override.
   const runtimeDurationMs = Math.max(
-    DEFAULT_HOSTED_WORKER_DURATION_MS,
     workerDurationMs,
-    DEFAULT_REVIEWER_DURATION_MS,
     reviewerDurationMs,
   )
   const runtimeDurationSeconds = Math.ceil(runtimeDurationMs / 1_000)
