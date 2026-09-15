@@ -7483,10 +7483,13 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (attempt.reservationGeneration !== undefined && (!Number.isSafeInteger(attempt.reservationGeneration) || attempt.reservationGeneration < 1)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt reservation generation is invalid', 500);
     }
-    if (attempt.billingCorrection !== undefined && attempt.billingCorrection !== 'restore-pending') {
+    if (attempt.billingCorrection !== undefined && attempt.billingCorrection !== 'release-pending' && attempt.billingCorrection !== 'restore-pending') {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt billing correction is invalid', 500);
     }
     if (attempt.billingCorrection === 'restore-pending' && attempt.state !== 'orphaned') {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt billing correction state is invalid', 500);
+    }
+    if (attempt.billingCorrection === 'release-pending' && attempt.state !== 'recovering' && attempt.state !== 'releasing' && attempt.state !== 'orphaned') {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt billing correction state is invalid', 500);
     }
     if (attempt.objectKey !== undefined && (typeof attempt.objectKey !== 'string' || attempt.objectKey.length === 0)) {

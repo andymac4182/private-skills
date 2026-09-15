@@ -456,8 +456,14 @@ export interface Job { id: string; organizationId: string; kind: 'scan' | 'impor
  * and draft writes can fail before a job exists.
  */
 export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'recovering' | 'releasing' | 'released';
-/** Durable marker for a metered correction whose inverse still needs retrying. */
-export type StorageBillingCorrection = 'restore-pending';
+/**
+ * Durable marker for a metered correction that crossed an external boundary.
+ * `release-pending` is written before the billing zero and therefore also
+ * covers the crash window in which that call may still be in flight.
+ * `restore-pending` is written after a late metadata reference is observed
+ * following a settled zero and requires an exact ledger inverse.
+ */
+export type StorageBillingCorrection = 'release-pending' | 'restore-pending';
 export interface StorageAttempt {
   id: string;
   organizationId: string;
@@ -471,7 +477,7 @@ export interface StorageAttempt {
   providerBinding?: string;
   /** Server-created proof that this exact write completed and was verified. */
   writeReceipt?: StorageWriteReceipt;
-  /** Set atomically when a late metadata reference requires billing restoration. */
+  /** Set atomically around an external billing correction. */
   billingCorrection?: StorageBillingCorrection;
   createdAt: string;
   updatedAt: string;

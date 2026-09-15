@@ -148,7 +148,7 @@ function validStorageAttempt(value: unknown): value is Record<string, unknown> {
     Number.isSafeInteger(value.size) && (value.size as number) >= 0 &&
     typeof value.state === 'string' && STORAGE_ATTEMPT_STATES.has(value.state) &&
     (value.reservationGeneration === undefined || (Number.isSafeInteger(value.reservationGeneration) && (value.reservationGeneration as number) >= 1)) &&
-    (value.billingCorrection === undefined || value.billingCorrection === 'restore-pending') &&
+    (value.billingCorrection === undefined || value.billingCorrection === 'release-pending' || value.billingCorrection === 'restore-pending') &&
     typeof value.createdAt === 'string' && value.createdAt.length > 0 &&
     typeof value.updatedAt === 'string' && value.updatedAt.length > 0 &&
     (value.objectKey === undefined || (typeof value.objectKey === 'string' && value.objectKey.length > 0)) &&
@@ -158,6 +158,7 @@ function validStorageAttempt(value: unknown): value is Record<string, unknown> {
   );
   if (!valid) return false;
   if (value.billingCorrection === 'restore-pending' && value.state !== 'orphaned') return false;
+  if (value.billingCorrection === 'release-pending' && value.state !== 'recovering' && value.state !== 'releasing' && value.state !== 'orphaned') return false;
   if (value.state === 'recovering' || value.state === 'releasing') {
     return value.recoveryToken !== undefined && value.recoveryStartedAt !== undefined;
   }

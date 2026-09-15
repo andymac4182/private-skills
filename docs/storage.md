@@ -90,20 +90,30 @@ false result retains the attempt and charge because a rejected or timed-out
 remote write may still materialize later. The adapter must return true only
 after its provider can no longer create that key. A successful recovery first
 persists a `releasing` metadata fence, then verifies/cleans the exact object,
-passes the captured billing reservation generation, and finally marks the
-attempt released. Attempts without a generation remain retained unless the
-operator explicitly enables `PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`;
-the ledger still rejects a reopened key.
+records `billingCorrection: "release-pending"` before the external billing
+zero, passes the captured billing reservation generation, and finally marks
+the attempt released while clearing that marker. If a process dies after the
+marker or billing call, a resumed reconciler keeps the marker and reuses the
+same generation-bound correction key. It may settle the release only after an
+exact durable ledger row is found; if a late metadata reference exists, it
+requires that row before promoting the marker to `restore-pending` and applying
+the ledger-owned inverse. A missing or unreadable ledger row retains the
+charge and marker for a later retry. Attempts without a generation remain
+retained unless the operator explicitly enables
+`PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`; the ledger still rejects a
+reopened key.
 
 If a metadata reference appears after the exact zero correction, the attempt is
 marked `billingCorrection: "restore-pending"` in the same durable transition
-that retains it. Retries settle the inverse reservation under a stable
-operation key bound to the original reservation generation (G1) before clearing
-that marker. The ledger returns a fresh generation (G2); the storage attempt
-persists G2 and removes the marker in one transaction. A lost response retries
-the same G1 restoration operation, while a delayed G1 zero is rejected and a
-later cleanup uses a G2-specific correction key. A failed inverse leaves the
-marker and the original reservation charged.
+that retains it. The preceding `release-pending` marker is never cleared by a
+resume that merely observes metadata: the reconciler first reads the exact
+generation-bound zero operation. Retries settle the inverse reservation under a
+stable operation key bound to the original reservation generation (G1) before
+clearing that marker. The ledger returns a fresh generation (G2); the storage
+attempt persists G2 and removes the marker in one transaction. A lost response
+retries the same G1 restoration operation, while a delayed G1 zero is rejected
+and a later cleanup uses a G2-specific correction key. A failed or unknown
+inverse leaves the marker and the original reservation charged.
 
 The current Node factory does not claim this finality for any built-in provider.
 The filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters expose

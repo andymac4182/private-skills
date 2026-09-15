@@ -143,6 +143,14 @@ interface FinalizeResult {
   referenced?: boolean;
 }
 
+/** Optional ledger read used to distinguish a committed zero from an
+ * external call that never reached the billing store.  The storage package
+ * deliberately keeps this structural so provider-neutral billing contracts do
+ * not acquire a package dependency on the billing implementation. */
+interface BillingUsageCorrectionLookup extends BillingUsageAdmission {
+  findUsageOperation?(organizationId: string, operationKey: string): Promise<unknown>;
+}
+
 function storageRecoveryOperationKey(attemptId: string, generation?: number): string {
   return generation === undefined
     ? `private-skills:storage-recovery:${attemptId}`
@@ -160,6 +168,19 @@ function validBillingRestorationResult(value: unknown, fromGeneration: number): 
     (value.reservationGeneration as number) > fromGeneration &&
     Number.isSafeInteger(value.restoredFromGeneration) &&
     value.restoredFromGeneration === fromGeneration;
+}
+
+function validSettledZeroCorrection(value: unknown, attempt: StorageAttempt): boolean {
+  const generation = attempt.reservationGeneration;
+  if (generation === undefined || !isRecord(value)) return false;
+  const delta = value.delta;
+  return value.organizationId === attempt.organizationId &&
+    value.operationKey === storageRecoveryOperationKey(attempt.id, generation) &&
+    value.status === "released" &&
+    value.reservationGeneration === generation &&
+    isRecord(delta) &&
+    Object.keys(delta).length === 1 &&
+    delta.storageBytes === -attempt.size;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -312,7 +333,7 @@ export function createDurableStorageRecoveryProofVerifier(
       return request.resume === true &&
         current.recoveryToken !== undefined &&
         current.recoveryStartedAt !== undefined &&
-        !defaultObjectReferenceCheck(state, current);
+        (current.billingCorrection === "release-pending" || !defaultObjectReferenceCheck(state, current));
     }
     if (current.state !== "orphaned" && current.state !== "pending") return false;
 
@@ -387,6 +408,16 @@ export class StorageRecoveryService {
       return this.#retain(request.organizationId, request.attemptId, undefined, "missing-object-key");
     }
 
+    let proofAccepted: boolean;
+    try {
+      proofAccepted = await this.#verifyProof({ request, attempt: cloneAttempt(initialAttempt) });
+    } catch {
+      return this.#retain(request.organizationId, request.attemptId, undefined, "proof-unavailable");
+    }
+    if (!proofAccepted) {
+      return this.#retain(request.organizationId, request.attemptId, undefined, "proof-rejected");
+    }
+
     // A late metadata reference can be discovered after the exact zero has
     // succeeded. Retry its inverse from the durable marker before the normal
     // metadata-reference guard; otherwise every retry would stop before the
@@ -398,14 +429,13 @@ export class StorageRecoveryService {
       return this.#retryBillingRestoration(request.organizationId, initialAttempt);
     }
 
-    let proofAccepted: boolean;
-    try {
-      proofAccepted = await this.#verifyProof({ request, attempt: cloneAttempt(initialAttempt) });
-    } catch {
-      return this.#retain(request.organizationId, request.attemptId, undefined, "proof-unavailable");
-    }
-    if (!proofAccepted) {
-      return this.#retain(request.organizationId, request.attemptId, undefined, "proof-rejected");
+    // `release-pending` is written before the external zero. It is the
+    // durable handoff for a process that died after that write began but
+    // before its final metadata transaction. A resumed operator must not
+    // demote this marker and forget which zero needs to be reconciled.
+    if (initialAttempt.billingCorrection === "release-pending") {
+      const resumed = await this.#resumePendingBillingCorrection(request, initialAttempt);
+      if (resumed !== undefined) return resumed;
     }
 
     // A pre-generation attempt is never guessed to be the current lifecycle.
@@ -484,6 +514,24 @@ export class StorageRecoveryService {
       }
     }
     if (billing) {
+      // The marker is committed before crossing the billing boundary. If the
+      // process dies after this transaction, a later resume can inspect the
+      // exact ledger operation and either finish the release or compensate a
+      // late metadata reference without guessing whether the zero applied.
+      if (attempt.size > 0) {
+        const pending = await this.#markBillingCorrectionPending(
+          request.organizationId,
+          request.attemptId,
+          claimed.token,
+          attempt.reservationGeneration,
+        );
+        if (!pending.applied || !pending.attempt) {
+          if (pending.referenced) {
+            return { status: "retained", reason: "metadata-referenced", attempt: pending.attempt ?? attempt, inspection };
+          }
+          return { status: "retained", reason: "stale-recovery", attempt: pending.attempt ?? attempt, inspection };
+        }
+      }
       try {
         await billing.reconcileUsage(
           request.organizationId,
@@ -552,6 +600,273 @@ export class StorageRecoveryService {
       inspection: cleanupPerformed ? "deleted" : "absent",
       billing: billing ? "reconciled" : "unmetered",
     };
+  }
+
+  async #resumePendingBillingCorrection(
+    request: StorageRecoveryRequest,
+    observedAttempt: StorageAttempt,
+  ): Promise<StorageRecoveryResult | undefined> {
+    const billing = this.#billing;
+    if (!billing) {
+      return { status: "retained", reason: "billing-unavailable", attempt: cloneAttempt(observedAttempt) };
+    }
+    try {
+      if (billing.status().enabled !== true) {
+        return { status: "retained", reason: "billing-unavailable", attempt: cloneAttempt(observedAttempt) };
+      }
+    } catch {
+      return { status: "retained", reason: "billing-unavailable", attempt: cloneAttempt(observedAttempt) };
+    }
+
+    const currentState = await this.#repository.read(request.organizationId);
+    const current = (currentState.storageAttempts ?? []).find((candidate) => candidate.id === request.attemptId);
+    if (!current || current.organizationId !== request.organizationId) {
+      throw new StorageRecoveryError("STORAGE_ATTEMPT_NOT_FOUND", "storage attempt was not found");
+    }
+    if (current.billingCorrection !== "release-pending") {
+      if (current.billingCorrection === "restore-pending") {
+        return this.#retryBillingRestoration(request.organizationId, current);
+      }
+      if (current.state === "committed" || current.state === "released") {
+        return { status: "already-terminal", state: current.state, attempt: cloneAttempt(current) };
+      }
+      return undefined;
+    }
+
+    const referenced = this.#isObjectReferenced(currentState, current);
+    const settled = await this.#findSettledZeroCorrection(current);
+    if (!referenced && settled === true) {
+      const finalized = await this.#settlePendingRelease(
+        request.organizationId,
+        request.attemptId,
+        current.reservationGeneration,
+      );
+      if (finalized.applied && finalized.attempt) {
+        return {
+          status: "released",
+          attempt: finalized.attempt,
+          inspection: "absent",
+          billing: "reconciled",
+        };
+      }
+      if (finalized.referenced && finalized.attempt) {
+        // A reference appeared between the read and the final release fence.
+        // Keep the marker, then require an exact settled zero before restoring.
+        const exact = await this.#findSettledZeroCorrection(finalized.attempt);
+        if (exact !== true) {
+          return { status: "retained", reason: "billing-failed", attempt: finalized.attempt };
+        }
+        const promoted = await this.#promotePendingCorrection(
+          request.organizationId,
+          request.attemptId,
+          finalized.attempt.reservationGeneration,
+        );
+        if (promoted.applied && promoted.attempt) {
+          return this.#retryBillingRestoration(request.organizationId, promoted.attempt);
+        }
+        return { status: "retained", reason: "stale-recovery", attempt: promoted.attempt ?? finalized.attempt };
+      }
+      return { status: "retained", reason: "stale-recovery", attempt: finalized.attempt ?? current };
+    }
+
+    if (!referenced) {
+      // No metadata reference exists and no durable zero was found. The
+      // ordinary resumed path may safely retry the same generation-bound
+      // operation key; the ledger makes that call idempotent if A completed
+      // after this lookup.
+      return undefined;
+    }
+
+    // A metadata reference wins over a pending release. Demote the old
+    // recovery token while retaining `release-pending`; clearing it here
+    // would lose the only durable indication that a zero may have happened.
+    const demoted = await this.#demotePendingCorrection(request.organizationId, request.attemptId);
+    if (!demoted.applied || !demoted.attempt) {
+      const latest = demoted.attempt ?? await this.#readAttempt(request.organizationId, request.attemptId);
+      if (latest.billingCorrection === "restore-pending") {
+        return this.#retryBillingRestoration(request.organizationId, latest);
+      }
+      if (latest.state === "committed" || latest.state === "released") {
+        return { status: "already-terminal", state: latest.state, attempt: latest };
+      }
+      return { status: "retained", reason: "metadata-referenced", attempt: latest };
+    }
+
+    // A lookup that is missing or unavailable is not proof that the external
+    // zero did not apply. Keep the original charge and marker until the exact
+    // correction row can be read on a later operator retry.
+    const settledAfterDemotion = await this.#findSettledZeroCorrection(demoted.attempt);
+    if (settledAfterDemotion !== true) {
+      // The reference itself is the durable reason this release cannot
+      // continue. The marker remains `release-pending` so a later exact
+      // ledger read can still discover a zero that commits after this retry.
+      return { status: "retained", reason: "metadata-referenced", attempt: demoted.attempt };
+    }
+    const promoted = await this.#promotePendingCorrection(
+      request.organizationId,
+      request.attemptId,
+      demoted.attempt.reservationGeneration,
+    );
+    if (!promoted.applied || !promoted.attempt) {
+      if (promoted.attempt?.billingCorrection === "restore-pending") {
+        return this.#retryBillingRestoration(request.organizationId, promoted.attempt);
+      }
+      return { status: "retained", reason: "stale-recovery", attempt: promoted.attempt ?? demoted.attempt };
+    }
+    return this.#retryBillingRestoration(request.organizationId, promoted.attempt);
+  }
+
+  async #findSettledZeroCorrection(attempt: StorageAttempt): Promise<boolean | undefined> {
+    const billing = this.#billing;
+    const generation = attempt.reservationGeneration;
+    if (!billing || generation === undefined || !Number.isSafeInteger(generation) || generation < 1 || attempt.size <= 0) {
+      return undefined;
+    }
+    const lookup = (billing as Partial<BillingUsageCorrectionLookup>).findUsageOperation;
+    if (typeof lookup !== "function") return undefined;
+    try {
+      const operation = await lookup.call(
+        billing,
+        attempt.organizationId,
+        storageRecoveryOperationKey(attempt.id, generation),
+      );
+      return validSettledZeroCorrection(operation, attempt);
+    } catch {
+      // A missing/unavailable read cannot prove that the zero did not apply;
+      // the caller must retain the marker and charge until a later retry.
+      return undefined;
+    }
+  }
+
+  async #markBillingCorrectionPending(
+    organizationId: string,
+    attemptId: string,
+    token: string,
+    reservationGeneration?: number,
+  ): Promise<FinalizeResult> {
+    try {
+      return await this.#repository.transaction(organizationId, (current) => {
+        current.storageAttempts ??= [];
+        const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
+        if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
+        if (
+          attempt.recoveryToken !== token ||
+          (attempt.state !== "recovering" && attempt.state !== "releasing") ||
+          attempt.reservationGeneration !== reservationGeneration
+        ) {
+          return { applied: false, attempt: cloneAttempt(attempt) };
+        }
+        if (this.#isObjectReferenced(current, attempt)) {
+          attempt.state = "orphaned";
+          // Preserve an earlier release intent. If this is the first marker,
+          // no external billing operation has crossed the boundary yet.
+          delete attempt.recoveryToken;
+          delete attempt.recoveryStartedAt;
+          attempt.updatedAt = nowIso(this.#now);
+          return { applied: false, referenced: true, attempt: cloneAttempt(attempt) };
+        }
+        attempt.billingCorrection = "release-pending";
+        attempt.updatedAt = nowIso(this.#now);
+        return { applied: true, attempt: cloneAttempt(attempt) };
+      });
+    } catch (error) {
+      throw new StorageRecoveryError(
+        "RECOVERY_PERSISTENCE_UNCERTAIN",
+        error instanceof Error ? "storage recovery billing intent is uncertain" : "storage recovery billing intent failed",
+      );
+    }
+  }
+
+  async #demotePendingCorrection(organizationId: string, attemptId: string): Promise<FinalizeResult> {
+    try {
+      return await this.#repository.transaction(organizationId, (current) => {
+        current.storageAttempts ??= [];
+        const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
+        if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
+        if (attempt.billingCorrection !== "release-pending") return { applied: false, attempt: cloneAttempt(attempt) };
+        if (!this.#isObjectReferenced(current, attempt)) return { applied: false, attempt: cloneAttempt(attempt) };
+        attempt.state = "orphaned";
+        delete attempt.recoveryToken;
+        delete attempt.recoveryStartedAt;
+        attempt.updatedAt = nowIso(this.#now);
+        return { applied: true, referenced: true, attempt: cloneAttempt(attempt) };
+      });
+    } catch (error) {
+      throw new StorageRecoveryError(
+        "RECOVERY_PERSISTENCE_UNCERTAIN",
+        error instanceof Error ? "storage recovery pending-release fence is uncertain" : "storage recovery pending-release fence failed",
+      );
+    }
+  }
+
+  async #promotePendingCorrection(
+    organizationId: string,
+    attemptId: string,
+    expectedReservationGeneration?: number,
+  ): Promise<FinalizeResult> {
+    try {
+      return await this.#repository.transaction(organizationId, (current) => {
+        current.storageAttempts ??= [];
+        const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
+        if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
+        if (
+          attempt.billingCorrection !== "release-pending" ||
+          attempt.reservationGeneration !== expectedReservationGeneration ||
+          !this.#isObjectReferenced(current, attempt)
+        ) {
+          return { applied: false, attempt: cloneAttempt(attempt) };
+        }
+        attempt.state = "orphaned";
+        attempt.billingCorrection = "restore-pending";
+        delete attempt.recoveryToken;
+        delete attempt.recoveryStartedAt;
+        attempt.updatedAt = nowIso(this.#now);
+        return { applied: true, referenced: true, attempt: cloneAttempt(attempt) };
+      });
+    } catch (error) {
+      throw new StorageRecoveryError(
+        "RECOVERY_PERSISTENCE_UNCERTAIN",
+        error instanceof Error ? "storage recovery compensation marker is uncertain" : "storage recovery compensation marker failed",
+      );
+    }
+  }
+
+  async #settlePendingRelease(
+    organizationId: string,
+    attemptId: string,
+    expectedReservationGeneration?: number,
+  ): Promise<FinalizeResult> {
+    try {
+      return await this.#repository.transaction(organizationId, (current) => {
+        current.storageAttempts ??= [];
+        const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
+        if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
+        if (
+          attempt.billingCorrection !== "release-pending" ||
+          attempt.reservationGeneration !== expectedReservationGeneration
+        ) {
+          return { applied: false, attempt: cloneAttempt(attempt) };
+        }
+        if (this.#isObjectReferenced(current, attempt)) {
+          attempt.state = "orphaned";
+          delete attempt.recoveryToken;
+          delete attempt.recoveryStartedAt;
+          attempt.updatedAt = nowIso(this.#now);
+          return { applied: false, referenced: true, attempt: cloneAttempt(attempt) };
+        }
+        attempt.state = "released";
+        delete attempt.billingCorrection;
+        delete attempt.recoveryToken;
+        delete attempt.recoveryStartedAt;
+        attempt.updatedAt = nowIso(this.#now);
+        return { applied: true, attempt: cloneAttempt(attempt) };
+      });
+    } catch (error) {
+      throw new StorageRecoveryError(
+        "RECOVERY_PERSISTENCE_UNCERTAIN",
+        error instanceof Error ? "storage recovery pending-release settlement is uncertain" : "storage recovery pending-release settlement failed",
+      );
+    }
   }
 
   async #restoreBilling(attempt: StorageAttempt): Promise<MeteredUsageRestoration | undefined> {
@@ -834,6 +1149,11 @@ export class StorageRecoveryService {
           return { applied: false, referenced: true, attempt: cloneAttempt(attempt) };
         }
         attempt.state = state;
+        // A successful external zero is paired with this final metadata
+        // commit. Clearing the intent here is atomic with `released`; a
+        // process crash before this line leaves `release-pending` available
+        // for an exact ledger lookup on the next resume.
+        if (state === "released") delete attempt.billingCorrection;
         delete attempt.recoveryToken;
         delete attempt.recoveryStartedAt;
         attempt.updatedAt = nowIso(this.#now);

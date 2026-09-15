@@ -152,6 +152,8 @@ class RecordingBilling implements BillingUsageAdmission {
 /** Small generation-aware ledger double for the storage recovery lifecycle. */
 class GenerationAwareBilling implements BillingUsageAdmission {
   readonly reconciliations: Array<{
+    organizationId: string;
+    reservationKey: string;
     actual: MeteredUsageDelta;
     operationKey: string;
     reservationGeneration?: number;
@@ -163,6 +165,8 @@ class GenerationAwareBilling implements BillingUsageAdmission {
   usage = BYTES.byteLength;
   generation = 1;
   lostRestoreResponse = true;
+  crashBeforeZero = false;
+  crashAfterZero = false;
   onReconciled?: () => Promise<void>;
   #restoration?: MeteredUsageRestoration;
 
@@ -175,17 +179,41 @@ class GenerationAwareBilling implements BillingUsageAdmission {
   }
 
   async reconcileUsage(
-    _organizationId: string,
-    _reservationKey: string,
+    organizationId: string,
+    reservationKey: string,
     actual: MeteredUsageDelta,
     operationKey: string,
     reservationGeneration?: number,
   ): Promise<unknown> {
     if (reservationGeneration !== this.generation) throw new Error("stale reservation generation");
-    this.reconciliations.push({ actual, operationKey, reservationGeneration });
+    if (actual.storageBytes === 0 && this.crashBeforeZero) {
+      this.crashBeforeZero = false;
+      throw new Error("process crashed before billing zero");
+    }
+    this.reconciliations.push({ organizationId, reservationKey, actual, operationKey, reservationGeneration });
     if (actual.storageBytes === 0) this.usage = 0;
     await this.onReconciled?.();
+    if (actual.storageBytes === 0 && this.crashAfterZero) {
+      this.crashAfterZero = false;
+      throw new Error("process crashed after billing zero");
+    }
     return { idempotent: false, reservationGeneration: this.generation };
+  }
+
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<unknown> {
+    const correction = this.reconciliations.find((candidate) =>
+      candidate.organizationId === organizationId &&
+      candidate.operationKey === operationKey &&
+      candidate.actual.storageBytes === 0,
+    );
+    if (!correction) return undefined;
+    return {
+      organizationId,
+      operationKey,
+      status: "released",
+      reservationGeneration: correction.reservationGeneration,
+      delta: { storageBytes: -BYTES.byteLength },
+    };
   }
 
   async restoreUsage(
@@ -455,7 +483,7 @@ describe("durable storage-attempt recovery", () => {
       read: (organizationId: string) => inner.read(organizationId),
       transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
         transactions += 1;
-        if (transactions === 3) throw new Error("crash after external correction");
+        if (transactions === 4) throw new Error("crash after external correction");
         return inner.transaction(organizationId, updater);
       },
     };
@@ -470,6 +498,112 @@ describe("durable storage-attempt recovery", () => {
     expect(billing.reconciliations).toHaveLength(2);
     expect(billing.reconciliations[0]?.operationKey).toBe(billing.reconciliations[1]?.operationKey);
     expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.state).toBe("released");
+  });
+
+  it("lets B retry the same release when A dies after the durable intent but before billing", async () => {
+    const blobs = new RecoverableMemoryBlobStore();
+    const inner = await repositoryWithAttempt(attempt());
+    const billing = new GenerationAwareBilling();
+    billing.lostRestoreResponse = false;
+    billing.crashBeforeZero = true;
+    let transactions = 0;
+    const repository = {
+      read: (organizationId: string) => inner.read(organizationId),
+      transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
+        transactions += 1;
+        // Claim, prepare, and the release intent commit. The next attempt is
+        // the catch-path finalization after the simulated process failure.
+        if (transactions === 4) throw new Error("process died before billing zero");
+        return inner.transaction(organizationId, updater);
+      },
+    };
+    const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof: () => true });
+
+    await expect(service.recover(request())).rejects.toMatchObject({ code: "RECOVERY_PERSISTENCE_UNCERTAIN" });
+    expect(billing.reconciliations).toHaveLength(0);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "releasing",
+      recoveryToken: expect.any(String),
+      billingCorrection: "release-pending",
+      reservationGeneration: 1,
+    });
+
+    const resumed = await service.recover({ ...request(), resume: true });
+
+    expect(resumed).toMatchObject({ status: "released", inspection: "absent", billing: "reconciled" });
+    expect(billing.reconciliations).toHaveLength(1);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "released",
+      reservationGeneration: 1,
+    });
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
+  });
+
+  it("lets B restore an exact zero after A dies before its final metadata commit", async () => {
+    const blobs = new RecoverableMemoryBlobStore();
+    const inner = await repositoryWithAttempt(attempt());
+    const billing = new GenerationAwareBilling();
+    billing.lostRestoreResponse = false;
+    billing.crashAfterZero = true;
+    let transactions = 0;
+    const repository = {
+      read: (organizationId: string) => inner.read(organizationId),
+      transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
+        transactions += 1;
+        // The catch-path finalization is deliberately unavailable, leaving A's
+        // release token and the pre-zero marker durable for B to recover.
+        if (transactions === 4) throw new Error("process died after billing zero");
+        return inner.transaction(organizationId, updater);
+      },
+    };
+    const verifyProof = createDurableStorageRecoveryProofVerifier(inner);
+    const proofRequest = {
+      ...request(),
+      proof: { kind: "writer-terminated" as const, reference: "runtime-storage-attempt:attempt-storage-1" },
+    };
+    const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof });
+
+    await expect(service.recover(proofRequest)).rejects.toMatchObject({ code: "RECOVERY_PERSISTENCE_UNCERTAIN" });
+    expect(billing.reconciliations).toHaveLength(1);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "releasing",
+      recoveryToken: expect.any(String),
+      billingCorrection: "release-pending",
+      reservationGeneration: 1,
+    });
+
+    await inner.transaction(ORGANIZATION, (state) => {
+      state.skills.push({
+        id: "crash-window-reference",
+        organizationId: ORGANIZATION,
+        name: "@team/crash-window-reference",
+        skillName: "crash-window-reference",
+        version: "1.0.0",
+        description: "reference committed while the first recovery was gone",
+        artifact: { key: KEY, digest: attempt().digest, size: BYTES.byteLength },
+        state: "approved",
+        policyRevision: state.policy.revision,
+        createdAt: "2026-09-16T00:00:00.000Z",
+        provenance: { kind: "native" },
+        fileCount: 1,
+        scanIds: [],
+      });
+    });
+
+    const resumed = await service.recover({ ...proofRequest, resume: true });
+
+    expect(resumed).toMatchObject({ status: "retained", reason: "billing-restored" });
+    expect(billing.reconciliations).toHaveLength(1);
+    expect(billing.restorations).toEqual([{
+      operationKey: "private-skills:storage-recovery-restore:attempt-storage-1:generation:1",
+      reservationGeneration: 1,
+    }]);
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 2,
+    });
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
   });
 
   it("requires a durable writer terminal fact and leaves pending attempts unchanged", async () => {
@@ -656,7 +790,7 @@ describe("durable storage-attempt recovery", () => {
       read: (organizationId: string) => inner.read(organizationId),
       transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
         transactions += 1;
-        if (transactions === 4) throw new Error("metadata response lost after G2 restore");
+        if (transactions === 5) throw new Error("metadata response lost after G2 restore");
         return inner.transaction(organizationId, updater);
       },
     };
