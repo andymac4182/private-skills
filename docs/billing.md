@@ -26,12 +26,16 @@ boundaries visible. Missing Stripe credentials do not activate a local paid
 mode. This package makes no external Stripe calls during tests and does not
 contain production account credentials.
 
-The free plan still has finite Eve limits, but `createBillingEveCostReservation`
-requires the billing service's enabled admission status before reserving them.
-Consequently a no-Stripe launch demo must explicitly use the durable local
-test accounting profile in development/test, or a separately approved
-providerless ledger mode; flipping the status gate would permit unmetered Eve
-work and is not a safe launch configuration.
+The free plan still has finite Eve limits, and
+`createBillingEveCostReservation` requires the billing service's enabled
+admission status before reserving them. A no-Stripe launch demo can use the
+explicit providerless metered evaluation profile by setting
+`PSKILLS_BILLING_ENABLED=true` and
+`PSKILLS_BILLING_METERED_EVALUATION=true` in development/test with a durable
+PostgreSQL billing repository. The service reports `provider: null`, keeps
+checkout, portal, and webhook routes closed, and still enforces the free-plan
+Eve budget. Production and non-durable file/memory profiles refuse this mode;
+flipping the status gate would permit unmetered Eve work.
 
 ## Company-admin console
 

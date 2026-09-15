@@ -628,6 +628,7 @@ export class BillingService {
   private readonly catalog: PlanCatalog;
   private readonly provider?: BillingProvider;
   private readonly enabled: boolean;
+  private readonly usageEnabled: boolean;
   private readonly webhookSecret?: string;
   private readonly webhookToleranceSeconds: number;
   private readonly maxWebhookBodyBytes: number;
@@ -652,6 +653,8 @@ export class BillingService {
       if (this.provider.mode !== 'test' && this.provider.mode !== 'live') throw new BillingError('INVALID_CONFIGURATION', 'billing provider mode is invalid', 500);
     }
     this.enabled = options.enabled ?? options.provider !== undefined;
+    if (options.usageEnabled !== undefined && typeof options.usageEnabled !== 'boolean') throw new BillingError('INVALID_CONFIGURATION', 'billing usage mode is invalid', 500);
+    this.usageEnabled = options.usageEnabled ?? (this.enabled && this.provider !== undefined);
     this.webhookSecret = options.webhookSecret;
     this.webhookToleranceSeconds = options.webhookToleranceSeconds ?? 300;
     this.maxWebhookBodyBytes = options.maxWebhookBodyBytes ?? MAX_WEBHOOK_BODY_BYTES;
@@ -665,16 +668,12 @@ export class BillingService {
   }
 
   status(): BillingStatus {
-    const providerReady = this.provider !== undefined;
-    const mode: BillingMode = !providerReady ? 'disabled' : this.provider!.mode;
+    const providerReady = this.enabled && this.provider !== undefined;
+    const mode: BillingMode = this.provider?.mode ?? (this.usageEnabled ? 'test' : 'disabled');
     return {
-      // The admission boundary is independent from hosted provider calls:
-      // a deployment can enforce limits from verified subscription state
-      // while checkout, portal, and webhook delivery remain unavailable until
-      // an operator configures a provider.
-      enabled: this.enabled,
+      enabled: this.usageEnabled,
       providerReady,
-      usageEnforcement: this.enabled,
+      usageEnforcement: this.usageEnabled,
       provider: this.provider?.id ?? null,
       mode,
       webhookVerification: this.enabled && providerReady && this.webhookSecret !== undefined,
@@ -709,7 +708,7 @@ export class BillingService {
   async entitlement(organizationId: string): Promise<BillingEntitlement> {
     const normalized = validateBillingOrganizationId(organizationId);
     const state = await this.repository.read(normalized);
-    return entitlementFromState(this.catalog, state, this.enabled);
+    return entitlementFromState(this.catalog, state, this.usageEnabled);
   }
 
   /** Alias used by runtime enforcement hooks. */
@@ -854,7 +853,7 @@ export class BillingService {
   async usageSnapshot(organizationId: string): Promise<UsageSnapshot> {
     const normalized = validateBillingOrganizationId(organizationId);
     const state = await this.repository.read(normalized);
-    const entitlement = entitlementFromState(this.catalog, state, this.enabled);
+    const entitlement = entitlementFromState(this.catalog, state, this.usageEnabled);
     return { organizationId: normalized, limits: { ...entitlement.limits }, usage: periodUsage(state.usage, this.now()), entitlement };
   }
 
@@ -1006,7 +1005,7 @@ export class BillingService {
     nowMs: number,
   ): UsageReservation {
     state.usage = periodUsage(state.usage, nowMs);
-    const entitlement = entitlementFromState(this.catalog, state, this.enabled);
+    const entitlement = entitlementFromState(this.catalog, state, this.usageEnabled);
     const existing = state.usageOperations.find((candidate) => candidate.operationKey === operationKey);
     if (existing) {
       if (!sameDelta(existing.delta, delta)) throw new BillingError('IDEMPOTENCY_CONFLICT', 'Usage operation key was already used with another delta', 409);
@@ -1514,6 +1513,8 @@ export function createBillingServiceFromEnv(options: BillingEnvironmentOptions):
   const env = options.env ?? {};
   const catalog = options.catalog ?? createPlanCatalog({ env });
   const requested = envBool(env.PSKILLS_BILLING_ENABLED, false);
+  const evaluationEnvironment = env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test';
+  const meteredEvaluation = requested && envBool(env.PSKILLS_BILLING_METERED_EVALUATION, false) && evaluationEnvironment;
   const providerName = env.PSKILLS_BILLING_PROVIDER ?? 'stripe';
   let provider: BillingProvider | undefined;
   if (requested && providerName === 'stripe' && env.STRIPE_SECRET_KEY) {
@@ -1534,6 +1535,7 @@ export function createBillingServiceFromEnv(options: BillingEnvironmentOptions):
     catalog,
     provider,
     enabled: requested,
+    ...(meteredEvaluation ? { usageEnabled: true } : {}),
     ...(env.STRIPE_WEBHOOK_SECRET ? { webhookSecret: env.STRIPE_WEBHOOK_SECRET } : env.PSKILLS_BILLING_WEBHOOK_SECRET ? { webhookSecret: env.PSKILLS_BILLING_WEBHOOK_SECRET } : {}),
     ...(options.successUrl ? { successUrl: options.successUrl } : env.PSKILLS_BILLING_SUCCESS_URL ? { successUrl: env.PSKILLS_BILLING_SUCCESS_URL } : {}),
     ...(options.cancelUrl ? { cancelUrl: options.cancelUrl } : env.PSKILLS_BILLING_CANCEL_URL ? { cancelUrl: env.PSKILLS_BILLING_CANCEL_URL } : {}),

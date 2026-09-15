@@ -102,6 +102,31 @@ describe('Node billing runtime composition', () => {
     });
   });
 
+  it('supports an explicit providerless metered evaluation profile without opening payment routes', () => {
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+    }, {} as BillingPgPoolLike, 'http://localhost:5173');
+    expect(runtime.service.status()).toMatchObject({
+      enabled: true,
+      provider: null,
+      mode: 'test',
+      checkout: false,
+      portal: false,
+      webhookVerification: false,
+    });
+  });
+
+  it('keeps providerless evaluation disabled without a durable PostgreSQL boundary', () => {
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+    }, undefined, 'http://localhost:5173');
+    expect(runtime.service.status()).toMatchObject({ enabled: false, provider: null, mode: 'disabled' });
+  });
+
   it('keeps local billing test-only and surfaces sanitized configuration failures', () => {
     const operatorError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {

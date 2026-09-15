@@ -362,16 +362,17 @@ export function createBillingRuntime(
 ): BillingRuntime {
   const requested = billingEnvironmentBool(env.PSKILLS_BILLING_ENABLED);
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
+  const meteredEvaluationRequested = requested && billingEnvironmentBool(env.PSKILLS_BILLING_METERED_EVALUATION);
+  const meteredEvaluationAllowed = meteredEvaluationRequested && !production && postgresPool !== undefined;
   const localTest = requested && !production && env.PSKILLS_BILLING_PROVIDER === 'local'
     && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
-  const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local'
-    && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
+  const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local';
   // Live billing must have the same durable PostgreSQL boundary as company
   // mappings. An explicit local provider is allowed only in development/test
   // and is visibly test mode; a file/HTTP production profile stays disabled.
   const durable = postgresPool !== undefined || localTest;
   const providerAllowed = !localProviderRequested || localTest;
-  const effectiveEnv = requested && (!durable || !providerAllowed)
+  const effectiveEnv = requested && (!durable || !providerAllowed || (meteredEvaluationRequested && !meteredEvaluationAllowed))
     ? { ...env, PSKILLS_BILLING_ENABLED: 'false' }
     : env;
   const testOrigin = trustedLocalBillingOrigin(env.PSKILLS_BILLING_LOCAL_BASE_URL ?? publicOrigin);
@@ -402,7 +403,11 @@ export function createBillingRuntime(
   if (requested && !service.status().enabled) {
     // Keep the registry available, but leave an operator-visible and
     // credential-free reason when an enabled request could not be honoured.
-    const reason = !providerAllowed
+    const reason = meteredEvaluationRequested && !meteredEvaluationAllowed
+      ? production
+        ? 'metered evaluation is test-only'
+        : 'a durable PostgreSQL billing boundary is required'
+      : !providerAllowed
       ? 'the local billing provider is test-only'
       : !durable
         ? 'a durable PostgreSQL billing boundary is required'

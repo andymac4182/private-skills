@@ -131,4 +131,33 @@ describePostgres('billing-backed Eve reservation recovery (requires PSKILLS_BILL
     expect(rows).toHaveLength(3);
     expect(rows.map((row) => Number(row.eve_cost_cents_delta))).toEqual([17, 17, -6]);
   });
+
+  it('admits bounded Eve usage in explicit providerless evaluation mode', async () => {
+    const service = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      enabled: false,
+      usageEnabled: true,
+      now: () => NOW,
+    });
+    expect(service.status()).toMatchObject({
+      enabled: true,
+      provider: null,
+      mode: 'test',
+      checkout: false,
+      portal: false,
+      webhookVerification: false,
+    });
+    const adapter = createBillingEveCostReservation(service, { estimateCents: 17 });
+    const held = await adapter.reserve({
+      tenantId: 'eve-providerless-acme',
+      service: 'consolidation-reviewer',
+      operation: 'daily-review',
+      idempotencyKey: 'providerless-review:2026-09-16',
+    });
+    await adapter.settle({ reservationId: held.reservationId, actualCostCents: 11 });
+    await expect(service.usageSnapshot('eve-providerless-acme')).resolves.toMatchObject({
+      usage: { eveCostCents: 11 },
+      entitlement: { state: 'inactive', source: 'no-subscription' },
+    });
+  });
 });
