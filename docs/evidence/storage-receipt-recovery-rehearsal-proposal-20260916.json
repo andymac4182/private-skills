@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-local-only",
+  "sourceRevision": "f4eea80d4d9ffa228c9e450fa53ae5942cfb383c",
+  "execution": {
+    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=f4eea80d4d9ffa228c9e450fa53ae5942cfb383c pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
+    "databaseTarget": "loopback PostgreSQL only; unique state and billing tables are dropped after the run",
+    "storageTarget": "temporary Files SDK filesystem root only",
+    "credentials": "provided in process; never logged or written to evidence"
+  },
+  "hostedTarget": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "recoveryExecuted": false,
+    "mutationPerformed": false,
+    "readOnlyProbe": {
+      "required": true,
+      "scope": "fresh inert exact prefix only",
+      "output": "counts and bounded metadata; no keys, credentials, or object bytes"
+    },
+    "prefixRule": "rehearsal/<fresh-cryptographic-nonce>/",
+    "productionAcceptanceClaim": false
+  },
+  "localScenarioManifest": [
+    {
+      "name": "metadata-failure-with-verified-receipt-after-client-restart",
+      "setup": [
+        "real PostgreSQL state repository",
+        "real PostgreSQL-backed BillingService",
+        "private Files SDK filesystem adapter",
+        "core metadata commit fails after awaited provider readback"
+      ],
+      "requiredEvidence": [
+        "attempt is orphaned and stores a verified receipt",
+        "fresh client has the same provider binding",
+        "exact object inspection is absent after cleanup",
+        "exact billing usage operation is released",
+        "storage usage is zero",
+        "metadata attempt is released"
+      ],
+      "expected": {
+        "receipt": "verified",
+        "recoveryStatus": "released",
+        "objectAfterRecovery": "absent",
+        "billingStorageBytesAfterRecovery": 0,
+        "metadataStateAfterRecovery": "released"
+      }
+    },
+    {
+      "name": "unknown-provider-outcome-without-receipt",
+      "expected": {
+        "receipt": "absent",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": "reservation size",
+        "metadataStateAfterRecovery": "orphaned"
+      }
+    },
+    {
+      "name": "binding-mismatch-receipt-retained",
+      "expected": {
+        "receipt": "binding-mismatch",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": "reservation size",
+        "metadataStateAfterRecovery": "orphaned"
+      }
+    }
+  ],
+  "externalInputsBeforeAnyHostedMutation": [
+    "fresh read-only production Blob prefix inventory",
+    "provider-authoritative writer termination/finality record for the exact key",
+    "targeted production database/object mapping readback",
+    "explicit operator authorization for exact object deletion and billing release",
+    "rollback/recovery operator path if a response is uncertain"
+  ]
+}
