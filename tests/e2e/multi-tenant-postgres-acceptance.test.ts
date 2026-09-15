@@ -27,7 +27,7 @@ import type {
 import { bundleFor, scannerResult } from './harness.js';
 import { digestBytes, encodeBundle } from '../../packages/storage/src/index.js';
 
-const ORIGIN = 'http://better-auth-tenant.test';
+const ORIGIN = 'http://postgres-tenant-acceptance.test';
 const TENANT_A = 'tenant-a';
 const TENANT_B = 'tenant-b';
 const SHARED_SKILL_NAME = '@acme/shared-tenant-skill';
@@ -195,7 +195,7 @@ async function createTenantRuntime(): Promise<TenantRuntime> {
       policyRevision: 'two-tenant-postgres-acceptance',
     }),
   });
-  const root = await mkdtemp(join(tmpdir(), 'private-skills-better-auth-tenant-'));
+  const root = await mkdtemp(join(tmpdir(), 'private-skills-postgres-tenant-'));
   const blobs = await createNodeFilesSdkBlobStore({ provider: 'fs', root, prefix: 'private-registry' });
 
   const auth = new TokenAuthenticator({
@@ -208,7 +208,7 @@ async function createTenantRuntime(): Promise<TenantRuntime> {
       tokenConfig('worker-a', WORKER_A_TOKEN, TENANT_A, 'worker-a', 'worker'),
       tokenConfig('worker-b', WORKER_B_TOKEN, TENANT_B, 'worker-b', 'worker'),
     ],
-    sessionSecret: 'better-auth-tenant-acceptance-session-secret',
+    sessionSecret: 'postgres-tenant-acceptance-session-secret',
     publicOrigin: ORIGIN,
     allowedOrigins: [ORIGIN],
   });
