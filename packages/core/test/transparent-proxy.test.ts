@@ -104,6 +104,9 @@ function fixtureBundle(): SkillBundle {
 class MemoryBlobs implements RecoverableBlobStore {
   private sequence = 0;
   private readonly values = new Map<string, Uint8Array>();
+  // The fixture writes synchronously; retain an explicit terminal fact rather
+  // than inferring provider finality from the object's current presence.
+  private readonly terminatedWrites = new Set<string>();
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
     return this.putAtKey(this.allocateObjectKey(), bytes);
@@ -121,6 +124,7 @@ class MemoryBlobs implements RecoverableBlobStore {
       size: copy.byteLength,
     };
     this.values.set(stored.key, copy);
+    this.terminatedWrites.add(stored.key);
     return stored;
   }
 
@@ -141,7 +145,7 @@ class MemoryBlobs implements RecoverableBlobStore {
   }
 
   async confirmWriteTerminated(key: string): Promise<boolean> {
-    return !this.values.has(key);
+    return this.terminatedWrites.has(key);
   }
 }
 

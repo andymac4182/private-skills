@@ -25,6 +25,9 @@ const EXTERNAL_ID = 'acme/root';
 
 class MemoryBlobs implements RecoverableBlobStore {
   private readonly values = new Map<string, Uint8Array>();
+  // The fixture writes synchronously; retain an explicit terminal fact rather
+  // than inferring provider finality from the object's current presence.
+  private readonly terminatedWrites = new Set<string>();
   private nextKey = 0;
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
@@ -39,6 +42,7 @@ class MemoryBlobs implements RecoverableBlobStore {
     const copy = bytes.slice();
     const stored = { key, digest: await digestBytes(copy), size: copy.byteLength } satisfies StoredBlob;
     this.values.set(stored.key, copy);
+    this.terminatedWrites.add(stored.key);
     return stored;
   }
 
@@ -59,7 +63,7 @@ class MemoryBlobs implements RecoverableBlobStore {
   }
 
   async confirmWriteTerminated(key: string): Promise<boolean> {
-    return !this.values.has(key);
+    return this.terminatedWrites.has(key);
   }
 }
 
