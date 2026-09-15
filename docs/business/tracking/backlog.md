@@ -25,3 +25,5 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] F05 — SCIM provisioning, custom domains, residency/SLA commitments and dedicated scanner fleet when evidence warrants them. Company SSO itself is launch scope.
 
 - [ ] B11 — L04: verify copied invitation in browser through invitee login, acceptance, membership persistence, wrong-email denial and expiration. Component tests pass at 574286e; browser proof pending.
+
+- [ ] B12 — L04: actual browser owner invite denied on d529e42 (Alice Acme / Acme Labs Demo, reader invite for synthetic Ben). UI shows owner but Better Auth returns permission denial. Inspect role resource mapping and invitation creation contract; prove authorized owner success and reader denial against real runtime. No invitation was created by this test.
