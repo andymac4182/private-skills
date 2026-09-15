@@ -24,14 +24,14 @@ export const DEFAULT_PLAN_DEFINITIONS: readonly PlanDefinition[] = Object.freeze
   {
     id: 'team' as PlanId,
     label: 'Team',
-    description: 'Shared private skill management for a small team (provisional).',
+    description: 'Shared private skill management for a small team.',
     limits: { seats: 10, storageBytes: 10 * GIB, scansPerMonth: 750, eveCostCentsPerMonth: 500 },
     public: true,
   },
   {
     id: 'business' as PlanId,
     label: 'Business',
-    description: 'Higher bounded capacity for governed organization use (provisional Team Plus anchor).',
+    description: 'Higher bounded capacity for governed organization use.',
     limits: { seats: 25, storageBytes: 50 * GIB, scansPerMonth: 4_000, eveCostCentsPerMonth: 2_500 },
     public: true,
   },

@@ -17,8 +17,8 @@ function PricingPage() {
   return <PublicLayout current="pricing">
     <section className="marketing-page-hero" aria-labelledby="pricing-title">
       <div className="marketing-page-hero-grid">
-        <div><span className="marketing-eyebrow">Simple packaging, deliberate rollout</span><h1 id="pricing-title">Choose the shape of your <em>first workflow.</em></h1><p>Compare a focused team run, several workflows, or a broader rollout. Commercial terms will be published after the workflow and value metric are settled.</p></div>
-        <div className="marketing-page-hero-note"><strong>{pricingStatus}</strong>Plan shapes and finite allowances are shown for evaluation. Confirm current plan limits and checkout readiness in your application billing console.</div>
+        <div><span className="marketing-eyebrow">Compare team sizes and usage limits</span><h1 id="pricing-title">Choose the right fit <em>for your team.</em></h1><p>Review active member, storage, scanner, and Eve allowances across the current plan preview. Commercial terms will be published when packaging is finalized.</p></div>
+        <div className="marketing-page-hero-note"><strong>{pricingStatus}</strong>These provisional plan limits are shown for evaluation. Confirm current plan limits and checkout readiness in your application billing console.</div>
       </div>
     </section>
 
@@ -38,15 +38,14 @@ function PricingPage() {
       </div>
 
       <div aria-labelledby="comparison-title" className="marketing-comparison" role="region" tabIndex={0}>
-        <h2 id="comparison-title">What the preview covers</h2>
-        <table><caption className="marketing-visually-hidden">Plan metadata and bounded limits for the pricing preview</caption><thead><tr><th>Plan metadata</th>{marketingPlans.map((plan) => <th key={plan.id}>{plan.name}</th>)}</tr></thead><tbody>
-          <tr><td>Server plan ID</td>{marketingPlans.map((plan) => <td key={plan.id}><code>{plan.id}</code></td>)}</tr>
+        <h2 id="comparison-title">Compare plan limits</h2>
+        <p className="marketing-comparison-hint">Swipe to compare all plans <span aria-hidden="true">→</span></p>
+        <table><caption className="marketing-visually-hidden">Plan limits for the pricing preview</caption><thead><tr><th>Plan limits</th>{marketingPlans.map((plan) => <th key={plan.id}>{plan.name}</th>)}</tr></thead><tbody>
           <tr><td>Active members</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.seats}</td>)}</tr>
           <tr><td>Retained storage</td>{marketingPlans.map((plan) => <td key={plan.id}>{formatMarketingStorage(plan.limits.storageBytes)}</td>)}</tr>
           <tr><td>Scans per month</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.scansPerMonth}</td>)}</tr>
           <tr><td>Eve allowance</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.eveCostCentsPerMonth} cents/month</td>)}</tr>
           <tr><td>Recurring price</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.priceConfigured ? 'Configured in app' : 'Not configured'}</td>)}</tr>
-          <tr><td>Marketing checkout</td>{marketingPlans.map((plan) => <td key={plan.id}>Unavailable</td>)}</tr>
         </tbody></table>
       </div>
     </section>
