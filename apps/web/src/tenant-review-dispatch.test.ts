@@ -374,7 +374,7 @@ describe('tenant review dispatch', () => {
     const runtime = createTenantReviewRuntime({
       env: { PSKILLS_AI_ENABLED: 'true' },
       repository: repo,
-      billing: { status: () => ({ enabled: true }), reserveUsage: async () => ({}), reconcileUsage: async () => ({}) },
+      billing: { status: () => ({ enabled: true }), reserveUsage: async () => ({}), reconcileUsage: async () => ({}), findUsageOperation: async () => undefined },
       eveTenant: {} as never,
       listTenants: async () => [],
     });
@@ -394,6 +394,7 @@ describe('tenant review dispatch', () => {
         calls.push(`reconcile:${organizationId}:${actual.eveCostCents}`);
         return {};
       },
+      findUsageOperation: async () => undefined,
     };
     const eveTenant = {
       providerFor: () => ({

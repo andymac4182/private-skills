@@ -858,6 +858,16 @@ export class BillingService {
     return { organizationId: normalized, limits: { ...entitlement.limits }, usage: periodUsage(state.usage, this.now()), entitlement };
   }
 
+  /**
+   * Recover a retained usage reservation after a host restart. The operation
+   * record is the billing system's durable source of tenant identity and
+   * reserved Eve amount; callers must not reconstruct it from request data.
+   */
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
+    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    return this.repository.findUsageOperation(normalized);
+  }
+
   async checkUsage(organizationId: string, delta: UsageDelta = {}): Promise<{ allowed: boolean; snapshot: UsageSnapshot; projected: BillingUsage; exceeded?: UsageLimitDetails }> {
     const normalized = validateBillingOrganizationId(organizationId);
     const normalizedDelta = normalizedDeltaInput(delta);

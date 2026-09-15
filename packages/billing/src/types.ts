@@ -174,6 +174,8 @@ export interface BillingRepository {
   read(organizationId: string): Promise<BillingOrganizationState>;
   /** The updater must be synchronous so every implementation can commit atomically. */
   transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T>;
+  /** Locate a retained usage operation by its durable idempotency key. */
+  findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
   findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined>;
   findOrganizationBySubscriptionId(provider: BillingProviderId, subscriptionId: string): Promise<string | undefined>;
   /**

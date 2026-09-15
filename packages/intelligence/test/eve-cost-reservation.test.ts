@@ -9,16 +9,21 @@ import { createBillingEveCostReservation } from '../../../apps/web/server/eve-co
 
 function billingHarness(enabled = true) {
   const calls: Array<{ kind: string; organizationId?: string; reservationKey?: string; actual?: number; operationKey?: string; delta?: unknown }> = [];
+  const durableReservations = new Map<string, { organizationId: string; operationKey: string; delta: { eveCostCents: number } }>();
   return {
     calls,
     status: () => ({ enabled }),
     async reserveUsage(organizationId: string, delta: unknown, operationKey: string) {
       calls.push({ kind: 'reserve', organizationId, delta, operationKey });
+      durableReservations.set(operationKey, { organizationId, operationKey, delta: delta as { eveCostCents: number } });
       return { operationKey };
     },
     async reconcileUsage(organizationId: string, reservationKey: string, actual: { eveCostCents: number }, operationKey: string) {
       calls.push({ kind: 'reconcile', organizationId, reservationKey, actual: actual.eveCostCents, operationKey });
       return { operationKey };
+    },
+    async findUsageOperation(operationKey: string) {
+      return durableReservations.get(operationKey);
     },
   };
 }
@@ -41,6 +46,36 @@ describe('billing-backed Eve cost reservations', () => {
     expect(billing.calls[1]).toMatchObject({ kind: 'reconcile', organizationId: 'acme', reservationKey: held.reservationId, actual: 17 });
     expect((billing.calls[0]?.operationKey ?? '')).toContain('acme');
     expect(billing.calls[0]?.operationKey).not.toBe(billing.calls[1]?.operationKey);
+  });
+
+  it('recovers a durable reservation after adapter restart and in-memory eviction', async () => {
+    const billing = billingHarness();
+    const first = createBillingEveCostReservation(billing, { estimateCents: 40, maxInMemoryReservations: 1 });
+    const held = await first.reserve({
+      tenantId: 'acme',
+      service: 'consolidation-reviewer',
+      operation: 'daily-review',
+      idempotencyKey: 'common-skill-review:2026-09-16',
+    });
+    await first.reserve({
+      tenantId: 'globex',
+      service: 'consolidation-reviewer',
+      operation: 'daily-review',
+      idempotencyKey: 'common-skill-review:2026-09-16',
+    });
+
+    const restarted = createBillingEveCostReservation(billing, { estimateCents: 40, maxInMemoryReservations: 1 });
+    await expect(restarted.reconcile?.({
+      reservationId: held.reservationId,
+      actualCostCents: 17,
+      operationKey: 'operator-reconcile-acme',
+    })).resolves.toBeUndefined();
+    expect(billing.calls.at(-1)).toMatchObject({
+      kind: 'reconcile',
+      organizationId: 'acme',
+      reservationKey: held.reservationId,
+      actual: 17,
+    });
   });
 
   it('releases a failed session with an idempotent zero-cost correction', async () => {

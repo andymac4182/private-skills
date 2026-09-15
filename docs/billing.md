@@ -26,6 +26,13 @@ boundaries visible. Missing Stripe credentials do not activate a local paid
 mode. This package makes no external Stripe calls during tests and does not
 contain production account credentials.
 
+The free plan still has finite Eve limits, but `createBillingEveCostReservation`
+requires the billing service's enabled admission status before reserving them.
+Consequently a no-Stripe launch demo must explicitly use the durable local
+test accounting profile in development/test, or a separately approved
+providerless ledger mode; flipping the status gate would permit unmetered Eve
+work and is not a safe launch configuration.
+
 ## Company-admin console
 
 The bounded route factory is `createBillingRoutes()` in
@@ -85,6 +92,13 @@ unit. Customer and subscription provider identifiers have database-wide
 unique constraints, and webhook `(provider, event_id)` claims are unique. A
 losing concurrent event claim aborts before any entitlement mutation and is
 reported as a duplicate after the durable row is re-read.
+
+The same PostgreSQL usage-operation table is the recovery source for Eve
+reservations. The web adapter keeps only a bounded in-process cache for
+latency; after a restart or cache eviction it resolves the reservation by its
+durable operation key, validates the organization and positive Eve estimate,
+and then applies an idempotent correction. Missing, ambiguous, or malformed
+records fail closed and require reconciliation rather than reopening Eve work.
 
 `packages/billing/test/postgres.integration.test.ts` is skipped unless
 `PSKILLS_BILLING_POSTGRES_URL` is supplied. With a disposable PostgreSQL

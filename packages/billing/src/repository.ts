@@ -427,6 +427,21 @@ export class MemoryBillingRepository implements BillingRepository {
     }
     return undefined;
   }
+
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
+    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    let found: BillingUsageOperation | undefined;
+    for (const state of this.states.values()) {
+      const candidate = state.usageOperations.find((operation) => operation.operationKey === normalized);
+      if (!candidate) continue;
+      if (found !== undefined && found.organizationId !== candidate.organizationId) {
+        throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
+      }
+      found = candidate;
+    }
+    if (found === undefined) return undefined;
+    return JSON.parse(JSON.stringify(found)) as BillingUsageOperation;
+  }
 }
 
 export interface BillingPgQueryResult<Row = Record<string, unknown>> {
@@ -1000,6 +1015,20 @@ export class PostgresBillingRepository implements BillingRepository {
       [normalizedProvider, normalizedEvent],
     );
     return result.rows[0] ? rowEvent(result.rows[0]) : undefined;
+  }
+
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
+    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    await this.ensureSchema();
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at FROM ${this.tables.operations} WHERE operation_key = $1 ORDER BY organization_id ASC LIMIT 2`,
+      [normalized],
+    );
+    if (result.rows.length > 1) throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
+    const row = result.rows[0];
+    if (!row) return undefined;
+    const organizationId = validateBillingOrganizationId(row.organization_id);
+    return rowOperation(row, organizationId);
   }
 }
 
