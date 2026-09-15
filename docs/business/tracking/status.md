@@ -6,6 +6,8 @@ Latest published increment: origin/main `668f53e6420419eda6aef0d0d73385da3af280c
 
 Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar purchase-availability/price checks remain active; no brand selection or domain purchase made.
 
+Company SSO settings UI integrated `cba7f63`; invitation clipboard/manual-selection fallback integrated `c7e4671`. Root verification: 16 SSO/client/command-palette/company tests plus 6 invitation acceptance tests passed, and typecheck passed. Runtime SSO mounting and actual browser verification of these latest screens remain open. These are local integration changes after the published foundation.
+
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
 | L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous homepage HTTP 200 and rendered content verified by root; full interactive/mobile review remains open |
