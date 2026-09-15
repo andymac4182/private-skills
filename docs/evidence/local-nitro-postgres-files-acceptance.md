@@ -65,9 +65,11 @@ same composed runtime and Better Auth schema shape:
    and applies the tenant resource allowlist. Each company receives only its
    own same-name skill result. This is not external model or provider
    acceptance.
-4. Each company confirms one pack install receipt from its own authorization.
-   The analytics response records one pack install and one install operation,
-   and its top-skill resource ID is limited to that company's pack member.
+4. Each company submits one synthetic client-confirmed pack-install receipt
+   from its own authorization. The analytics response records one pack
+   install and one install operation, and its top-skill resource ID is limited
+   to that company's pack member. This proves receipt attribution and does not
+   claim a native pack installation.
 
 An actual filtered execution on 16 September 2026 passed the extended case
 against loopback PostgreSQL and the Files SDK filesystem provider (`1 passed,
