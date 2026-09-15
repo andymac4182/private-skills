@@ -94,8 +94,38 @@ class RecoverableMemoryBlobs extends MemoryBlobs {
     return { state: 'present', key, digest: await digestBytes(value), size: value.byteLength };
   }
 
-  async confirmWriteTerminated(): Promise<boolean> {
+  async confirmWriteTerminated(_key: string): Promise<boolean> {
     return true;
+  }
+}
+
+class DelayedOriginalWriteBlobs extends RecoverableMemoryBlobs {
+  private delayNext = false;
+  private delayed?: { key: string; bytes: Uint8Array };
+  private readonly terminated = new Set<string>();
+
+  delayNextWrite(): void {
+    this.delayNext = true;
+  }
+
+  override async putAtKey(key: string, bytes: Uint8Array): Promise<StoredBlob> {
+    if (!this.delayNext) return await super.putAtKey(key, bytes);
+    this.delayNext = false;
+    this.attemptWriteKeys.push(key);
+    this.delayed = { key, bytes: bytes.slice() };
+    throw new Error('simulated response loss while provider write remains in flight');
+  }
+
+  override async confirmWriteTerminated(key: string): Promise<boolean> {
+    return this.terminated.has(key);
+  }
+
+  finishDelayedWrite(): void {
+    if (!this.delayed) throw new Error('delayed write was not started');
+    const { key, bytes } = this.delayed;
+    this.delayed = undefined;
+    this.values.set(key, bytes);
+    this.terminated.add(key);
   }
 }
 
@@ -242,7 +272,7 @@ interface Fixture {
   reviewTriggerCalls: number;
 }
 
-async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; recoverable?: boolean; withBilling?: boolean } = {}): Promise<Fixture> {
+async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; recoverable?: boolean; delayedWrite?: boolean; withBilling?: boolean } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
@@ -253,7 +283,11 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; r
     ],
   };
   const bytes = encodeBundle(bundle);
-  const blobs = options.recoverable ? new RecoverableMemoryBlobs() : new MemoryBlobs();
+  const blobs = options.delayedWrite
+    ? new DelayedOriginalWriteBlobs()
+    : options.recoverable
+      ? new RecoverableMemoryBlobs()
+      : new MemoryBlobs();
   const stored = await blobs.put(bytes);
   const release: SkillVersion = {
     id: 'release-1',
@@ -556,6 +590,47 @@ describe('durable skill drafts', () => {
     const attemptWriteKeys = (test.blobs as RecoverableMemoryBlobs).attemptWriteKeys;
     expect(attemptWriteKeys.filter((key) => key === draft.artifact.key)).toHaveLength(1);
     expect(new Set(attemptWriteKeys).size).toBe(2); // the create and update artifacts have distinct stable keys
+  });
+
+  it('does not rewrite an orphan while the original provider write may still finish', async () => {
+    const test = await fixture({ delayedWrite: true, withBilling: true });
+    const created = await create(test);
+    const blobs = test.blobs as DelayedOriginalWriteBlobs;
+    const changedFiles = [
+      { ...test.bundle.files[0]!, content: base64('---\nname: demo\ndescription: Delayed edit\n---\n# Delayed\n') },
+      ...test.bundle.files.slice(1),
+    ];
+    blobs.delayNextWrite();
+
+    const failed = await test.handler(updateRequest(created.draft.id, 'delayed-update', 1, changedFiles));
+    expect(failed.status).toBe(503);
+    expect((await json(failed)).error.code).toBe('STORAGE_UNAVAILABLE');
+
+    const afterFailure = await test.repository.read(ORGANIZATION);
+    const orphan = afterFailure.storageAttempts!.find((attempt) => attempt.state === 'orphaned' && attempt.objectKey !== undefined && attempt.reservationKey.includes('private-skills:draft-storage:'))!;
+    expect(orphan).toBeDefined();
+    const retryBeforeFinish = await test.handler(updateRequest(created.draft.id, 'delayed-update', 1, changedFiles));
+    expect(retryBeforeFinish.status).toBe(503);
+    expect((await json(retryBeforeFinish)).error.code).toBe('STORAGE_ATTEMPT_BUSY');
+    expect(blobs.attemptWriteKeys.filter((key) => key === orphan.objectKey)).toHaveLength(1);
+
+    blobs.finishDelayedWrite();
+    const retryAfterFinish = await test.handler(updateRequest(created.draft.id, 'delayed-update', 1, changedFiles));
+    expect(retryAfterFinish.status).toBe(200);
+    expect(await json(retryAfterFinish)).toMatchObject({ idempotent: false });
+
+    const state = await test.repository.read(ORGANIZATION);
+    const draft = state.drafts!.find((candidate) => candidate.id === created.draft.id)!;
+    expect(draft.revision).toBe(2);
+    expect(draft.artifact).toMatchObject({ key: orphan.objectKey, digest: draft.digest, size: orphan.size });
+    expect(state.storageAttempts!.filter((attempt) => attempt.reservationKey === orphan.reservationKey)).toEqual([
+      expect.objectContaining({ id: orphan.id, state: 'committed', objectKey: orphan.objectKey }),
+    ]);
+    const committedBytes = state.storageAttempts!
+      .filter((attempt) => attempt.state === 'committed')
+      .reduce((total, attempt) => total + attempt.size, 0);
+    await expect(test.billing!.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { storageBytes: committedBytes } });
+    expect(blobs.attemptWriteKeys.filter((key) => key === orphan.objectKey)).toHaveLength(1);
   });
 
   it('canonicalizes file order before sealing and replays idempotency from the verified blob', async () => {

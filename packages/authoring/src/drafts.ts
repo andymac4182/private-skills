@@ -46,6 +46,7 @@ import {
   createVerifiedStorageWriteReceipt,
   decodeBundle,
   digestBytes,
+  isRecoverableBlobStore,
   encodeBundle,
   isVerifiedStorageWriteReceipt,
   parseSkillMetadata,
@@ -327,7 +328,7 @@ function draftStorageAttemptRecord(input: {
 async function beginDraftStorageAttempt(
   deps: AuthoringHandlerDependencies,
   input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
-): Promise<{ attempt: StorageAttempt; ownsWrite: boolean }> {
+): Promise<DraftStorageAttemptClaim> {
   // Persist the provider object identity before the draft write so a lost
   // upload response can be reconciled without guessing a provider key.
   const attempt = draftStorageAttemptRecord({
@@ -336,7 +337,7 @@ async function beginDraftStorageAttempt(
     objectKey: allocateStorageObjectKey(deps.blobs),
     providerBinding: storageProviderBinding(deps.blobs),
   });
-  return await deps.repository.transaction(deps.config.organizationId, (state) => {
+  const claim = await deps.repository.transaction(deps.config.organizationId, (state) => {
     state.storageAttempts ??= [];
     // The metered key is the lifecycle identity. Two requests can both pass
     // the idempotency pre-read before either metadata transaction commits;
@@ -358,9 +359,7 @@ async function beginDraftStorageAttempt(
         if (existing.billingCorrection === 'restore-pending') {
           throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is settling; retry shortly', 503);
         }
-        existing.state = 'pending';
-        existing.updatedAt = new Date().toISOString();
-        return { attempt: { ...existing }, ownsWrite: true };
+        return { orphaned: true as const, attempt: { ...existing } };
       }
       if (existing.state === 'pending' || existing.state === 'recovering' || existing.state === 'releasing') {
         throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
@@ -370,6 +369,96 @@ async function beginDraftStorageAttempt(
     }
     state.storageAttempts.push(attempt);
     return { attempt, ownsWrite: true };
+  });
+  if ('orphaned' in claim) return await resumeOrphanedDraftStorageAttempt(deps, input, claim.attempt);
+  return claim;
+}
+
+type DraftStorageAttemptClaim = {
+  attempt: StorageAttempt;
+  ownsWrite: boolean;
+  stored?: StoredBlob;
+};
+
+async function resumeOrphanedDraftStorageAttempt(
+  deps: AuthoringHandlerDependencies,
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+  observed: StorageAttempt,
+): Promise<DraftStorageAttemptClaim> {
+  const key = observed.objectKey;
+  if (!key || !isRecoverableBlobStore(deps.blobs)) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  let inspection;
+  try {
+    inspection = await deps.blobs.inspectObject(key);
+  } catch {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  if (inspection.state === 'present') {
+    if (inspection.digest !== input.digest || inspection.size !== input.size) {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the provider object', 409);
+    }
+    const stored: StoredBlob = { key: inspection.key, digest: inspection.digest, size: inspection.size };
+    return await deps.repository.transaction(deps.config.organizationId, (state) => {
+      const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+      if (
+        !current ||
+        current.objectKey !== key ||
+        current.reservationKey !== input.reservationKey ||
+        current.reservationGeneration !== input.reservationGeneration ||
+        current.digest !== input.digest ||
+        current.size !== input.size
+      ) {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
+      }
+      if (current.state === 'orphaned') return { attempt: { ...current }, ownsWrite: false, stored };
+      if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedDraftStorageBlob(current) };
+      if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+      }
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    });
+  }
+
+  if (inspection.state !== 'absent') {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  let writeTerminated = false;
+  try {
+    writeTerminated = typeof deps.blobs.confirmWriteTerminated === 'function' && await deps.blobs.confirmWriteTerminated(key);
+  } catch {
+    writeTerminated = false;
+  }
+  if (!writeTerminated) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  return await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+    if (
+      !current ||
+      current.objectKey !== key ||
+      current.reservationKey !== input.reservationKey ||
+      current.reservationGeneration !== input.reservationGeneration ||
+      current.digest !== input.digest ||
+      current.size !== input.size
+    ) {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
+    }
+    if (current.state === 'orphaned') {
+      current.state = 'pending';
+      current.updatedAt = new Date().toISOString();
+      return { attempt: { ...current }, ownsWrite: true };
+    }
+    if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedDraftStorageBlob(current) };
+    if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+    }
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
   });
 }
 
@@ -1263,7 +1352,7 @@ async function createDraft(
     storageAttempt = storageClaim.attempt;
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt)
-      : committedDraftStorageBlob(storageAttempt);
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
     if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
@@ -1419,7 +1508,7 @@ async function createUploadDraft(
     storageAttempt = storageClaim.attempt;
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt)
-      : committedDraftStorageBlob(storageAttempt);
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
     if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
@@ -1721,7 +1810,7 @@ export async function writeDraftRevision(
     storageAttempt = storageClaim.attempt;
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt)
-      : committedDraftStorageBlob(storageAttempt);
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
     if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(input.deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
