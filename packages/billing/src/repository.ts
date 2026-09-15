@@ -655,7 +655,7 @@ BEGIN
     SELECT 1
       FROM pg_constraint AS existing_constraint
      WHERE existing_constraint.conname = '${normalizedPrefix}_operations_status_check'
-       AND existing_constraint.conrelid = to_regclass('${normalizedPrefix}_usage_operations')
+       AND existing_constraint.conrelid = to_regclass('${tables.operations}')
   ) THEN
     ALTER TABLE ${tables.operations}
       ADD CONSTRAINT ${quoteIdentifier(`${normalizedPrefix}_operations_status_check`)}
@@ -668,7 +668,7 @@ BEGIN
     SELECT 1
       FROM pg_constraint AS existing_constraint
      WHERE existing_constraint.conname = '${generationConstraintName}'
-       AND existing_constraint.conrelid = to_regclass('${normalizedPrefix}_usage_operations')
+       AND existing_constraint.conrelid = to_regclass('${tables.operations}')
   ) THEN
     ALTER TABLE ${tables.operations}
       ADD CONSTRAINT ${quoteIdentifier(generationConstraintName)}

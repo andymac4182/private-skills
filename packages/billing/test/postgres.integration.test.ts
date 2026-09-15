@@ -258,6 +258,61 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     }
   })
 
+  it('reruns safely when an empty search-path schema precedes the resolved table schema', async () => {
+    const schemaBase = `billing_it_search_path_${process.pid}_${Math.floor(Math.random() * 10_000)}`
+    const emptySchema = `${schemaBase}_empty`
+    const existingSchema = `${schemaBase}_existing`
+    try {
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS "${emptySchema}" CASCADE`)
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS "${existingSchema}" CASCADE`)
+      await sql!.unsafe(`CREATE SCHEMA "${emptySchema}"`)
+      await sql!.unsafe(`CREATE SCHEMA "${existingSchema}"`)
+
+      const existingClient = await sql!.reserve()
+      try {
+        await existingClient.unsafe(`SET search_path TO "${existingSchema}", public`)
+        await existingClient.unsafe(billingPostgresSchemaSql(prefix))
+      } finally {
+        await existingClient.unsafe('SET search_path TO public')
+        await existingClient.release()
+      }
+
+      const emptyFirstClient = await sql!.reserve()
+      try {
+        await emptyFirstClient.unsafe(`SET search_path TO "${emptySchema}", "${existingSchema}", public`)
+        await emptyFirstClient.unsafe(billingPostgresSchemaSql(prefix))
+        await emptyFirstClient.unsafe(billingPostgresSchemaSql(prefix))
+      } finally {
+        await emptyFirstClient.unsafe('SET search_path TO public')
+        await emptyFirstClient.release()
+      }
+
+      const constraints = await sql!.unsafe<{ schema_name: string; constraint_name: string }[]>(
+        `SELECT target_schema.nspname AS schema_name, existing_constraint.conname AS constraint_name
+           FROM pg_constraint AS existing_constraint
+           JOIN pg_class AS target_table ON target_table.oid = existing_constraint.conrelid
+           JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
+          WHERE target_schema.nspname = $1
+            AND target_table.relname = $2
+            AND existing_constraint.conname IN ($3, $4)
+          ORDER BY existing_constraint.conname`,
+        [
+          existingSchema,
+          `${prefix}_usage_operations`,
+          `${prefix}_op_generation_check`,
+          `${prefix}_operations_status_check`,
+        ],
+      )
+      expect(constraints).toEqual([
+        { schema_name: existingSchema, constraint_name: `${prefix}_op_generation_check` },
+        { schema_name: existingSchema, constraint_name: `${prefix}_operations_status_check` },
+      ])
+    } finally {
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS "${emptySchema}" CASCADE`)
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS "${existingSchema}" CASCADE`)
+    }
+  })
+
   it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {
     const catalog = planCatalog()
     const first = new BillingService({
