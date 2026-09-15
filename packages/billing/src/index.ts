@@ -85,8 +85,6 @@ const REFUND_EVENTS = new Set(['charge.refunded', 'refund.created', 'refund.upda
 const MAX_OPERATION_KEY_BYTES = 256;
 export const MAX_WEBHOOK_BODY_BYTES = 10 * 1024 * 1024;
 const MAX_WEBHOOK_EVENTS = 2_000;
-/** A failed Better Auth write cannot run an after-hook; bound that stale hold. */
-const SEAT_RESERVATION_TTL_MS = 15 * 60 * 1_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -298,18 +296,6 @@ function seatReservationSnapshot(
       entitlement,
     },
   };
-}
-
-function expireSeatReservations(state: BillingOrganizationState, nowMs: number): void {
-  const { reservations } = seatState(state);
-  for (const reservation of reservations) {
-    if (reservation.status !== 'active') continue;
-    const updatedAt = Date.parse(reservation.updatedAt);
-    if (!Number.isFinite(updatedAt) || nowMs - updatedAt < SEAT_RESERVATION_TTL_MS) continue;
-    state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
-    reservation.status = 'settled';
-    reservation.updatedAt = new Date(nowMs).toISOString();
-  }
 }
 
 function digestBytes(bytes: Uint8Array): Promise<string> {
@@ -967,7 +953,6 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const { reservations } = seatState(state);
-      expireSeatReservations(state, nowMs);
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (existing?.status === 'active') {
@@ -981,9 +966,10 @@ export class BillingService {
       const timestamp = new Date(nowMs).toISOString();
       if (existing) {
         existing.status = 'active';
+        existing.committed = false;
         existing.updatedAt = timestamp;
       } else {
-        reservations.push({ operationKey: normalizedKey, status: 'active', createdAt: timestamp, updatedAt: timestamp });
+        reservations.push({ operationKey: normalizedKey, status: 'active', committed: false, createdAt: timestamp, updatedAt: timestamp });
       }
       state.usage = next;
       return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, next, entitlement, false);
@@ -992,7 +978,8 @@ export class BillingService {
 
   /**
    * Release an admission that never became an authoritative member or
-   * invitation. Settled reservations remain as lifecycle tombstones so a
+   * invitation, or release a committed member/invitation after its identity
+   * row is removed. Settled reservations remain as lifecycle tombstones so a
    * remove-and-readd or cancel-and-reinvite can safely reactivate the same
    * subject key instead of being mistaken for an old idempotent request.
    */
@@ -1002,16 +989,18 @@ export class BillingService {
     const nowMs = this.now();
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
-      const { reservations } = seatState(state);
-      expireSeatReservations(state, nowMs);
+      const { baseline, reservations } = seatState(state);
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
-      if (!existing || existing.status === 'settled') {
+      if (!existing || (existing.status === 'settled' && existing.committed === false)) {
         return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, true);
       }
+      const wasCommitted = existing.status === 'settled' && existing.committed !== false;
       state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
       existing.status = 'settled';
+      existing.committed = false;
       existing.updatedAt = new Date(nowMs).toISOString();
+      if (wasCommitted) state.seatBaseline = Math.max(0, baseline - 1);
       return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, false);
     });
   }
@@ -1028,7 +1017,6 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const { baseline, reservations } = seatState(state);
-      expireSeatReservations(state, nowMs);
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (!existing || existing.status === 'settled') {
@@ -1037,6 +1025,7 @@ export class BillingService {
         return seatReservationSnapshot(normalized, normalizedKey, {}, state.usage, entitlement, true);
       }
       existing.status = 'settled';
+      existing.committed = true;
       existing.updatedAt = new Date(nowMs).toISOString();
       state.seatBaseline = baseline + 1;
       const exceeded = firstExceeded(entitlement.limits, state.usage, {});
@@ -1047,10 +1036,11 @@ export class BillingService {
 
   /**
    * Reconcile Better Auth's member plus pending-invitation count without
-   * erasing active reservations. A count decrease is authoritative and lowers
-   * the committed baseline; a count increase is left for the corresponding
-   * after-hook's commitSeat call so one concurrent write can never settle a
-   * different request's in-flight hold.
+   * erasing active reservations. Counts are read outside this transaction and
+   * carry no version, so this method only advances the committed baseline.
+   * Lifecycle releaseSeat calls perform decrements for rows that this process
+   * removed; retaining a lower-bound observation is fail-closed when a stale
+   * count races another identity write.
    */
   async syncSeatCount(organizationId: string, seats: number, operationKey: string): Promise<UsageReservation> {
     if (!Number.isSafeInteger(seats) || seats < 0) throw new BillingError('INVALID_USAGE', 'seat count must be a non-negative safe integer', 400);
@@ -1060,13 +1050,16 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const seat = seatState(state);
-      expireSeatReservations(state, nowMs);
       const activeCount = seat.reservations.filter((reservation) => reservation.status === 'active').length;
-      // An increase may belong to a concurrent write whose after-hook has not
-      // committed its key yet. Preserve the holds and wait for that explicit
-      // lifecycle transition. With no active holds the count is fully
-      // authoritative and can advance the baseline directly.
-      const nextBaseline = activeCount === 0 ? seats : Math.min(seat.baseline, seats);
+      // Identity counts are read outside this billing transaction. A lower
+      // observation can therefore be stale (for example, it may have been
+      // read before another member's after-hook committed). Never lower the
+      // baseline from an unversioned snapshot: explicit releaseSeat calls
+      // perform lifecycle decrements, while this reconciliation only raises
+      // a known lower bound. If a hold is active, defer increases as well so
+      // a count that already includes the in-flight write cannot double count
+      // it; commitSeat will advance the baseline for that exact key.
+      const nextBaseline = activeCount === 0 ? Math.max(seat.baseline, seats) : seat.baseline;
       const desiredSeats = nextBaseline + activeCount;
       const delta = desiredSeats - state.usage.seats;
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);

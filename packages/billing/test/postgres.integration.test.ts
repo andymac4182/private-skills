@@ -1,5 +1,6 @@
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { PostgresIdentityBillingAdmission } from '../../../apps/web/server/identity-infrastructure.js'
 import {
   BillingService,
   PostgresBillingRepository,
@@ -181,10 +182,114 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await first.commitSeat(organizationId, winner)
     await first.syncSeatCount(organizationId, 2, 'pg-seat-invite-committed')
 
-    // Remove and re-add the same subject after the committed count falls.
-    await first.syncSeatCount(organizationId, 1, 'pg-seat-member-removed')
+    // A stale lower count cannot lower the committed baseline. The explicit
+    // remove lifecycle then frees the seat before the same subject is re-added.
+    await first.syncSeatCount(organizationId, 1, 'pg-seat-member-stale-read')
+    await expect(first.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 2 } })
+    await expect(first.releaseSeat(organizationId, winner)).resolves.toMatchObject({ idempotent: false })
     await expect(second.reserveSeat(organizationId, winner)).resolves.toMatchObject({ idempotent: false })
     await expect(second.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 2 } })
+  })
+
+  it('does not let a stale Better Auth count undo a committed seat', async () => {
+    const catalog = planCatalog()
+    const first = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const second = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const organizationId = 'org-pg-stale-identity-count'
+    const schema = `billing_identity_it_${process.pid}_${Math.floor(Math.random() * 10_000)}`
+    const quotedSchema = `"${schema}"`
+    const memberTable = `${quotedSchema}."member"`
+    const invitationTable = `${quotedSchema}."invitation"`
+    await sql!.unsafe(`CREATE SCHEMA ${quotedSchema}`)
+    await sql!.unsafe(`CREATE TABLE ${memberTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "userId" text NOT NULL, "role" text NOT NULL)`)
+    await sql!.unsafe(`CREATE TABLE ${invitationTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "status" text NOT NULL, "expiresAt" timestamptz NOT NULL)`)
+    await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, ['member-existing', organizationId, 'user-existing', 'owner'])
+
+    const identityPool = pool
+    const firstAdmission = new PostgresIdentityBillingAdmission(first, identityPool, schema)
+    await firstAdmission.syncSeats(organizationId, 'pg-stale-seed')
+
+    let releaseCountRead!: () => void
+    const countReadBarrier = new Promise<void>((resolve) => { releaseCountRead = resolve })
+    let countReadObserved!: () => void
+    const countRead = new Promise<void>((resolve) => { countReadObserved = resolve })
+    let delayed = false
+    const delayedIdentityPool: BillingPgPoolLike = {
+      query: async <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => {
+        if (!delayed && statement.includes(`FROM ${memberTable}`) && statement.includes('pendingInvitationCount')) {
+          delayed = true
+          const result = await identityPool.query<Row>(statement, parameters)
+          countReadObserved()
+          await countReadBarrier
+          return result
+        }
+        return identityPool.query<Row>(statement, parameters)
+      },
+      connect: identityPool.connect.bind(identityPool),
+    }
+    const secondAdmission = new PostgresIdentityBillingAdmission(second, delayedIdentityPool, schema)
+    let staleSync: Promise<void> | undefined
+    try {
+      // Capture the identity count (one member) and hold before its billing
+      // transaction. A concurrent member then commits both identity and
+      // billing state while this sync still owns the stale count.
+      staleSync = secondAdmission.syncSeats(organizationId, 'pg-stale-count')
+      await countRead
+      await first.reserveSeat(organizationId, 'pg-stale-member')
+      await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, ['member-new', organizationId, 'user-new', 'reader'])
+      await first.commitSeat(organizationId, 'pg-stale-member')
+      releaseCountRead()
+      await staleSync
+
+      // The stale lower observation must leave the committed baseline at two;
+      // a third member is rejected before Better Auth can write its row.
+      await expect(second.reserveSeat(organizationId, 'pg-stale-third')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED' })
+      await expect(first.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 2 } })
+      const members = await sql!.unsafe<Record<string, unknown>[]>(`SELECT count(*)::int AS count FROM ${memberTable} WHERE "organizationId" = $1`, [organizationId])
+      expect(members[0]?.count).toBe(2)
+    } finally {
+      releaseCountRead()
+      await staleSync?.catch(() => undefined)
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`)
+    }
+  })
+
+  it('keeps an active seat hold until its identity lifecycle resolves', async () => {
+    let now = NOW
+    const catalog = planCatalog()
+    const first = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => now }),
+      catalog,
+      enabled: false,
+      now: () => now,
+    })
+    const second = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => now }),
+      catalog,
+      enabled: false,
+      now: () => now,
+    })
+    const organizationId = 'org-pg-inflight-seat'
+    await first.syncSeatCount(organizationId, 1, 'pg-inflight-seed')
+    await first.reserveSeat(organizationId, 'pg-inflight-member')
+
+    // A Better Auth write can outlive any fixed lease. Keeping the hold active
+    // until its after-hook/release is explicit prevents a late insert from
+    // racing a newly admitted member past the limit.
+    now += 2 * 60 * 60 * 1_000
+    await expect(second.reserveSeat(organizationId, 'pg-inflight-third')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED' })
+    await expect(first.releaseSeat(organizationId, 'pg-inflight-member')).resolves.toMatchObject({ idempotent: false })
+    await expect(second.reserveSeat(organizationId, 'pg-inflight-third')).resolves.toMatchObject({ idempotent: false })
   })
 
   it('claims one signed webhook delivery across concurrent service instances', async () => {

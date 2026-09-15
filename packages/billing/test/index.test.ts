@@ -440,9 +440,12 @@ describe('transactional usage enforcement', () => {
     await expect(service.commitSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
     await expect(service.syncSeatCount('org-seat-lifecycle', 3, 'commit')).resolves.toMatchObject({ snapshot: { usage: { seats: 3 } } });
 
-    // Removing the committed member lowers the authoritative baseline, and a
-    // later re-add of the same subject key admits a fresh seat.
-    await service.syncSeatCount('org-seat-lifecycle', 2, 'remove');
+    // A stale lower count must not lower the committed baseline. The explicit
+    // lifecycle release then frees the seat, and a later re-add of the same
+    // subject key admits a fresh seat.
+    await service.syncSeatCount('org-seat-lifecycle', 2, 'stale-remove-observation');
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+    await expect(service.releaseSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
     await expect(service.reserveSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
     await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
   });

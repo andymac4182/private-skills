@@ -134,9 +134,12 @@ sync active members plus unexpired pending invitations and reserve a new seat
 before direct member or invitation writes. Seat holds are stored beside the
 locked usage row, and reconciliation preserves other requests' in-flight
 holds. Successful writes settle their own key; cancellations, removals, and
-re-invites can reuse a settled lifecycle key, while an abandoned hold expires
-after a bounded lease. These adapters are omitted when billing explicitly
-reports disabled, preserving the legacy deployment path.
+re-invites can reuse a settled lifecycle key. Active identity holds do not
+expire automatically because the billing transaction cannot prove that a
+Better Auth write has stopped; they remain fail-closed until an explicit
+success/failure lifecycle hook or operator reconciliation resolves them. These
+adapters are omitted when billing explicitly reports disabled, preserving the
+legacy deployment path.
 
 The service exposes `getEntitlement()`, `usageSnapshot()`, `checkUsage()`,
 `enforceUsage()`, and `recordUsage()` aliases for identity, storage, scanner,

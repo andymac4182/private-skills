@@ -128,12 +128,19 @@ export interface BillingUsageOperation {
 /**
  * A seat admission is kept separately from the aggregate usage operation log.
  * `active` means the Better Auth write is still in flight; `settled` means the
- * admission was committed, released, or expired and can be reused by a later
- * lifecycle for the same subject.
+ * admission was committed or released and can be reused by a later lifecycle
+ * for the same subject. Active holds stay fail-closed until an explicit
+ * lifecycle transition resolves them.
  */
 export interface BillingSeatReservation {
   operationKey: string;
   status: 'active' | 'settled';
+  /**
+   * A settled reservation is either a committed identity row or a released
+   * admission. Older rows omit this field; readers treat those as committed
+   * so recovery fails closed rather than undercounting seats.
+   */
+  committed?: boolean;
   createdAt: string;
   updatedAt: string;
 }

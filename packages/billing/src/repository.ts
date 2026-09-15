@@ -166,6 +166,7 @@ export function assertBillingState(state: BillingOrganizationState): void {
       if (reservationKeys.has(reservation.operationKey)) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation is duplicated');
       reservationKeys.add(reservation.operationKey);
       if (reservation.status !== 'active' && reservation.status !== 'settled') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation status is invalid');
+      if (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation committed flag is invalid');
       if (!Number.isFinite(Date.parse(reservation.createdAt)) || !Number.isFinite(Date.parse(reservation.updatedAt))) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation timestamp is invalid');
     }
   }
@@ -574,12 +575,13 @@ function rowSeatReservations(row: Record<string, unknown>): BillingSeatReservati
   return value.map((candidate) => {
     if (!candidate || typeof candidate !== 'object') throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
     const reservation = candidate as Partial<BillingSeatReservation>;
-    if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
+    if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
       throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
     }
     return {
       operationKey: reservation.operationKey,
       status: reservation.status,
+      ...(reservation.committed === undefined ? {} : { committed: reservation.committed }),
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
     };
@@ -651,7 +653,12 @@ function usageRowParameters(usage: BillingUsage, state: BillingOrganizationState
     usage.eveCostCents,
     usage.updatedAt,
     state.seatBaseline ?? usage.seats,
-    JSON.stringify(state.seatReservations ?? []),
+    // postgres-js serializes values for an explicit `::jsonb` parameter. A
+    // pre-stringified JSON array would therefore be encoded as a JSON string
+    // ("[]"), which violates the array invariant and silently breaks durable
+    // seat admission. Pass the structured value through so the driver sends
+    // an actual JSON array.
+    state.seatReservations ?? [],
   ];
 }
 
@@ -798,7 +805,7 @@ export class PostgresBillingRepository implements BillingRepository {
         `INSERT INTO ${this.tables.operations} (organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)
          ON CONFLICT (organization_id, operation_key) DO NOTHING`,
-        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, JSON.stringify(operation.usage), operation.createdAt],
+        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, operation.usage, operation.createdAt],
       );
     }
   }
