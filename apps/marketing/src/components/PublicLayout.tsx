@@ -31,7 +31,7 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
         <a aria-current={current === 'contact' ? 'page' : undefined} className={current === 'contact' ? 'marketing-nav-active' : ''} href="/contact">Contact</a>
       </nav>
       <div className="marketing-header-actions">
-        <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Sign in to registry <span aria-hidden="true">↗</span></a>
+        <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Open app sign-in <span aria-hidden="true">↗</span></a>
       </div>
     </header>
     <main id="main-content">{children}</main>
@@ -205,19 +205,19 @@ function MarketingFooter() {
     <div className="marketing-footer-cta">
       <div>
         <span className="marketing-eyebrow">Start with one real workflow</span>
-        <h2>Give your team a calmer path to approved skills.</h2>
-        <p>Read the pilot guide, then use the registry's configured sign-in when your pilot environment is ready.</p>
+        <h2>Start with one skill your team already needs.</h2>
+        <p>Use the pilot guide to see the steps. If you already have an application workspace, open sign-in and continue there.</p>
       </div>
       <div className="marketing-footer-cta-actions">
-        <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the pilot guide <span aria-hidden="true">↗</span></a>
-        <a className="marketing-button marketing-button-secondary" href={appLoginHref()}>Sign in to registry</a>
+        <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Start with the pilot guide <span aria-hidden="true">↗</span></a>
+        <a className="marketing-button marketing-button-secondary" href={appLoginHref()}>Open app sign-in</a>
       </div>
     </div>
     <div className="marketing-footer-grid">
-      <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>Private registry, pull-through, and packs for engineering teams.</p></div>
+      <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>A clear release path for engineering teams rolling out AI-agent skills.</p></div>
       <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/demo">Demo walkthrough</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
-      <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Sign in to registry</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
-      <div><span className="marketing-footer-label">Boundaries</span><span className="marketing-footer-note">Scans and source adapters depend on deployment configuration.</span><span className="marketing-footer-note">Eve suggests review and draft changes; a human controls publishing.</span><a href="/legal">Legal and product notes</a></div>
+      <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Open app sign-in</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
+      <div><span className="marketing-footer-label">Before rollout</span><span className="marketing-footer-note">Source access and scanner setup depend on the deployment.</span><span className="marketing-footer-note">Eve can suggest review and draft changes; people control publishing.</span><a href="/legal#publication-status">Legal and privacy status</a></div>
     </div>
     <div className="marketing-footer-bottom"><span>© {new Date().getFullYear()} {brand.name}</span><span>Working name · launch preview</span></div>
   </footer>

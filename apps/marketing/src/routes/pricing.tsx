@@ -17,13 +17,13 @@ function PricingPage() {
   return <PublicLayout current="pricing">
     <section className="marketing-page-hero" aria-labelledby="pricing-title">
       <div className="marketing-page-hero-grid">
-        <div><span className="marketing-eyebrow">Simple packaging, deliberate rollout</span><h1 id="pricing-title">Choose the shape of your <em>first workflow.</em></h1><p>Start with the controls your team needs today, then expand as more sources, packs, and teams come into the registry.</p></div>
+        <div><span className="marketing-eyebrow">Simple packaging, deliberate rollout</span><h1 id="pricing-title">Choose the shape of your <em>first workflow.</em></h1><p>Compare a focused team run, several workflows, or a broader rollout. Commercial terms will be published after the workflow and value metric are settled.</p></div>
         <div className="marketing-page-hero-note"><strong>{pricingStatus}</strong>Plan shapes and inclusions are being evaluated for launch. This page helps teams compare the workflow; no purchase or payment path is active.</div>
       </div>
     </section>
 
     <section className="marketing-pricing-wrap" aria-labelledby="plans-title">
-      <div className="marketing-pricing-notice"><b>No purchase yet</b><span>These are planning views, not offers. Use the pilot guide to evaluate the workflow. Existing customers can sign in to a configured registry when it is ready. <a href="/contact">Need a walkthrough?</a></span></div>
+      <div className="marketing-pricing-notice"><b>No purchase yet</b><span>These are planning views, not offers. Use the pilot guide to evaluate the workflow. If your team already has application access, open the registry sign-in when its workspace is ready. <a href="/contact">Need a walkthrough?</a></span></div>
       <h2 id="plans-title" className="marketing-visually-hidden">Pricing preview</h2>
       <div className="marketing-pricing-grid">
         {marketingPlans.map((plan) => <article className={plan.featured ? 'marketing-plan-card marketing-plan-card-featured' : 'marketing-plan-card'} key={plan.id}>

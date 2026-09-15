@@ -53,13 +53,13 @@ function DemoPage() {
         <article className="marketing-demo-script-card">
           <span className="marketing-feature-index">01 / CONNECT</span>
           <h3>Connect the CLI</h3>
-          <p>Use a scoped token supplied by the configured workspace. Keep the token out of recordings, shell history, and public docs.</p>
+          <p>Use a scoped token supplied by your application workspace. Keep the token out of recordings, shell history, and public docs.</p>
           <pre><code>pskills login --registry &lt;registry-url&gt; --token-stdin</code></pre>
         </article>
         <article className="marketing-demo-script-card">
           <span className="marketing-feature-index">02 / INSPECT</span>
           <h3>Inspect the decision</h3>
-          <p>Discover the configured source, inspect the release, and read the scanner status before choosing an install.</p>
+          <p>Discover an enabled source, inspect the release, and read the scanner status before choosing an install.</p>
           <pre><code>pskills sources list{ '\n' }pskills sources search --source skills-sh &quot;frontend&quot;{ '\n' }pskills scan status sha256:&lt;release-digest&gt;</code></pre>
         </article>
         <article className="marketing-demo-script-card">
@@ -82,7 +82,7 @@ function DemoPage() {
         <p>Follow the setup guide with your deployment inputs, then use the configured app sign-in when the pilot environment is ready. The marketing site never asks for a credential.</p>
         <div className="marketing-hero-actions">
           <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the setup guide <span aria-hidden="true">↗</span></a>
-          <a className="marketing-hero-link" href={appLoginHref()}>Use configured sign-in <span aria-hidden="true">→</span></a>
+          <a className="marketing-hero-link" href={appLoginHref()}>Open app sign-in <span aria-hidden="true">→</span></a>
         </div>
       </div>
     </section>
