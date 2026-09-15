@@ -122,6 +122,7 @@ class RecordingBilling implements BillingUsageAdmission {
   }> = [];
   enabled = true;
   fail = false;
+  afterReconcile?: () => Promise<void>;
 
   status(): { enabled: boolean } {
     return { enabled: this.enabled };
@@ -143,6 +144,7 @@ class RecordingBilling implements BillingUsageAdmission {
   ): Promise<unknown> {
     if (this.fail) throw new Error("billing unavailable");
     this.reconciliations.push({ organizationId, reservationKey, actual, operationKey, reservationGeneration });
+    await this.afterReconcile?.();
     return undefined;
   }
 }
@@ -391,6 +393,56 @@ describe("durable storage-attempt recovery", () => {
     expect(result).toMatchObject({ status: "retained", reason: "metadata-referenced" });
     expect(blobs.removeCalls).toBe(0);
     expect(billing.reconciliations).toHaveLength(0);
+  });
+
+  it("keeps the compensation marker when a resumed recovery wins the metadata race", async () => {
+    const blobs = new RecoverableMemoryBlobStore();
+    const billing = new RecordingBilling();
+    let releaseFirstRecovery!: () => void;
+    let firstRecoveryReachedBilling!: () => void;
+    const firstRecoveryAtBilling = new Promise<void>((resolve) => { firstRecoveryReachedBilling = resolve; });
+    const releaseBilling = new Promise<void>((resolve) => { releaseFirstRecovery = resolve; });
+    billing.afterReconcile = async () => {
+      firstRecoveryReachedBilling();
+      await releaseBilling;
+    };
+    const repository = await repositoryWithAttempt(attempt());
+    const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof: () => true });
+
+    const firstRecovery = service.recover(request());
+    await firstRecoveryAtBilling;
+    expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({ state: "releasing" });
+
+    await repository.transaction(ORGANIZATION, (state) => {
+      state.skills.push({
+        id: "late-resume-reference",
+        organizationId: ORGANIZATION,
+        name: "@team/late-resume-reference",
+        skillName: "late-resume-reference",
+        version: "1.0.0",
+        description: "late resume reference",
+        artifact: { key: KEY, digest: attempt().digest, size: BYTES.byteLength },
+        state: "approved",
+        policyRevision: state.policy.revision,
+        createdAt: "2026-09-16T00:00:00.000Z",
+        provenance: { kind: "native" },
+        fileCount: 1,
+        scanIds: [],
+      });
+    });
+    await expect(service.recover({ ...request(), resume: true })).resolves.toMatchObject({
+      status: "retained",
+      reason: "metadata-referenced",
+    });
+
+    releaseFirstRecovery();
+    await expect(firstRecovery).resolves.toMatchObject({ status: "retained", reason: "billing-failed" });
+    expect(billing.reconciliations).toHaveLength(1);
+    expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 1,
+      billingCorrection: "restore-pending",
+    });
   });
 
   it("can resume a recovery after a crash between billing correction and final state commit", async () => {

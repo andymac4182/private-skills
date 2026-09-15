@@ -503,6 +503,7 @@ export class StorageRecoveryService {
       claimed.token,
       "released",
       billing !== undefined,
+      attempt.reservationGeneration,
     );
     if (!finalized.applied || !finalized.attempt) {
       if (finalized.referenced) {
@@ -790,13 +791,34 @@ export class StorageRecoveryService {
     token: string | undefined,
     state: "orphaned" | "released",
     billingCorrectionApplied = false,
+    expectedReservationGeneration?: number,
   ): Promise<FinalizeResult> {
     try {
       return await this.#repository.transaction(organizationId, (current) => {
         current.storageAttempts ??= [];
         const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
         if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
-        if (token !== undefined && attempt.recoveryToken !== token) return { applied: false, attempt: cloneAttempt(attempt) };
+        if (token !== undefined && attempt.recoveryToken !== token) {
+          // A concurrent resume can observe a metadata reference while this
+          // caller is between the external zero and its final fence. That
+          // resume changes `releasing` to `orphaned` and clears this token.
+          // If this caller already applied the zero, retain the compensation
+          // marker even though the token is stale; otherwise the tenant would
+          // remain under-metered with no durable restoration work to retry.
+          if (
+            state === "released" &&
+            billingCorrectionApplied &&
+            expectedReservationGeneration !== undefined &&
+            attempt.reservationGeneration === expectedReservationGeneration &&
+            attempt.state === "orphaned" &&
+            this.#isObjectReferenced(current, attempt)
+          ) {
+            attempt.billingCorrection = "restore-pending";
+            attempt.updatedAt = nowIso(this.#now);
+            return { applied: false, referenced: true, attempt: cloneAttempt(attempt) };
+          }
+          return { applied: false, attempt: cloneAttempt(attempt) };
+        }
         if (token === undefined && attempt.state === "recovering") return { applied: false, attempt: cloneAttempt(attempt) };
         // A proof check may race the original writer's final metadata commit.
         // Never turn a committed or released attempt back into an orphan.
