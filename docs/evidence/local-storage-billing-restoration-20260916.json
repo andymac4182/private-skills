@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-09-15T22:28:50Z",
+  "recordedAt": "2026-09-15T22:43:35Z",
   "scope": "durable storage billing restoration, generation fencing, and Node provider binding",
-  "sourceCommit": "f4eea80d4d9ffa228c9e450fa53ae5942cfb383c",
+  "sourceCommit": "036fb746531fde01374ad92aa1323a0ed2ca7592",
   "checkout": "/private/tmp/private-skills-final-candidate-4917215",
   "environment": "Local-only validation. Billing and database checks used disposable loopback PostgreSQL on 127.0.0.1:55432; credentials and connection values are omitted. No production database, storage provider, deployment, or external identity provider was contacted.",
   "checks": [
@@ -10,8 +10,36 @@
       "result": "passed"
     },
     {
-      "command": "CI=true node_modules/.bin/vitest run packages/billing/test/index.test.ts packages/billing/test/postgres.integration.test.ts packages/storage/test/recovery.test.ts packages/storage/test/recovery.postgres.integration.test.ts packages/storage/test/node.test.ts packages/storage/test/receipt.test.ts packages/core/test/storage-receipt.test.ts packages/core/test/storage-recovery.test.ts packages/core/test/index.test.ts packages/authoring/test/drafts.test.ts apps/web/src/runtime-node.test.ts --no-file-parallelism",
-      "result": "11 test files passed; 134 tests passed (focused billing, recovery, receipt, authoring, core, Node binding, and loopback PostgreSQL coverage)"
+      "command": "CI=true node_modules/.bin/vitest run packages/billing/test/index.test.ts packages/billing/test/postgres.integration.test.ts packages/storage/test/recovery.test.ts packages/storage/test/recovery.postgres.integration.test.ts packages/storage/test/node.test.ts packages/storage/test/receipt.test.ts packages/core/test/storage-receipt.test.ts packages/core/test/storage-recovery.test.ts packages/core/test/index.test.ts packages/authoring/test/drafts.test.ts apps/web/src/runtime-node.test.ts apps/web/src/runtime-storage-recovery-mount.test.ts apps/web/src/runtime-company-sso-mount.test.ts apps/web/src/eve-tenant-runtime.test.ts apps/web/src/bootstrap-adoption-better-auth.integration.test.ts packages/identity/test/company-sso.better-auth.integration.test.ts --no-file-parallelism",
+      "result": "16 test files passed; 153 tests passed (focused billing, recovery, receipt, authoring, core, Node binding, runtime mounts, Better Auth adoption, SSO, and loopback PostgreSQL coverage)"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run packages/core/test/import-cache.test.ts packages/core/test/source-catalog-root-provenance.test.ts packages/core/test/transparent-proxy.test.ts --no-file-parallelism",
+      "result": "3 test files passed; 21 tests passed with explicit synchronous terminal-write bookkeeping in the recoverable blob fixtures"
+    },
+    {
+      "command": "CI=true pnpm test -- --no-file-parallelism --reporter=dot",
+      "result": "178 test files passed; 18 skipped; 1,281 tests passed and 44 skipped"
+    },
+    {
+      "command": "CI=true pnpm build",
+      "result": "passed; Node Nitro production output generated"
+    },
+    {
+      "command": "CI=true PSKILLS_STORAGE_BUILD_PROFILE=vercel-blob node scripts/build-vercel.mjs",
+      "result": "passed; Vercel Build Output API output generated, 615-second function budget applied, 31 relocated symlinks and traced provider dependencies verified"
+    },
+    {
+      "command": "CI=true PSKILLS_RUNTIME_PROFILE=edge NITRO_PRESET=cloudflare_module node node_modules/vite/bin/vite.js build --config apps/web/vite.config.ts",
+      "result": "passed; Cloudflare Nitro edge output generated"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run packages/identity/test/postgres.integration.test.ts packages/identity/test/company-sso.postgres.integration.test.ts packages/identity/test/company-sso.better-auth.integration.test.ts packages/identity/test/operations-events.postgres.integration.test.ts packages/billing/test/postgres.integration.test.ts packages/storage/test/recovery.postgres.integration.test.ts packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts apps/web/src/bootstrap-adoption-better-auth.integration.test.ts apps/web/src/company-sso-runtime.postgres.integration.test.ts apps/web/src/tenant-identity-route.postgres.integration.test.ts tests/e2e/multi-tenant-postgres-acceptance.test.ts tests/operations-postgres-rehearsal.test.ts --no-file-parallelism",
+      "result": "12 test files passed; 34 tests passed directly against disposable loopback PostgreSQL at 127.0.0.1:55432"
+    },
+    {
+      "command": "PSKILLS_NITRO_POSTGRES_ACCEPTANCE=true PSKILLS_NITRO_POSTGRES_URL=\"(loopback URL supplied by password-file wrapper)\" CI=true node_modules/.bin/vitest run tests/e2e/nitro-postgres-files-acceptance.test.ts --no-file-parallelism",
+      "result": "1 test file passed; 2 tests passed through the composed Node Nitro HTTP runtime with PostgreSQL and Files SDK filesystem storage"
     },
     {
       "command": "CI=true node_modules/.bin/vitest run packages/storage/test/recovery.postgres.integration.test.ts --no-file-parallelism",
