@@ -241,5 +241,6 @@ export async function createNodeFilesSdkBlobStore(
     client,
     maxBytes: options.maxBytes,
     prefix: options.prefix,
+    providerBinding: options.providerBinding,
   });
 }
