@@ -1,4 +1,8 @@
 import type { Digest } from '../../contracts/src/index.js';
+import type {
+  BoundEveTenantService,
+  EveTenantDelegationBinding,
+} from '../../eve-tenant/src/index.js';
 
 export type BuilderDigest = Digest;
 export type DraftFileKind = 'text' | 'binary' | 'oversize';
@@ -127,7 +131,12 @@ export interface SkillBuilderBackend {
 
 export interface SkillBuilderRegistryClientOptions {
   readonly baseUrl: string;
-  readonly serviceToken: string;
+  /** Legacy default-company bearer. Omit when tenantService is supplied. */
+  readonly serviceToken?: string;
+  /** Credential provider permanently bound to one tenant and service. */
+  readonly tenantService?: BoundEveTenantService;
+  /** Server-owned binding attached to every tenant callback request. */
+  readonly tenantBinding?: EveTenantDelegationBinding;
   readonly fetch?: typeof fetch;
   readonly maxResponseBytes?: number;
 }
@@ -416,14 +425,29 @@ export async function digestText(content: string): Promise<BuilderDigest> {
 
 export class SkillBuilderRegistryClient implements SkillBuilderBackend {
   private readonly baseUrl: URL;
-  private readonly serviceToken: string;
+  private readonly serviceToken?: string;
+  private readonly tenantService?: BoundEveTenantService;
+  private readonly tenantBinding?: EveTenantDelegationBinding;
   private readonly fetchImpl: typeof fetch;
   private readonly maxResponseBytes: number;
 
   constructor(options: SkillBuilderRegistryClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
-    this.serviceToken = boundedIdentifier(options.serviceToken, 'serviceToken', 512);
-    if (/\s/u.test(this.serviceToken)) throw new SkillBuilderConfigurationError('serviceToken must not contain whitespace');
+    if (options.serviceToken !== undefined && options.tenantService !== undefined) {
+      throw new SkillBuilderConfigurationError('serviceToken and tenantService are mutually exclusive');
+    }
+    if (options.serviceToken === undefined && options.tenantService === undefined) {
+      throw new SkillBuilderConfigurationError('a serviceToken or tenantService is required');
+    }
+    if (options.serviceToken !== undefined) {
+      this.serviceToken = boundedIdentifier(options.serviceToken, 'serviceToken', 512);
+      if (/\s/u.test(this.serviceToken)) throw new SkillBuilderConfigurationError('serviceToken must not contain whitespace');
+    }
+    this.tenantService = options.tenantService;
+    this.tenantBinding = options.tenantBinding;
+    if (this.tenantService && (!this.tenantBinding || !this.tenantBinding.registrySessionId)) {
+      throw new SkillBuilderConfigurationError('tenantBinding.registrySessionId is required for tenant registry calls');
+    }
     this.fetchImpl = options.fetch ?? fetch;
     this.maxResponseBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
     if (!Number.isSafeInteger(this.maxResponseBytes) || this.maxResponseBytes < 1024 || this.maxResponseBytes > 10 * 1024 * 1024) {
@@ -434,7 +458,7 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
   async loadContext(binding: DraftBinding): Promise<DraftContext> {
     const normalized = validateDraftBinding(binding);
     const path = `/v1/drafts/${encodeURIComponent(normalized.draftId)}/builder-context?revision=${normalized.revision}&digest=${encodeURIComponent(normalized.digest)}`;
-    const value = await this.requestJson(path, { method: 'GET' });
+    const value = await this.requestJson(path, { method: 'GET' }, this.bindingFor(normalized));
     const context = validateDraftContext(value);
     if (context.draftId !== normalized.draftId || context.revision !== normalized.revision || context.digest !== normalized.digest) {
       throw new SkillBuilderError('UPSTREAM_CONFLICT', 'authoring service returned a different draft revision', 409);
@@ -459,7 +483,7 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
       if (!entry || !entry.contentAvailable || entry.kind !== 'text') {
         throw new SkillBuilderError('UPSTREAM_CONFLICT', `path is not in the server-selected text file set: ${path}`, 409);
       }
-      const value = await this.requestJson(`/v1/drafts/${encodeURIComponent(context.draftId)}/builder-file?revision=${context.revision}&digest=${encodeURIComponent(context.digest)}&path=${encodeURIComponent(path)}`, { method: 'GET' });
+      const value = await this.requestJson(`/v1/drafts/${encodeURIComponent(context.draftId)}/builder-file?revision=${context.revision}&digest=${encodeURIComponent(context.digest)}&path=${encodeURIComponent(path)}`, { method: 'GET' }, this.bindingFor(context));
       const content = parseDraftFileContent(value, context, path);
       totalBytes += utf8Bytes(content.content);
       if (totalBytes > MAX_MODEL_TOTAL_BYTES) throw new SkillBuilderValidationError('requested draft content exceeds the model total limit');
@@ -490,7 +514,7 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
         sessionId,
         operations,
       }),
-    });
+    }, this.bindingFor(context));
     if (!isRecord(responseValue) || !isRecord(responseValue.proposal)) {
       throw new SkillBuilderError('UPSTREAM_SCHEMA_ERROR', 'authoring service returned an invalid proposal envelope');
     }
@@ -502,11 +526,20 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
     return proposal;
   }
 
-  private async requestJson(path: string, init: RequestInit): Promise<unknown> {
+  private async requestJson(path: string, init: RequestInit, binding?: EveTenantDelegationBinding): Promise<unknown> {
     const headers = new Headers(init.headers);
     headers.set('accept', 'application/json');
-    headers.set('authorization', `Bearer ${this.serviceToken}`);
+    if (this.tenantService) {
+      const tenantHeaders = await this.tenantService.headers(headers, binding);
+      tenantHeaders.set('x-pskills-tool-identity', 'skill-builder');
+      return this.fetchJson(path, init, tenantHeaders);
+    }
+    headers.set('authorization', `Bearer ${this.serviceToken!}`);
     headers.set('x-pskills-tool-identity', 'skill-builder');
+    return this.fetchJson(path, init, headers);
+  }
+
+  private async fetchJson(path: string, init: RequestInit, headers: Headers): Promise<unknown> {
     let response: Response;
     try {
       response = await this.fetchImpl(this.urlFor(path), { ...init, headers, redirect: 'error' });
@@ -523,6 +556,16 @@ export class SkillBuilderRegistryClient implements SkillBuilderBackend {
     } catch {
       throw new SkillBuilderError('UPSTREAM_SCHEMA_ERROR', 'authoring service returned invalid JSON');
     }
+  }
+
+  private bindingFor(binding: DraftBinding): EveTenantDelegationBinding | undefined {
+    if (!this.tenantService) return undefined;
+    return {
+      ...this.tenantBinding,
+      draftId: binding.draftId,
+      draftRevision: binding.revision,
+      draftDigest: binding.digest,
+    };
   }
 
   private urlFor(path: string): string {

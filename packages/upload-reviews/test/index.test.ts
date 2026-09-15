@@ -13,6 +13,12 @@ import {
   type UploadReviewSnapshot,
 } from '../src/index.js';
 import { createUploadReviewHttpHandler } from '../src/http.js';
+import {
+  EVE_TENANT_ID_HEADER,
+  EVE_TENANT_SERVICE_HEADER,
+  verifyEveTenantDelegation,
+  issueEveTenantDelegation,
+} from '../../eve-tenant/src/index.js';
 
 const BASE_TIME = '2026-01-02T03:04:05.000Z';
 
@@ -599,6 +605,82 @@ describe('upload/edit review persistence', () => {
     });
     expect(complete?.status).toBe(200);
     expect(await complete!.json()).toMatchObject({ status: 'passed', findingCount: 0 });
+  });
+
+  it('derives the upload callback tenant from a verified job-bound delegation', async () => {
+    const { service } = await fixture();
+    const job = await service.enqueue('org-a', {
+      binding: binding(),
+      snapshot: snapshot(),
+      model: 'openai/gpt-5.6-luna',
+      reviewerRevision: 'upload-reviewer-v1',
+      now: BASE_TIME,
+    });
+    const secret = 'upload-review-tenant-callback-secret-0123456789';
+    const verifier = {
+      issuer: 'https://registry.test',
+      secret,
+      expectedServiceIdentity: 'registry-host',
+    };
+    const issued = await issueEveTenantDelegation({
+      issuer: verifier.issuer,
+      secret,
+      serviceIdentity: verifier.expectedServiceIdentity,
+      now: () => Date.now(),
+    }, {
+      tenantId: 'org-a',
+      service: 'upload-reviewer',
+      binding: { sessionId: 'tenant-session-a', jobId: job.id },
+    });
+    const handler = createUploadReviewHttpHandler({
+      repository: new MemoryStateRepository(),
+      organizationId: 'default',
+      service,
+      tenantDelegationConfigured: true,
+      tenantAuthenticate: async (request) => {
+        const token = request.headers.get('authorization')?.match(/^Bearer\s+([^\s]+)$/u)?.[1];
+        if (!token) return null;
+        try {
+          return await verifyEveTenantDelegation(token, verifier, {
+            service: 'upload-reviewer',
+            tenantId: 'org-a',
+            binding: { sessionId: 'tenant-session-a', jobId: job.id },
+          });
+        } catch {
+          return null;
+        }
+      },
+    });
+    const prepared = await handler(new Request('https://registry.test/internal/upload-review/prepare', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${issued.token}`,
+        [EVE_TENANT_ID_HEADER]: 'org-a',
+        [EVE_TENANT_SERVICE_HEADER]: 'upload-reviewer',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ sessionId: 'tenant-session-a', jobId: job.id }),
+    }));
+    expect(prepared?.status).toBe(200);
+    expect(await prepared!.json()).toMatchObject({ status: 'prepared', jobId: job.id });
+
+    const wrongBinding = await issueEveTenantDelegation({
+      issuer: verifier.issuer,
+      secret,
+      serviceIdentity: verifier.expectedServiceIdentity,
+      now: () => Date.now(),
+    }, {
+      tenantId: 'org-a',
+      service: 'upload-reviewer',
+      binding: { sessionId: 'tenant-session-a', jobId: 'other-job' },
+    });
+    const rejected = await handler(new Request('https://registry.test/internal/upload-review/prepare', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${wrongBinding.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'tenant-session-a', jobId: job.id }),
+    }));
+    expect(rejected?.status).toBe(401);
+    expect(JSON.stringify(await rejected!.json())).not.toContain('org-a');
   });
 
   it('recovers a delayed first Eve prepare through the job-specific binding handshake', async () => {

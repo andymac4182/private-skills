@@ -32,6 +32,11 @@ import {
   digestBytes,
   parseSkillMetadata,
 } from '../../storage/src/index.js';
+import {
+  looksLikeEveTenantDelegation,
+  type EveTenantDelegationBinding,
+  type EveTenantDelegationClaims,
+} from '../../eve-tenant/src/index.js';
 
 const DEFAULT_MAX_BODY_BYTES = 3_000_000;
 const MAX_QUERY_CHARACTERS = 12_000;
@@ -79,6 +84,11 @@ export interface IntelligenceHandlerOptions {
   reviewService?: ReviewPersistenceService;
   /** Starts the external reviewer session; it must not receive artifact text. */
   triggerReview?: (organizationId: string) => Promise<unknown> | unknown;
+  /** Verify a tenant-bound reviewer callback against the fixed route tenant. */
+  reviewerDelegation?: (
+    request: Request,
+    context: { organizationId: string; binding?: EveTenantDelegationBinding },
+  ) => Promise<EveTenantDelegationClaims | null>;
 }
 
 export interface IntelligenceHandler {
@@ -108,6 +118,7 @@ interface Context {
   embeddingProvider?: EmbeddingProvider;
   reviews: ReviewPersistenceService;
   triggerReview?: (organizationId: string) => Promise<unknown> | unknown;
+  reviewerDelegation?: IntelligenceHandlerOptions['reviewerDelegation'];
 }
 
 interface VerifiedSkillDocument {
@@ -147,6 +158,7 @@ export function createIntelligenceHandler(options: IntelligenceHandlerOptions): 
     embeddingProvider: options.embeddingProvider,
     reviews: options.reviewService ?? new DefaultReviewPersistenceService(options.repository),
     triggerReview: options.triggerReview,
+    reviewerDelegation: options.reviewerDelegation,
   };
 
   return async (request: Request): Promise<Response | undefined> => {
@@ -479,13 +491,6 @@ async function reviewRunRoute(request: Request, context: Context): Promise<Respo
 }
 
 async function reviewerPrepareRoute(request: Request, context: Context): Promise<Response> {
-  requireReviewerToken(request, context.config.reviewerToken);
-  // The reviewer token is deliberately insufficient to export candidate text
-  // when AI is disabled.  Runtime wiring omits the provider in that mode;
-  // persisted review history remains readable through /v1/reviews.
-  if (!context.embeddingProvider) {
-    throw new IntelligenceHttpError('REVIEW_UNAVAILABLE', 'Review automation is not configured', 503, true);
-  }
   const body = await readOptionalJson(request, context.config.maxBodyBytes);
   const model = body.model === undefined
     ? DEFAULT_REVIEW_MODEL
@@ -493,6 +498,17 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
   const eveSessionId = body.eveSessionId === undefined
     ? undefined
     : boundedOpaqueId(body.eveSessionId, MAX_ID_LENGTH, 'Eve session ID');
+  await requireReviewerAccess(
+    request,
+    context,
+    eveSessionId === undefined ? undefined : { sessionId: eveSessionId },
+  );
+  // The reviewer token is deliberately insufficient to export candidate text
+  // when AI is disabled. Runtime wiring omits the provider in that mode;
+  // persisted review history remains readable through /v1/reviews.
+  if (!context.embeddingProvider) {
+    throw new IntelligenceHttpError('REVIEW_UNAVAILABLE', 'Review automation is not configured', 503, true);
+  }
   // The reviews service performs strict validation. Keep this boundary
   // structural so the reviewer app can carry only its bounded provenance
   // object without exposing prompt or report content.
@@ -568,10 +584,17 @@ async function reviewerPrepareRoute(request: Request, context: Context): Promise
 }
 
 async function reviewerCompleteRoute(request: Request, context: Context): Promise<Response> {
-  requireReviewerToken(request, context.config.reviewerToken);
   const body = await readJson(request, context.config.maxBodyBytes);
   const runId = boundedText(body.runId, MAX_ID_LENGTH, 'runId');
   const leaseToken = boundedText(body.leaseToken, MAX_TOKEN_LENGTH, 'leaseToken');
+  const eveSessionId = body.eveSessionId === undefined
+    ? undefined
+    : boundedOpaqueId(body.eveSessionId, MAX_ID_LENGTH, 'Eve session ID');
+  await requireReviewerAccess(
+    request,
+    context,
+    eveSessionId === undefined ? undefined : { sessionId: eveSessionId, runId },
+  );
   boundedText(body.summary, 8_000, 'Review summary');
   const rawProposals = body.proposals ?? body.suggestions;
   if (!Array.isArray(rawProposals) || rawProposals.length > MAX_REVIEW_SNAPSHOT) {
@@ -726,6 +749,42 @@ function requireReviewerToken(request: Request, configured: string): void {
   if (!timingSafeEqual(left, right)) {
     throw new IntelligenceHttpError('UNAUTHORIZED', 'Reviewer authentication required', 401);
   }
+}
+
+/**
+ * Accept the legacy reviewer credential only when a tenant delegation was
+ * not presented. A token-shaped value that fails the tenant verifier cannot
+ * fall through to a static default-company credential.
+ */
+async function requireReviewerAccess(
+  request: Request,
+  context: Context,
+  binding: EveTenantDelegationBinding | undefined,
+): Promise<void> {
+  if (context.reviewerDelegation) {
+    let claims: EveTenantDelegationClaims | null = null;
+    if (binding !== undefined) {
+      try {
+        claims = await context.reviewerDelegation(request, {
+          organizationId: context.config.organizationId,
+          binding,
+        });
+      } catch {
+        claims = null;
+      }
+    }
+    if (claims) {
+      if (claims.tenantId !== context.config.organizationId) {
+        throw new IntelligenceHttpError('UNAUTHORIZED', 'Reviewer authentication required', 401);
+      }
+      return;
+    }
+    const bearer = /^Bearer[ \t]+([^ \t]+)$/iu.exec(request.headers.get('authorization') ?? '')?.[1];
+    if (looksLikeEveTenantDelegation(bearer)) {
+      throw new IntelligenceHttpError('UNAUTHORIZED', 'Reviewer authentication required', 401);
+    }
+  }
+  requireReviewerToken(request, context.config.reviewerToken);
 }
 
 function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {

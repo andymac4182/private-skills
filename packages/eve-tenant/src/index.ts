@@ -355,6 +355,42 @@ export function bindEveTenantService(
   return bound;
 }
 
+/**
+ * Construct a callback credential service from a deployment environment. Eve
+ * apps use this only after reading their active verified caller; the caller's
+ * tenant id is therefore input from signed session metadata, never a body or
+ * prompt value. Missing delegation configuration returns undefined so the
+ * caller can retain its explicitly supported legacy static path.
+ */
+export function createEveTenantServiceFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  options: {
+    readonly issuer: string;
+    readonly tenantId: string;
+    readonly service: EveTenantService;
+    readonly serviceIdentity?: string;
+  },
+): BoundEveTenantService | undefined {
+  const serviceIdentity = options.serviceIdentity ?? env['PSKILLS_EVE_TENANT_SERVICE_IDENTITY'];
+  if (serviceIdentity === undefined || serviceIdentity.trim() === '') {
+    if (env[EVE_TENANT_DELEGATION_SECRET_ENV] === undefined) return undefined;
+    throw new EveTenantDelegationError('Eve tenant service identity is not configured');
+  }
+  const issuerOptions = eveTenantDelegationIssuerOptionsFromEnv(env, {
+    issuer: options.issuer,
+    serviceIdentity,
+  });
+  if (issuerOptions === undefined) return undefined;
+  return bindEveTenantService(
+    createEveTenantCredentialProvider({
+      ...issuerOptions,
+      tenantId: options.tenantId,
+      service: options.service,
+    }),
+    { tenantId: options.tenantId, service: options.service },
+  );
+}
+
 export interface BoundEveTenantService {
   readonly tenantId: string;
   readonly service: EveTenantService;
@@ -463,6 +499,7 @@ export interface EveSessionAuthShape {
   readonly current: {
     readonly principalType?: string;
     readonly principalId?: string;
+    readonly authenticator?: string;
     readonly attributes?: Readonly<Record<string, unknown>>;
   } | null;
 }

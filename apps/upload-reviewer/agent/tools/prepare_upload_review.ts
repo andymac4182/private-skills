@@ -32,8 +32,9 @@ export default defineTool({
     if (current.status === 'completed' || current.status === 'failed' || current.status === 'stale') {
       return { status: current.status === 'completed' ? 'already_completed' as const : current.status, files: [] };
     }
-    const jobId = ctx.session.auth.initiator?.attributes.uploadReviewJobId
-      ?? ctx.session.auth.current?.attributes.uploadReviewJobId;
+    // Internal deliveries must use the active verified caller. The initiator
+    // can describe an earlier session and is never a tenant credential source.
+    const jobId = ctx.session.auth.current?.attributes.uploadReviewJobId;
     const response = await retryUnboundPrepare(
       () => postUploadReviewerJson(
         '/internal/upload-review/prepare',
@@ -43,6 +44,13 @@ export default defineTool({
         },
         (value) => prepareResponseSchema.parse(value),
         ctx.abortSignal,
+        {
+          session: ctx.session,
+          binding: {
+            sessionId: ctx.session.id,
+            ...(typeof jobId === 'string' ? { jobId } : {}),
+          },
+        },
       ),
       ctx.abortSignal,
     );
@@ -75,6 +83,10 @@ export default defineTool({
         },
         (value) => failOutputSchema.parse(value),
         ctx.abortSignal,
+        {
+          session: ctx.session,
+          binding: { sessionId: ctx.session.id, jobId: response.jobId },
+        },
       ).catch(() => undefined);
       throw new Error('upload review model configuration does not match the queued review');
     }

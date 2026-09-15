@@ -8,6 +8,7 @@ import {
   validatePatchOperations,
   validateDraftContext,
 } from "../src/index.js";
+import type { EveTenantDelegationBinding } from "../../eve-tenant/src/index.js";
 
 const baseDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 
@@ -73,6 +74,60 @@ describe("skill-builder contracts", () => {
     expect(init?.redirect).toBe("error");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer registry-token");
     expect(new Headers(init?.headers).get("x-pskills-tool-identity")).toBe("skill-builder");
+  });
+
+  it("uses the tenant provider and full draft binding on every registry request", async () => {
+    const bindings: Array<EveTenantDelegationBinding | undefined> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer tenant-builder-token");
+      expect(headers.get("x-pskills-tenant-id")).toBe("company-a");
+      expect(headers.get("x-pskills-eve-service")).toBe("skill-builder");
+      return new Response(JSON.stringify({
+        draftId: "draft-1",
+        revision: 4,
+        digest: baseDigest,
+        files: [],
+      }));
+    });
+    const tenantService = {
+      tenantId: "company-a",
+      service: "skill-builder" as const,
+      async credential(binding?: EveTenantDelegationBinding) {
+        bindings.push(binding);
+        return {
+          token: "tenant-builder-token",
+          tenantId: "company-a",
+          service: "skill-builder" as const,
+          serviceIdentity: "registry-host",
+          expiresAt: Date.now() + 60_000,
+        };
+      },
+      async headers(init?: HeadersInit, binding?: EveTenantDelegationBinding) {
+        bindings.push(binding);
+        const headers = new Headers(init);
+        headers.set("authorization", "Bearer tenant-builder-token");
+        headers.set("x-pskills-tenant-id", "company-a");
+        headers.set("x-pskills-eve-service", "skill-builder");
+        return headers;
+      },
+    };
+    const client = new SkillBuilderRegistryClient({
+      baseUrl: "https://registry.example.test",
+      tenantService,
+      tenantBinding: { registrySessionId: "registry-session-1" },
+      fetch: fetchMock,
+    });
+    await expect(client.loadContext({ draftId: "draft-1", revision: 4, digest: baseDigest })).resolves.toMatchObject({
+      draftId: "draft-1",
+      revision: 4,
+    });
+    expect(bindings).toEqual([{
+      registrySessionId: "registry-session-1",
+      draftId: "draft-1",
+      draftRevision: 4,
+      draftDigest: baseDigest,
+    }]);
   });
 
   it("rejects a context response for a different revision", async () => {

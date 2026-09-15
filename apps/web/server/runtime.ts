@@ -12,6 +12,8 @@ import { createInfrastructure, type RuntimeEnvironment } from '#pskills-infrastr
 import { createEmbeddingProvider } from '../../../packages/intelligence/src/embeddings';
 import { createReviewTrigger } from '../../../packages/intelligence/src/reviewer-client';
 import { resolveUploadReviewModel, resolveUploadReviewRevision } from '../../../packages/upload-reviews/src/index';
+import { createUploadReviewHttpHandler } from '../../../packages/upload-reviews/src/http';
+import { createUploadReviewTrigger } from '../../../packages/upload-reviews/src/trigger';
 import { createIntelligenceHandler } from '../../../packages/intelligence/src/handler';
 import { createOpenClawTrustedFeedProfile } from './openclaw-profile';
 import {
@@ -53,6 +55,14 @@ import { canonicalOriginFromEnv } from './identity-infrastructure.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
+import {
+  looksLikeEveTenantDelegation,
+  EVE_TENANT_ID_HEADER,
+  EVE_TENANT_SERVICE_HEADER,
+  type EveTenantDelegationBinding,
+  type EveTenantService,
+} from '../../../packages/eve-tenant/src/index.js';
+import { createEveTenantHostRuntime } from './eve-tenant-runtime.js';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -82,6 +92,10 @@ async function createRuntime(env: RuntimeEnvironment) {
       ...configuredGatewayBases,
     ])],
   };
+  // Eve credentials are opt-in and are always minted for the tenant selected
+  // by this request. The issuer is deployment configuration, never Host or
+  // Origin supplied by a caller.
+  const eveTenant = createEveTenantHostRuntime(env, canonicalOriginFromEnv(env));
   const infrastructure = await createInfrastructure(env);
   const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
   // Better Auth is optional and Node-owned. The infrastructure profile may
@@ -109,6 +123,17 @@ async function createRuntime(env: RuntimeEnvironment) {
   const auth = await createAuthenticatorFromEnv(env);
   const requestAuthenticator: Authenticator = {
     authenticate: async (request: Request) => {
+      const eveRoute = await eveTenantRouteForRequest(request);
+      if (eveTenant && eveRoute) {
+        const principal = await eveTenant.authenticatePrincipal(request, eveRoute.service, {
+          ...(eveRoute.binding === undefined ? {} : { binding: eveRoute.binding }),
+        });
+        if (principal && evePrincipalHasRouteBinding(principal, eveRoute.service)) return principal;
+        // A configured tenant bearer must never be reinterpreted as a
+        // default-company Better Auth, API-token, or legacy credential.
+        const supplied = request.headers.get('authorization')?.match(/^Bearer[ \t]+([^ \t]+)$/iu)?.[1];
+        if (looksLikeEveTenantDelegation(supplied)) return null;
+      }
       // Signed worker delegations are route-specific and must be considered
       // before user/session credentials. They carry the tenant selected by
       // the worker deployment and are rechecked by the tenant router.
@@ -301,6 +326,15 @@ async function createRuntime(env: RuntimeEnvironment) {
     ? infrastructure.createSearchIndex(embeddingProvider.profile)
     : undefined;
   const legacyReviewTrigger = createReviewTrigger(env);
+  const tenantUploadReviewHttpHandler = eveTenant && uploadReviewRuntime
+    ? createUploadReviewHttpHandler({
+      repository: infrastructure.repository,
+      organizationId: defaultOrganizationId,
+      service: uploadReviewRuntime.service,
+      tenantAuthenticate: async (request) => eveTenant.verify(request, 'upload-reviewer'),
+      tenantDelegationConfigured: true,
+    })
+    : undefined;
 
   /**
    * Build the fixed-org domain handlers after the outer identity boundary has
@@ -312,11 +346,51 @@ async function createRuntime(env: RuntimeEnvironment) {
   const createTenantHandler = async (context: TenantRuntimeContext) => {
     const tenantConfig = { ...config, organizationId: context.organizationId };
     const isLegacyTenant = context.organizationId === defaultOrganizationId;
+    // Each non-default handler receives fresh credentials pinned to the
+    // selected tenant. Static default-company tokens never enter this branch.
+    const tenantBuilder = !isLegacyTenant && eveTenant
+      ? createBuilderBffRuntime(env, {
+        tenantService: eveTenant.providerFor(context.organizationId, 'skill-builder'),
+      })
+      : undefined;
+    const tenantUploadService = !isLegacyTenant && eveTenant && uploadReviewRuntime
+      ? eveTenant.providerFor(context.organizationId, 'upload-reviewer')
+      : undefined;
+    const tenantUploadTrigger = tenantUploadService
+      ? createUploadReviewTrigger(
+        { ...env, PSKILLS_UPLOAD_REVIEW_EVE_API_TOKEN: undefined },
+        { tenantService: tenantUploadService },
+      )
+      : undefined;
+    const tenantUploadReview = uploadReviewRuntime && tenantUploadTrigger
+      ? {
+        service: uploadReviewRuntime.service,
+        model: resolveUploadReviewModel(env),
+        reviewerRevision: resolveUploadReviewRevision(env),
+        configured: true,
+        trigger: tenantUploadTrigger,
+      }
+      : undefined;
+    const tenantReviewService = !isLegacyTenant && eveTenant
+      ? eveTenant.providerFor(context.organizationId, 'consolidation-reviewer')
+      : undefined;
+    const tenantReviewTrigger = tenantReviewService
+      ? createReviewTrigger(
+        { ...env, PSKILLS_EVE_API_TOKEN: undefined },
+        { tenantService: tenantReviewService },
+      )
+      : undefined;
+    const tenantDependencies = isLegacyTenant
+      ? legacyDependencies
+      : {
+        ...(tenantBuilder === undefined ? {} : { builder: tenantBuilder }),
+        ...(tenantUploadReview === undefined ? {} : { uploadReview: tenantUploadReview }),
+      };
     const registry = createRegistryHandler({
       ...baseInfrastructure,
       auth: context.auth,
       config: tenantConfig,
-      ...(isLegacyTenant ? legacyDependencies : {}),
+      ...tenantDependencies,
     });
     const intelligence = createIntelligenceHandler({
       repository: infrastructure.repository,
@@ -324,16 +398,25 @@ async function createRuntime(env: RuntimeEnvironment) {
       authenticate: context.auth,
       organizationId: context.organizationId,
       publicOrigin: config.publicOrigin,
-      // Provider and reviewer credentials are deployment-owned legacy
-      // capabilities. They are not copied into a new tenant handler.
-      ...(isLegacyTenant && embeddingProvider === undefined ? {} : isLegacyTenant ? {
+      ...(embeddingProvider === undefined ? {} : {
         embeddingProvider,
         index: legacySearchIndex,
-      } : {}),
+      }),
       ...(isLegacyTenant && env.PSKILLS_REVIEWER_TOKEN === undefined ? {} : isLegacyTenant ? {
         reviewerToken: env.PSKILLS_REVIEWER_TOKEN,
       } : {}),
-      ...(isLegacyTenant ? { triggerReview: legacyReviewTrigger } : {}),
+      ...(isLegacyTenant
+        ? { triggerReview: legacyReviewTrigger }
+        : tenantReviewTrigger === undefined ? {} : { triggerReview: tenantReviewTrigger }),
+      ...(eveTenant === undefined ? {} : {
+        reviewerDelegation: async (
+          request: Request,
+          delegationContext: { organizationId: string; binding?: EveTenantDelegationBinding },
+        ) => eveTenant.verify(request, 'consolidation-reviewer', {
+          tenantId: delegationContext.organizationId,
+          ...(delegationContext.binding === undefined ? {} : { binding: delegationContext.binding }),
+        }),
+      }),
     });
     const billing = createBillingRoutes({
       service: infrastructure.billing.service,
@@ -425,6 +508,18 @@ async function createRuntime(env: RuntimeEnvironment) {
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
     if (path.startsWith('/internal/upload-review/')) {
+      const supplied = request.headers.get('authorization')?.match(/^Bearer[ \t]+([^ \t]+)$/iu)?.[1];
+      const hasTenantRouting = request.headers.has(EVE_TENANT_ID_HEADER) || request.headers.has(EVE_TENANT_SERVICE_HEADER);
+      const tenantResponse = eveTenant && (looksLikeEveTenantDelegation(supplied) || hasTenantRouting)
+        ? await tenantUploadReviewHttpHandler?.(request)
+        : undefined;
+      if (tenantResponse) return tenantResponse;
+      if (eveTenant && (looksLikeEveTenantDelegation(supplied) || hasTenantRouting)) {
+        return Response.json(
+          { error: 'tenant upload review is not configured' },
+          { status: 503, headers: { 'cache-control': 'no-store' } },
+        );
+      }
       const response = await uploadReviewRuntime?.httpHandler?.(request);
       if (response) return response;
     }
@@ -523,6 +618,90 @@ function isBetterAuthPrincipal(value: Principal & { authMethod?: unknown }): boo
 function optionalEnvironmentValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+interface EveTenantInboundRoute {
+  readonly service: EveTenantService;
+  readonly binding?: EveTenantDelegationBinding;
+}
+
+/** Return the only registry callback paths that accept an Eve delegation. */
+async function eveTenantRouteForRequest(request: Request): Promise<EveTenantInboundRoute | undefined> {
+  let pathname: string;
+  let url: URL;
+  try {
+    url = new URL(request.url);
+    pathname = url.pathname.replace(/\/+$/u, '') || '/';
+  } catch {
+    return undefined;
+  }
+  if (pathname === '/internal/reviewer/prepare' || pathname === '/internal/reviewer/complete') {
+    const body = await boundedRequestObject(request);
+    const eveSessionId = body?.eveSessionId;
+    const runId = body?.runId;
+    if (typeof eveSessionId !== 'string') return { service: 'consolidation-reviewer' };
+    return {
+      service: 'consolidation-reviewer',
+      binding: {
+        sessionId: eveSessionId,
+        ...(pathname.endsWith('/complete') && typeof runId === 'string' ? { runId } : {}),
+      },
+    };
+  }
+  const builderMatch = /^\/v1\/drafts\/([^/]+)\/(builder-context|builder-file|proposals)$/u.exec(pathname);
+  if (builderMatch) {
+    const draftId = builderMatch[1];
+    const operation = builderMatch[2];
+    if (operation === 'proposals') {
+      const body = await boundedRequestObject(request);
+      if (!body || typeof body.draftRevision !== 'number' || typeof body.draftDigest !== 'string') {
+        return { service: 'skill-builder' };
+      }
+      return {
+        service: 'skill-builder',
+        binding: {
+          registrySessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+          draftId,
+          draftRevision: body.draftRevision,
+          draftDigest: body.draftDigest,
+        },
+      };
+    }
+    const revision = Number(url.searchParams.get('revision'));
+    const digest = url.searchParams.get('digest');
+    if (!Number.isSafeInteger(revision) || typeof digest !== 'string' || digest.length === 0) {
+      return { service: 'skill-builder' };
+    }
+    return {
+      service: 'skill-builder',
+      binding: { draftId, draftRevision: revision, draftDigest: digest },
+    };
+  }
+  return undefined;
+}
+
+async function boundedRequestObject(request: Request): Promise<Record<string, unknown> | undefined> {
+  const declared = request.headers.get('content-length');
+  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > 96 * 1024)) return undefined;
+  try {
+    const text = await request.clone().text();
+    if (new TextEncoder().encode(text).byteLength > 96 * 1024) return undefined;
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function evePrincipalHasRouteBinding(principal: { eveTenant: { service: EveTenantService; binding?: EveTenantDelegationBinding } }, service: EveTenantService): boolean {
+  const binding = principal.eveTenant.binding;
+  if (!binding || binding.draftId === undefined || binding.draftRevision === undefined || binding.draftDigest === undefined) {
+    return service !== 'skill-builder' && binding?.sessionId !== undefined;
+  }
+  if (service === 'consolidation-reviewer') return binding.sessionId !== undefined;
+  return binding.registrySessionId !== undefined;
 }
 
 // A stable environment object is cached on Node; worker bindings are per-request.

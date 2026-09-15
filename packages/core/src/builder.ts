@@ -23,6 +23,10 @@ import {
   type BuilderSessionAcceptanceExpectation,
   type DraftBinding,
 } from '../../skill-builder/src/index.js';
+import type {
+  BoundEveTenantService,
+  EveTenantDelegationBinding,
+} from '../../eve-tenant/src/index.js';
 
 const MAX_BODY_BYTES = 96 * 1024;
 const MAX_TURNS = 200;
@@ -39,9 +43,11 @@ export interface BuilderBffRuntime {
   /** Origin of the separate Eve service, without credentials or path. */
   readonly appOrigin: string;
   /** Token accepted only by the app's internal channel routes. */
-  readonly serviceToken: string;
+  readonly serviceToken?: string;
   /** Token accepted only by Eve's ID-addressed HTTP session routes. */
-  readonly eveToken: string;
+  readonly eveToken?: string;
+  /** Tenant-bound credential provider for a non-default company. */
+  readonly tenantService?: BoundEveTenantService;
   readonly fetch?: typeof fetch;
 }
 
@@ -132,9 +138,10 @@ export function createBuilderBffHandler(deps: BuilderBffDependencies): (request:
 
 async function availability(fetchImpl: typeof fetch, runtime: BuilderBffRuntime): Promise<Response> {
   try {
+    const headers = await upstreamHeaders(runtime, { accept: 'application/json' }, undefined, 'service');
     const response = await fetchWithTimeout(fetchImpl, `${runtime.appOrigin}/internal/builder/status`, {
       method: 'GET',
-      headers: { authorization: `Bearer ${runtime.serviceToken}`, accept: 'application/json' },
+      headers,
       redirect: 'error',
     });
     const value = await boundedJson(response, 64 * 1024);
@@ -172,7 +179,7 @@ async function loadSession(
   if (!record) throw builderError('BUILDER_SESSION_NOT_FOUND', 'No builder session exists for this draft revision', 404);
   assertSessionBinding(record, principal, binding, false);
   if (!record.eveSessionId) return json({ session: toSessionDto(record, []) }, 200);
-  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId);
+  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId, builderBinding(record));
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
   if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
@@ -239,7 +246,7 @@ async function sendPrompt(
   }
 
   if (record.requests.find((candidate) => candidate.id === requestId)?.state === 'completed' && record.eveSessionId) {
-    const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId);
+    const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId, builderBinding(record));
     return json({ session: toSessionDto(record, snapshot.events) }, 200);
   }
 
@@ -262,13 +269,13 @@ async function sendPrompt(
   };
   let acceptedSessionId: string;
   try {
+    const headers = await upstreamHeaders(deps.runtime, {
+      accept: 'application/json',
+      'content-type': 'application/json',
+    }, builderBinding(record), 'service');
     const response = await fetchWithTimeout(fetchImpl, `${deps.runtime.appOrigin}/internal/builder/sessions`, {
       method: 'POST',
-      headers: {
-        authorization: `Bearer ${deps.runtime.serviceToken}`,
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(payload),
       redirect: 'error',
     });
@@ -304,7 +311,7 @@ async function sendPrompt(
     throw error;
   }
   record = await bindAcceptedSession(deps.repository, deps.config.organizationId, record.id, requestId, binding, acceptedSessionId);
-  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId);
+  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, record.eveSessionId, builderBinding(record));
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
   if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
@@ -339,7 +346,7 @@ async function stopSession(
     method: 'POST',
     body: JSON.stringify(record.activeTurnId ? { turnId: record.activeTurnId } : {}),
     headers: { 'content-type': 'application/json' },
-  });
+  }, builderBinding(record));
   const cancelValue = await boundedJson(cancelResponse, MAX_CANCEL_RESPONSE_BYTES);
   if (!isRecord(cancelValue) || cancelValue.ok !== true || (cancelValue.status !== 'accepted' && cancelValue.status !== 'no_active_turn')) {
     throw builderError('BUILDER_UPSTREAM', 'The builder returned an invalid cancellation response', 502);
@@ -367,7 +374,7 @@ async function streamSession(
   // Keep the registry facade sanitized.  Eve's raw stream includes tool,
   // tracing, and provider events that are server-internal; the browser gets
   // the same bounded turn DTO as the session routes.
-  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, boundedSessionId(record.eveSessionId));
+  const snapshot = await fetchSessionSnapshot(fetchImpl, deps.runtime, boundedSessionId(record.eveSessionId), builderBinding(record));
   await reconcileSnapshot(deps.repository, deps.config.organizationId, record, snapshot);
   if (snapshot.lifecycle) record.state = snapshot.lifecycle;
   if (snapshot.lifecycle === 'ready' || snapshot.lifecycle === 'failed' || snapshot.lifecycle === 'stopped' || snapshot.lifecycle === 'completed') delete record.activeTurnId;
@@ -555,8 +562,13 @@ async function reconcileSnapshot(
   });
 }
 
-async function fetchSessionSnapshot(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, eveSessionId: string): Promise<{ events: BuilderEvent[]; activeTurnId?: string; lifecycle?: BuilderSessionLifecycle }> {
-  const response = await fetchEve(fetchImpl, runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(eveSessionId))}/stream?startIndex=0&includeTailIndex=1`, { method: 'GET' });
+async function fetchSessionSnapshot(
+  fetchImpl: typeof fetch,
+  runtime: BuilderBffRuntime,
+  eveSessionId: string,
+  binding?: EveTenantDelegationBinding,
+): Promise<{ events: BuilderEvent[]; activeTurnId?: string; lifecycle?: BuilderSessionLifecycle }> {
+  const response = await fetchEve(fetchImpl, runtime, `/eve/v1/session/${encodeURIComponent(boundedSessionId(eveSessionId))}/stream?startIndex=0&includeTailIndex=1`, { method: 'GET' }, binding);
   const text = await boundedTextResponse(response, MAX_EVE_STREAM_BYTES);
   const events: BuilderEvent[] = [];
   for (const line of text.split('\n')) {
@@ -694,10 +706,15 @@ function assertOptionalBodyBinding(body: Record<string, unknown>, binding: Draft
   assertBodyBinding(body, binding, draftId);
 }
 
-async function fetchEve(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, path: string, init: RequestInit): Promise<Response> {
+async function fetchEve(
+  fetchImpl: typeof fetch,
+  runtime: BuilderBffRuntime,
+  path: string,
+  init: RequestInit,
+  binding?: EveTenantDelegationBinding,
+): Promise<Response> {
   try {
-    const headers = new Headers(init.headers);
-    headers.set('authorization', `Bearer ${runtime.eveToken}`);
+    const headers = await upstreamHeaders(runtime, init.headers, binding);
     headers.set('accept', 'application/json, application/x-ndjson');
     const response = await fetchWithTimeout(fetchImpl, `${runtime.appOrigin}${path}`, { ...init, headers, redirect: 'error' });
     if (!response.ok) {
@@ -708,6 +725,32 @@ async function fetchEve(fetchImpl: typeof fetch, runtime: BuilderBffRuntime, pat
   } catch {
     throw builderError('BUILDER_UPSTREAM', 'The builder service is unavailable', 502);
   }
+}
+
+/** Resolve tenant credentials for every upstream request; static tokens are
+ * retained only for the legacy default-company bridge. */
+async function upstreamHeaders(
+  runtime: BuilderBffRuntime,
+  init?: HeadersInit,
+  binding?: EveTenantDelegationBinding,
+  kind: 'service' | 'eve' = 'eve',
+): Promise<Headers> {
+  if (runtime.tenantService) return runtime.tenantService.headers(init, binding);
+  const headers = new Headers(init);
+  const token = kind === 'service' ? runtime.serviceToken : runtime.eveToken;
+  if (!token) throw builderError('BUILDER_UNAVAILABLE', 'The builder service is not configured', 503);
+  headers.set('authorization', `Bearer ${token}`);
+  return headers;
+}
+
+function builderBinding(record: Pick<SkillBuilderSessionRecord, 'id' | 'draftId' | 'draftRevision' | 'draftDigest' | 'eveSessionId'>): EveTenantDelegationBinding {
+  return {
+    registrySessionId: record.id,
+    draftId: record.draftId,
+    draftRevision: record.draftRevision,
+    draftDigest: record.draftDigest,
+    ...(record.eveSessionId ? { sessionId: record.eveSessionId } : {}),
+  };
 }
 
 async function fetchWithTimeout(fetchImpl: typeof fetch, input: string, init: RequestInit): Promise<Response> {

@@ -7,6 +7,10 @@ import {
   type UploadReviewPersistenceService,
   type UploadReviewSnapshotFile,
 } from './index.js';
+import type {
+  EveTenantDelegationClaims,
+  EveTenantDelegationBinding,
+} from '../../eve-tenant/src/index.js';
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_TOKEN_LENGTH = 512;
@@ -17,7 +21,11 @@ export interface UploadReviewHttpDependencies {
   repository: StateRepository;
   organizationId: string;
   /** A distinct upload-reviewer token; never reuse the daily reviewer token. */
-  reviewerToken: string;
+  reviewerToken?: string;
+  /** Verify a tenant-bound callback and return only signed claims. */
+  tenantAuthenticate?: (request: Request) => Promise<EveTenantDelegationClaims | null>;
+  /** Refuse token-shaped tenant credentials instead of trying static auth. */
+  tenantDelegationConfigured?: boolean;
   /** Core-owned draft binding lookup evaluated inside queue transactions. */
   resolveCurrentBinding?: UploadReviewCurrentBindingResolver;
   service?: UploadReviewPersistenceService;
@@ -48,22 +56,30 @@ export function createUploadReviewHttpHandler(
   const service = dependencies.service ?? createUploadReviewPersistenceService(dependencies.repository, {
     resolveCurrentBinding: dependencies.resolveCurrentBinding,
   });
-  assertToken(dependencies.reviewerToken);
+  if (dependencies.reviewerToken !== undefined) assertToken(dependencies.reviewerToken);
 
   return async (request: Request): Promise<Response | undefined> => {
     const path = new URL(request.url).pathname.replace(/\/+$/u, '') || '/';
     if (!path.startsWith('/internal/upload-review/')) return undefined;
     try {
-      requireBearer(request, dependencies.reviewerToken);
+      const tenant = dependencies.tenantAuthenticate ? await dependencies.tenantAuthenticate(request) : null;
+      if (!tenant) {
+        const supplied = request.headers.get('authorization')?.match(/^Bearer\s+([^\s]+)$/iu)?.[1];
+        if (dependencies.tenantDelegationConfigured && looksLikeDelegation(supplied)) {
+          throw new UploadReviewHttpError(401, 'tenant authentication is required');
+        }
+        if (!dependencies.reviewerToken) throw new UploadReviewHttpError(401, 'authentication is required');
+        requireBearer(request, dependencies.reviewerToken);
+      }
       if (request.method.toUpperCase() !== 'POST') return methodNotAllowed();
       if (path === '/internal/upload-review/prepare') {
-        return jsonResponse(await prepare(request, service, dependencies.organizationId, maxBodyBytes));
+        return jsonResponse(await prepare(request, service, tenant?.tenantId ?? dependencies.organizationId, maxBodyBytes, tenant ?? undefined));
       }
       if (path === '/internal/upload-review/complete') {
-        return jsonResponse(await complete(request, service, dependencies.organizationId, maxBodyBytes));
+        return jsonResponse(await complete(request, service, tenant?.tenantId ?? dependencies.organizationId, maxBodyBytes, tenant ?? undefined));
       }
       if (path === '/internal/upload-review/fail') {
-        return jsonResponse(await fail(request, service, dependencies.organizationId, maxBodyBytes));
+        return jsonResponse(await fail(request, service, tenant?.tenantId ?? dependencies.organizationId, maxBodyBytes, tenant ?? undefined));
       }
       return jsonResponse({ error: 'not found' }, 404);
     } catch (error) {
@@ -77,6 +93,7 @@ async function prepare(
   service: UploadReviewPersistenceService,
   organizationId: string,
   maxBodyBytes: number,
+  claims?: EveTenantDelegationClaims,
 ): Promise<UploadReviewPrepareResponse> {
   const body = await readJson(request, maxBodyBytes);
   const sessionId = requiredId(body.sessionId, 'sessionId');
@@ -84,6 +101,7 @@ async function prepare(
   // returns. A job-specific opaque id lets this authenticated request finish
   // that bind atomically, without guessing among pending jobs.
   const jobId = body.jobId === undefined ? undefined : requiredId(body.jobId, 'jobId');
+  assertTenantCallbackBinding(claims, { sessionId, ...(jobId === undefined ? {} : { jobId }) });
   if (jobId !== undefined) await service.bindEveSession(organizationId, jobId, sessionId);
   const claim = await service.claimForEveSession(organizationId, sessionId);
   const job = claim.job;
@@ -117,11 +135,13 @@ async function complete(
   service: UploadReviewPersistenceService,
   organizationId: string,
   maxBodyBytes: number,
+  claims?: EveTenantDelegationClaims,
 ): Promise<Record<string, unknown>> {
   const body = await readJson(request, maxBodyBytes);
   const sessionId = requiredId(body.sessionId, 'sessionId');
   const jobId = requiredId(body.jobId, 'jobId');
   const leaseToken = requiredId(body.leaseToken, 'leaseToken');
+  assertTenantCallbackBinding(claims, { sessionId, jobId });
   const findings = body.findings;
   if (!Array.isArray(findings)) throw new UploadReviewHttpError(400, 'findings must be an array');
   const job = await service.getLeasedJob(organizationId, jobId, leaseToken);
@@ -138,11 +158,13 @@ async function fail(
   service: UploadReviewPersistenceService,
   organizationId: string,
   maxBodyBytes: number,
+  claims?: EveTenantDelegationClaims,
 ): Promise<Record<string, unknown>> {
   const body = await readJson(request, maxBodyBytes);
   const sessionId = requiredId(body.sessionId, 'sessionId');
   const jobId = requiredId(body.jobId, 'jobId');
   const leaseToken = requiredId(body.leaseToken, 'leaseToken');
+  assertTenantCallbackBinding(claims, { sessionId, jobId });
   const job = await service.getLeasedJob(organizationId, jobId, leaseToken);
   if (job.eveSessionId !== sessionId) throw new UploadReviewHttpError(404, 'upload review job was not found');
   if (job.state === 'stale') return { status: 'stale', ...(job.resultId === undefined ? {} : { resultId: job.resultId }) };
@@ -174,6 +196,22 @@ function requireBearer(request: Request, expected: string): void {
   const value = request.headers.get('authorization');
   const supplied = value?.match(/^Bearer\s+([^\s]+)$/u)?.[1];
   if (!supplied || !constantTimeEqual(expected, supplied)) throw new UploadReviewHttpError(401, 'authentication is required');
+}
+
+function assertTenantCallbackBinding(
+  claims: EveTenantDelegationClaims | undefined,
+  actual: EveTenantDelegationBinding,
+): void {
+  if (!claims) return;
+  const binding = claims.binding;
+  if (!binding || binding.sessionId !== actual.sessionId ||
+      (binding.jobId !== undefined && binding.jobId !== actual.jobId)) {
+    throw new UploadReviewHttpError(403, 'tenant callback binding does not match the upload review request');
+  }
+}
+
+function looksLikeDelegation(value: string | undefined): boolean {
+  return typeof value === 'string' && value.split('.').length === 3;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

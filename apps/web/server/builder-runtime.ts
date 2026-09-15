@@ -1,10 +1,16 @@
 import type { BuilderBffRuntime } from '../../../packages/core/src/builder.js';
+import type { BoundEveTenantService } from '../../../packages/eve-tenant/src/index.js';
 
 /** The only production origin permitted for the separately deployed builder. */
 export const BUILDER_APP_ORIGIN = 'https://private-skills-builder.vercel.app';
 
 const MAX_BUILDER_TOKEN_LENGTH = 16 * 1024;
 export type BuilderRuntimeEnvironment = Record<string, string | undefined>;
+
+export interface BuilderRuntimeOptions {
+  /** Tenant-bound credential for a non-default company. */
+  readonly tenantService?: BoundEveTenantService;
+}
 
 /**
  * Resolve the registry's server-only connection to the builder app.
@@ -16,11 +22,14 @@ export type BuilderRuntimeEnvironment = Record<string, string | undefined>;
  */
 export function createBuilderBffRuntime(
   env: BuilderRuntimeEnvironment,
+  options: BuilderRuntimeOptions = {},
 ): BuilderBffRuntime | undefined {
   const appOrigin = validBuilderAppOrigin(env.PSKILLS_BUILDER_APP_ORIGIN, env);
   const serviceToken = boundedSecret(env.PSKILLS_BUILDER_SERVICE_TOKEN);
   const eveToken = boundedSecret(env.PSKILLS_BUILDER_EVE_API_TOKEN);
-  if (appOrigin === undefined || serviceToken === undefined || eveToken === undefined) {
+  if (appOrigin === undefined) return undefined;
+  if (options.tenantService) return { appOrigin, tenantService: options.tenantService };
+  if (serviceToken === undefined || eveToken === undefined) {
     return undefined;
   }
   return { appOrigin, serviceToken, eveToken };

@@ -13,6 +13,11 @@ import { MemoryStateRepository, defaultRegistryState } from '../../database/src/
 import { DefaultReviewPersistenceService } from '../../reviews/src/index.js';
 import type { SearchDocument, SearchHealth, SearchHit, SemanticIndex } from '../../search/src/types.js';
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
+import {
+  issueEveTenantDelegation,
+  verifyEveTenantDelegation,
+  type EveTenantDelegationBinding,
+} from '../../eve-tenant/src/index.js';
 import type { EmbeddingProvider } from '../src/embeddings.js';
 import { createIntelligenceHandler } from '../src/handler.js';
 
@@ -428,6 +433,91 @@ describe('intelligence HTTP handler', () => {
       body: {},
     }));
     expect(accepted?.status).toBe(200);
+  });
+
+  it('accepts only session/run-bound tenant reviewer callbacks', async () => {
+    const harness = await fixture();
+    const secret = 'intelligence-tenant-review-secret-0123456789';
+    const serviceIdentity = 'registry-host';
+    const issuer = { issuer: ORIGIN, secret, serviceIdentity };
+    const verifier = {
+      ...issuer,
+      expectedServiceIdentity: serviceIdentity,
+    };
+    const calls: Array<EveTenantDelegationBinding | undefined> = [];
+    const handler = createIntelligenceHandler({
+      repository: harness.repository,
+      blobs: harness.blobs,
+      authenticate: async () => ownerPrincipal(),
+      organizationId: ORGANIZATION,
+      publicOrigin: ORIGIN,
+      embeddingProvider: provider,
+      index: harness.index,
+      reviewerDelegation: async (request, context) => {
+        calls.push(context.binding);
+        const token = request.headers.get('authorization')?.match(/^Bearer\s+([^\s]+)$/u)?.[1];
+        if (!token) return null;
+        try {
+          return await verifyEveTenantDelegation(token, verifier, {
+            service: 'consolidation-reviewer',
+            tenantId: context.organizationId,
+            ...(context.binding === undefined ? {} : { binding: context.binding }),
+          });
+        } catch {
+          return null;
+        }
+      },
+    });
+    const issued = await issueEveTenantDelegation({
+      ...issuer,
+      now: () => Date.now(),
+    }, {
+      tenantId: ORGANIZATION,
+      service: 'consolidation-reviewer',
+      binding: { sessionId: 'tenant-review-session' },
+    });
+    const prepared = await handler(request('/internal/reviewer/prepare', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${issued.token}` },
+      body: { model: 'tenant-reviewer', eveSessionId: 'tenant-review-session' },
+    }));
+    expect(prepared?.status).toBe(200);
+    const preparedBody = await json<{ runId: string; leaseToken: string }>(prepared!);
+    expect(calls[0]).toEqual({ sessionId: 'tenant-review-session' });
+
+    const completion = await issueEveTenantDelegation({
+      ...issuer,
+      now: () => Date.now(),
+    }, {
+      tenantId: ORGANIZATION,
+      service: 'consolidation-reviewer',
+      binding: { sessionId: 'tenant-review-session', runId: preparedBody.runId },
+    });
+    const completed = await handler(request('/internal/reviewer/complete', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${completion.token}` },
+      body: {
+        eveSessionId: 'tenant-review-session',
+        runId: preparedBody.runId,
+        leaseToken: preparedBody.leaseToken,
+        summary: 'No safe consolidation proposal.',
+        suggestions: [],
+      },
+    }));
+    expect(completed?.status).toBe(200);
+    expect(calls[1]).toEqual({ sessionId: 'tenant-review-session', runId: preparedBody.runId });
+
+    const missingSession = await handler(request('/internal/reviewer/complete', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${completion.token}` },
+      body: {
+        runId: preparedBody.runId,
+        leaseToken: preparedBody.leaseToken,
+        summary: 'retry',
+        suggestions: [],
+      },
+    }));
+    expect(missingSession?.status).toBe(401);
   });
 
   it('rejects unsafe Eve session metadata at the reviewer boundary', async () => {
