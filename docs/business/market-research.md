@@ -2,6 +2,8 @@
 
 **Snapshot:** 15 September 2026 (UTC)
 
+**Follow-up refresh:** 15 September 2026, 15:16–15:18 UTC (16 September 2026, 01:16–01:18 AEST)
+
 **Purpose:** internal working research for the launch decision. This note separates what a competitor says about its own product, what this repository currently demonstrates, and what remains a positioning hypothesis. It contains no customer, revenue, market-size, or traction claim.
 
 ## Reading guide
@@ -18,7 +20,7 @@ The product name in the repository remains **Private Skills** for this work. A b
 
 | Product | Relationship | What its primary materials say | Implication for Private Skills |
 | --- | --- | --- | --- |
-| [Tessl](https://docs.tessl.io/) | Direct competitor | Tessl describes an agentic-development platform with a registry and package manager for public and private context, governance, evaluations, observability, and agent-agnostic use. Its [registry](https://tessl.io/registry) and [evaluation workflow](https://docs.tessl.io/evaluate) put agent skills, package quality, and review in one managed product. | Competes for the full “discover, assess, and manage agent skills” job. A smaller team can be served with a narrower release and distribution workflow, provided that portability and evidence are real. |
+| [Tessl](https://docs.tessl.io/) | Direct competitor | Tessl describes an agentic-development platform with a registry and package manager for public and private context, governance, evaluations, observability, and agent-agnostic use. Its [registry](https://tessl.io/registry) puts agent skills, package quality, and review in one managed product. | Competes for the full “discover, assess, and manage agent skills” job. A smaller team can be served with a narrower release and distribution workflow, provided that portability and evidence are real. |
 | [JFrog Artifactory / AI Catalog](https://jfrog.com/artifactory/) | Potentially direct enterprise competitor | JFrog positions Artifactory as a system of record for software artifacts and explicitly lists AI/ML models plus agent assets such as skills, plugins, and MCP items. Its [AI Catalog](https://jfrog.com/ai-catalog/mcp-registry/) extends that enterprise artifact and governance model to agent assets. | Treat this as a direct governance comparison when a buyer wants one enterprise control plane. Do not frame artifact storage or governance alone as unique; the possible wedge is a focused skill-release workflow that is easier to adopt alongside an existing engineering stack. |
 | [skills.sh](https://www.skills.sh/docs) | Direct-adjacent public discovery and install path | The [CLI documentation](https://www.skills.sh/docs/cli) documents `npx skills add` for installing skills and packs, while the project describes public and private packs and warns that routine audits cannot guarantee quality or security. | It is the familiar public discovery and developer-install path. Private Skills can sit in front of selected upstream content and add organization review, release records, and policy-controlled distribution. It must not claim drop-in compatibility with the `skills` CLI unless that is separately verified. |
 | [ClawHub](https://github.com/openclaw/clawhub/blob/main/docs/clawhub.md) | Direct-adjacent ecosystem registry | ClawHub describes a public OpenClaw skill/plugin registry with versioned bundles, tags, changelogs, download and star signals, scan summaries, and scan-held or blocked releases. Its [vision](https://github.com/openclaw/clawhub/blob/main/VISION.md) emphasizes provenance and trust evidence for that ecosystem. | It shows an existing ecosystem capability and competitive investment in provenance and screening. Its OpenClaw-specific public marketplace scope leaves room for a private, provider-neutral team workflow. |
@@ -35,7 +37,7 @@ The initial market map remains useful, but the surrounding agent ecosystem is mo
 
 | Source | Current primary-source signal | Research consequence |
 | --- | --- | --- |
-| [Tessl evaluation documentation](https://docs.tessl.io/evaluate) and [how Tessl works](https://docs.tessl.io/introduction-to-tessl/how-tessl-works) | Tessl describes a registry and package manager for agent skills, with evaluation signals covering validation, implementation, activation, and scenario-based review. | “We review skills” is too broad to differentiate. Test whether a release record that connects source, decision, digest, and install is easier to use than a general package score. |
+| [Tessl documentation](https://docs.tessl.io/) and [Tessl Registry](https://tessl.io/registry) | Tessl currently describes a registry and package manager alongside governance, role controls, install and publish policies, audit trails, evaluations, and observability. Its registry presents skills as evaluated, secured, versioned, and discoverable. | “We review skills” is too broad to differentiate. Test whether a release record that connects source, decision, digest, and install is easier to use than a general package score. |
 | [Cursor plugins](https://prod.cursor.com/docs/plugins) and [Agent Skills](https://prod.cursor.com/docs/skills) | Cursor documents bundles that can include rules, skills, agents, commands, MCP servers, and hooks, with team marketplaces and default, disabled, or required plugin settings. | Team distribution already exists inside an important coding-agent surface. Test the value of keeping source intake and release evidence across agent surfaces rather than claiming distribution itself is new. |
 | [GitHub Copilot Agent Skills](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills) and [adding skills to cloud agent](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/add-skills) | GitHub documents skills for Copilot cloud agent, code review, CLI, app, and IDE agent mode, with repository and user skill locations. | Repository-native, provider-specific workflows are becoming normal. Verify which parts of the `pskills` release and install path work alongside these workflows before using “portable” as a public claim. |
 | [Claude Code Skills](https://code.claude.com/docs/en/skills) | Anthropic documents the Agent Skills open standard and project, user, enterprise, and plugin skill locations, with skills loaded when relevant. | Portability must be tested at the content and installation boundaries across agent tools. An open standard does not by itself make registry, policy, or lock behavior interchangeable. |
@@ -45,6 +47,56 @@ The initial market map remains useful, but the surrounding agent ecosystem is mo
 | [Cloudsmith artifact management](https://cloudsmith.com/platform-features/artifact-management) | Cloudsmith documents private and public repositories, upstream proxying, access control, audit logs, multiple package formats, and policy checks. | General artifact infrastructure is a realistic substitute. The test must show the operational value of skill-specific source intake and agent-focused release records. |
 
 This refresh changes the competitive test, not the product evidence. It strengthens the case for a narrow engineering-team workflow while weakening any claim that evaluation, scanning, policy, provenance, private storage, or distribution is unique in isolation.
+
+## Follow-up market refresh — 16 September 2026
+
+This follow-up was read against the vendors' current public documentation on 15 September 2026 UTC. It is a source refresh, not customer validation. The older Tessl `/evaluate` path returned a Page Not Found response during this check, so current Tessl claims below use the [documentation home](https://docs.tessl.io/) and [registry](https://tessl.io/registry); vendor documentation paths should be rechecked before a public comparison is published.
+
+| Source | Current primary-source signal | What to test next |
+| --- | --- | --- |
+| [Tessl documentation](https://docs.tessl.io/) and [Registry](https://tessl.io/registry) | Tessl groups registry and package management with governance, role controls, install and publish policies, audit trails, evaluations, observability, and agent-agnostic use. The registry presents skills as evaluated, secured, versioned, and discoverable. | Compare a focused source-to-release-to-install record with a general package score. Measure whether a maintainer can answer source, revision, decision, and installed digest questions without another system. |
+| [JFrog AI Catalog / MCP Registry](https://jfrog.com/ai-catalog/mcp-registry/) | JFrog explicitly lists Agent Skills Registry alongside model, plugin, and MCP registries, and describes a unified catalog with policy, curation, access controls, and integrations for coding-agent tools. | Treat JFrog as a direct enterprise control-plane alternative. Test whether a smaller team can adopt the skill-specific workflow without adding a large artifact-platform project. |
+| [Cursor plugins](https://prod.cursor.com/docs/plugins) | Cursor documents manually reviewed plugins, team marketplaces, administrator publishing controls, and Default Off, On, or Required install modes. | Test whether Private Skills adds value at the source and release boundary when distribution is already administered inside an agent surface. |
+| [GitHub Copilot Agent Skills](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills) | GitHub documents the open Agent Skills standard across Copilot cloud agent, code review, CLI, app, and IDE agent mode, with repository and user skill locations. | Validate content and installation behavior on the exact provider surfaces before using “portable” or “works with Copilot” in copy. |
+| [Claude Code Skills](https://code.claude.com/docs/en/skills) | Claude Code documents enterprise, project, personal, plugin, and additional-directory skill locations. | Use the same sanitized skill to test whether a recorded release can be installed and verified across two agent tools without manual file copying. |
+| [skills.sh CLI](https://www.skills.sh/docs/cli) | The public CLI makes `npx skills add` and pack installation familiar, with filters for several agent tools and documented anonymous telemetry and opt-out behavior. | Keep public discovery and Private Skills release/install paths distinct. Test whether a team understands the added approval and evidence step without assuming CLI compatibility. |
+| [ClawHub documentation](https://github.com/openclaw/clawhub/blob/main/docs/clawhub.md) | ClawHub documents versioned OpenClaw bundles, semver and tags, changelogs, scan summaries, source metadata, and lock-file support, with automated checks and moderation. | Use this as evidence of ecosystem capability and competitive investment. Do not present it as proof of buyer demand or as provider-neutral parity. |
+| [Cloudsmith artifact management](https://cloudsmith.com/platform-features/artifact-management) | Cloudsmith covers private and public repositories, upstream proxying, access control, audit logs, many package formats, and policy checks. | Test the “skill release record” against an existing artifact repository and identify which source, review, or install questions remain unanswered there. |
+
+### Messaging and roadmap implications
+
+The strongest message to test is: **Private Skills gives an engineering team a clear path from an AI-agent skill source to a reviewed, repeatable install.** The proof card should show three concrete things in that order:
+
+1. source identity, revision, and content digest;
+2. required checks, configured policy result, and any human decision when a review gate is enabled; and
+3. the release or pack that a developer installed and can verify again.
+
+This framing competes on operational clarity and a small first workflow. It does not claim that scanning, governance, private storage, provenance, evaluation, or distribution is unique. It also does not imply runtime enforcement, automatic authoring, universal human approval, or compatibility with every agent tool.
+
+| Sequence | Product or evidence work | Message dependency |
+| --- | --- | --- |
+| Now | Make one sanitized source-to-release-to-install transcript reproducible, including the exact `pskills` help-backed commands and a visible digest/check/policy outcome. | The first page can promise a concrete team workflow rather than a broad security category. |
+| Next | Run install and verification conformance on two named agent surfaces, record the content and path differences, and publish a compatibility table only for passing fixtures. | “Cross-agent” becomes a measured claim with a bounded support list. |
+| Next | Exercise failed required checks, configured review gates, revoke/rescan behavior, and the resulting audit record with accepted fixtures. | The evidence story can distinguish policy admission from a human decision and from runtime protection. |
+| Later | Test role separation, deployment/data-handling requirements, retention/export, and support expectations with buyer-side participants. | Organization packaging and procurement language remain hypotheses until the operating evidence exists. |
+
+### Follow-up buyer and adoption backlog
+
+These are small, decision-oriented tests for engineering teams. They remain hypotheses; no participant, customer, or conversion result has been recorded.
+
+| ID | Adoption hypothesis | Smallest useful test | Pass signal | Decision if it fails |
+| --- | --- | --- | --- | --- |
+| MR08 | A release record is more useful than a catalog listing when a team must explain an install. | Eight platform, DevEx, or security participants compare a plain listing with the same source, revision, digest, checks, policy, and install evidence. | At least 6 of 8 answer all five “what happened?” questions without a prompt. | Simplify the record or lead with the job participants actually choose. |
+| MR09 | Teams will trade public discovery convenience for a private, repeatable install path when they own the source. | Six maintainers run one internal fixture from source intake through a second verification or update. | At least 4 of 6 complete the second action without copying files or changing the recorded digest. | Treat repeatability as unresolved and inspect CLI, lock, and update friction. |
+| MR10 | Cross-agent portability is a buying concern only when the same content can be demonstrated safely. | Six consenting participants install the same sanitized release on two named agent surfaces using the documented path. | At least 4 of 6 complete both tasks; every failure is classified as content, path, or provider behavior. | Narrow the supported list and remove an untested portability promise. |
+| MR11 | The first evaluation has a clear owner, operator, and approver. | Six buyer-side sessions map who starts the trial, maintains skills, reviews evidence, and approves spend. | At least 4 of 6 name real roles and a triggering workflow without inventing a new role. | Rewrite the operating model around observed ownership. |
+| MR12 | Buyers choose package boundaries by governed-release or deployment need rather than an assumed seat count. | Six participants rank Evaluation, Team, and Organization shapes with no dollar amounts and state the value metric behind the choice. | At least 4 of 6 state a concrete release, source, retention, or deployment requirement. | Keep pricing as a preview and research cost-to-serve again. |
+
+The next research cycle should record participant type, task, date, completion definition, and raw observation. A page visit, signup, or demo click is not adoption evidence. Do not mark a hypothesis confirmed from an opinion or a single successful walkthrough.
+
+### Commercial signal from the competitor set
+
+[Tessl's current pricing page](https://tessl.io/pricing) shows a free tier, a Team tier at `$100/month`, and custom Enterprise packaging. It describes credits for reviews, evaluations, and agent runs while publish and install are listed as free. This is a competitor-stated anchor, not a recommendation for Private Skills. Keep Private Skills pricing as a preview until the value metric, cost-to-serve, and buyer evidence are known.
 
 ## ICP hypothesis
 
@@ -178,9 +230,9 @@ The initial desk-research pass recorded in B14–B16 is complete for the evidenc
 
 | Area | Initial evidence now recorded | Still unvalidated |
 | --- | --- | --- |
-| Market category | Primary descriptions for Tessl, JFrog, skills.sh, ClawHub, Cloudsmith, Cursor, GitHub Copilot, and Claude Code, with direct versus adjacent interpretation. | Which category a real team would budget for, and which alternative it would replace. |
+| Market category | Primary descriptions for Tessl, JFrog, skills.sh, ClawHub, Cloudsmith, Cursor, GitHub Copilot, and Claude Code, with a 16 September follow-up refresh and direct versus adjacent interpretation. | Which category a real team would budget for, and which alternative it would replace. |
 | Product wedge | A source-to-policy-to-release-to-install workflow is a positioning hypothesis tied to repository documents. | Whether it is a more urgent job than discovery, evaluation, runtime control, or general artifact storage. |
-| Brand and domains | `ReleaseLoom` and `Vouchpack` remain leading candidates; public RDAP and registrar observations are dated in [the shortlist](brand-domain-shortlist.md). | Trademark, company, package, GitHub, social, and checkout clearance; user choice. |
+| Brand and domains | `ReleaseLoom` and `Vouchpack` remain leading candidates; the shortlist records the 15 September 15:16–15:18 UTC registrar UI recheck alongside the earlier RDAP observations. | Trademark, company, package, GitHub, social, and checkout clearance; user choice. |
 | Buyer and adoption | ICP and role split are explicit sampling hypotheses. | Interviews, guided tasks, repeat use, support burden, and a budget owner. |
 | Commercial model | Evaluation, Team, and Organization package shapes are hypotheses; no firm prices are in copy. | Value metric, cost-to-serve, willingness to pay, and payment readiness. |
 
@@ -243,14 +295,15 @@ The useful acquisition funnel for a later consented pilot is: relevant page view
 
 1. **MR01–MR03:** run the scripted buyer, first-install, and evidence-comprehension tasks with a known fixture. Attach participant count, task script, duration, and observed failure to the tracker.
 2. **MR04–MR07:** test repeat use, role ownership, package boundaries, and deployment constraints. Keep the commercial and deployment decisions open until the observations exist.
-3. **A1–A4:** test the hosted/self-host split and three positioning messages with the same evidence card. Update copy only after recording confusion and completion, not after a single opinion.
-4. **A5–A7:** prepare discoverable content and a launch draft after support, brand, and evidence links are ready. No outreach or paid acquisition is part of the current task.
-5. Reconcile the business tracker after every study. Mark a hypothesis confirmed only when its pass signal is met and the underlying observations are attached; otherwise mark it mixed, rejected, or still open.
+3. **MR08–MR12:** compare a release record with a catalog listing, test repeat verification on two named agent surfaces, and map the evaluation owner and value metric. Record the exact provider, fixture, and failure class for every task.
+4. **A1–A4:** test the hosted/self-host split and three positioning messages with the same evidence card. Update copy only after recording confusion and completion, not after a single opinion.
+5. **A5–A7:** prepare discoverable content and a launch draft after support, brand, and evidence links are ready. No outreach or paid acquisition is part of the current task.
+6. Reconcile the business tracker after every study. Mark a hypothesis confirmed only when its pass signal is met and the underlying observations are attached; otherwise mark it mixed, rejected, or still open.
 
 ## Primary references
 
 - [Tessl documentation](https://docs.tessl.io/) and [Tessl Registry](https://tessl.io/registry)
-- [Tessl evaluation](https://docs.tessl.io/evaluate) and [how Tessl works](https://docs.tessl.io/introduction-to-tessl/how-tessl-works)
+- [Tessl pricing](https://tessl.io/pricing)
 - [Cursor plugins](https://prod.cursor.com/docs/plugins) and [Cursor Agent Skills](https://prod.cursor.com/docs/skills)
 - [GitHub Copilot Agent Skills](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills)
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)
