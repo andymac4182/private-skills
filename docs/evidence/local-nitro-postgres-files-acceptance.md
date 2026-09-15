@@ -48,6 +48,38 @@ The verified journey is:
    authorization, descriptor, and transfer are denied by the current-release
    policy fence.
 
+The extended acceptance case in the same file adds a second journey on the
+same composed runtime and Better Auth schema shape:
+
+1. Both companies publish the same skill name and create the same pack name
+   and version. The resolved pack members point to different company-owned
+   skill IDs, each pack list contains only its own pack, and a foreign pack
+   lookup or install authorization returns 404.
+2. Each authenticated owner/editor creates a draft, edits it to revision 2,
+   reads the draft again from PostgreSQL, and reads `SKILL.md` through the
+   draft-file route. The persisted revision and file manifest are nonempty;
+   foreign draft and file reads return 404.
+3. Search reindex and query run through the configured AI Gateway SDK against
+   a loopback HTTP protocol fixture. The fixture returns deterministic vectors
+   and counts requests, while the runtime still verifies approved artifacts
+   and applies the tenant resource allowlist. Each company receives only its
+   own same-name skill result. This is not external model or provider
+   acceptance.
+4. Each company confirms one pack install receipt from its own authorization.
+   The analytics response records one pack install and one install operation,
+   and its top-skill resource ID is limited to that company's pack member.
+
+An actual filtered execution on 16 September 2026 passed the extended case
+against loopback PostgreSQL and the Files SDK filesystem provider (`1 passed,
+1 skipped` because the unchanged baseline case was intentionally filtered):
+
+```sh
+PSKILLS_NITRO_POSTGRES_ACCEPTANCE=true \
+PSKILLS_NITRO_POSTGRES_URL="$LOOPBACK_POSTGRES_URL" \
+node_modules/.bin/vitest run tests/e2e/nitro-postgres-files-acceptance.test.ts \
+  -t "same-name packs" --reporter=verbose
+```
+
 The proof is intentionally bounded. It does not cover hosted Eve, an external
 AI Gateway/model, a real scanner provider, S3/R2/GCS/Azure/Vercel Blob, a
 deployed origin, or production credentials. Better Auth and worker identities

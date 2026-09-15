@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -24,7 +25,14 @@ import {
 import type { PgPoolLike } from '../../packages/database/src/index.js';
 import { bundleFor } from './harness.js';
 import { digestBytes, encodeBundle } from '../../packages/storage/src/index.js';
-import type { Job, SkillBundle, SkillVersion } from '../../packages/contracts/src/index.js';
+import type {
+  InstallAnalytics,
+  Job,
+  PackVersion,
+  Resolution,
+  SkillBundle,
+  SkillVersion,
+} from '../../packages/contracts/src/index.js';
 import { WorkerRunner } from '../../workers/runner/src/worker.js';
 import {
   enumerateRegularFiles,
@@ -300,6 +308,84 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+interface EmbeddingGatewayFixture {
+  readonly origin: string;
+  readonly requestCount: number;
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * A loopback implementation of the AI Gateway embedding protocol. It keeps
+ * the composed runtime on the real Gateway SDK path while making the test
+ * deterministic and preventing prompts or credentials from leaving the
+ * machine. The vectors are intentionally constant; search authorization and
+ * artifact revalidation remain the production code under test.
+ */
+async function startEmbeddingGateway(): Promise<EmbeddingGatewayFixture> {
+  let requestCount = 0;
+  const server = createHttpServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/v1/embedding-model') {
+      response.statusCode = 404;
+      response.end();
+      return;
+    }
+    if (request.headers.authorization !== 'Bearer local-embedding-fixture-key') {
+      response.statusCode = 401;
+      response.end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    request.on('data', (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.byteLength;
+      if (bytes <= 256 * 1024) chunks.push(buffer);
+    });
+    request.on('end', () => {
+      if (bytes > 256 * 1024) {
+        response.statusCode = 413;
+        response.end();
+        return;
+      }
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { values?: unknown };
+        if (!Array.isArray(body.values) || body.values.length === 0 || body.values.length > 60 || body.values.some((value) => typeof value !== 'string')) {
+          response.statusCode = 400;
+          response.end();
+          return;
+        }
+        requestCount += 1;
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ embeddings: body.values.map(() => [1, 0]) }));
+      } catch {
+        response.statusCode = 400;
+        response.end();
+      }
+    });
+    request.on('error', () => {
+      if (!response.writableEnded) response.destroy();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port: 0 }, () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw new Error('Unable to start the local embedding Gateway fixture');
+  }
+  return {
+    origin: `http://127.0.0.1:${address.port}/v1`,
+    get requestCount() { return requestCount; },
+    close: async () => {
+      if (!server.listening) return;
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+  };
+}
+
 async function runBuild(repoRoot: string): Promise<void> {
   const viteEntry = join(repoRoot, 'node_modules', 'vite', 'bin', 'vite.js');
   const child = spawn(process.execPath, [viteEntry, 'build'], {
@@ -333,6 +419,7 @@ async function startRuntime(
   secret: string,
   runId: string,
   origin: string,
+  runtimeOverrides: Record<string, string | undefined> = {},
 ): Promise<RuntimeProcess> {
   const port = Number(new URL(origin).port);
   if (!Number.isSafeInteger(port) || port < 1) throw new Error('Nitro runtime origin must include a local port');
@@ -400,6 +487,7 @@ async function startRuntime(
       NITRO_HOST: '127.0.0.1',
       PORT: String(port),
       NITRO_PORT: String(port),
+      ...runtimeOverrides,
     },
     detached: RETAIN_FIXTURE,
     stdio: 'ignore',
@@ -806,4 +894,248 @@ local('real Nitro + PostgreSQL + Files SDK tenant journey', () => {
       retainedFixtureWritten = true;
     }
   }, 180_000);
+
+  it('keeps same-name packs, draft revisions/files, search, and confirmed-install analytics tenant-scoped', async () => {
+    if (!DATABASE_URL) throw new Error('loopback PostgreSQL URL is required');
+    const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+    const runId = randomUUID().replaceAll('-', '').slice(0, 16);
+    const schema = `nitro_auth_${runId}`;
+    const ssoTable = `nitro_sso_${runId}`;
+    const secret = `nitro-runtime-extended-secret-${runId}-0123456789`;
+    cleanupDatabase = {
+      schema,
+      ssoTable,
+      apiTokenIdA: `nitro_api_token_${runId}_a`,
+      apiTokenIdB: `nitro_api_token_${runId}_b`,
+    };
+    const port = await freePort();
+    const origin = `http://127.0.0.1:${port}`;
+    let gateway: EmbeddingGatewayFixture | undefined;
+    try {
+      // Start the local Gateway protocol fixture before the actual runtime so
+      // every embedding request stays loopback-only and is observable.
+      gateway = await startEmbeddingGateway();
+      const seeded = await seedBetterAuth(DATABASE_URL, origin, secret, schema, ssoTable, runId);
+      await runBuild(repoRoot);
+      runtime = await startRuntime(repoRoot, DATABASE_URL, seeded, secret, runId, origin, {
+        PSKILLS_AI_ENABLED: 'true',
+        PSKILLS_EMBEDDING_MODEL: 'local/deterministic',
+        PSKILLS_EMBEDDING_DIMENSIONS: '2',
+        PSKILLS_AI_GATEWAY_BASE_URL: gateway.origin,
+        AI_GATEWAY_API_KEY: 'local-embedding-fixture-key',
+      });
+
+      const sharedSkillName = `@nitro/shared-skill-${INSTANCE_ID}-${runId.slice(0, 8)}`;
+      const sharedPackName = `@nitro/shared-pack-${INSTANCE_ID}-${runId.slice(0, 8)}`;
+      const approvedA = await publishAndApprove(
+        runtime,
+        seeded.cookieA,
+        runtime.workerTokenA,
+        sharedSkillName,
+        'Company A shared search fixture',
+      );
+      const approvedB = await publishAndApprove(
+        runtime,
+        seeded.cookieB,
+        runtime.workerTokenB,
+        sharedSkillName,
+        'Company B shared search fixture',
+      );
+      expect(approvedA.skill.name).toBe(sharedSkillName);
+      expect(approvedB.skill.name).toBe(sharedSkillName);
+      expect(approvedA.skill.id).not.toBe(approvedB.skill.id);
+      expect(approvedA.skill.organizationId).toBe(TENANT_A);
+      expect(approvedB.skill.organizationId).toBe(TENANT_B);
+
+      const filesA = await http<{ files: Array<{ path: string }> }>(
+        runtime,
+        `/v1/skills/${encodeURIComponent(approvedA.skill.id)}/files`,
+        seeded.cookieA,
+        { method: 'GET' },
+      );
+      expect(filesA.response.status).toBe(200);
+      expect(filesA.value?.files.map((file) => file.path)).toEqual(expect.arrayContaining(['SKILL.md', 'README.md']));
+      const foreignFiles = await http(runtime, `/v1/skills/${encodeURIComponent(approvedA.skill.id)}/files`, seeded.cookieB, { method: 'GET' });
+      expect(foreignFiles.response.status).toBe(404);
+
+      const packAResponse = await http<{ pack: PackVersion }>(runtime, '/v1/packs', seeded.cookieA, {
+        method: 'POST',
+        json: {
+          name: sharedPackName,
+          version: '1.0.0',
+          description: 'Company A shared pack',
+          skills: [{ ref: sharedSkillName, version: '1.0.0' }],
+        },
+      });
+      expect(packAResponse.response.status).toBe(201);
+      const packA = packAResponse.value?.pack;
+      if (!packA) throw new Error('Company A pack response omitted its pack');
+      const packBResponse = await http<{ pack: PackVersion }>(runtime, '/v1/packs', seeded.cookieB, {
+        method: 'POST',
+        json: {
+          name: sharedPackName,
+          version: '1.0.0',
+          description: 'Company B shared pack',
+          skills: [{ ref: sharedSkillName, version: '1.0.0' }],
+        },
+      });
+      expect(packBResponse.response.status).toBe(201);
+      const packB = packBResponse.value?.pack;
+      if (!packB) throw new Error('Company B pack response omitted its pack');
+      expect(packA.name).toBe(sharedPackName);
+      expect(packB.name).toBe(sharedPackName);
+      expect(packA.id).not.toBe(packB.id);
+      expect(packA.organizationId).toBe(TENANT_A);
+      expect(packB.organizationId).toBe(TENANT_B);
+      expect(packA.members.map((member) => member.resourceId)).toEqual([approvedA.skill.id]);
+      expect(packB.members.map((member) => member.resourceId)).toEqual([approvedB.skill.id]);
+
+      const packsA = await http<{ packs: PackVersion[] }>(runtime, '/v1/packs', seeded.cookieA, { method: 'GET' });
+      const packsB = await http<{ packs: PackVersion[] }>(runtime, '/v1/packs', seeded.cookieB, { method: 'GET' });
+      expect(packsA.response.status).toBe(200);
+      expect(packsB.response.status).toBe(200);
+      expect(packsA.value?.packs.map((pack) => pack.id)).toEqual([packA.id]);
+      expect(packsB.value?.packs.map((pack) => pack.id)).toEqual([packB.id]);
+      const foreignPack = await http(runtime, `/v1/packs/${encodeURIComponent(packA.id)}`, seeded.cookieB, { method: 'GET' });
+      expect(foreignPack.response.status).toBe(404);
+      await expectNoDigest(foreignPack.response, packA.manifestDigest);
+
+      const packResolutionAResponse = await http<{ resolution: Resolution }>(runtime, '/v1/resolve', seeded.cookieA, {
+        method: 'POST',
+        json: { kind: 'pack', ref: sharedPackName, version: '1.0.0' },
+      });
+      expect(packResolutionAResponse.response.status).toBe(200);
+      const packResolutionA = packResolutionAResponse.value?.resolution;
+      if (!packResolutionA) throw new Error('Company A pack resolution was omitted');
+      expect(packResolutionA.kind).toBe('pack');
+      expect(packResolutionA.organizationId).toBe(TENANT_A);
+      expect(packResolutionA.resourceId).toBe(packA.id);
+      expect(packResolutionA.members.map((member) => member.id)).toEqual([approvedA.skill.id]);
+      const packResolutionBResponse = await http<{ resolution: Resolution }>(runtime, '/v1/resolve', seeded.cookieB, {
+        method: 'POST',
+        json: { kind: 'pack', ref: sharedPackName, version: '1.0.0' },
+      });
+      expect(packResolutionBResponse.response.status).toBe(200);
+      const packResolutionB = packResolutionBResponse.value?.resolution;
+      if (!packResolutionB) throw new Error('Company B pack resolution was omitted');
+      expect(packResolutionB.resourceId).toBe(packB.id);
+      expect(packResolutionB.members.map((member) => member.id)).toEqual([approvedB.skill.id]);
+      const foreignPackAuthorization = await http(runtime, '/v1/install-authorizations', seeded.cookieB, {
+        method: 'POST',
+        json: { resolution: packResolutionA },
+      });
+      expect(foreignPackAuthorization.response.status).toBe(404);
+      await expectNoDigest(foreignPackAuthorization.response, packA.manifestDigest);
+
+      type DraftView = { id: string; revision: number; digest: string; files: Array<{ path: string }> };
+      const createAndEditDraft = async (
+        cookie: string,
+        skill: SkillVersion,
+        label: string,
+      ): Promise<{ created: DraftView; updated: DraftView }> => {
+        const createdResponse = await http<{ draft: DraftView }>(
+          runtime!,
+          `/v1/skills/${encodeURIComponent(skill.id)}/drafts`,
+          cookie,
+          { method: 'POST', headers: { 'idempotency-key': `draft-create-${runId}-${label}` }, json: { baseDigest: skill.artifact.digest } },
+        );
+        if (createdResponse.response.status !== 201) {
+          throw new Error(`${label} draft creation failed (${createdResponse.response.status}): ${await createdResponse.response.clone().text()}`);
+        }
+        expect(createdResponse.response.status).toBe(201);
+        const created = createdResponse.value?.draft;
+        if (!created) throw new Error(`${label} draft creation omitted its draft`);
+        const editedBundle = bundleFor(skill.skillName, `Edited ${label} shared draft`) as SkillBundle;
+        const updatedResponse = await http<{ draft: DraftView }>(runtime!, `/v1/drafts/${encodeURIComponent(created.id)}`, cookie, {
+          method: 'PUT',
+          headers: { 'idempotency-key': `draft-update-${runId}-${label}` },
+          json: { expectedRevision: 1, files: editedBundle.files },
+        });
+        expect(updatedResponse.response.status).toBe(200);
+        const updated = updatedResponse.value?.draft;
+        if (!updated) throw new Error(`${label} draft update omitted its draft`);
+        expect(updated.revision).toBe(2);
+        expect(updated.files.length).toBeGreaterThan(0);
+        const persistedResponse = await http<{ draft: DraftView }>(runtime!, `/v1/drafts/${encodeURIComponent(created.id)}`, cookie, { method: 'GET' });
+        expect(persistedResponse.response.status).toBe(200);
+        const persisted = persistedResponse.value?.draft;
+        if (!persisted) throw new Error(`${label} persisted draft was omitted`);
+        expect(persisted).toMatchObject({ id: created.id, revision: 2, digest: updated.digest });
+        expect(persisted.files.length).toBeGreaterThan(0);
+        return { created, updated: persisted };
+      };
+      const draftA = await createAndEditDraft(seeded.cookieA, approvedA.skill, 'company-a');
+      const draftB = await createAndEditDraft(seeded.cookieB, approvedB.skill, 'company-b');
+      const draftFileA = await http<{ file: { path: string; content: string } }>(
+        runtime,
+        `/v1/drafts/${encodeURIComponent(draftA.updated.id)}/files?path=SKILL.md&revision=2&digest=${encodeURIComponent(draftA.updated.digest)}`,
+        seeded.cookieA,
+        { method: 'GET' },
+      );
+      expect(draftFileA.response.status).toBe(200);
+      expect(draftFileA.value?.file).toMatchObject({ path: 'SKILL.md', content: expect.any(String) });
+      const foreignDraft = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, seeded.cookieB, { method: 'GET' });
+      expect(foreignDraft.response.status).toBe(404);
+      const foreignDraftFile = await http(runtime, `/v1/drafts/${encodeURIComponent(draftA.updated.id)}/files?path=SKILL.md&revision=2&digest=${encodeURIComponent(draftA.updated.digest)}`, seeded.cookieB, { method: 'GET' });
+      expect(foreignDraftFile.response.status).toBe(404);
+      expect(draftB.updated.id).not.toBe(draftA.updated.id);
+
+      const searchReindexA = await http<{ indexed: number }>(runtime, '/v1/search/reindex', seeded.cookieA, { method: 'POST' });
+      const searchReindexB = await http<{ indexed: number }>(runtime, '/v1/search/reindex', seeded.cookieB, { method: 'POST' });
+      expect(searchReindexA.response.status).toBe(200);
+      expect(searchReindexB.response.status).toBe(200);
+      expect(searchReindexA.value?.indexed).toBe(1);
+      expect(searchReindexB.value?.indexed).toBe(1);
+      const searchA = await http<{ results: Array<{ resourceId: string }> }>(runtime, '/v1/search?q=shared&limit=20', seeded.cookieA, { method: 'GET' });
+      const searchB = await http<{ results: Array<{ resourceId: string }> }>(runtime, '/v1/search?q=shared&limit=20', seeded.cookieB, { method: 'GET' });
+      expect(searchA.response.status).toBe(200);
+      expect(searchB.response.status).toBe(200);
+      const searchIdsA = searchA.value?.results.map((result) => result.resourceId) ?? [];
+      const searchIdsB = searchB.value?.results.map((result) => result.resourceId) ?? [];
+      expect(searchIdsA).toEqual([approvedA.skill.id]);
+      expect(searchIdsB).toEqual([approvedB.skill.id]);
+      expect(searchIdsA).not.toContain(approvedB.skill.id);
+      expect(searchIdsB).not.toContain(approvedA.skill.id);
+      expect(gateway.requestCount).toBeGreaterThan(0);
+
+      const authorizationA = await http<{ authorization: { id: string }; receipt: { id: string } }>(runtime, '/v1/install-authorizations', seeded.cookieA, {
+        method: 'POST',
+        json: { resolution: packResolutionA },
+      });
+      expect(authorizationA.response.status).toBe(201);
+      const authorizationIdA = authorizationA.value?.authorization.id;
+      expect(authorizationA.value?.receipt.id).toBeDefined();
+      if (!authorizationIdA) throw new Error('Company A pack authorization omitted its id');
+      const authorizationB = await http<{ authorization: { id: string }; receipt: { id: string } }>(runtime, '/v1/install-authorizations', seeded.cookieB, {
+        method: 'POST',
+        json: { resolution: packResolutionB },
+      });
+      expect(authorizationB.response.status).toBe(201);
+      const authorizationIdB = authorizationB.value?.authorization.id;
+      expect(authorizationB.value?.receipt.id).toBeDefined();
+      if (!authorizationIdB) throw new Error('Company B pack authorization omitted its id');
+      const receiptA = await http(runtime, '/v1/install-receipts', seeded.cookieA, {
+        method: 'POST',
+        json: { authorizationId: authorizationIdA, changed: true, agent: 'codex', platform: 'linux', clientVersion: `nitro-pack-${runId}` },
+      });
+      expect(receiptA.response.status).toBe(201);
+      const receiptB = await http(runtime, '/v1/install-receipts', seeded.cookieB, {
+        method: 'POST',
+        json: { authorizationId: authorizationIdB, changed: true, agent: 'codex', platform: 'linux', clientVersion: `nitro-pack-${runId}` },
+      });
+      expect(receiptB.response.status).toBe(201);
+      const analyticsA = await http<InstallAnalytics>(runtime, '/v1/analytics?days=1', seeded.cookieA, { method: 'GET' });
+      const analyticsB = await http<InstallAnalytics>(runtime, '/v1/analytics?days=1', seeded.cookieB, { method: 'GET' });
+      expect(analyticsA.response.status).toBe(200);
+      expect(analyticsB.response.status).toBe(200);
+      expect(analyticsA.value?.totals).toMatchObject({ installOperations: 1, skillInstalls: 0, packInstalls: 1 });
+      expect(analyticsB.value?.totals).toMatchObject({ installOperations: 1, skillInstalls: 0, packInstalls: 1 });
+      expect(analyticsA.value?.topSkills.map((skill) => skill.resourceId)).toEqual([approvedA.skill.id]);
+      expect(analyticsB.value?.topSkills.map((skill) => skill.resourceId)).toEqual([approvedB.skill.id]);
+      expect(analyticsA.value?.topSkills.map((skill) => skill.resourceId)).not.toContain(approvedB.skill.id);
+      expect(analyticsB.value?.topSkills.map((skill) => skill.resourceId)).not.toContain(approvedA.skill.id);
+    } finally {
+      await gateway?.close();
+    }
+  }, 240_000);
 });
