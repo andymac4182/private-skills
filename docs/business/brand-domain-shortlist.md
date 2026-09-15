@@ -1,7 +1,8 @@
 # Brand and domain shortlist
 
 **RDAP checked:** 15 September 2026 at 13:10:22 UTC<br>
-**Registrar UI checked:** 15 September 2026, 13:18–13:20 UTC
+**Registrar UI checked:** 15 September 2026, 13:18–13:20 UTC<br>
+**Live registrar recheck:** 15 September 2026, 14:00–14:01 UTC (16 September 2026, 00:00–00:01 AEST)
 
 **Status:** exploratory naming work. No domain was purchased or registered. No registrar account was used, no contact was made, and no trademark clearance was performed.
 
@@ -12,6 +13,27 @@ The name should be easy to say and spell, work for a developer-tool company, lea
 The two leading candidates from this pass are **ReleaseLoom** and **Vouchpack**. **DraftCove** was the requested backup for the live registrar check, but the public-name search found an exact product and it is now a hold/reject candidate. The other names remain comparison records; none has been cleared.
 
 Suggested spoken forms for the three registrar-checked names are **ri-LEASE loom**, **VOUCH-pack**, and **DRAFT-cove**. These are pronunciation aids, not evidence of distinctiveness.
+
+## Provisional naming scorecard
+
+This is a screening aid for the next research step, not a selection or a legal opinion. Each criterion is rated from 1 (weak) to 5 (strong), using the limited public-name and registrar evidence in this document. The weighted score is only useful for deciding what to investigate next.
+
+| Criterion | Weight | What to ask |
+| --- | ---: | --- |
+| Sayability and spelling | 20% | Can an engineer say it once and type it correctly later? |
+| Meaning and product fit | 15% | Does it suggest the source, release, evidence, or team workflow without overpromising? |
+| Room to grow | 15% | Can it cover skills, packs, policy, and releases if the product expands? |
+| Collision signal | 25% | Do exact or close product, company, or category uses create confusion? |
+| Domain path | 15% | Are sensible domains showing a non-premium registration path at the time of the check? |
+| Ecosystem clearance | 10% | Are package, GitHub, social, and handle checks still open or showing a conflict? |
+
+| Candidate | Say / spell | Meaning / fit | Room to grow | Collision signal | Domain path | Ecosystem clearance | Weighted screen | Next disposition |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| **ReleaseLoom** | 4 | 5 | 4 | 3 | 4 | 2 | **3.7 / 5** | Advance to legal, package, and handle screening. |
+| **Vouchpack** | 4 | 4 | 3 | 3 | 4 | 2 | **3.4 / 5** | Advance to the same screening; test whether “vouch” is clear in target markets. |
+| **DraftCove** | 4 | 3 | 3 | 1 | 3 | 2 | **2.6 / 5** | Hold or reject because of the exact public-name collision. |
+
+`Domain path` is rated 4 for the leading names because the public registrar showed a normal-looking result card, while the `.com` RDAP response was inconclusive. `Ecosystem clearance` remains 2 for every candidate because the package, repository, social, company, and trademark checks are not complete. Keep **Private Skills** as the working product name while the business decides; it is not scored as a rename candidate in this table.
 
 ## Candidate shortlist
 
@@ -52,6 +74,21 @@ The public [Namecheap domain search](https://www.namecheap.com/domains/registrat
 
 The `.com` pages for ReleaseLoom and Vouchpack displayed the exact result card with **Add to cart**, even though the Verisign responses in the earlier RDAP pass had empty-body `404` responses. The registrar UI is recorded as a live indication, while the RDAP result remains **unverified** under the method below. The DraftCove `.com` page displayed **Registered in 2025** and **Make offer**, so it is not a normal new-registration candidate.
 
+### Live registrar recheck
+
+On 15 September 2026 from 14:00 to 14:01 UTC (16 September 2026 from 00:00 to 00:01 AEST), the `.com` and `.dev` endpoints for the two leading candidates and the DraftCove backup were opened again in the public Namecheap results UI. The target card was read without signing in, opening a cart, or submitting any form. “UI-listed” means the page displayed **Add to cart** and a first-year price; it does not mean the name was purchased, reserved, or guaranteed to pass checkout.
+
+| Domain | Result visible during recheck | Price or status shown | Evidence |
+| --- | --- | --- | --- |
+| `releaseloom.com` | UI-listed; **Add to cart** | `$11.28/yr`, retail `$14.98/yr`; page also showed the new-customer `$6.79` `NEWCOM679` promotion | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.com) |
+| `releaseloom.dev` | UI-listed; **Add to cart** | `$10.98/yr`, retail `$15.98/yr`; 31% off | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.dev) |
+| `vouchpack.com` | UI-listed; **Add to cart** | `$11.28/yr`, retail `$14.98/yr`; page also showed the new-customer `$6.79` `NEWCOM679` promotion | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.com) |
+| `vouchpack.dev` | UI-listed; **Add to cart** | `$10.98/yr`, retail `$15.98/yr`; 31% off | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.dev) |
+| `draftcove.com` | **Registered in 2025**; **Make offer** | No normal annual registration price shown | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=draftcove.com) |
+| `draftcove.dev` | UI-listed; **Add to cart** | `$10.98/yr`, retail `$15.98/yr`; 31% off | [Namecheap result](https://www.namecheap.com/domains/registration/results/?domain=draftcove.dev) |
+
+The leading `.com` pages continued to conflict with the earlier Verisign RDAP responses that returned an empty-body `404`. Keep those `.com` statuses **Unverified**, and treat the registrar pages as live UI indications only. Promotions, first-year pricing, premium status, and checkout eligibility can change between this check and any future decision. The `.ai` values in the RDAP table were not rechecked in this UI pass and must be checked again if `.ai` is part of the final choice.
+
 ## Results
 
 The result words have these precise meanings:
@@ -83,3 +120,24 @@ Before any public announcement or registration:
 2. Check the registrar directly for price, premium status, registry reservation, and purchase eligibility immediately before a decision.
 3. Check package names, GitHub organization names, social handles, and common misspellings.
 4. Obtain explicit business approval for the selected name and domain before registration.
+
+## Detailed naming research backlog
+
+These checks are deliberately sequenced so a memorable name does not become a costly rename before the product, package, and public identity can move together. No outreach, account creation, purchase, or registration is part of this backlog.
+
+| ID | Check | Evidence to collect | Decision gate |
+| --- | --- | --- | --- |
+| N1 | Business choice | A written choice between keeping Private Skills and advancing ReleaseLoom or Vouchpack. | Do not change public product copy until a choice exists. |
+| N2 | Spoken and written recall | Ten consenting readers hear each finalist once, then type and pronounce it; record errors and associations. | Advance a finalist only if at least 8 of 10 spell it correctly and no repeated pronunciation problem appears. |
+| N3 | Product and package collisions | Exact and close searches on GitHub, npm, crates.io, PyPI, major agent-skill directories, and package registries. | A finalist with a confusing package or repository collision returns to hold, regardless of domain status. |
+| N4 | Company, social, and trademark screen | Search target-market company records, handles, and trademark databases; preserve query date and jurisdiction. | Legal review decides whether a name is usable; this document cannot clear it. |
+| N5 | Registrar and registry recheck | Within 24 hours of a registration decision, repeat `.com`, `.dev`, and optional `.ai` checks for price, premium label, registry response, and checkout eligibility. | A public UI card is sufficient only to queue the next check; it is never proof of purchasability. |
+| N6 | Migration impact | List changes for the marketing app, application app, shared brand package, docs, analytics labels, support destination, package names, redirects, and deployment variables. | Approve the rename only when the migration list has an owner and rollback path. |
+
+### Recheck cadence
+
+The 15 September UTC registrar observations are a dated research snapshot. Treat them as stale for a registration decision after seven days, or sooner if the business is ready to announce a name. Run the final registry and registrar checks in the same session as the decision, record the UTC timestamp, and capture whether a premium or resale flow appears. Check again after any legal or package conflict changes the candidate list.
+
+### Selection rule
+
+Until N1–N6 are complete, keep **Private Skills** in public copy and use **ReleaseLoom** and **Vouchpack** only as exploratory candidates. If the user chooses a finalist, update the brand package and both deployable apps in one planned change, preserve redirects where required, and keep domain registration as a separate explicitly approved action. Do not infer a trademark clearance, package availability, or customer preference from the scorecard or the registrar UI.
