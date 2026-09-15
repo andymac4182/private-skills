@@ -137,20 +137,7 @@ export class WorkerRunner {
     let completionSubmitted = false;
     let billing: BillingUsageAdmission | undefined;
     let scanReservationKey: string | undefined;
-    let scanReservationAdmitted = false;
     let scanInvocationStarted = false;
-    let scanReservationReleased = false;
-    const releaseUnusedScanReservation = async (): Promise<void> => {
-      if (!billing || !scanReservationKey || !scanReservationAdmitted || scanInvocationStarted || scanReservationReleased) return;
-      try {
-        await billing.reconcileUsage(job.organizationId, scanReservationKey, { scans: 0 }, `${scanReservationKey}:release`);
-        scanReservationReleased = true;
-      } catch {
-        // A failed correction leaves the reservation charged. Reconciliation
-        // must not make a pre-scanner failure look paid when its durable
-        // ledger update is uncertain.
-      }
-    };
     try {
       billing = this.options.billing?.status().enabled === true ? this.options.billing : undefined;
       // Reserve before source acquisition, artifact download, materialization,
@@ -159,7 +146,6 @@ export class WorkerRunner {
       if (billing) {
         scanReservationKey = await scanReservationKeyForJob(job);
         await billing.reserveUsage(job.organizationId, { scans: 1 }, scanReservationKey);
-        scanReservationAdmitted = true;
       }
       let bundleForScan: SkillBundleInput;
       if (job.kind === 'import') {
@@ -216,7 +202,6 @@ export class WorkerRunner {
         executor: this.executor,
         imageForScanner: (id) => this.options.scannerImages?.[id],
       });
-      await releaseUnusedScanReservation();
       const evaluation = evaluatePolicy(runs, { allowUnscanned: policy.allowUnscanned });
       // Disabled engines are policy state, not scan evidence. Sending an
       // unsupported zero-file result would make the core reject an otherwise
@@ -244,6 +229,7 @@ export class WorkerRunner {
       }
       const completion = await this.client.complete(job, {
         scanResults,
+        scanInvocationStarted,
         artifactDigest: scanArtifactDigest,
         attempt: job.attempt,
         ...(importedBundle === undefined ? {} : { bundle: importedBundle, provenance: importedProvenance }),
@@ -266,8 +252,7 @@ export class WorkerRunner {
       return { claimed: true, jobId: job.id, scannerResults: scanResults, allow: evaluation.allow };
     } catch (error) {
       const message = sanitizeError(error);
-      await releaseUnusedScanReservation();
-      if (!completionSubmitted) await this.completeFailure(job, token, message, signal);
+      if (!completionSubmitted) await this.completeFailure(job, token, message, signal, scanInvocationStarted);
       await this.emit({ type: 'failed', jobId: job.id, error: message });
       return { claimed: true, jobId: job.id, error: message };
     } finally {
@@ -284,10 +269,11 @@ export class WorkerRunner {
     }
   }
 
-  private async completeFailure(job: WorkerClaimedJob, token: string, error: string, signal?: AbortSignal): Promise<void> {
+  private async completeFailure(job: WorkerClaimedJob, _token: string, error: string, signal?: AbortSignal, scanInvocationStarted = false): Promise<void> {
     try {
       await this.client.complete(job, {
         error,
+        scanInvocationStarted,
         artifactDigest: job.artifactDigest ?? job.artifact?.digest,
         attempt: job.attempt,
       }, signal);

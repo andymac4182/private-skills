@@ -6,10 +6,12 @@ import {
 } from '../src/index.js';
 import {
   cloneRegistryState,
+  createMemoryStateRepository,
   defaultRegistryState,
 } from '../../database/src/index.js';
 import type {
   BillingUsageAdmission,
+  Job,
   MeteredUsageDelta,
   RegistryState,
   StateRepository,
@@ -305,6 +307,58 @@ describe('durable metered reservation ownership', () => {
     expect(billing.reconciliations).toHaveLength(0);
     await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
       meteredReservationOwners: [{ reservationKey: RESERVATION_KEY, state: 'owned', jobId: 'job-new' }],
+    });
+  });
+
+  it('keeps a newer active generation charged when an older terminal intent is retried', async () => {
+    const repository = createMemoryStateRepository({
+      initial: { [ORGANIZATION]: defaultRegistryState({ production: false, allowUnscanned: true }) },
+    });
+    const billing = new RecordingBilling();
+    await billing.reserveUsage(ORGANIZATION, { scans: 1 }, RESERVATION_KEY);
+    await repository.transaction(ORGANIZATION, (state) => {
+      const terminal: Job = {
+        id: 'job-terminal-generation',
+        organizationId: ORGANIZATION,
+        kind: 'scan',
+        state: 'failed',
+        policyRevision: state.policy.revision,
+        policy: state.policy,
+        meteredReservationKey: RESERVATION_KEY,
+        meteredScanSettlement: 'unused',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        attempts: 1,
+      };
+      const active: Job = {
+        ...terminal,
+        id: 'job-new-generation',
+        state: 'queued',
+        meteredScanSettlement: undefined,
+      };
+      state.jobs.push(terminal, active);
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, terminal.id);
+      claimMeteredReservationOwner(state, RESERVATION_KEY, false, active.id);
+    });
+
+    await releaseMeteredUsageIfUnowned(
+      repository,
+      billing,
+      ORGANIZATION,
+      RESERVATION_KEY,
+      { scans: 1 },
+      false,
+      'job-terminal-generation',
+    );
+
+    expect(billing.reconciliations).toHaveLength(0);
+    expect(billing.reservations.has(RESERVATION_KEY)).toBe(true);
+    await expect(repository.read(ORGANIZATION)).resolves.toMatchObject({
+      jobs: [
+        expect.objectContaining({ id: 'job-terminal-generation', meteredScanSettlement: 'unused' }),
+        expect.objectContaining({ id: 'job-new-generation', state: 'queued' }),
+      ],
+      meteredReservationOwners: [expect.objectContaining({ reservationKey: RESERVATION_KEY, state: 'owned', jobId: 'job-new-generation' })],
     });
   });
 });

@@ -189,7 +189,7 @@ profile not covered by the recorded evidence.
 
 ## Jobs, acquisition, and scanners
 
-The core creates durable `scan` and `import` jobs with a captured policy revision, artifact identity, and lease metadata. `WorkerApiClient` claims through an authenticated internal route and sends a fencing token on artifact reads and completion. A stale lease cannot finalize evidence for a newer attempt.
+The core creates durable `scan` and `import` jobs with a captured policy revision, artifact identity, and lease metadata. `WorkerApiClient` claims through an authenticated internal route and sends a fencing token on artifact reads and completion. A stale lease cannot finalize evidence for a newer attempt. A worker completion may carry the authenticated `scanInvocationStarted` boundary; the core stores its terminal metered settlement intent in the same job transaction, and a bounded server maintenance pass reconciles definite pre-scanner failures by exact job generation. Older workers omit the marker and remain charged conservatively.
 
 The runner handles two job paths:
 

@@ -134,6 +134,24 @@ class QueueBarrierRepository implements StateRepository {
   }
 }
 
+class FailOnceTransactionRepository implements StateRepository {
+  failNext = false;
+
+  constructor(private readonly inner: StateRepository) {}
+
+  read(organizationId: string): Promise<RegistryState> {
+    return this.inner.read(organizationId);
+  }
+
+  async transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error('simulated terminal settlement transaction outage');
+    }
+    return this.inner.transaction(organizationId, updater);
+  }
+}
+
 class RecordingBillingAdmission implements BillingUsageAdmission {
   readonly reservations = new Set<string>();
   readonly reconciliations: Array<{ reservationKey: string; actual: MeteredUsageDelta }> = [];
@@ -275,6 +293,178 @@ describe('runtime billing admission', () => {
     expect((await test.repository.read(ORGANIZATION)).storageAttempts).toEqual([
       expect.objectContaining({ state: 'committed', objectKey: expect.any(String), size: expect.any(Number) }),
     ]);
+  });
+
+  it('settles a definite pre-scanner completion from durable terminal intent', async () => {
+    const test = fixture({ storageBytes: 100_000, scansPerMonth: 1 });
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '@team/pre-scan-failure', version: '1.0.0', bundle: bundle('pre-scan-failure') }),
+    }));
+    expect(queued.status).toBe(202);
+    const operation = (await json(queued)).operation as { id: string };
+    const workerPrincipal: Principal = {
+      ...principal(),
+      roles: ['worker'],
+      scopes: [...(principal().scopes ?? []), 'jobs:claim', 'jobs:complete', 'jobs:artifact'],
+    };
+    const workerHandler = createRegistryHandler({
+      repository: test.repository,
+      blobs: test.blobs,
+      auth: { authenticate: async () => workerPrincipal },
+      billing: test.billing,
+      config: {
+        publicOrigin: ORIGIN,
+        maxBodyBytes: 1024 * 1024,
+        organizationId: ORGANIZATION,
+        leaseSeconds: 30,
+      },
+    });
+    const claim = await workerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    expect(claim.status).toBe(200);
+    const job = (await json(claim)).job as { id: string; leaseToken: string; meteredReservationKey: string };
+    expect(job.id).toBe(operation.id);
+    const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': job.leaseToken },
+      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'source acquisition failed', scanInvocationStarted: false }),
+    }));
+    expect(complete.status).toBe(200);
+    expect((await json(complete)).operation).toMatchObject({
+      id: job.id,
+      state: 'failed',
+      meteredScanSettlement: 'released',
+    });
+    const finalState = await test.repository.read(ORGANIZATION);
+    expect(finalState.jobs[0]).toMatchObject({
+      id: job.id,
+      state: 'failed',
+      meteredScanSettlement: 'released',
+    });
+    await expect(test.billing.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { scans: 0 } });
+    expect(finalState.meteredReservationOwners).toEqual([
+      expect.objectContaining({ reservationKey: job.meteredReservationKey, state: 'released', jobId: job.id }),
+    ]);
+  });
+
+  it('retries a provider-corrected terminal intent after the final owner write fails', async () => {
+    const test = fixture({ storageBytes: 100_000, scansPerMonth: 1 });
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '@team/retry-settlement', version: '1.0.0', bundle: bundle('retry-settlement') }),
+    }));
+    expect(queued.status).toBe(202);
+
+    const repository = new FailOnceTransactionRepository(test.repository);
+    let failAfterFirstCorrection = true;
+    const admission: BillingUsageAdmission = {
+      status: () => test.billing.status(),
+      reserveUsage: (organizationId, delta, operationKey) => test.billing.reserveUsage(organizationId, delta, operationKey),
+      reconcileUsage: async (organizationId, reservationKey, actual, operationKey) => {
+        const result = await test.billing.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+        if (failAfterFirstCorrection) {
+          failAfterFirstCorrection = false;
+          repository.failNext = true;
+        }
+        return result;
+      },
+    };
+    const workerPrincipal: Principal = {
+      ...principal(),
+      roles: ['worker'],
+      scopes: [...(principal().scopes ?? []), 'jobs:claim', 'jobs:complete', 'jobs:artifact'],
+    };
+    const workerHandler = createRegistryHandler({
+      repository,
+      blobs: test.blobs,
+      auth: { authenticate: async () => workerPrincipal },
+      billing: admission,
+      config: {
+        publicOrigin: ORIGIN,
+        maxBodyBytes: 1024 * 1024,
+        organizationId: ORGANIZATION,
+        leaseSeconds: 30,
+      },
+    });
+    const claim = await workerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const job = (await json(claim)).job as { id: string; leaseToken: string };
+    const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': job.leaseToken },
+      body: JSON.stringify({ leaseToken: job.leaseToken, error: 'pre-scanner failure', scanInvocationStarted: false }),
+    }));
+    expect(complete.status).toBe(200);
+    expect((await repository.read(ORGANIZATION)).jobs[0]).toMatchObject({
+      id: job.id,
+      state: 'failed',
+      meteredScanSettlement: 'unused',
+    });
+    expect((await repository.read(ORGANIZATION)).meteredReservationOwners).toEqual([
+      expect.objectContaining({ state: 'releasing', jobId: job.id, releaseToken: expect.any(String) }),
+    ]);
+
+    // A later claim performs bounded maintenance even when no new job is
+    // available. The persisted release token lets it finish the owner fence
+    // without reopening the reservation or charging another scan.
+    const maintenanceClaim = await workerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    expect(maintenanceClaim.status).toBe(200);
+    expect((await json(maintenanceClaim)).job).toBeNull();
+    expect((await repository.read(ORGANIZATION)).jobs[0]).toMatchObject({ meteredScanSettlement: 'released' });
+    expect((await repository.read(ORGANIZATION)).meteredReservationOwners).toEqual([
+      expect.objectContaining({ state: 'released', jobId: job.id }),
+    ]);
+    await expect(test.billing.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { scans: 0 } });
+  });
+
+  it('keeps a retry charged when the earlier scanner boundary is uncertain', async () => {
+    const test = fixture({ storageBytes: 100_000, scansPerMonth: 2 });
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '@team/retry-charged', version: '1.0.0', bundle: bundle('retry-charged') }),
+    }));
+    expect(queued.status).toBe(202);
+    const workerPrincipal: Principal = {
+      ...principal(),
+      roles: ['worker'],
+      scopes: [...(principal().scopes ?? []), 'jobs:claim', 'jobs:complete', 'jobs:artifact'],
+    };
+    const workerHandler = createRegistryHandler({
+      repository: test.repository,
+      blobs: test.blobs,
+      auth: { authenticate: async () => workerPrincipal },
+      billing: test.billing,
+      config: {
+        publicOrigin: ORIGIN,
+        maxBodyBytes: 1024 * 1024,
+        organizationId: ORGANIZATION,
+        leaseSeconds: 30,
+      },
+    });
+    const firstClaim = await workerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const firstJob = (await json(firstClaim)).job as { id: string; leaseToken: string };
+    await test.repository.transaction(ORGANIZATION, (state) => {
+      const job = state.jobs.find((candidate) => candidate.id === firstJob.id);
+      if (job) job.leaseExpiresAt = new Date(Date.now() - 1_000).toISOString();
+    });
+    const retryClaim = await workerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const retryJob = (await json(retryClaim)).job as { id: string; leaseToken: string; attempt: number };
+    expect(retryJob.id).toBe(firstJob.id);
+    expect(retryJob.attempt).toBe(2);
+    const complete = await workerHandler(new Request(`${ORIGIN}/internal/jobs/${retryJob.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-worker-fencing-token': retryJob.leaseToken },
+      body: JSON.stringify({ leaseToken: retryJob.leaseToken, error: 'retry failed before scanner', scanInvocationStarted: false }),
+    }));
+    expect(complete.status).toBe(200);
+    expect((await test.repository.read(ORGANIZATION)).jobs[0]).toMatchObject({
+      state: 'failed',
+      attempts: 2,
+      meteredScanSettlement: 'executed',
+    });
+    await expect(test.billing.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { scans: 1 } });
   });
 
   it('retains a provider write as an orphaned storage attempt when metadata commit is uncertain', async () => {

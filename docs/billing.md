@@ -176,9 +176,13 @@ publish blob write and before import completion stores an acquired bundle.
 Authoring reserves draft bytes before create/upload/revision writes and scan
 units before draft publication. The worker repeats the scan reservation with
 the same job key before source acquisition, download, materialization, or
-scanner execution, so queue admission and retries charge one operation. A
-definite no-write or pre-scanner failure may release its reservation with an
-explicit-zero reconciliation; after a provider or blob write may have
+scanner execution, so queue admission and retries charge one operation. The
+worker reports whether a scanner adapter was entered, but never performs a
+client-side release. The core records a terminal `unused` or `executed` intent
+atomically with job completion; a bounded server maintenance pass may apply
+an explicit-zero reconciliation only for a definite pre-scanner failure,
+fenced to that exact job generation. A newer queued/running job reusing the
+canonical key keeps its charge. After a provider or blob write may have
 succeeded, the charged reservation remains held for durable object
 reconciliation. Release corrections are fenced by a durable per-generation
 token and use a token-specific billing operation key. If the correction result

@@ -102,10 +102,11 @@ describe('worker import acquisition', () => {
     assert.ok(completion);
     assert.equal(completion.artifactDigest, `sha256:${createHash('sha256').update(JSON.stringify({ format: 'pskills-bundle-v1', files: [{ path: 'SKILL.md', content: base64 }] })).digest('hex')}`);
     assert.deepEqual(completion.provenance && (completion.provenance as { kind?: string }).kind, 'github');
+    assert.equal(completion.scanInvocationStarted, true);
     assert.deepEqual(completion.bundle, { format: 'pskills-bundle-v1', files: [{ path: 'SKILL.md', content: base64 }] });
   });
 
-  it('releases a scan reservation when acquisition fails before scanner invocation', async () => {
+  it('reports a pre-scanner failure without performing an unsafe client-side release', async () => {
     const job: WorkerClaimedJob = {
       id: 'job-import-before-scan-failure',
       kind: 'import',
@@ -169,10 +170,8 @@ describe('worker import acquisition', () => {
     expect(result.error).toBeDefined();
     expect(scannerCalls).toBe(0);
     expect(reservationKey).toBe('private-skills:scan:queue-owner');
-    expect(reconciles).toEqual([
-      expect.objectContaining({ actual: { scans: 0 }, operationKey: expect.stringContaining(':release') }),
-    ]);
-    expect(reconciles[0]?.reservationKey).toMatch(/^private-skills:scan:/u);
+    expect(reconciles).toHaveLength(0);
+    expect(completion?.scanInvocationStarted).toBe(false);
     expect(completion?.error).toBeDefined();
   });
 
@@ -238,6 +237,7 @@ describe('worker import acquisition', () => {
     expect(result.error).toContain('scanner timed out');
     expect(scannerCalls).toBe(1);
     expect(reconciles).toHaveLength(0);
+    expect(completion?.scanInvocationStarted).toBe(true);
     expect(completion?.error).toContain('scanner timed out');
   });
 
@@ -311,6 +311,7 @@ describe('worker import acquisition', () => {
     expect(reservationKey).toBe('private-skills:scan:job-import-over-quota');
     expect(acquisitionCalls).toBe(0);
     expect(scannerCalls).toBe(0);
+    expect(completion?.scanInvocationStarted).toBe(false);
     expect(completion?.error).toContain('scan allowance exhausted');
   });
 });

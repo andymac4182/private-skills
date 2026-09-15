@@ -33,6 +33,8 @@ export interface WorkerClaimedJob {
   sourceAcquisition?: unknown;
   /** Server-owned metered reservation owner; retries must reuse this key. */
   meteredReservationKey?: string;
+  /** Durable server settlement intent; workers only receive this for observability. */
+  meteredScanSettlement?: 'unused' | 'executed' | 'released';
   [key: string]: unknown;
 }
 
@@ -68,6 +70,8 @@ export interface CompletionPayload {
   bundle?: SkillBundle;
   /** Source evidence captured by the acquisition adapter. */
   provenance?: Provenance;
+  /** Set before the first scanner adapter invocation; omission is fail-closed. */
+  scanInvocationStarted?: boolean;
 }
 
 export interface WorkerCompletionResponse {

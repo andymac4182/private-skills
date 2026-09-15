@@ -45,6 +45,7 @@ import {
   type Upstream,
   type UpstreamRequestObserver,
   type MeteredUsageDelta,
+  type MeteredScanSettlement,
   type MeteredReservationOwner,
   canonicalMeteredImportIdentity,
   type StorageAttempt,
@@ -149,6 +150,7 @@ const SCAN_STATUSES = new Set<ScanResult['status']>([
   'unsupported',
 ]);
 const JOB_STATES = new Set<Job['state']>(['queued', 'running', 'completed', 'failed']);
+const METERED_SCAN_SETTLEMENTS = new Set<MeteredScanSettlement>(['unused', 'executed', 'released']);
 const PACK_STATES = new Set<PackVersion['state']>(['approved', 'revoked']);
 const SEVERITIES = new Set<Finding['severity']>([
   'info',
@@ -6352,8 +6354,24 @@ async function claimJob(
   requestId: string,
 ): Promise<Response> {
   const now = Date.now();
+  const settlementJobIds: string[] = [];
   const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, defaultPolicy());
+    // Keep recovery bounded. Clear the list because a PostgreSQL repository
+    // may retry an updater after a serialization conflict.
+    settlementJobIds.length = 0;
+    if (meteredAdmission(deps)) {
+      for (const job of mutable.jobs) {
+        if (
+          settlementJobIds.length >= 32 ||
+          job.organizationId !== config.organizationId ||
+          (job.state !== 'completed' && job.state !== 'failed') ||
+          job.meteredScanSettlement !== 'unused' ||
+          !isMeteredReservationKey(job.meteredReservationKey)
+        ) continue;
+        settlementJobIds.push(job.id);
+      }
+    }
     const candidate = mutable.jobs.find((job) => {
       if (job.organizationId !== config.organizationId) return false;
       if (job.state === 'queued') return true;
@@ -6371,6 +6389,9 @@ async function claimJob(
     }, config.organizationId));
     return serializeJobForWorker(candidate);
   });
+  for (const jobId of settlementJobIds) {
+    await settleUnusedMeteredScanReservation(deps, config, jobId);
+  }
   return jsonResponse({ job: result });
 }
 
@@ -6461,6 +6482,13 @@ async function completeJob(
     throw new RegistryApiError('LEASE_EXPIRED', 'Job lease has expired', 409, { retryable: true });
   }
   if (body.error !== undefined && typeof body.error !== 'string') throw new RegistryApiError('INVALID_JOB_RESULT', 'error must be a string', 400);
+  const requestedScanInvocationStarted = body.scanInvocationStarted;
+  if (requestedScanInvocationStarted !== undefined && typeof requestedScanInvocationStarted !== 'boolean') {
+    throw new RegistryApiError('INVALID_JOB_RESULT', 'scanInvocationStarted must be a boolean', 400);
+  }
+  const scanInvocationStarted = typeof requestedScanInvocationStarted === 'boolean'
+    ? requestedScanInvocationStarted
+    : undefined;
   if (job.kind === 'import' && !body.error) {
     validateOpenClawJobFeed(job, completionNow);
   }
@@ -6574,6 +6602,7 @@ async function completeJob(
       currentJob.state = 'failed';
       currentJob.error = redactJobError(body.error);
       currentJob.updatedAt = nowIso();
+      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
       if (currentJob.resourceId) {
         const skill = mutable.skills.find((candidate) => candidate.id === currentJob.resourceId);
         if (skill && skill.state !== 'revoked') skill.state = 'scan-error';
@@ -6598,6 +6627,7 @@ async function completeJob(
       currentJob.updatedAt = nowIso();
       currentJob.leaseToken = undefined;
       currentJob.leaseExpiresAt = undefined;
+      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
       if (evaluation.error) currentJob.error = evaluation.error;
       appendAudit(mutable, audit(principal, `job.complete.${evaluation.state}`, id, {
         resourceId: skill.id,
@@ -6639,6 +6669,7 @@ async function completeJob(
     currentJob.updatedAt = nowIso();
     currentJob.leaseToken = undefined;
     currentJob.leaseExpiresAt = undefined;
+    recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
     if (evaluation.error) currentJob.error = evaluation.error;
     appendAudit(mutable, audit(principal, `job.complete.${evaluation.state}`, id, {
       resourceId: skill.id,
@@ -6672,6 +6703,11 @@ async function completeJob(
     await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
     importedStorageAttempt = undefined;
     importedStorageAdmission = undefined;
+  }
+  if (result.meteredScanSettlement === 'unused' && await settleUnusedMeteredScanReservation(deps, config, result.id)) {
+    // The helper has already committed this transition. Reflect it in the
+    // response object returned from the preceding job transaction as well.
+    result.meteredScanSettlement = 'released';
   }
   const recordSourceProof = (deps as RegistryHandlerDependencies).openClaw?.recordSourceProof;
   if (recordSourceProof && result.kind === 'import' && result.state === 'completed' && result.resourceId && body.error === undefined) {
@@ -7365,6 +7401,9 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (job.meteredReservationKey !== undefined && !isMeteredReservationKey(job.meteredReservationKey)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered reservation key is invalid', 500);
     }
+    if (job.meteredScanSettlement !== undefined && !METERED_SCAN_SETTLEMENTS.has(job.meteredScanSettlement)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered scan settlement is invalid', 500);
+    }
   }
   const storageAttemptIds = new Set<string>();
   for (const attempt of state.storageAttempts ?? []) {
@@ -7755,6 +7794,27 @@ function releaseDelta(delta: MeteredUsageDelta): MeteredUsageDelta {
   ) as MeteredUsageDelta;
 }
 
+/**
+ * Record the worker's bounded scanner boundary in the same transaction that
+ * terminalizes a job.  The marker is accepted only from the worker route and
+ * is deliberately fail-closed when omitted by an older worker.  A retry is
+ * charged conservatively because a previous attempt may have reached an
+ * external scanner before its lease was lost.
+ */
+function recordMeteredScanSettlement(
+  job: Job,
+  scanInvocationStarted: boolean | undefined,
+  hasScanEvidence: boolean,
+): void {
+  if (!job.meteredReservationKey || scanInvocationStarted === undefined) return;
+  if (job.meteredScanSettlement === 'released') return;
+  if (scanInvocationStarted || hasScanEvidence || job.attempts > 1) {
+    job.meteredScanSettlement = 'executed';
+    return;
+  }
+  if (job.meteredScanSettlement !== 'executed') job.meteredScanSettlement = 'unused';
+}
+
 async function releaseMeteredUsage(
   billing: BillingUsageAdmission | undefined,
   organizationId: string,
@@ -7777,6 +7837,74 @@ async function releaseMeteredUsage(
 }
 
 /**
+ * Reconcile a terminal pre-scanner failure after its terminal job transaction
+ * has committed.  The job id is the reservation generation: an old terminal
+ * intent may never settle a newer queued/running job that reused the
+ * canonical key.  A second transaction records the successful correction so
+ * a crash after the provider call is recoverable without charging twice.
+ */
+async function settleUnusedMeteredScanReservation(
+  deps: RegistryDependencies,
+  config: Required<RegistryConfiguration>,
+  jobId: string,
+): Promise<boolean> {
+  const billing = meteredAdmission(deps);
+  if (!billing) return false;
+  let state: RegistryState;
+  try {
+    state = await readState(deps.repository, config.organizationId);
+  } catch {
+    return false;
+  }
+  const job = state.jobs.find((candidate) => candidate.id === jobId);
+  const reservationKey = job?.meteredReservationKey;
+  if (
+    !job ||
+    (job.state !== 'completed' && job.state !== 'failed') ||
+    job.meteredScanSettlement !== 'unused' ||
+    !isMeteredReservationKey(reservationKey)
+  ) return false;
+
+  await releaseMeteredUsageIfUnowned(
+    deps.repository,
+    billing,
+    config.organizationId,
+    reservationKey,
+    { scans: 1 },
+    false,
+    job.id,
+  );
+
+  try {
+    return await deps.repository.transaction(config.organizationId, (mutableState) => {
+      const mutable = ensureState(mutableState, defaultPolicy());
+      const currentJob = mutable.jobs.find((candidate) => candidate.id === job.id);
+      if (
+        !currentJob ||
+        (currentJob.state !== 'completed' && currentJob.state !== 'failed') ||
+        currentJob.meteredReservationKey !== reservationKey ||
+        currentJob.meteredScanSettlement !== 'unused'
+      ) return false;
+      const newerActiveJob = mutable.jobs.find((candidate) =>
+        candidate.organizationId === config.organizationId &&
+        candidate.id !== job.id &&
+        (candidate.state === 'queued' || candidate.state === 'running') &&
+        candidate.meteredReservationKey === reservationKey,
+      );
+      if (newerActiveJob) return false;
+      const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (!owner || owner.state !== 'released' || owner.jobId !== job.id) return false;
+      currentJob.meteredScanSettlement = 'released';
+      currentJob.updatedAt = nowIso();
+      return true;
+    });
+  } catch {
+    // Leave the durable `unused` intent for the next bounded maintenance pass.
+    return false;
+  }
+}
+
+/**
  * A reservation may be shared by requests that crossed the queue transaction
  * boundary.  The owner transition and the active-job check must be one
  * persisted transaction.  A read followed by a release permits a concurrent
@@ -7793,37 +7921,47 @@ export async function releaseMeteredUsageIfUnowned(
   expectedJobId?: string,
 ): Promise<void> {
   if (!billing) return;
-  let decision: { kind: 'keep' | 'busy' | 'release'; token?: string };
+  let decision: { kind: 'keep' | 'busy' | 'already-released' | 'release'; token?: string };
   try {
     decision = await repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
-      const active = mutable.jobs.find((job) =>
+      const activeJobs = mutable.jobs.filter((job) =>
         job.organizationId === organizationId &&
         (job.state === 'queued' || job.state === 'running') &&
         job.meteredReservationKey === reservationKey,
       );
+      if (expectedJobId !== undefined && activeJobs.some((job) => job.id !== expectedJobId)) {
+        // A newer generation has taken the canonical key.  Its charge is
+        // live even if this older terminal intent is still being retried.
+        return { kind: 'keep' as const };
+      }
+      const active = expectedJobId === undefined
+        ? activeJobs[0]
+        : activeJobs.find((job) => job.id === expectedJobId);
       if (active) {
         // A completion/recovery caller may be holding an older job lease. An
         // active replacement owns the reservation generation and must fence
         // that caller before it reaches billing.
-        if (expectedJobId !== undefined && active.id !== expectedJobId) return { kind: 'keep' as const };
+        const existingOwner = findMeteredReservationOwner(mutable, reservationKey);
+        if (existingOwner?.state === 'releasing') return { kind: 'busy' as const };
         const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned');
         owner.jobId = active.id;
         return { kind: 'keep' as const };
       }
       const owner = findMeteredReservationOwner(mutable, reservationKey);
-      if (expectedJobId !== undefined && owner?.jobId !== expectedJobId) {
-        // The reservation key can be admitted again after a completed release.
-        // A stale terminal callback must never settle that newer generation.
-        return { kind: 'busy' as const };
+      if (expectedJobId !== undefined) {
+        if (owner?.jobId !== undefined && owner.jobId !== expectedJobId) return { kind: 'keep' as const };
+        if (owner?.jobId === undefined && owner !== undefined) return { kind: 'keep' as const };
+        if (owner?.state === 'released') return { kind: 'already-released' as const };
+        if (owner?.state === 'releasing') {
+          if (!owner.releaseToken) return { kind: 'busy' as const };
+          return { kind: 'release' as const, token: owner.releaseToken };
+        }
       }
       if (owner?.state === 'releasing') {
-        // A previous process may have completed the external correction but
-        // crashed before its terminal owner transaction committed. Reuse the
-        // durable fence token so the deterministic billing operation can be
-        // retried idempotently and this invocation can finish the owner
-        // transition. The fence continues to reject queue ownership until the
-        // terminal transaction succeeds.
+        // Reuse the durable token after a crash between the provider
+        // correction and its final owner transaction. The deterministic
+        // billing operation key makes the retry idempotent.
         if (!owner.releaseToken) return { kind: 'busy' as const };
         return { kind: 'release' as const, token: owner.releaseToken };
       }
@@ -7832,7 +7970,7 @@ export async function releaseMeteredUsageIfUnowned(
         owner.state = 'releasing';
         owner.releaseToken = token;
         owner.updatedAt = nowIso();
-        if (expectedJobId !== undefined) owner.jobId = expectedJobId;
+        owner.jobId = expectedJobId;
       } else {
         mutable.meteredReservationOwners!.push({
           reservationKey,
@@ -7871,12 +8009,21 @@ export async function releaseMeteredUsageIfUnowned(
     await repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
       const owner = findMeteredReservationOwner(mutable, reservationKey);
-      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token || (expectedJobId !== undefined && owner.jobId !== expectedJobId)) return;
+      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token) return;
+      if (expectedJobId !== undefined) {
+        if (owner.jobId !== expectedJobId) return;
+        const newerActiveJob = mutable.jobs.find((job) =>
+          job.organizationId === organizationId &&
+          job.id !== expectedJobId &&
+          (job.state === 'queued' || job.state === 'running') &&
+          job.meteredReservationKey === reservationKey,
+        );
+        if (newerActiveJob) return;
+      }
       owner.updatedAt = nowIso();
       if (released) {
         owner.state = 'released';
         owner.releaseToken = undefined;
-        owner.jobId = undefined;
       } else {
         // The correction may have been accepted remotely even when this call
         // failed locally. Keep the same durable fence token so a retry can
