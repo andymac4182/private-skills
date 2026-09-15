@@ -94,10 +94,11 @@ records `billingCorrection: "release-pending"` before the external billing
 zero, passes the captured billing reservation generation, and finally marks
 the attempt released while clearing that marker. If a process dies after the
 marker or billing call, a resumed reconciler keeps the marker and reuses the
-same generation-bound correction key. It may settle the release only after an
-exact durable ledger row is found. When a late metadata reference exists, the
-preferred ledger resolver atomically returns either `restored` (the zero was
-committed, so the inverse advances G1 to G2) or `fenced` (the reservation was
+same generation-bound correction key. It may settle the release only after the
+ledger proves either an exact zero or an atomic source-generation fence. When
+a late metadata reference exists, the preferred ledger resolver atomically
+returns either `restored` (the zero was committed, so the inverse advances G1
+to G2) or `fenced` (the reservation was
 untouched, so G1 is advanced without changing usage); the storage attempt then
 persists G2 and clears the marker. Older adapters may promote only an exact
 settled zero to `restore-pending`; a missing or unreadable ledger row retains
