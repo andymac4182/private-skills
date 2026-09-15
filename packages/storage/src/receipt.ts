@@ -7,13 +7,13 @@ import type {
 } from '../../contracts/src/index.js';
 import { isSha256Digest } from './digest.js';
 
-/** Provider-binding values are configuration identities, never credentials. */
+/** Provider-binding values are bounded configuration identities. */
 export const STORAGE_PROVIDER_BINDING_MAX_LENGTH = 256;
 
 /**
- * Accept only a small non-secret alphabet so a binding cannot accidentally
- * contain a URL, header, token, or other provider credential. Hosts should
- * change this value when the endpoint, account, bucket, or private prefix
+ * Accept a bounded identity alphabet that excludes URL/query/header
+ * delimiters. Hosts remain responsible for supplying a non-secret value and
+ * should change it when the endpoint, account, bucket, or private prefix
  * changes.
  */
 export function normalizeStorageProviderBinding(value: unknown): string | undefined {
@@ -56,6 +56,7 @@ export function isVerifiedStorageWriteReceipt(
   const candidate = value as Partial<StorageWriteReceipt>;
   if (
     candidate.kind !== 'verified' ||
+    typeof candidate.providerBinding !== 'string' ||
     normalizeStorageProviderBinding(candidate.providerBinding) !== candidate.providerBinding ||
     typeof candidate.key !== 'string' ||
     candidate.key.length === 0 ||

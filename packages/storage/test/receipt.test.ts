@@ -130,6 +130,13 @@ describe('verified storage write receipts', () => {
     })).toBe(false);
     expect(isVerifiedStorageWriteReceipt({
       kind: 'verified',
+      key: 'sealed/key',
+      digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+      size: 4,
+      completedAt: '2026-09-16T00:00:00.000Z',
+    })).toBe(false);
+    expect(isVerifiedStorageWriteReceipt({
+      kind: 'verified',
       providerBinding: 'files-sdk:local:private',
       key: 'sealed/key',
       digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
