@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-09-15T15:25:36Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "92d2f0bfd06a1d5b4e58d5fd02b015ba597f2c83",
+    "pullRequest": 53,
+    "releaseHeadSha": "37ddf6fa9c813d1d0c36e4912e3c0abaa4c738e4",
+    "mergedAtUtc": "2026-09-15T15:21:07Z",
+    "trigger": "Git"
+  },
+  "localGates": {
+    "frozenInstall": {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed"
+    },
+    "typecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed",
+      "sourceSnapshot": "6a8d06e023aceaa1246d35a226c76a6eb0a1467d"
+    },
+    "tests": {
+      "command": "CI=true pnpm test -- --reporter=dot",
+      "result": "passed",
+      "passed": 1110,
+      "skipped": 21,
+      "sourceSnapshot": "6a8d06e023aceaa1246d35a226c76a6eb0a1467d",
+      "releaseSourceNote": "The release changes after this tested snapshot are the one-line marketing contact copy fix and tracker documentation; the app executable source is unchanged."
+    },
+    "webBuild": {
+      "command": "CI=true pnpm --filter @private-skills/web build",
+      "result": "passed",
+      "sourceSnapshot": "6a8d06e023aceaa1246d35a226c76a6eb0a1467d"
+    },
+    "marketingBuild": {
+      "command": "APP_ORIGIN=https://private-skills-theta.vercel.app CI=true pnpm --filter @private-skills/marketing build",
+      "result": "passed",
+      "sourceSnapshot": "e18ad47b34fa1edfad46d0c12549cf2aa5258d5a",
+      "qualification": "The public app origin was supplied ephemerally; no repository or deployment environment value was changed."
+    }
+  },
+  "nativeCi": {
+    "workflowRun": "34987589137",
+    "status": "blocked_before_runner",
+    "jobs": [
+      "web (Node 24)",
+      "rust (aarch64-apple-darwin)",
+      "rust (x86_64-pc-windows-msvc)",
+      "rust (x86_64-unknown-linux-gnu)"
+    ],
+    "containerJob": "skipped",
+    "annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased.",
+    "userWaiver": true,
+    "qualification": "Native CI was unavailable before runner execution and is not represented as a passing platform gate."
+  },
+  "deployments": [
+    {
+      "service": "app",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "deploymentId": "dpl_HQZdm2f7wwXT5r6PjKjiV6C4fwKo",
+      "deploymentUrl": "private-skills-jca4ignsm-andrewmcclenaghan-6046s-projects.vercel.app",
+      "buildId": "bld_r66e69f7w",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "92d2f0bfd06a1d5b4e58d5fd02b015ba597f2c83",
+      "sourceRef": "main"
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "deploymentId": "dpl_8GVfEpK2MFCwUM6EnPCgircNWxHE",
+      "deploymentUrl": "private-skills-builder-60ivjx93v.vercel.app",
+      "buildId": "bld_b9qhjnkm0",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "92d2f0bfd06a1d5b4e58d5fd02b015ba597f2c83",
+      "sourceRef": "main"
+    },
+    {
+      "service": "marketing",
+      "project": "private-skills-marketing",
+      "alias": "private-skills-marketing.vercel.app",
+      "deploymentId": "dpl_8t49VrmeEaJxxgAYhT7op2SszWk9",
+      "deploymentUrl": "private-skills-marketing-hsg3hd1ka.vercel.app",
+      "buildId": "bld_8b3we9mcz",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "92d2f0bfd06a1d5b4e58d5fd02b015ba597f2c83",
+      "sourceRef": "main"
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "deploymentId": "dpl_7qq7NyMzk3u9PfDJpNAUYwmgdreA",
+      "deploymentUrl": "private-skills-upload-reviewer-a3q4fkiso.vercel.app",
+      "buildId": "bld_1kt42026k",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "92d2f0bfd06a1d5b4e58d5fd02b015ba597f2c83",
+      "sourceRef": "main"
+    }
+  ],
+  "appChecks": {
+    "health": {
+      "path": "/health",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "service": "private-skills",
+        "version": "0.4.0"
+      }
+    },
+    "identityConfig": {
+      "path": "/auth/identity/config",
+      "status": 200,
+      "enabled": false,
+      "basePath": "/api/auth",
+      "providers": [],
+      "organizationEnabled": false,
+      "bootstrapEnabled": false,
+      "invitationMode": "copy-link",
+      "emailDelivery": "disabled",
+      "qualification": "Production Better Auth remains opt-in and disabled; this is a legacy-safe boundary check, not hosted identity acceptance."
+    }
+  },
+  "serviceChecks": {
+    "builderHealth": {
+      "path": "/health",
+      "status": 302,
+      "qualification": "The protected builder deployment redirected; no HTTP 200 health claim is made."
+    },
+    "uploadReviewerHealth": {
+      "path": "/health",
+      "status": 302,
+      "qualification": "The protected upload-reviewer deployment redirected; no HTTP 200 health claim is made."
+    }
+  },
+  "marketingChecks": {
+    "origin": "https://private-skills-marketing.vercel.app",
+    "method": "GET",
+    "anonymousRoutes": {
+      "/": 200,
+      "/product": 200,
+      "/demo": 200,
+      "/pricing": 200,
+      "/docs": 200,
+      "/docs/getting-started": 200,
+      "/faq": 200,
+      "/contact": 200,
+      "/legal": 200
+    },
+    "allRoutesReturned": 200
+  },
+  "localIdentityProof": {
+    "sourceSnapshot": "e18ad47b34fa1edfad46d0c12549cf2aa5258d5a",
+    "fixture": "Disposable PostgreSQL with synthetic Acme and Globex issuers on loopback port 5407",
+    "health": "App and both synthetic providers returned HTTP 200",
+    "browser": "Root passed fresh Acme company creation, fresh SSO settings load, and company operations rendering with queue/scanner counts and explicit unavailable Eve/history/billing states",
+    "readerFriendlyLabels": {
+      "status": "pending",
+      "reason": "Tenant UI CUA host was locked; no browser mutation occurred and no Reader-label acceptance is claimed."
+    }
+  },
+  "qualifications": {
+    "productionConfigChanged": false,
+    "productionEnvironmentChanged": false,
+    "productionDataMigrationRun": false,
+    "secretsExported": false,
+    "fullLaunch": false,
+    "hostedIdentityProviderProof": false,
+    "laterMigrationExcluded": "5ca2365 and later billing or operations changes are outside this release."
+  }
+}
