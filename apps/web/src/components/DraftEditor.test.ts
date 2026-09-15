@@ -214,18 +214,20 @@ describe('draft editor renderer fallback', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
-    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: fallbackDraft, onClose: vi.fn() }))
+    await act(async () => {
+      root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: fallbackDraft, onClose: vi.fn() }))
+    })
 
     try {
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
       expect(draftFile).toHaveBeenCalledWith(fallbackDraft.id, firstPath, { revision: fallbackDraft.revision, digest: fallbackDraft.digest }, expect.any(AbortSignal))
+      const draftFileRequest = draftFile.mock.results[0]
+      expect(draftFileRequest?.type).toBe('return')
+      await act(async () => { await (draftFileRequest as { type: 'return'; value: Promise<unknown> }).value })
 
       const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
       expect(editButton).toBeDefined()
       expect(editButton?.disabled).toBe(false)
       await act(async () => { editButton?.click() })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
       expect(container.querySelector('.release-code-fallback')?.textContent).toBe(firstText)
       expect(container.querySelector('textarea')).toBeNull()
 
@@ -247,8 +249,6 @@ describe('draft editor renderer fallback', () => {
       const secondButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.release-file-row')).find((button) => button.textContent?.includes(secondPath))
       expect(secondButton).toBeDefined()
       await act(async () => { secondButton?.click() })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
       expect(container.querySelector('[aria-current="true"] code')?.textContent).toBe(secondPath)
       expect(container.querySelector('textarea')).toBeNull()
     } finally {
@@ -284,11 +284,12 @@ describe('draft editor renderer fallback', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
-    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+    await act(async () => {
+      root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+    })
 
     async function settle(): Promise<void> {
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await flushMicrotasks() })
     }
 
     try {
@@ -439,11 +440,12 @@ describe('draft editor review finding navigation', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root: Root = createRoot(container)
-    root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+    await act(async () => {
+      root.render(createElement(DraftEditor, { resourceId: 'upload:test', baseDigest: draft.baseDigest!, baseVersion: '1.0.0', initialDraft: cleanDraft, onClose: vi.fn() }))
+    })
 
     async function settle(): Promise<void> {
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)) })
+      await act(async () => { await flushMicrotasks() })
     }
 
     try {
