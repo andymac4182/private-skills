@@ -1,5 +1,9 @@
 # Launch status
 
+CLI token console integrated `d30fcc8`: create scoped expiring tokens, reveal once with copy fallback, list lifecycle metadata, revoke and clear secret on company switch. Root isolated focused rerun: 20 tests passed. foundation_release preparing PostgreSQL fixture for actual browser-to-token-use/revocation proof; that journey remains open.
+
+Root independent clean verification at `91023f6` passed frozen offline install, typecheck and full suite (1,052 tests passed, 17 skipped). A prior shared-checkout run failed to load samlify because another worktree replaced dependency links; isolate dependency installs per worktree. Do not reuse that failed run as release evidence.
+
 Latest SSO protocol snapshot `fea919d`: signed local OIDC and SAML callbacks plus SAML wrong-issuer/wrong-audience rejection checks pass against disposable PostgreSQL. Root independently ran 16 tests across protocol integration and module suites. Runtime mounting remains separate work.
 
 Corrected 5402 fixture uses PostgreSQL (initial test adapter intentionally disabled identity). Root browser passed Acme login/company selection, compact overview rendering and company SSO unavailable state. Root created a synthetic reader invitation and clicked Copy; UI reported copied and retained the visible manual-selection link. Browser clipboard contents were not independently read back. Pending-invitation list currently includes accepted entries; label/filter polish remains open.
