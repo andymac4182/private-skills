@@ -430,4 +430,17 @@ describe("Files SDK BlobStore boundary", () => {
       reason: "provider-error",
     });
   });
+
+  it("recognizes Vercel Blob's provider-coded missing-key response", async () => {
+    const client = new InMemoryFilesClient();
+    client.head = async () => {
+      throw Object.assign(new Error("Vercel Blob: The requested blob does not exist"), { code: "Provider" });
+    };
+    const store = new FilesSdkBlobStore({ client });
+
+    await expect(store.inspectObject("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toEqual({
+      state: "absent",
+      key: "sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+  });
 });

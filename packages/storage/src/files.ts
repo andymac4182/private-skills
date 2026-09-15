@@ -195,7 +195,13 @@ function isKnownNotFound(error: unknown): boolean {
     const status = error.status ?? error.statusCode;
     if (code === "notfound" || code === "not_found" || code === "enoent" || status === 404) return true;
   }
-  return error instanceof Error && /^(?:not[ -]?found|enoent)$/iu.test(error.message.trim());
+  if (!(error instanceof Error)) return false;
+  const message = error.message.trim();
+  // Vercel Blob's private `head()` maps a missing key to a provider error
+  // without preserving a status/code. Keep this exact message match narrow;
+  // other provider failures must remain unknown for recovery purposes.
+  return /^(?:not[ -]?found|enoent)$/iu.test(message)
+    || /^Vercel Blob:\s+The requested blob does not exist$/u.test(message);
 }
 
 function inspectionFailure(key: string, error: unknown): StorageObjectInspection {
