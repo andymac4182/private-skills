@@ -4,6 +4,8 @@
   "capturedAt": "2026-09-15T22:59:00Z",
   "source": {
     "sourceHead": "4c51d269a779a265427bc7e8e93d6618d04484cc",
+    "sourceHeadRole": "clean candidate base before the tested UI implementation",
+    "testedImplementationCommit": "d172cf75a6c19b808cc197e4480b18896721a7e2",
     "checkout": "/private/tmp/private-skills-company-portal-usability",
     "origin": "http://127.0.0.1:5308",
     "identityFixture": "disposable local identity fixture",
@@ -80,6 +82,28 @@
     "/private/tmp/private-skills-company-portal-review-owner-mobile-nav-after.png",
     "/private/tmp/private-skills-company-portal-review-reader-mobile-nav-after.png",
     "/private/tmp/private-skills-company-portal-review-reader-billing-denial-after.png"
+  ],
+  "validation": [
+    {
+      "command": "node_modules/.bin/vitest run apps/web/src/components/RegistryShell.test.ts apps/web/src/views/CompanyView.test.ts",
+      "result": "passed",
+      "observed": "2 test files passed; 14 tests passed."
+    },
+    {
+      "command": "pnpm build",
+      "result": "passed",
+      "observed": "Vite client, SSR, and Nitro production build completed successfully; existing chunk-size and dynamic-import warnings were reported."
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed",
+      "observed": "No whitespace errors."
+    },
+    {
+      "command": "pnpm typecheck",
+      "result": "failed-baseline",
+      "observed": "The existing storage billing contract mismatch remains in packages/storage/src/recovery.ts and packages/storage/test/recovery.test.ts: BillingUsageRecoveryResolver/AtomicRecoveryBilling resolveStorageRecovery returns Promise<unknown> where BillingUsageAdmission requires Promise<MeteredStorageRecoveryResolution>. This evidence change did not modify those files."
+    }
   ],
   "limits": [
     "This was a local identity/PostgreSQL fixture with a deterministic test billing adapter; no Stripe account, product, price, customer, payment method, charge, or production system was used.",
