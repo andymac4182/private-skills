@@ -36,6 +36,7 @@ describe('marketing plan projection', () => {
   it('keeps capability copy independent from unsupported source-count entitlements', () => {
     const featureText = marketingPlans.flatMap((plan) => plan.features).join(' ')
     expect(featureText).not.toMatch(/one source connection|multiple source connections/iu)
+    expect(marketingPlans.map((plan) => plan.description).join(' ')).not.toMatch(/provisional|Team Plus anchor/iu)
     expect(featureText).toContain('Configured policy and scanner evidence')
     expect(featureText).toContain('Repeatable pskills install path')
   })
