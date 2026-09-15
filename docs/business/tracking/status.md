@@ -1,5 +1,9 @@
 # Launch status
 
+Latest SSO protocol snapshot `fea919d`: signed local OIDC and SAML callbacks plus SAML wrong-issuer/wrong-audience rejection checks pass against disposable PostgreSQL. Root independently ran 16 tests across protocol integration and module suites. Runtime mounting remains separate work.
+
+Corrected 5402 fixture uses PostgreSQL (initial test adapter intentionally disabled identity). Root browser passed Acme login/company selection, compact overview rendering and company SSO unavailable state. Root created a synthetic reader invitation and clicked Copy; UI reported copied and retained the visible manual-selection link. Browser clipboard contents were not independently read back. Pending-invitation list currently includes accepted entries; label/filter polish remains open.
+
 Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency through 20 September. Overall: implementation in progress, not launched.
 
 Latest published increment: origin/main `668f53e6420419eda6aef0d0d73385da3af280cc`, independently confirmed by root with git ls-remote. Release agent reports Git-triggered app `dpl_BvgT5TSCPRUM5zXfzXkthniKzWyA` and marketing `dpl_ArrxaeUqYmABC8uWDWtCGRLKU1SX` READY for this SHA; frozen install, typecheck, 1,031 tests passed / 11 skipped, app/marketing/all Eve builds passed. Root independently observed anonymous marketing homepage and app `/health` HTTP 200. Identity remains opt-in and unconfigured in production; no authenticated hosted tenant acceptance is implied. Native CI remains explicitly waived.
