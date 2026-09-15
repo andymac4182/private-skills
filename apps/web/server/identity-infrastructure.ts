@@ -1,5 +1,6 @@
 import {
   createIdentityRuntimeFromEnv,
+  IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY,
   normalizeIdentityRole,
   seatOperationKey,
   type IdentityEnvironment,
