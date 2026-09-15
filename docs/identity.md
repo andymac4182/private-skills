@@ -128,6 +128,54 @@ the same planner before any handler, session, or principal operation. It is
 intended for a controlled single process; explicit migration is preferred for
 multi-instance deployments.
 
+The web Node host composes Better Auth with the company SSO and persisted
+service-token repositories. Its `IdentityInfrastructure.runMigrations()`
+entrypoint runs the Better Auth, company SSO, API-token, and operations-event
+plans in order, using the configured
+`PSKILLS_BETTER_AUTH_SCHEMA` for the Better Auth and private SSO tables. The
+service-token schema remains public for compatibility unless the host
+explicitly supplies `apiTokenSchemaName` or `PSKILLS_API_TOKEN_SCHEMA`; its
+configured table name is preserved. The lower-level
+`runtime.runMigrations()` above remains the Better Auth-only entrypoint for
+callers that construct the package runtime directly.
+
+Identity operations visibility uses the separate
+`private_skills_identity_operations_events` table. It records only bounded
+event kinds and reason codes for sign-in, provider callback, and membership
+denials. A tenant id and role are written only after the server verifies the
+current Better Auth membership; failures before that check remain global and
+are excluded from a company panel. No token, provider response, URL, email,
+request body, or exception text is stored.
+
+The table migration is explicit by default. Set
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE=true` only when one controlled
+process owns startup DDL, or call the infrastructure `runMigrations()` helper
+from the reviewed deployment job. That helper also removes up to the bounded
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE` of rows older than
+`PSKILLS_IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS` (30 days by default) on
+each run. A successful event write also starts at most one bounded cleanup per
+five-minute interval, so long-running processes with `autoMigrate=false` do
+not depend on startup DDL for retention. Deployments may call the public
+`cleanup()` method from a scheduler for additional bounded batches. Aggregate
+queries apply the same retention boundary before counting, and use the
+`occurred_at` index; the operations status endpoint returns only aggregate
+totals and last-24-hour counts for the selected company.
+
+Failure capture is best effort and never changes an authentication result. A
+request with a platform `waitUntil` hook submits the sanitized database write
+to that hook. Ordinary Fetch runtimes await the write for at most 250 ms, then
+continue even if the database is unavailable. Events contain only the closed
+kind/reason/provider fields and never exception text, request content, tokens,
+or unverified tenant claims.
+
+The PostgreSQL identity and operations-event suites are opt-in and refuse any
+configured database URL whose host is not `localhost`, `127.0.0.1`, or `::1`.
+Run them against a disposable local database by supplying
+`PSKILLS_IDENTITY_TEST_DATABASE_URL` through the process environment; the
+fixture creates and drops unique schemas and never prints the connection
+string. This covers Better Auth membership revocation and owner serialization,
+the handler failure to durable event row path, and record-triggered expiry.
+
 The implementation follows Better Auth's current
 [PostgreSQL adapter guidance](https://www.better-auth.com/docs/adapters/postgresql),
 [organization plugin](https://www.better-auth.com/docs/plugins/organization),

@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "mode": "local-loopback-native-cli-approved-install",
+  "verifiedAt": "2026-09-15T15:19:50Z",
+  "fixture": {
+    "path": "/private/tmp/tenant-eve-nitro-fixture-20260916-v2.json",
+    "origin": "http://127.0.0.1:59497",
+    "sourceCheckout": "/private/tmp/private-skills-tenant-nitro",
+    "sourceHead": "a8ab65ab1fbf69056cd8c3f12b8580b0d8491faf",
+    "runtimePid": 37615,
+    "organizationId": "nitro-runtime-company-b-18f9ddf6c2e0",
+    "identity": "synthetic local Nitro Company B owner membership"
+  },
+  "cliBuild": {
+    "binary": "/private/tmp/private-skills-tenant-nitro/target/release/pskills",
+    "version": "0.4.0",
+    "command": "cargo build --locked --release -p pskills",
+    "exitCode": 0,
+    "builtFromSourceHead": "a8ab65ab1fbf69056cd8c3f12b8580b0d8491faf"
+  },
+  "credentialTransport": {
+    "method": "PSKILLS_TOKEN environment variable supplied to the native binary",
+    "rawTokenLogged": false,
+    "rawTokenPersistedByProofRunner": false,
+    "fixtureCredentialHandling": "The existing restricted fixture credential was read programmatically; the proof runner did not persist a second copy.",
+    "browserCookiesLogged": false
+  },
+  "approvedRelease": {
+    "skillId": "skill_d60396be-0ca6-4caf-b5d2-3749423074cd",
+    "reference": "@nitro/company-b-skill-18f9ddf6c2e0@1.0.0",
+    "organizationId": "nitro-runtime-company-b-18f9ddf6c2e0",
+    "artifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a",
+    "artifactSize": 299,
+    "fileCount": 2,
+    "state": "approved",
+    "provenanceKind": "native",
+    "policyRevision": "policy-initial"
+  },
+  "nativeCommands": [
+    {
+      "phase": "preflight",
+      "command": "pskills --json --registry http://127.0.0.1:59497 whoami",
+      "exitCode": 0,
+      "result": {
+        "organizationId": "nitro-runtime-company-b-18f9ddf6c2e0",
+        "roles": ["owner"]
+      }
+    },
+    {
+      "phase": "preflight",
+      "command": "pskills --json --registry http://127.0.0.1:59497 show @nitro/company-b-skill-18f9ddf6c2e0",
+      "exitCode": 0,
+      "result": {
+        "state": "approved",
+        "artifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a"
+      }
+    },
+    {
+      "phase": "install",
+      "command": "pskills --json --registry http://127.0.0.1:59497 install @nitro/company-b-skill-18f9ddf6c2e0@1.0.0 --directory <ephemeral-absolute-directory> --agent universal",
+      "exitCode": 0,
+      "result": {
+        "ok": true,
+        "changed": true,
+        "reference": "@nitro/company-b-skill-18f9ddf6c2e0",
+        "version": "1.0.0",
+        "artifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a"
+      }
+    },
+    {
+      "phase": "pinned-repeat",
+      "command": "pskills --json --registry http://127.0.0.1:59497 --frozen-lockfile install @nitro/company-b-skill-18f9ddf6c2e0@1.0.0 --directory <same-ephemeral-absolute-directory> --agent universal",
+      "exitCode": 0,
+      "result": {
+        "ok": true,
+        "changed": false,
+        "reference": "@nitro/company-b-skill-18f9ddf6c2e0",
+        "version": "1.0.0",
+        "artifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a"
+      }
+    },
+    {
+      "phase": "verification",
+      "command": "pskills --json --registry http://127.0.0.1:59497 verify --directory <same-ephemeral-absolute-directory> --agent universal",
+      "exitCode": 0,
+      "result": {
+        "ok": true,
+        "expectedTreeDigest": "sha256:6273ecbd874f65854d6a2e584231afec6ae93a421a35b825103fafce021c5cd1",
+        "actualTreeDigest": "sha256:6273ecbd874f65854d6a2e584231afec6ae93a421a35b825103fafce021c5cd1"
+      }
+    }
+  ],
+  "byteVerification": {
+    "method": "Reconstructed canonical pskills-bundle-v1 JSON from the two installed files, then SHA-256 hashed it",
+    "filePaths": ["README.md", "SKILL.md"],
+    "computedArtifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a",
+    "fixtureArtifactDigest": "sha256:62d3dc4c4262ace8a406566b4e52080419390a9bba1a13aae1e07daa218aba8a",
+    "matches": true
+  },
+  "tenantBoundary": {
+    "status": "not_attempted",
+    "reason": "The runtime provisions Company A and Company B, but the retained credential and metadata handed off for this proof covered Company B only. No Company A credential or foreign release was used, so no cross-company CLI assertion is claimed; the separate core HTTP A/B boundary proof remains authoritative."
+  },
+  "installAcceptance": {
+    "attempted": true,
+    "nativeBinary": true,
+    "disposableDestination": true,
+    "scope": "Company B approved release only"
+  }
+}

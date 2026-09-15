@@ -132,17 +132,25 @@ process.
    consumers or install an equivalent provider-supported fence. The fence must
    cover registry writes, identity adoption, service-token changes, billing
    webhooks, usage reservations, uploads, and Eve jobs.
-2. **Review the Better Auth plan.** Generate the plan from the running
+2. **Review the identity plan.** Generate the Better Auth plan from the running
    `IdentityRuntimeAdmin`, review every create/alter/index operation and any
-   unsafe change, then run `runtime.runMigrations()` once before accepting
-   traffic. Apply additive expand/contract changes for populated tables. Never
-   infer a migration from the old registry table, and never run an unreviewed
-   destructive down migration against a populated identity database.
-3. **Apply the dependent application schemas.** Create the explicit company SSO
-   table, service-token table, billing tables, and registry table using their
-   current schema helpers and configured names. Record the resulting schema
-   version and indexes. These helpers have opt-in `autoMigrate`; ownership of
-   when they execute belongs to the runtime migration runner.
+   unsafe change, then run the web host's
+   `IdentityInfrastructure.runMigrations()` once before accepting traffic.
+   That entrypoint applies Better Auth, company SSO, and service-token schemas
+   in order, using the configured table names and the explicit API-token schema
+   option when one is supplied. The Better Auth and private SSO tables follow
+   `PSKILLS_BETTER_AUTH_SCHEMA`; service-token storage remains public by
+   default for compatibility. Apply additive expand/contract changes for
+   populated tables. Never infer a migration from the old registry table, and
+   never run an unreviewed destructive down migration against a populated
+   identity database.
+3. **Apply the remaining application schemas.** Create the billing and registry
+   tables using their current schema helpers and configured names, then record
+   the resulting schema version and indexes. If a deployment does not use the
+   web host composition, run the reviewed company SSO and API-token helpers
+   separately before accepting those routes. These helpers have opt-in
+   `autoMigrate`; ownership of when they execute belongs to the migration
+   runner.
 4. **Adopt the existing organization explicitly.** If the old `default`
    organization is retained, use the explicit bootstrap-owner action described
    in [`docs/identity.md`](../identity.md). Require the authenticated owner,

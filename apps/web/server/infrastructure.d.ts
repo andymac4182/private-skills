@@ -52,8 +52,12 @@ declare module '#pskills-infrastructure' {
         callbackURL: string;
       } | null>;
     };
+    /** Optional durable identity operations counters and event sink. */
+    operationsEvents?: import('../../../packages/identity/src/index').IdentityOperationsEventSink;
     /** Explicit Better Auth user + bootstrap-owner adoption transaction. */
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;
+    /** Optional Node-owned provider for verified private CLI release archives. */
+    cliReleaseProvider?: import('../../../packages/cli-release/src/index').CliReleaseAssetProvider;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;
     createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;

@@ -4,6 +4,8 @@
 **Registrar UI checked:** 15 September 2026, 13:18–13:20 UTC<br>
 **Live registrar recheck:** 15 September 2026, 14:00–14:01 UTC (16 September 2026, 00:00–00:01 AEST)
 
+**Latest registrar UI recheck:** 15 September 2026, 15:16–15:18 UTC (16 September 2026, 01:16–01:18 AEST)
+
 **Status:** exploratory naming work. No domain was purchased or registered. No registrar account was used, no contact was made, and no trademark clearance was performed.
 
 ## Naming criteria
@@ -89,6 +91,19 @@ On 15 September 2026 from 14:00 to 14:01 UTC (16 September 2026 from 00:00 to 00
 
 The leading `.com` pages continued to conflict with the earlier Verisign RDAP responses that returned an empty-body `404`. Keep those `.com` statuses **Unverified**, and treat the registrar pages as live UI indications only. Promotions, first-year pricing, premium status, and checkout eligibility can change between this check and any future decision. The `.ai` values in the RDAP table were not rechecked in this UI pass and must be checked again if `.ai` is part of the final choice.
 
+### Latest registrar UI recheck — 15 September 2026, 15:16–15:18 UTC
+
+The two leading candidates were opened again in Namecheap's public results UI without signing in, opening a cart, or submitting a form. Each target card showed **Add to cart** and a first-year price. The target cards did not show **Registered**, **Make offer**, or a premium badge. The `.com` result cards also displayed Namecheap's new-customer `$6.79` promotion, whose explanatory text says it applies to non-premium domains; promotion eligibility was not tested.
+
+| Domain | Registrar UI observation | Price shown | Decision state |
+| --- | --- | --- | --- |
+| `releaseloom.com` | UI-listed; **Add to cart**; no target-card premium badge | `$11.28/yr`, retail `$14.98/yr`; `$6.79` `NEWCOM679` promotion shown | **Unverified**, because the earlier Verisign RDAP response was an empty-body `404`; checkout was not attempted |
+| `releaseloom.dev` | UI-listed; **Add to cart**; no target-card premium badge | `$10.98/yr`, retail `$15.98/yr`; 31% off | UI-listed only; prior Google RDAP was “Unregistered at check”; checkout was not attempted |
+| `vouchpack.com` | UI-listed; **Add to cart**; no target-card premium badge | `$11.28/yr`, retail `$14.98/yr`; `$6.79` `NEWCOM679` promotion shown | **Unverified**, because the earlier Verisign RDAP response was an empty-body `404`; checkout was not attempted |
+| `vouchpack.dev` | UI-listed; **Add to cart**; no target-card premium badge | `$10.98/yr`, retail `$15.98/yr`; 31% off | UI-listed only; prior Google RDAP was “Unregistered at check”; checkout was not attempted |
+
+Evidence links: [ReleaseLoom `.com`](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.com), [ReleaseLoom `.dev`](https://www.namecheap.com/domains/registration/results/?domain=releaseloom.dev), [Vouchpack `.com`](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.com), and [Vouchpack `.dev`](https://www.namecheap.com/domains/registration/results/?domain=vouchpack.dev). These observations establish **registrar UI-listed** status only. No candidate is **confirmed purchasable** because checkout and registration were not attempted; no target card was marked premium or taken during this pass. `DraftCove.com` remains **registered / Make offer** as recorded above.
+
 ## Results
 
 The result words have these precise meanings:
@@ -136,7 +151,7 @@ These checks are deliberately sequenced so a memorable name does not become a co
 
 ### Recheck cadence
 
-The 15 September UTC registrar observations are a dated research snapshot. Treat them as stale for a registration decision after seven days, or sooner if the business is ready to announce a name. Run the final registry and registrar checks in the same session as the decision, record the UTC timestamp, and capture whether a premium or resale flow appears. Check again after any legal or package conflict changes the candidate list.
+The 15 September 15:16–15:18 UTC registrar observations are a dated research snapshot. Treat them as stale for a registration decision after seven days, or sooner if the business is ready to announce a name. Run the final registry and registrar checks in the same session as the decision, record the UTC timestamp, and capture whether a premium or resale flow appears. Check again after any legal or package conflict changes the candidate list.
 
 ### Selection rule
 

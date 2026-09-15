@@ -63,7 +63,10 @@ describe('PostgreSQL API token repository', () => {
     expect(API_TOKEN_SCHEMA_SQL).toContain('organization_id text NOT NULL');
     expect(API_TOKEN_SCHEMA_SQL).toContain('role_ceiling');
     expect(postgresApiTokenSchemaSql('identity_service_tokens')).toContain('"identity_service_tokens"');
+    expect(postgresApiTokenSchemaSql('identity_service_tokens', 'identity_auth')).toContain('CREATE SCHEMA IF NOT EXISTS "identity_auth"');
+    expect(postgresApiTokenSchemaSql('identity_service_tokens', 'identity_auth')).toContain('"identity_auth"."identity_service_tokens"');
     expect(() => postgresApiTokenSchemaSql('bad-name')).toThrow();
+    expect(() => postgresApiTokenSchemaSql('identity_service_tokens', 'bad-name')).toThrow();
   });
 
   it('writes and reads tenant-scoped records without exposing raw token material', async () => {
@@ -71,6 +74,7 @@ describe('PostgreSQL API token repository', () => {
     const repository = new PostgresApiTokenRepository(pool);
     await repository.create(record);
     expect(pool.calls[0]!.text).toContain('organization_id');
+    expect(pool.calls[0]!.text).toContain('INSERT INTO "private_skills_service_tokens"');
     expect(pool.calls[0]!.parameters).toContain(record.tokenHash);
 
     pool.row = dbRow();
@@ -91,5 +95,22 @@ describe('PostgreSQL API token repository', () => {
     expect(revoked?.revokedAt).toBe('2026-09-15T10:30:00.000Z');
     expect(pool.calls[0]!.text).toContain('CREATE TABLE IF NOT EXISTS');
     expect(pool.calls.at(-1)?.text).toContain('COALESCE(revoked_at');
+  });
+
+  it('runs a configured schema migration explicitly once while preserving token access', async () => {
+    const pool = new PoolFixture();
+    const repository = new PostgresApiTokenRepository(pool, {
+      tableName: 'identity_service_tokens',
+      schemaName: 'identity_auth',
+    });
+
+    await Promise.all([repository.runMigrations(), repository.runMigrations()]);
+    expect(pool.calls.filter(({ text }) => text.includes('CREATE TABLE IF NOT EXISTS')).length).toBe(1);
+    expect(pool.calls[0]?.text).toContain('CREATE SCHEMA IF NOT EXISTS "identity_auth"');
+    expect(pool.calls[0]?.text).toContain('"identity_auth"."identity_service_tokens"');
+
+    pool.row = dbRow();
+    expect(await repository.findByHash(record.tokenHash)).toEqual(record);
+    expect(pool.calls.at(-1)?.text).toContain('FROM "identity_auth"."identity_service_tokens"');
   });
 });

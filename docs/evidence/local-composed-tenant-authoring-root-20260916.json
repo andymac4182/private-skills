@@ -1,0 +1,28 @@
+{
+  "recordedAt": "2026-09-15T15:35:29.968116+00:00",
+  "integrationCommit": "82ccaea",
+  "verificationCommit": "a50f0c9",
+  "scope": "local composed Node Nitro HTTP + PostgreSQL + Files SDK filesystem",
+  "result": {
+    "testFilesPassed": 1,
+    "testsPassed": 2,
+    "durationSeconds": 20.99
+  },
+  "verified": [
+    "two-company approved release transfer and revocation denial",
+    "same-name company skills and packs remain isolated",
+    "exact edited SKILL.md content persisted at revision 2",
+    "stale revision read rejected",
+    "foreign company draft PUT rejected without owner content changes",
+    "tenant-filtered semantic search",
+    "synthetic client-confirmed pack receipts produce company-scoped analytics"
+  ],
+  "limitations": [
+    "synthetic local Better Auth identities",
+    "deterministic local file-reading scanner adapter",
+    "loopback embedding fixture through Gateway SDK, not hosted AI Gateway",
+    "synthetic pack receipts, not native pack install",
+    "filesystem storage, not hosted blob provider",
+    "no production identity activation"
+  ]
+}

@@ -118,4 +118,69 @@ describe('company SSO identity composition', () => {
       await infrastructure.identity?.close();
     }
   });
+
+  it('keeps API-token startup migration opt-in while waiting for it when enabled', async () => {
+    const pool: ApiTokenPgPool = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      connect: vi.fn(),
+    };
+    const infrastructure = (await import('../server/identity-infrastructure.js')).createIdentityInfrastructure({
+      PSKILLS_BETTER_AUTH_ENABLED: 'true',
+      DATABASE_URL: 'postgres://127.0.0.1:1/identity-composition-test',
+      BETTER_AUTH_SECRET: 'identity-composition-test-secret-0123456789',
+      BETTER_AUTH_URL: 'http://localhost:5173',
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
+      PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'false',
+      PSKILLS_API_TOKEN_AUTO_MIGRATE: 'true',
+      PSKILLS_API_TOKEN_SCHEMA: 'identity_composition_auth',
+      PSKILLS_BETTER_AUTH_SCHEMA: 'identity_composition_auth',
+    }, {
+      postgresPool: pool,
+      canonicalOrigin: 'http://localhost:5173',
+      apiTokenTableName: 'identity_composition_tokens',
+      companySsoTableName: 'identity_composition_company_sso',
+    });
+
+    try {
+      await infrastructure.ready;
+      const migration = (pool.query as ReturnType<typeof vi.fn>).mock.calls
+        .map(([text]) => text as string)
+        .find((text) => text.includes('identity_composition_tokens'));
+      expect(migration).toContain('CREATE SCHEMA IF NOT EXISTS "identity_composition_auth"');
+      expect(migration).toContain('"identity_composition_auth"."identity_composition_tokens"');
+    } finally {
+      await infrastructure.identity?.close();
+    }
+  });
+
+  it('does not run the API-token migration when its startup flag is disabled', async () => {
+    const pool: ApiTokenPgPool = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      connect: vi.fn(),
+    };
+    const infrastructure = (await import('../server/identity-infrastructure.js')).createIdentityInfrastructure({
+      PSKILLS_BETTER_AUTH_ENABLED: 'true',
+      DATABASE_URL: 'postgres://127.0.0.1:1/identity-composition-test',
+      BETTER_AUTH_SECRET: 'identity-composition-test-secret-0123456789',
+      BETTER_AUTH_URL: 'http://localhost:5173',
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
+      PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'false',
+      PSKILLS_API_TOKEN_AUTO_MIGRATE: 'false',
+      PSKILLS_BETTER_AUTH_SCHEMA: 'identity_composition_auth',
+    }, {
+      postgresPool: pool,
+      canonicalOrigin: 'http://localhost:5173',
+      apiTokenTableName: 'identity_composition_tokens',
+      companySsoTableName: 'identity_composition_company_sso',
+    });
+
+    try {
+      await infrastructure.ready;
+      expect(pool.query).not.toHaveBeenCalled();
+    } finally {
+      await infrastructure.identity?.close();
+    }
+  });
 });

@@ -38,9 +38,9 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [x] B17 — L03: account display fix integrated 2de3e2f; identity name/email preferred with legacy fallback. Reader overview role-order correction ff2d0ab also integrated. Root seven focused tests passed. New build browser proof remains part of B03.
 
-- [ ] B18 — Company CLI token console: create scoped expiring tokens, reveal secret once with copy/manual fallback, list metadata and revoke, clear secret on company switch, enforce server role/company checks. Root found no token management entry in CompanyView/command navigation; tenant_ui owns current API contract audit and complete connected UI, not just a visual mockup.
+- [x] B18 — Company CLI token console: create scoped expiring tokens, reveal secret once with copy/manual fallback, list metadata and revoke, clear secret on company switch, enforce server role/company checks. The connected console and server contract are integrated in `d30fcc8`; local product acceptance is complete. Hosted identity/provider and authenticated archive acquisition remain separate L05/B26 gates.
 
-  Browser follow-up on 5403 / candidate 205a28e: scoped seven-day Reader token creation and hide-secret pass. After identity sign-out, the generic token sign-in rejects that exact newly issued token with “Session token is invalid”. tenant_ui owns persisted-token/BFF exchange investigation and actual use/revoke proof. Release is held; no raw token recorded here.
+  Dated local follow-up on 5405 / candidate `89ef195`: scoped Reader token creation, sign-in/use, owner revoke, existing-session denial, fresh-sign-in denial, and native CLI metadata/revocation readback all passed. This supersedes the earlier 5403 / `205a28e` “Session token is invalid” observation for that fixture. No raw token is recorded here.
 
 - [ ] B19 — Restore rehearsal must include Better Auth organizations/memberships, token revocations, both company SSO configuration and mirrored provider rows, billing mappings/reservations/webhook state, and registry/blob consistency. Existing registry-only restore is insufficient. tenant_eve owns isolated local PostgreSQL rehearsal and post-restore tenant boundary checks; hosted proof remains separate.
 - [ ] B20 — Signed SAML callback currently rejects issuer because the provider SP entityID is compared with the IdP entityID. oauth_demo_finish owns protocol trust-anchor correction and wrong-issuer/audience negative tests; editor_test_stability owns runtime mounting. Do not claim SAML works before the signed round trip passes.
@@ -60,3 +60,22 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [ ] B24 — Eve cost reconciliation must survive process restart and cache eviction. Current candidate stores reservation lookup metadata only in a process-local map; replace with durable lookup and prove restart/eviction reconciliation against PostgreSQL. Confirm budgeted Eve works in the intended no-Stripe evaluation configuration without bypassing limits. Owner: runtime_finish.
 - [ ] B25 — Persist sanitized authentication/callback failure and membership-denial signals. Attribute company metrics only from server-trusted identity; unknown-tenant failures stay operator-only. Verify persistence and tenant/admin boundaries. Owner: tenant_auth_backend.
+
+- [ ] B26 — Hosted customers must obtain verified platform CLI archives without private GitHub repository access. Add authenticated company release metadata/downloads backed by Files SDK storage, pinned sizes/digests, platform chooser and install documentation. Preserve native-test qualifications. Owner: oauth_demo_finish.
+- [x] B27 — Explicit identity migration must preserve the location and validity of existing API tokens when a custom Better Auth schema is already configured. Require separate explicit token-schema configuration or a reviewed data-preserving migration; prove the existing custom-identity/public-token combination. Owner: editor_test_stability. Corrected by ad19364; existing-token survival across explicit migration and fresh infrastructure proven by 0669c9e, independently passed by root at cc50c62 (four PostgreSQL cases). Production migration remains separate.
+
+- [ ] B28 — Billing operation retention must not invalidate idempotency or strand reconciliation: exact-key lookup must find durable reservations after the recent-history window evicts them, including unresolved Eve runs and reopened old operation keys. Verify small-window PostgreSQL replay/reconciliation tests. Also provide a safe recovery path for active seat holds whose identity write definitively failed. Owners: billing_finish and runtime_finish.
+
+- [ ] B29 — Recover queued worker jobs for every company after initial request-drain failure or timeout. Current operator cron selects only the default company; implement fair bounded durable company dispatch with leases/cursors, server-selected scoped credentials and actual PostgreSQL retry/isolation tests. Owners: tenant_ui (worker scheduler), runtime_finish (coordinate Eve scheduler/runtime/cron seams).
+
+- [ ] B30 — Marketing discoverability: page-specific titles/descriptions, validated canonical marketing origin, social sharing metadata, public sitemap and robots rules with preview/local noindex. Verify rendered HTML and route inventory; retain working brand and avoid unsupported company/review claims. Owner: marketing_finish.
+
+### Market research delivery criteria — 16 September follow-up
+
+B14–B16 remain launch work and must deliver:
+- A dated primary-source comparison of developer tooling, AI coding-agent ecosystems, skill registries and existing artifact platforms, separating direct competitors from substitutes.
+- Buyer versus daily-user roles, adoption and purchase triggers, switching friction, distribution channels, positioning and pricing hypotheses, and concrete validation experiments.
+- A ranked brand shortlist with rationale, pronunciation, package/company collisions, domain alternatives, timestamped registrar availability, premium/renewal prices where visible, and source links. Recheck finalists immediately before selection; unregistered does not mean purchasable or secured.
+- An explicit mapping from findings to homepage copy, launch offer and product priorities. Keep claims bounded by product evidence, and keep Private Skills until the user chooses a brand.
+
+Existing research lives in [market research](../market-research.md), [brand options](../brand-options.md) and [domain shortlist](../brand-domain-shortlist.md). Owner: marketing_finish; root reviews evidence and application.

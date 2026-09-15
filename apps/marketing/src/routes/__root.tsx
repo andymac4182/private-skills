@@ -1,5 +1,6 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import { marketingRobotsContent } from '../lib/marketingSeo'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
@@ -9,6 +10,7 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'Private Skills · A private registry for engineering teams' },
       { name: 'description', content: 'Private Skills helps engineering teams review and install agent skills with source and policy context.' },
+      { name: 'robots', content: marketingRobotsContent() },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),

@@ -5,6 +5,7 @@ import { MemoryStateRepository } from '../../../packages/database/src/memory.js'
 import { BillingService, createMemoryBillingRepository } from '../../../packages/billing/src/index.js';
 import type { ReviewRun } from '../../../packages/reviews/src/index.js';
 import type { UploadReviewJob } from '../../../packages/upload-reviews/src/index.js';
+import type { IdentityOperationsEventSink } from '../../../packages/identity/src/index.js';
 import {
   OPERATIONS_STATUS_ROUTE_PATH,
   createOperationsStatusHandler,
@@ -168,7 +169,7 @@ describe('company operations status route', () => {
     expect(body.eve.uploadReviews).toEqual({ total: 2, pending: 0, running: 0, passed: 0, failed: 1, stale: 1 });
     expect(body.billing.state).toBe('disabled');
     expect(body.billing.usageState).toBe('available');
-    expect(body.auth).toMatchObject({ state: 'unavailable', authenticationFailures: null, callbackFailures: null });
+    expect(body.auth).toMatchObject({ state: 'unavailable', authenticationFailures: null, callbackFailures: null, membershipDenials: null });
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain('secret');
     expect(serialized).not.toContain('report');
@@ -196,5 +197,79 @@ describe('company operations status route', () => {
     const body = await (await unavailable(request('owner-a')))?.json() as OperationsStatusResponse;
     expect(body.eve.state).toBe('unavailable');
     expect(body.eve.reason).toContain('not configured');
+  });
+
+  it('projects durable identity counters and records only verified membership denials', async () => {
+    const summary = {
+      authenticationFailures: { total: 2, last24h: 1, latestAt: new Date(NOW - 1_000).toISOString() },
+      callbackFailures: { total: 1, last24h: 1, latestAt: new Date(NOW - 2_000).toISOString() },
+      membershipDenials: { total: 1, last24h: 1, latestAt: new Date(NOW - 3_000).toISOString() },
+    };
+    const operationsEvents: IdentityOperationsEventSink = {
+      recordGlobal: vi.fn(async () => undefined),
+      trustedTenant: vi.fn(async (organizationId: string, userId: string) => organizationId === 'org-a' && userId === 'org-a-subject'
+        ? { organizationId, userId, role: 'reader' as const }
+        : null),
+      recordTenant: vi.fn(async () => true),
+      summarize: vi.fn(async () => summary),
+      runMigrations: vi.fn(async () => undefined),
+      cleanup: vi.fn(async () => 0),
+    };
+    const eventHandler = createOperationsStatusHandler({
+      repository,
+      billing,
+      authenticate,
+      organizationId: 'org-a',
+      operationsEvents,
+      now: () => NOW,
+    });
+    const response = await eventHandler(request('owner-a'));
+    const body = await response?.json() as OperationsStatusResponse;
+    expect(body.auth).toEqual({ ...summary, state: 'available' });
+    expect(operationsEvents.summarize).toHaveBeenCalledWith('org-a', NOW);
+
+    const readerResponse = await eventHandler(request('reader-a'));
+    expect(readerResponse?.status).toBe(403);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(operationsEvents.trustedTenant).toHaveBeenCalledWith('org-a', 'org-a-subject');
+    expect(operationsEvents.recordTenant).toHaveBeenCalledWith(
+      { organizationId: 'org-a', userId: 'org-a-subject', role: 'reader' },
+      { kind: 'membership_denial', reasonCode: 'membership_role_denied' },
+    );
+    expect(operationsEvents.recordGlobal).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stale membership denial global instead of assigning it to a company', async () => {
+    const operationsEvents: IdentityOperationsEventSink = {
+      recordGlobal: vi.fn(async () => undefined),
+      trustedTenant: vi.fn(async () => ({ organizationId: 'org-b', userId: 'org-b-subject', role: 'admin' as const })),
+      recordTenant: vi.fn(async () => false),
+      summarize: vi.fn(async () => ({
+        authenticationFailures: { total: 0, last24h: 0 },
+        callbackFailures: { total: 0, last24h: 0 },
+        membershipDenials: { total: 0, last24h: 0 },
+      })),
+      runMigrations: vi.fn(async () => undefined),
+      cleanup: vi.fn(async () => 0),
+    };
+    const eventHandler = createOperationsStatusHandler({
+      repository,
+      billing,
+      authenticate,
+      organizationId: 'org-a',
+      operationsEvents,
+      now: () => NOW,
+    });
+
+    expect((await eventHandler(request('wrong-org-admin')))?.status).toBe(403);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(operationsEvents.recordTenant).toHaveBeenCalledWith(
+      { organizationId: 'org-b', userId: 'org-b-subject', role: 'admin' },
+      { kind: 'membership_denial', reasonCode: 'tenant_mismatch' },
+    );
+    expect(operationsEvents.recordGlobal).toHaveBeenCalledWith({
+      kind: 'membership_denial',
+      reasonCode: 'membership_missing',
+    });
   });
 });

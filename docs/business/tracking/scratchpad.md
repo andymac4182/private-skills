@@ -53,7 +53,7 @@ Working hypothesis to test: an approachable company skills platform for engineer
 
 ### 5405 browser revocation completed
 
-On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting the same token again returned "Session token is invalid" and cleared the input. The temporary browser variable was discarded. This closes the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI, display-name correction, SSO settings failure and hosted acceptance remain separate. No production state changed.
+On candidate `89ef195`, the owner API revoked the exact UI-issued local Reader proof token (HTTP 200, revoked true). Reloading its existing browser session redirected to login; submitting that revoked token again returned "Session token is invalid" and cleared the input, as expected. The temporary browser variable was discarded. This closed the local browser create/hide/sign-out/token-sign-in/read/revoke/existing-session/new-session check; native CLI and hosted acceptance remained separate at that observation. No production state changed.
 
 Review follow-ups: billing count reconciliation needs a stale-read/after-hook barrier test in addition to concurrent reservation tests; Eve dispatcher needs current lease timestamps and bounded invocation continuation under slow providers. Owners are implementing and verifying these before integration.
 
@@ -68,3 +68,94 @@ Foundation traced the 5404 SSO error to missing `private_skills_company_sso_prov
 Root opened a new 5404 browser tab, completed Acme login and explicit company selection, then opened SSO settings. Provider list loaded empty, provider ID input was enabled, and alert count was zero. This verifies the repaired disposable DB at `acca451`; fresh-launch migration regression coverage is still pending.
 
 Release increment `3809277` is in PR #52. Marketing preview ready; app/builder previews pending at this checkpoint. Native CI failures must be checked for billing/runner unavailability before applying the user waiver; no source-regression waiver is implied.
+
+### Fresh candidate browser and migration review — 16 September
+
+Root inspected actual browser tab 18 at local 5407 on candidate e18ad47: Acme Candidate Demo / Alice Acme owner remained selected. Company operations rendered an empty queue, no releases, three enabled scanners, and explicit unavailable Eve/history and disabled billing states without a page error. Fresh-company SSO settings also loaded without the manual schema repair needed by the previous fixture. These are local fixture checks, not production Better Auth activation.
+
+Explicit token migration candidate 5ca2365 is held because inheriting the Better Auth custom schema changes existing token lookup from its prior public location. B27 tracks preserving existing access. B26 tracks a separate launch gap: authenticated customers need CLI acquisition without private source-repository access. Marketing research owner was reactivated for primary-source positioning and registrar-level domain availability/price checks; B14–B16 remain open.
+
+### Billing retention review and browser host pause
+
+Reviewed billing635d112. Seat subject/revision reconciliation is implemented, but root identified two remaining acceptance questions: active holds with no committed identity row require safe failed-write recovery, and newest-N usage-operation loading cannot be the authority for old-key idempotency. B28 records the exact durable-lookup/replay proof needed. Billing and Eve owners are coordinating; no billing candidate is integrated on this evidence alone.
+
+The token-display browser owner reports CUA host locked with automatic unlock paused. User unlock requested asynchronously. This pauses the browser-dependent proof only; no fixture session or production configuration was changed.
+
+Root independently passed the composed Nitro/PostgreSQL/Files SDK worker acceptance at verification d11f6cb (1 test, 11.41 seconds). Integrated c17d113/0cf5440; sanitized evidence is `docs/evidence/local-composed-nitro-root-20260916.json`. Native CLI follow-through remains assigned to tenant_ui against the separately retained approved fixture.
+
+### Integrated token migration compatibility and local boundary checks
+
+Integrated e978ae3/aeb85a8: the explicit migration entrypoint covers Better Auth, company SSO and API tokens; token schema remains unchanged by default and a separate API-token schema is opt-in. Root verification cddf73a passed 17 focused tests across three files, including four actual PostgreSQL SSO/infrastructure cases, and TypeScript passed. A follow-up regression will strengthen existing-token survival evidence across rerunning the composed migration; B27 remains open until that case is recorded. No production DDL or identity activation occurred.
+
+At d11f6cb, root also reran populated PostgreSQL tenant acceptance, source tenant isolation, and live identity-route PostgreSQL integration: three files / three tests passed in 2.25 seconds. The populated matrix uses bootstrap identities/core composition, source catalog responses are fixtures, and hosted acceptance remains separate.
+
+Release owner is authorized to publish prepared37ddf6f while explicitly retaining the Reader friendly-label browser check as pending due the locked host. That local display check does not block the independently verified operations/copy increment while production identity remains disabled. Billing and newer migration candidates are excluded from that release.
+
+### Full regression and native CLI checkpoint
+
+Root full suite at verification cddf73a after the explicit token migration fixes: 154 files passed / 15 skipped; 1,113 tests passed / 24 skipped; 26.45 seconds. TypeScript passed separately. Opt-in PostgreSQL scenarios were run separately as recorded above; skipped suites are not counted as accepted.
+
+Native Mac CLI proof is integrated from 5d7a645 plus correction e6465ab. Against the retained local Nitro Company B fixture: approved install into an isolated directory, frozen-lockfile repeat with changed=false, tree verification and reconstructed canonical artifact digest all passed. Retained metadata covered B only; no cross-company native CLI assertion is claimed. Market research/domain recheck d252f03 is also integrated; no brand or domain purchase decision has been made.
+
+### Existing token survival and worker recovery
+
+Integrated dff442f (0669c9e) and independently passed four PostgreSQL tests at root cc50c62. The regression issues a public-table token before composed migration, reruns migration, creates fresh infrastructure, and authenticates the same unchanged token without a custom-schema token table. B27 is closed for local implementation/regression; production migration remains unperformed.
+
+PR53 is merged at92d2f0b (GitHub mergedAt2026-09-15T15:21:07Z), verified by root. Integration merged origin/main successfully. Production deployment verification remains with foundation_release. Root found B29 by tracing hosted-worker.ts/runtime.ts: new companies get only best-effort two-job POST drains, while /internal/worker/run cron selects default tenant. Durable cross-company retry scheduling assigned to tenant_ui with Eve owner coordination.
+
+### Reconciliation note — 16 September 2026
+
+The later 5405 follow-up completed the local browser token create, sign-in/use,
+owner revoke, existing-session denial, fresh-sign-in denial, and native CLI
+metadata/revocation readback. This supersedes the earlier “pending browser/CLI”
+wording above for the disposable fixture; hosted provider configuration and
+customer archive acquisition remain open under L05/B26. Root's fresh 5407
+browser check loaded company operations and SSO settings without a page error;
+it remains local fixture evidence. A later post-migration candidate run
+(`cddf73a` / `432bf5d`) passed 1,113 tests with 24 skipped and typecheck; native
+Mac CLI installation and canonical artifact digest/repeat checks passed
+against the separately retained a8ab65a fixture. Neither follow-up proves hosted identity or production PR #53 behavior.
+
+### Review follow-through before next integration
+
+B21 concurrent import review found a shared-reservation race: the first reserving request can release the shared scan charge after another request queues the job and a worker begins scanning. Caller owner is adding a durable ownership fence and barrier tests. Definite failure before blob put also needs explicit zero reconciliation.
+
+B25 identity telemetry candidate03c73bb needs request-lifetime persistence rather than fire-and-forget writes, operational retention cleanup rather than migration-only cleanup, and actual loopback PostgreSQL proof. CLI acquisition needs an in-app sign-in/download flow instead of public links landing on JSON401 responses. Neither candidate is accepted yet.
+
+Extended Nitro fixture21701b7 adds packs, draft revisions/files, search through local embedding fixture and synthetic confirmed-install receipts. Follow-up strengthens exact edited content and foreign edit denial before root runs combined scenarios. B30 tracks missing marketing metadata/sitemap discovered in root source review.
+
+### Composed authoring and pack acceptance
+
+Integrated47f10a8/82ccaea and independently ran both Nitro+PostgreSQL+Files SDK scenarios at root a50f0c9: two tests passed in20.99seconds. New proof verifies exact edited SKILL.md bytes, changed revision digest, persisted revision2, stale-revision denial, rejected foreign PUT with unchanged owner content, isolated same-name packs/search and synthetic client-confirmed pack receipts. Evidence: docs/evidence/local-composed-tenant-authoring-root-20260916.json. External scanner/Gateway, native pack install and hosted identity remain separate gates.
+
+### Recovery/adoption regression checkpoint
+
+Root verificationa50f0c9 passed the loopback PostgreSQL operations restore rehearsal and Better Auth bootstrap-adoption integration together: two files / two tests,3.01seconds. The current implementation preserves restored identity/SSO/token/billing/registry/filesystem object state and exercises protected owner adoption with replay/concurrency denials. This is local evidence, not a hosted restore.
+
+B19 follow-through is assigned to tenant_eve: extend recovery inventory for the upcoming billing lifecycle fields, seat revision/holds, Eve dispatch fences, worker retry/lease state and identity operational events once their owners finalize contracts. Current recovery evidence does not cover those unintegrated additions.
+
+### Market research continuation — 16 September
+
+User reiterated research across marketing, developer tools and AI tools, plus detailed future naming/domain work. Existing B14–B16 and MR/N research tasks remain authoritative; no duplicate tracker was created. Root refreshed primary discovery: [JFrog Skills Registry documentation](https://docs.jfrog.com/ai-ml/docs/skills-registry) explicitly describes versioned organization bundles and a scan gate; [JFrog skills repositories](https://docs.jfrog.com/artifactory/docs/skills-repositories) describes ClawHub-compatible packages. This strengthens the need to test adoption simplicity and source-to-install clarity rather than claim scanning or private distribution is unique. Marketing owner has the research continuation alongside SEO. Existing domain observations are dated snapshots, not a fresh registration check or a purchase.
+
+### CLI distribution integration — 16 September, 01:48 AEST
+
+Integrated CLI candidate 572352a as 1b2671a. Root independently ran six focused files / 17 tests and TypeScript successfully in verification checkout 31bdf18. The older verification checkout needed the current integration getting-started document during cherry-pick; executable CLI changes applied unchanged. Routes require a bound company principal, permitted member role and token scopes, return no-store responses, and verify size/digest before sending bytes. This is local component evidence; real release assets remain unprovisioned in the default manifest. Foundation owns private Files SDK provisioning and authenticated exact-byte proof. No production deployment or customer download readiness is claimed.
+
+### Identity operational events — 16 September, 01:50 AEST
+
+Integrated 4d62970 and 5bb67bd as 915d378 / 70f8a7f, preserving the CLI provider in the runtime return type. Root verification snapshot 91eb8d4 passed TypeScript and 9 tests across three files, including two disposable PostgreSQL cases. The PG evidence covers live-member role attribution, global-versus-tenant isolation, awaited handler failure capture, and expired-row cleanup during normal recording. This establishes local operational capture/retention behavior; production migration and full hosted observability remain open. Marketing SEO 180b30f is held for compatibility: omitted new indexing settings must safely build noindex rather than break existing production/preview build commands.
+
+### Combined CLI and identity regression checkpoint — 16 September, 01:52 AEST
+
+Root verification checkout 91eb8d4 passed the full Vitest run: 161 files passed / 16 skipped, 1,138 tests passed / 27 skipped (28.65 seconds). This default run does not activate opt-in PostgreSQL cases; identity operational events were run separately against disposable PostgreSQL in the preceding checkpoint. TypeScript and the production web Vite/Nitro build also passed. Build emitted an ineffective dynamic-import warning for scanner utilities; no build failure occurred. Source snapshot is a local verification composition, not production acceptance or a claim that skipped native/provider checks passed.
+
+### Marketing SEO integration and seat recovery review — 16 September, 01:54 AEST
+
+Integrated SEO 180b30f + 2998519 as 7a9f648 + 5e76eda. Root verification caca65c passed seven metadata/config tests, marketing TypeScript and the marketing production build with only existing APP_ORIGIN set. Missing new SEO settings now safely produce noindex and omit canonical URLs; explicit public indexing requires HTTPS marketing origin. Old verification-branch homepage/docs conflicts were resolved with current integration content. Production public indexing configuration and rendered hosted proof remain open.
+
+Root review held candidate c1fb2df seat recovery POST: company-admin supplied proof strings do not establish that an identity writer failed or terminated. Recovery must not free an in-flight hold or a committed identity row whose after-hook failed. Billing owner is implementing an authoritative operational boundary and concurrency proof; editor was told not to accept the current user-facing route.
+
+### Rendered marketing default-indexing proof — 16 September
+
+Root served the built caca65c marketing app on loopback port 5488 and fetched all nine public routes. Every route returned HTTP 200, rendered noindex metadata and omitted canonical URLs when new SEO configuration was absent. robots.txt returned disallow-all and sitemap.xml contained no locations. This verifies safe defaults in rendered Nitro responses, not just helper output. The temporary server was gracefully stopped. Explicit public-mode checks were reported by the marketing owner; production indexing configuration remains to be applied and verified during release.

@@ -207,10 +207,11 @@ export interface OperationsStatusResponse {
     latestCompletedAt?: string
   }
   auth: {
-    state: 'unavailable'
-    authenticationFailures: null
-    callbackFailures: null
-    reason: string
+    state: 'available' | 'empty' | 'unavailable'
+    authenticationFailures: { total: number; last24h: number; latestAt?: string } | null
+    callbackFailures: { total: number; last24h: number; latestAt?: string } | null
+    membershipDenials: { total: number; last24h: number; latestAt?: string } | null
+    reason?: string
   }
   billing: {
     state: 'available' | 'unconfigured' | 'disabled' | 'unavailable'

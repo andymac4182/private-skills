@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-cli-release-asset-staging",
+  "capturedAt": "2026-09-15T15:34:35Z",
+  "repository": "andymac4182/private-skills",
+  "release": {
+    "tag": "v0.4.0",
+    "tagObjectSha": "6fcf711e405c18442c8d1fd4f387defe6600ca43",
+    "commit": "84f712720dba74508d56f0bcb532393dad24324d",
+    "targetCommitish": "main",
+    "publishedAt": "2026-09-14T11:15:11Z",
+    "isDraft": false,
+    "isPrerelease": false
+  },
+  "source": {
+    "kind": "authenticated-github-release-metadata",
+    "metadataQuery": "gh api repos/andymac4182/private-skills/releases/tags/v0.4.0",
+    "downloadedAgain": false,
+    "reuseReason": "Existing local bytes match the authenticated release asset digest and size; no second download was needed.",
+    "localArtifactRoot": "/private/tmp/private-skills-cli-release-v04-download",
+    "copyRoot": "/private/tmp/private-skills-cli-release-v04-artifacts",
+    "copiesByteIdentical": true
+  },
+  "assets": [
+    {
+      "logicalAssetId": "cli.v0.4.0.aarch64-apple-darwin.archive",
+      "name": "pskills-aarch64-apple-darwin.tar.gz",
+      "target": "aarch64-apple-darwin",
+      "format": "tar.gz",
+      "archiveMember": "pskills",
+      "relativePath": "pskills-aarch64-apple-darwin.tar.gz",
+      "size": 2673030,
+      "sha256": "1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+      "releaseDigest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+      "contentType": "application/x-gtar"
+    },
+    {
+      "logicalAssetId": "cli.v0.4.0.x86_64-unknown-linux-gnu.archive",
+      "name": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "target": "x86_64-unknown-linux-gnu",
+      "format": "tar.gz",
+      "archiveMember": "pskills",
+      "relativePath": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "size": 2922162,
+      "sha256": "4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+      "releaseDigest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+      "contentType": "application/x-gtar"
+    },
+    {
+      "logicalAssetId": "cli.v0.4.0.x86_64-pc-windows-msvc.archive",
+      "name": "pskills-x86_64-pc-windows-msvc.zip",
+      "target": "x86_64-pc-windows-msvc",
+      "format": "zip",
+      "archiveMember": "pskills.exe",
+      "relativePath": "pskills-x86_64-pc-windows-msvc.zip",
+      "size": 2479997,
+      "sha256": "7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+      "releaseDigest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+      "contentType": "application/zip"
+    },
+    {
+      "logicalAssetId": "cli.v0.4.0.checksums",
+      "name": "SHA256SUMS",
+      "target": "all",
+      "format": "sha256-checksums",
+      "relativePath": "SHA256SUMS",
+      "size": 309,
+      "sha256": "02c6bf4296ee344aa9d6846e5848ba00920112361093205a7bb95ef688688889",
+      "releaseDigest": "sha256:02c6bf4296ee344aa9d6846e5848ba00920112361093205a7bb95ef688688889",
+      "contentType": "application/octet-stream",
+      "entries": 3
+    }
+  ],
+  "verification": {
+    "releaseTagRefs": "passed; annotated tag peels to the recorded commit",
+    "githubAssetMetadata": "passed; authenticated metadata size and digest match local bytes",
+    "localDirectoryExactSet": "passed; exactly the three archives and SHA256SUMS",
+    "sha256sums": "passed",
+    "archiveMemberShape": "passed; one regular expected member per archive",
+    "releaseVerifier": "passed; scripts/verify-cli-release.mjs --version=0.4.0",
+    "macArm64Smoke": {
+      "status": "passed",
+      "target": "aarch64-apple-darwin",
+      "version": "pskills 0.4.0",
+      "binarySha256": "c7f77c8e4ff47d67d0e3d7dffddc852807eefe41e2138b528ae3e7e5ed7bb0d1"
+    },
+    "nativeTargetQualification": "Linux and Windows archives have member/checksum verification only; no native Linux or Windows execution claim is made."
+  },
+  "placementPlan": {
+    "status": "local-staging-only",
+    "uploadPerformed": false,
+    "serverOwned": true,
+    "domainContract": "BlobStore",
+    "implementation": "FilesSdkBlobStore",
+    "providerSelection": {
+      "environmentKey": "PSKILLS_STORAGE_PROVIDER",
+      "acceptedValues": [
+        "filesystem",
+        "s3",
+        "r2",
+        "gcs",
+        "azure",
+        "vercel-blob",
+        "http"
+      ],
+      "nodeFilesSdkProviders": [
+        "fs",
+        "s3",
+        "r2",
+        "gcs",
+        "azure",
+        "vercel-blob"
+      ],
+      "runtimeConfigurationKeys": {
+        "provider": "PSKILLS_STORAGE_PROVIDER",
+        "buildProfile": "PSKILLS_STORAGE_BUILD_PROFILE",
+        "filesystemRoot": "PSKILLS_STORAGE_ROOT",
+        "bucket": "PSKILLS_STORAGE_BUCKET",
+        "container": "PSKILLS_STORAGE_CONTAINER",
+        "region": "PSKILLS_STORAGE_REGION",
+        "endpoint": "PSKILLS_STORAGE_ENDPOINT",
+        "pathStyle": "PSKILLS_STORAGE_PATH_STYLE",
+        "projectId": "PSKILLS_STORAGE_PROJECT_ID",
+        "credentialReferences": [
+          "PSKILLS_STORAGE_ACCESS_KEY_ID",
+          "PSKILLS_STORAGE_SECRET_ACCESS_KEY",
+          "PSKILLS_STORAGE_ACCOUNT_ID",
+          "PSKILLS_STORAGE_ACCOUNT_NAME",
+          "PSKILLS_STORAGE_ACCOUNT_KEY",
+          "PSKILLS_STORAGE_CONNECTION_STRING",
+          "PSKILLS_STORAGE_SAS_TOKEN",
+          "PSKILLS_STORAGE_CLIENT_EMAIL",
+          "PSKILLS_STORAGE_PRIVATE_KEY",
+          "BLOB_READ_WRITE_TOKEN"
+        ]
+      }
+    },
+    "objectKeyContract": {
+      "prefixOption": "FilesSdkBlobStoreOptions.prefix",
+      "keyPattern": "<optional-relative-prefix>/sealed/<48 lowercase hexadecimal characters>",
+      "callerChoosesProviderKey": false,
+      "releaseFilenamesAreLogicalIds": true,
+      "publicBaseUrl": null,
+      "access": "private server-side object; authenticated gateway or bounded signed transfer only"
+    },
+    "storedBlobManifestKeys": [
+      "key",
+      "digest",
+      "size"
+    ],
+    "recordTemplate": {
+      "logicalAssetId": "cli.v0.4.0.<target-or-checksums>",
+      "releaseTag": "v0.4.0",
+      "target": "<target-or-all>",
+      "assetName": "<release-asset-name>",
+      "contentType": "<content-type>",
+      "storedBlob": {
+        "key": "<result of BlobStore.put(bytes).key>",
+        "digest": "<result of BlobStore.put(bytes).digest>",
+        "size": "<result of BlobStore.put(bytes).size>"
+      },
+      "state": "staged"
+    },
+    "writeSequence": [
+      "Read one existing local release byte stream from the allowlisted staging directory.",
+      "Hash and size-check it against this manifest and the authenticated release metadata before upload.",
+      "Call BlobStore.put(bytes) once; persist the returned key, digest, and size with the logical asset record.",
+      "Read the returned sealed key back and verify exact size and SHA-256 before any distribution reference is published.",
+      "Expose the asset only through an authenticated, expiring transfer contract after the final module/manifest contract is accepted."
+    ],
+    "logicalAssets": [
+      "cli.v0.4.0.aarch64-apple-darwin.archive",
+      "cli.v0.4.0.x86_64-unknown-linux-gnu.archive",
+      "cli.v0.4.0.x86_64-pc-windows-msvc.archive",
+      "cli.v0.4.0.checksums"
+    ]
+  },
+  "differences": [
+    "The release has four assets: three platform archives plus SHA256SUMS; all four are represented because the checksum file is part of the distribution manifest.",
+    "The design document calls the domain reference storageRef, while the current TypeScript contract returns StoredBlob.key, StoredBlob.digest, and StoredBlob.size. The plan uses the implemented keys.",
+    "FilesSdkBlobStore accepts only fresh random sealed object keys, so release filenames cannot be used as provider keys; the logical asset ID must map to the returned StoredBlob.key.",
+    "The factory accepts a prefix option, but runtime-node does not currently expose a PSKILLS_STORAGE_PREFIX environment key; prefix selection needs to be part of the finalized asset module configuration.",
+    "The current repository has no finalized CLI-release asset table or remote blob publication route. This record is a staging manifest and placement plan, not a hosted upload or public download proof."
+  ],
+  "redaction": {
+    "containsCredentials": false,
+    "containsPrivateGithubUrls": false,
+    "containsRawArtifactBytes": false,
+    "archivesCommitted": false,
+    "secretsExported": false
+  },
+  "limits": [
+    "No Files SDK provider was configured or contacted in this task.",
+    "No production environment, storage bucket, Vercel Blob store, database record, or public URL was changed.",
+    "The existing local archives remain outside the repository and untracked.",
+    "Hosted authenticated CLI acquisition and install remain separate acceptance work."
+  ]
+}

@@ -17,6 +17,7 @@ import { CompanyView } from './CompanyView'
 import { SsoSettingsView } from './SsoSettingsView'
 import { ApiTokensView } from './ApiTokensView'
 import { BillingView } from './BillingView'
+import { CliReleaseView } from './CliReleaseView'
 import type { AppSectionSearch } from '../routes/app.$section'
 
 export function SectionView({ section, draftSearch }: { section: string; draftSearch?: AppSectionSearch }) {
@@ -40,6 +41,7 @@ export function SectionView({ section, draftSearch }: { section: string; draftSe
     case 'company-sso': return <SsoSettingsView />
     case 'company-tokens': return <ApiTokensView />
     case 'billing': return <BillingView />
+    case 'cli': return <CliReleaseView initialTarget={draftSearch?.target} />
     default: return <div className="view-heading"><div><span className="eyebrow">Registry</span><h1>Section not found</h1><p className="muted">The requested registry section does not exist.</p></div></div>
   }
 }

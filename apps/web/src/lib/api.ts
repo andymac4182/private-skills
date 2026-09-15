@@ -13,6 +13,7 @@ import type {
   OrganizationInvitationAcceptanceResponse, OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
   ProviderSignInResponse, BrowserPrincipal,
 } from './types'
+import type { CliReleaseTarget, PublicCliReleaseManifest } from '../../../../packages/cli-release/src/index.js'
 
 export class ApiError extends Error {
   readonly status: number
@@ -78,6 +79,21 @@ function identityBasePath(value: string): string {
   return normalized || identityRoutes.betterAuthBase
 }
 
+const CLI_RELEASE_VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/u
+const CLI_RELEASE_TARGETS = new Set<CliReleaseTarget>([
+  'aarch64-apple-darwin',
+  'x86_64-unknown-linux-gnu',
+  'x86_64-pc-windows-msvc',
+])
+
+/** Build the closed, same-origin download path used by the in-app chooser. */
+export function cliReleaseDownloadPath(version: string, target: CliReleaseTarget): string {
+  if (!CLI_RELEASE_VERSION_PATTERN.test(version) || !CLI_RELEASE_TARGETS.has(target)) {
+    throw new Error('The selected CLI release is invalid.')
+  }
+  return `/v1/cli/releases/${encodeURIComponent(version)}/${encodeURIComponent(target)}/download`
+}
+
 /**
  * Keep identity endpoints in one place. `/auth/session` remains the legacy
  * registry-token exchange; identity session/config are sanitized Nitro
@@ -108,6 +124,14 @@ export const api = {
   authProviders() { return request<PublicProviderConfig>(identityRoutes.config).then(unwrapProviders) },
   /** Better Auth session data is sanitized by the server before it reaches the browser. */
   authSession() { return request<AuthSession | { session?: AuthSession }>(identityRoutes.session).then(unwrapSession) },
+  cliReleaseManifest() { return request<PublicCliReleaseManifest>('/v1/cli/releases').then(unwrap) },
+  /** Raw bytes stay behind the authenticated server route; callers handle errors before creating a download. */
+  cliReleaseDownload(version: string, target: CliReleaseTarget) {
+    return fetch(cliReleaseDownloadPath(version, target), {
+      credentials: 'include',
+      headers: { accept: 'application/octet-stream' },
+    })
+  },
   authSignIn(provider: string, callbackURL: string, basePath: string = identityRoutes.betterAuthBase) {
     return request<ProviderSignInResponse>(`${identityBasePath(basePath)}/sign-in/social`, {
       method: 'POST', body: { provider, callbackURL },
