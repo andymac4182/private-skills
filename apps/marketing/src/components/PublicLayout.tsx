@@ -34,7 +34,7 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
         <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Open app sign-in <span aria-hidden="true">↗</span></a>
       </div>
     </header>
-    <main id="main-content">{children}</main>
+    <main id="main-content" tabIndex={-1}>{children}</main>
     <MarketingFooter />
   </div>
 }
