@@ -3,10 +3,40 @@
   "sourceCommit": "900bc3e680093d9c3dd10790eab9ce1b24e71bc1",
   "reviewStatus": "review-only-no-hosted-ddl",
   "targetReadback": {
-    "environment": "DATABASE_URL",
-    "configured": false,
+    "environment": "Vercel production DATABASE_URL fetched by project/environment-variable ID",
+    "configured": true,
     "readOnly": true,
-    "result": "No in-process target was configured; no production schema claim is made."
+    "credentialHandling": "Value held in process memory only; never printed or written to a file.",
+    "namespace": {
+      "currentSchema": "public",
+      "currentSchemas": ["public"],
+      "searchPath": "\"$user\", public"
+    },
+    "status": "absent",
+    "tablePrefix": "private_skills_billing",
+    "schemaNames": [],
+    "expectedTables": [
+      "private_skills_billing_customers",
+      "private_skills_billing_subscriptions",
+      "private_skills_billing_usage",
+      "private_skills_billing_webhook_events",
+      "private_skills_billing_usage_operations"
+    ],
+    "foundTables": [],
+    "missingTables": [
+      "private_skills_billing_customers",
+      "private_skills_billing_subscriptions",
+      "private_skills_billing_usage",
+      "private_skills_billing_webhook_events",
+      "private_skills_billing_usage_operations"
+    ],
+    "schemaDigest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "tables": [],
+    "exactAdditiveSqlApplicable": {
+      "relationLevel": true,
+      "reason": "No expected billing relation exists in any schema.",
+      "requiredGates": ["encrypted backup", "migration owner lock", "write/webhook fence", "final preflight"]
+    }
   },
   "migration": {
     "sqlPath": "packages/billing/migrations/0001_billing_schema.sql",
@@ -56,6 +86,11 @@
   },
   "verification": [
     {
+      "command": "authenticated Vercel production DATABASE_URL env-by-ID fetch + schema-migration-review --inspect-env DATABASE_URL",
+      "exitCode": 0,
+      "scope": "read-only target catalog, columns, constraints, indexes, and row counts; credential held in process memory"
+    },
+    {
       "command": "pnpm exec tsc --noEmit --pretty false",
       "exitCode": 0
     },
@@ -83,10 +118,10 @@
     }
   ],
   "limitations": [
-    "The current process did not have DATABASE_URL, so hosted schema drift and row counts were not inspected.",
+    "The targeted readback found no expected billing relation; there are therefore no billing columns or rows to compare yet. It did not select row payloads.",
     "The local row-manifest is evidence for an isolated rehearsal, not an encrypted production backup.",
     "The authoritative helper does not validate an existing relation shape; production must preflight columns, defaults, keys, checks, and indexes before applying it.",
     "The Node composition now defaults billing auto-migration off in production; setting PSKILLS_BILLING_AUTO_MIGRATE=true remains an explicit migration-window opt-in.",
-    "No Stripe account, provider credential, local production adapter, hosted DDL, or environment value was used or changed."
+    "No Stripe account, provider credential, local production adapter, hosted DDL, or environment file/value was changed; the targeted database credential was held in process memory only."
   ]
 }

@@ -1,6 +1,6 @@
 # Billing PostgreSQL schema migration review
 
-This is a review package for billing schema candidate `900bc3e680093d9c3dd10790eab9ce1b24e71bc1`. It contains no hosted DDL, environment update, provider call, or production data. The current process had no `DATABASE_URL`, so the target readback is explicitly absent rather than inferred.
+This is a review package for billing schema candidate `900bc3e680093d9c3dd10790eab9ce1b24e71bc1`. It contains no hosted DDL, environment update, provider call, or production row payload. A targeted read-only production readback was obtained through the authenticated Vercel project environment-variable API; the credential was held in process memory and never printed or written to a file.
 
 The byte-for-byte migration artifact is [`0001_billing_schema.sql`](../../packages/billing/migrations/0001_billing_schema.sql). It is generated from the authoritative [`billingPostgresSchemaSql()`](../../packages/billing/src/repository.ts#L571-L710) helper and is checked against it by [`schema-migration-review.test.ts`](../../packages/billing/test/schema-migration-review.test.ts). The checked-in manifest is [`0001_billing_schema.manifest.json`](../../packages/billing/migrations/0001_billing_schema.manifest.json).
 
@@ -27,13 +27,24 @@ The relation contract is:
 
 `organization_id` is application-owned tenant identity. There are deliberately no cross-domain foreign keys in this migration. The nullable webhook `organization_id` preserves unbound verified events for global replay/idempotency history; a migration must not filter those rows by company.
 
-The executable review utility is [`schema-migration-review.ts`](../../packages/billing/scripts/schema-migration-review.ts). `--manifest` prints only expected schema metadata. `--inspect-env DATABASE_URL` performs a repeatable-read, read-only catalog and row-count readback; it does not select row payloads or print connection details. If matching tables are split across schemas, it reports `ambiguous` instead of combining them into a false complete result. A missing environment is reported as `{ "configured": false, "readOnly": true }`. The exact command run in this process was:
+The executable review utility is [`schema-migration-review.ts`](../../packages/billing/scripts/schema-migration-review.ts). `--manifest` prints only expected schema metadata. `--inspect-env DATABASE_URL` performs a repeatable-read, read-only catalog and row-count readback; it does not select row payloads or print connection details. If matching tables are split across schemas, it reports `ambiguous` instead of combining them into a false complete result. A missing environment is reported as `{ "configured": false, "readOnly": true }`. The initial local absence check was:
 
 ```sh
 env -u DATABASE_URL pnpm exec tsx packages/billing/scripts/schema-migration-review.ts --inspect-env DATABASE_URL
 ```
 
-The result was `configured: false`. No production schema status is claimed from that result.
+That local check returned `configured: false`; it was not used as a claim about hosted availability. The later targeted Vercel readback used the production-scoped `DATABASE_URL` record by project/environment-variable ID and returned the following sanitized baseline:
+
+| Target fact | Readback |
+| --- | --- |
+| Billing schema status | `absent` |
+| Billing relations found | 0 of 5, across all schemas |
+| Expected relation names missing | all five default-prefix relations |
+| Current schema / search path | `public`; `"$user", public` |
+| Billing row payload selected | no |
+| Schema digest | `sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+
+Because no expected billing relation exists, the reviewed additive SQL is applicable at the billing-relation level and would create the relations in the default `public` namespace under the current search path. This is a readiness finding, not permission to run it: the production change still requires an encrypted backup, migration owner lock, write/webhook fence, and a final preflight immediately before application.
 
 `PostgresBillingRepository` defaults `autoMigrate` to `false` at [`repository.ts:958`](../../packages/billing/src/repository.ts#L947-L969). The Node composition now reads `PSKILLS_BILLING_AUTO_MIGRATE`: it defaults to `false` in production and `true` only for development/test convenience, with `true` as an explicit production migration-window opt-in at [`runtime-node.ts:397`](../../apps/web/server/runtime-node.ts#L371-L410). For a populated multi-instance production database, the reviewed rollout should apply the static SQL once under the migration owner and fence, then leave this flag unset or false. The review also records the current schema digest because there is no database schema-version row.
 
@@ -56,4 +67,4 @@ The production recovery decision is forward-only for populated data. If code is 
 
 Billing metering can be enabled before a Stripe account through the explicit providerless production posture: durable PostgreSQL, `PSKILLS_BILLING_ENABLED=true`, and `PSKILLS_BILLING_METERED_EVALUATION=true`. The service then enforces the finite provisional free-plan limits while checkout, portal, invoice-provider reads, and webhooks remain unavailable. The checked-in Free, Team, and Business allowances are engineering fixtures; they are not approved public prices or launch entitlements. The runtime rejects the local billing adapter in production; `PSKILLS_BILLING_PROVIDER=local` is accepted only with the explicit non-production test flag. No local payment adapter should be enabled in the hosted production environment during this migration review.
 
-Before any hosted migration, the owner still needs a current target readback, an actual encrypted backup identifier, a write/webhook fence, an external migration lock/change window, and post-apply two-company authorization and metering checks. This package is evidence for that review gate, not an approval to run hosted DDL.
+Before any hosted migration, the owner still needs an actual encrypted backup identifier, a write/webhook fence, an external migration lock/change window, and post-apply two-company authorization and metering checks. This package is evidence for that review gate, not an approval to run hosted DDL.
