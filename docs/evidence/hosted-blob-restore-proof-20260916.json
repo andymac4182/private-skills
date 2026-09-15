@@ -1,0 +1,690 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.hosted-blob-restore-proof",
+  "observedAt": "2026-09-15T16:34:52.353Z",
+  "status": "verified",
+  "operation": {
+    "sourceObjectsCopied": 11,
+    "sourceObjectsMutatedByOperation": false,
+    "destinationPrefix": "restore/skill-registry-proof-20260916-3fae894786d35e9b",
+    "destinationPreserved": true
+  },
+  "source": {
+    "storeId": "store_C0EMhnU7DH3uSMaw",
+    "access": "private",
+    "prefix": "sealed",
+    "inventoryBefore": {
+      "count": 14,
+      "totalBytes": 8112930,
+      "hasMore": false,
+      "pageCount": 1,
+      "keys": [
+        "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304"
+      ],
+      "sizes": [
+        {
+          "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+          "size": 24197
+        },
+        {
+          "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+          "size": 487
+        },
+        {
+          "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+          "size": 1717
+        },
+        {
+          "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+          "size": 325
+        },
+        {
+          "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+          "size": 325
+        },
+        {
+          "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+          "size": 487
+        },
+        {
+          "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+          "size": 2479997
+        },
+        {
+          "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+          "size": 325
+        },
+        {
+          "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+          "size": 2673030
+        },
+        {
+          "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+          "size": 483
+        },
+        {
+          "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+          "size": 2922162
+        },
+        {
+          "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+          "size": 7369
+        },
+        {
+          "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+          "size": 1717
+        },
+        {
+          "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+          "size": 309
+        }
+      ]
+    },
+    "inventoryAfterRead": {
+      "count": 14,
+      "totalBytes": 8112930,
+      "hasMore": false,
+      "pageCount": 1,
+      "keys": [
+        "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304"
+      ],
+      "sizes": [
+        {
+          "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+          "size": 24197
+        },
+        {
+          "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+          "size": 487
+        },
+        {
+          "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+          "size": 1717
+        },
+        {
+          "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+          "size": 325
+        },
+        {
+          "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+          "size": 325
+        },
+        {
+          "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+          "size": 487
+        },
+        {
+          "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+          "size": 2479997
+        },
+        {
+          "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+          "size": 325
+        },
+        {
+          "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+          "size": 2673030
+        },
+        {
+          "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+          "size": 483
+        },
+        {
+          "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+          "size": 2922162
+        },
+        {
+          "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+          "size": 7369
+        },
+        {
+          "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+          "size": 1717
+        },
+        {
+          "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+          "size": 309
+        }
+      ]
+    },
+    "inventoryAfterCopy": {
+      "count": 14,
+      "totalBytes": 8112930,
+      "hasMore": false,
+      "pageCount": 1,
+      "keys": [
+        "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304"
+      ],
+      "sizes": [
+        {
+          "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+          "size": 24197
+        },
+        {
+          "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+          "size": 487
+        },
+        {
+          "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+          "size": 1717
+        },
+        {
+          "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+          "size": 325
+        },
+        {
+          "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+          "size": 325
+        },
+        {
+          "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+          "size": 487
+        },
+        {
+          "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+          "size": 2479997
+        },
+        {
+          "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+          "size": 325
+        },
+        {
+          "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+          "size": 2673030
+        },
+        {
+          "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+          "size": 483
+        },
+        {
+          "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+          "size": 2922162
+        },
+        {
+          "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+          "size": 7369
+        },
+        {
+          "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+          "size": 1717
+        },
+        {
+          "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+          "size": 309
+        }
+      ]
+    },
+    "manifest": [
+      {
+        "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "size": 24197,
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "listedSize": 24197,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "listedSize": 487,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "listedSize": 1717,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "listedSize": 325,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "listedSize": 325,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "listedSize": 487,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "size": 325,
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "listedSize": 325,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "size": 483,
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "listedSize": 483,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "size": 7369,
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "listedSize": 7369,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "listedSize": 1717,
+        "getVerified": "passed",
+        "isCliAsset": false
+      },
+      {
+        "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "size": 309,
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "listedSize": 309,
+        "getVerified": "passed",
+        "isCliAsset": false
+      }
+    ],
+    "excludedCliKeys": [
+      "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+      "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+      "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6"
+    ],
+    "excludedCliObjects": [
+      {
+        "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "size": 2479997
+      },
+      {
+        "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "size": 2673030
+      },
+      {
+        "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "size": 2922162
+      }
+    ],
+    "sourceStateStable": true,
+    "driftAfterRead": false,
+    "driftAfterCopy": false,
+    "digestRecheck": [
+      {
+        "key": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "size": 24197,
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "size": 325,
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "size": 483,
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "size": 7369,
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      },
+      {
+        "key": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "size": 309,
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "matchesInitialManifest": true,
+        "getVerified": "passed"
+      }
+    ]
+  },
+  "destination": {
+    "storeId": "store_C0EMhnU7DH3uSMaw",
+    "access": "private",
+    "prefix": "restore/skill-registry-proof-20260916-3fae894786d35e9b",
+    "manifest": [
+      {
+        "sourceKey": "sealed/0bdaa6145bfd189d9cf0509078d26071ff2db6f5f5b5984d",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/3f87bd312cd4c194637266aed50c85a4e4b9f47e3361a9ed",
+        "size": 24197,
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/251106746e877e531d405648c87b84c4fc6ccf4f8c1a162d",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/aedf69c99a79afef5f68f8c3c4427147fd7876225f7ec3bc",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/531f296573ead6f9fb2d0783fdb13300871d2652ae2e6f96",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/830fd8e99dcb1fba71210d9ff504ce2cea0b1c3728fb118c",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/56a3d93a7bee312a5c98d813070c20bfecde27eb2c328e43",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/b745210848da14232edf4ec26116f2acd696b09b03b967c1",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/8726fdc1c53e84cbb7c55a4a2487243b43ff41f51be1ef17",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/a47be60f1d3c66b54c92ced691eef5971185ec7291b07c86",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/89d5ca09353263cc5c5346bc4ad7a450e59ab48c3838c417",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/50b654b4d7d38c3b7b6d3fb0140ae464fb37c5c6258ad0ff",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/e620152d0cc87a634f72651fdbb16f660972f02b970d6626",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/8d7c5088605b91bb6d486305f32366dbccf4d695ca7fb919",
+        "size": 325,
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/f02d3dba0936d9a1fd964b7a89c52399650ecad070c4a4ad",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/2ae9f0decaa7c1ffb439b2a9ed36471d06df1af16749778d",
+        "size": 483,
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/f446dfdc3477bbe2655f09880f9e898f1db79a55b11fb150",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/46dddd3f4181eea278287b89f63ecb1605fc00abf1e413f2",
+        "size": 7369,
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/fa97b4042ddc96eeb9a10c5bf147969aa2d159007a018862",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/e6f3b33c3e00dfac63a6e7c8fb246feb1c682b21eb3962c2",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      },
+      {
+        "sourceKey": "sealed/fbe98825fda9037b5eb2ddb4e9922653d8db1db2403e3304",
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/1c3224897f5a30133b73285f9c8d534282309f7e5d90fcd4",
+        "size": 309,
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "put": "passed",
+        "getVerified": "passed",
+        "exactBytes": true
+      }
+    ],
+    "independentReadback": [
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/3f87bd312cd4c194637266aed50c85a4e4b9f47e3361a9ed",
+        "size": 24197,
+        "digest": "sha256:a33611ad01b5eaba4d70854f945611881a148f4aafb88772751858c1edd4ba78",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/aedf69c99a79afef5f68f8c3c4427147fd7876225f7ec3bc",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/830fd8e99dcb1fba71210d9ff504ce2cea0b1c3728fb118c",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/b745210848da14232edf4ec26116f2acd696b09b03b967c1",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/a47be60f1d3c66b54c92ced691eef5971185ec7291b07c86",
+        "size": 325,
+        "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/50b654b4d7d38c3b7b6d3fb0140ae464fb37c5c6258ad0ff",
+        "size": 487,
+        "digest": "sha256:8242faebc3007ee0a1dee7f47ad2451c4efdf3efc0be2893c711a695f43648e2",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/8d7c5088605b91bb6d486305f32366dbccf4d695ca7fb919",
+        "size": 325,
+        "digest": "sha256:0aea8c55da64f17181feb9c92abaa89021ee133e771b2023886ca4f939b2e49b",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/2ae9f0decaa7c1ffb439b2a9ed36471d06df1af16749778d",
+        "size": 483,
+        "digest": "sha256:a199b0366e283815a0ca094f13b44828f76bca908a0fa8b4671c16a6257005be",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/46dddd3f4181eea278287b89f63ecb1605fc00abf1e413f2",
+        "size": 7369,
+        "digest": "sha256:da17bbac6d7e8ae70aa49cc47794dabd1621118ed9f6bb86a812d3328b83ca00",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/e6f3b33c3e00dfac63a6e7c8fb246feb1c682b21eb3962c2",
+        "size": 1717,
+        "digest": "sha256:700a9450535b6ae3dd21cd4ec453148deb1fed25c97fcd8dd5d749e46e0bacb4",
+        "exactBytes": true,
+        "getVerified": "passed"
+      },
+      {
+        "destinationKey": "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/1c3224897f5a30133b73285f9c8d534282309f7e5d90fcd4",
+        "size": 309,
+        "digest": "sha256:d856e770b76f671c4500d66e02de441a82ba9a1bc1f4b7aeaae548005121c534",
+        "exactBytes": true,
+        "getVerified": "passed"
+      }
+    ],
+    "list": {
+      "count": 11,
+      "totalBytes": 37741,
+      "hasMore": false,
+      "keys": [
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/1c3224897f5a30133b73285f9c8d534282309f7e5d90fcd4",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/2ae9f0decaa7c1ffb439b2a9ed36471d06df1af16749778d",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/3f87bd312cd4c194637266aed50c85a4e4b9f47e3361a9ed",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/46dddd3f4181eea278287b89f63ecb1605fc00abf1e413f2",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/50b654b4d7d38c3b7b6d3fb0140ae464fb37c5c6258ad0ff",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/830fd8e99dcb1fba71210d9ff504ce2cea0b1c3728fb118c",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/8d7c5088605b91bb6d486305f32366dbccf4d695ca7fb919",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/a47be60f1d3c66b54c92ced691eef5971185ec7291b07c86",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/aedf69c99a79afef5f68f8c3c4427147fd7876225f7ec3bc",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/b745210848da14232edf4ec26116f2acd696b09b03b967c1",
+        "restore/skill-registry-proof-20260916-3fae894786d35e9b/sealed/e6f3b33c3e00dfac63a6e7c8fb246feb1c682b21eb3962c2"
+      ]
+    },
+    "exactByteReadback": true,
+    "sourceObjectsUntouched": true
+  },
+  "bounds": {
+    "maxSourceObjects": 14,
+    "maxSourceTotalBytes": 20971520,
+    "sourceObjectCount": 14,
+    "sourceTotalBytes": 8112930,
+    "copiedNonCliObjectCount": 11,
+    "copiedNonCliTotalBytes": 37741
+  },
+  "providerProof": {
+    "adapter": "files-sdk/vercel-blob",
+    "filesSdkVersion": "2.4.0",
+    "credentialReference": "BLOB_READ_WRITE_TOKEN (targeted production env reference; value omitted)",
+    "credentialUsedInProcessOnly": true,
+    "privateAccessForced": true,
+    "destinationReadbackUsedFreshClient": true
+  },
+  "mutationBoundary": {
+    "sourceWrites": "not-run",
+    "destinationWrites": "fresh-prefix-only",
+    "deletion": "not-run",
+    "lifecycleChanges": "not-run",
+    "productionConfigChanges": "not-run",
+    "aliasChanges": "not-run",
+    "deployment": "not-run"
+  },
+  "limits": [
+    "Storage-only object manifest and private-prefix copy; no PostgreSQL snapshot or transaction fence was used.",
+    "The non-CLI set is classified by exclusion from the three known CLI asset keys and is not a DB-linked registry inventory.",
+    "Source list and digest rechecks detect key, size, deletion, and content drift during this bounded operation; this is not a whole-database consistency claim.",
+    "CLI assets remain in the source prefix and were not copied into the restore prefix."
+  ],
+  "redaction": {
+    "credentialsIncluded": false,
+    "privateUrlsIncluded": false,
+    "objectBytesIncluded": false,
+    "fullEnvironmentExported": false
+  }
+}
