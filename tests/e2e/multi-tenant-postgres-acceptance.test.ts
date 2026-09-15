@@ -15,6 +15,8 @@ import { createReviewPersistenceService } from '../../packages/reviews/src/index
 import { StateSemanticIndex } from '../../packages/search/src/index.js';
 import { createIntelligenceHandler, type IntelligenceHandler } from '../../packages/intelligence/src/handler.js';
 import type { EmbeddingProvider } from '../../packages/intelligence/src/embeddings.js';
+import { SourceCatalogClient } from '../../packages/source-catalog/src/client.js';
+import type { SourceCatalogAdapter, SourceResolution } from '../../packages/source-catalog/src/types.js';
 import { createNodeFilesSdkBlobStore } from '../../packages/storage/src/node.js';
 import type {
   InstallAuthorization,
@@ -59,6 +61,12 @@ interface TenantRuntime {
   readonly repository: PostgresStateRepository;
   readonly blobs: Awaited<ReturnType<typeof createNodeFilesSdkBlobStore>>;
   readonly close: () => Promise<void>;
+}
+
+interface SourceCatalogFixture {
+  readonly catalog: SourceCatalogClient;
+  readonly searches: string[];
+  readonly resolves: string[];
 }
 
 interface PublishedFixture {
@@ -175,6 +183,57 @@ function presentedToken(request: Request): string | undefined {
   return bearerValue ?? request.headers.get('x-pskills-reviewer-token') ?? undefined;
 }
 
+function sourceCatalogFixture(): SourceCatalogFixture {
+  const searches: string[] = [];
+  const resolves: string[] = [];
+  const adapter: SourceCatalogAdapter = {
+    id: 'fixture-source',
+    label: 'Tenant fixture source',
+    capabilities: ['search', 'resolve'],
+    configRevision: 'fixture-source-v1',
+    availability: () => ({ state: 'available' }),
+    search: async ({ organizationId, query }) => {
+      searches.push(`${organizationId}:${query}`);
+      return [{
+        sourceId: 'fixture-source',
+        externalId: 'shared-source',
+        title: `Shared source for ${organizationId}`,
+        version: '1.0.0',
+        installable: true,
+        metadata: { owningCompany: organizationId },
+      }];
+    },
+    resolve: async ({ organizationId, externalId }): Promise<SourceResolution> => {
+      resolves.push(`${organizationId}:${externalId}`);
+      const row = {
+        sourceId: 'fixture-source' as const,
+        externalId,
+        title: `Shared source for ${organizationId}`,
+        version: '1.0.0',
+        installable: true,
+        metadata: { owningCompany: organizationId },
+      };
+      return {
+        sourceId: 'fixture-source',
+        externalId,
+        row,
+        reference: `fixture/${organizationId}/${externalId}`,
+        title: row.title,
+        version: row.version,
+        acquisition: {
+          kind: 'registry',
+          baseUrl: 'https://source.example.test',
+          package: `${organizationId}/shared-source`,
+          version: row.version,
+        },
+        configRevision: 'fixture-source-v1:enabled:',
+        resolvedAt: '2026-09-16T00:00:00.000Z',
+      };
+    },
+  };
+  return { catalog: new SourceCatalogClient({ adapters: [adapter] }), searches, resolves };
+}
+
 /**
  * Compose two real Request handlers behind a request-context fixture. The
  * durable registry state is one PostgreSQL table with one row per company;
@@ -182,7 +241,7 @@ function presentedToken(request: Request): string | undefined {
  * authenticated. The fixture uses local bootstrap credentials only and never
  * contacts an external provider.
  */
-async function createTenantRuntime(): Promise<TenantRuntime> {
+async function createTenantRuntime(sourceCatalog?: SourceCatalogClient): Promise<TenantRuntime> {
   if (!DATABASE_URL) throw new Error('PSKILLS_TEST_POSTGRES_URL is required');
   const sql = postgres(DATABASE_URL, { max: 8, prepare: false });
   const tableName = `private_skills_l10_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -247,7 +306,13 @@ async function createTenantRuntime(): Promise<TenantRuntime> {
   ]);
 
   for (const organizationId of [TENANT_A, TENANT_B] as const) {
-    const registry = createRegistryHandler({ repository, blobs, auth, config: config(organizationId) });
+    const registry = createRegistryHandler({
+      repository,
+      blobs,
+      auth,
+      config: config(organizationId),
+      ...(sourceCatalog === undefined ? {} : { sourceCatalog }),
+    });
     const intelligence = reviewers.get(organizationId)!;
     registries.set(organizationId, async (incoming) => await intelligence(incoming) ?? registry(incoming));
   }
@@ -463,7 +528,8 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
   });
 
   it('keeps populated skills, packs, files, drafts, imports, scans, downloads, search, analytics, tokens, and Eve callbacks tenant-scoped', async () => {
-    const runtime = await createTenantRuntime();
+    const source = sourceCatalogFixture();
+    const runtime = await createTenantRuntime(source.catalog);
     cleanups.push(runtime.close);
 
     const [tenantA, tenantB] = await Promise.all([
@@ -480,6 +546,29 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
     expect(tenantA.skill.artifact.digest).toBe(tenantB.skill.artifact.digest);
     expect(tenantA.skill.artifact.key).not.toBe(tenantB.skill.artifact.key);
     expect(importA.skill.artifact.digest).not.toBe(importB.skill.artifact.digest);
+
+    const foreignDetail = await runtime.request(request(`/v1/skills/${encodeURIComponent(tenantA.skill.id)}`, {
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(foreignDetail.status).toBe(404);
+    expect(await foreignDetail.text()).not.toContain(tenantA.skill.artifact.digest);
+    const foreignRescan = await runtime.request(request(`/v1/skills/${encodeURIComponent(tenantA.skill.id)}/rescan`, {
+      method: 'POST',
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(foreignRescan.status).toBe(404);
+    expect(await foreignRescan.text()).not.toContain(tenantA.skill.artifact.digest);
+    const foreignRevoke = await runtime.request(request(`/v1/skills/${encodeURIComponent(tenantA.skill.id)}/revoke`, {
+      method: 'POST',
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(foreignRevoke.status).toBe(404);
+    expect(await foreignRevoke.text()).not.toContain(tenantA.skill.artifact.digest);
+    const ownerDetail = await runtime.request(request(`/v1/skills/${encodeURIComponent(tenantA.skill.id)}`, {
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+    }));
+    expect(ownerDetail.status).toBe(200);
+    expect((await body<{ skill: SkillVersion }>(ownerDetail)).skill.state).toBe('approved');
 
     const listA = await runtime.request(request('/v1/skills?q=shared-tenant-skill', {
       headers: bearer(USER_A_TOKEN, TENANT_A),
@@ -544,6 +633,18 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
       headers: bearer(USER_B_TOKEN, TENANT_B),
     }));
     expect(foreignPack.status).toBe(404);
+    const foreignMemberPack = await runtime.request(jsonRequest('/v1/packs', {
+      method: 'POST',
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+      json: {
+        name: '@acme/foreign-member-pack',
+        version: '1.0.0',
+        description: 'Foreign member attempt',
+        skills: [{ ref: tenantA.skill.id, version: tenantA.skill.version }],
+      },
+    }));
+    expect(foreignMemberPack.status).toBe(409);
+    expect(await foreignMemberPack.text()).not.toContain(tenantA.skill.artifact.digest);
 
     type DraftView = { id: string; revision: number; digest: string; files: Array<{ path: string }> };
     const createDraft = async (organizationId: TenantId, userToken: string, skill: SkillVersion, label: string): Promise<{ created: DraftView; updated: DraftView }> => {
@@ -586,6 +687,26 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
       headers: bearer(USER_B_TOKEN, TENANT_B),
     }));
     expect(foreignDraftFile.status).toBe(404);
+    const foreignDraftUpdateHeaders = bearer(USER_B_TOKEN, TENANT_B);
+    foreignDraftUpdateHeaders.set('idempotency-key', 'draft-foreign-update');
+    const foreignDraftUpdate = await runtime.request(jsonRequest(`/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, {
+      method: 'PUT',
+      headers: foreignDraftUpdateHeaders,
+      json: {
+        expectedRevision: 2,
+        files: bundleFor(tenantA.skill.skillName, 'Foreign draft overwrite').files,
+      },
+    }));
+    expect(foreignDraftUpdate.status).toBe(404);
+    const draftAfterForeignUpdate = await runtime.request(request(`/v1/drafts/${encodeURIComponent(draftA.updated.id)}`, {
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+    }));
+    expect(draftAfterForeignUpdate.status).toBe(200);
+    expect((await body<{ draft: DraftView }>(draftAfterForeignUpdate)).draft).toMatchObject({
+      id: draftA.updated.id,
+      revision: 2,
+      digest: draftA.updated.digest,
+    });
 
     // The source import is completed with an inline deterministic bundle. The
     // configured fixture URL is never fetched, so this remains a local test.
@@ -593,6 +714,16 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
       headers: bearer(USER_B_TOKEN, TENANT_B),
     }));
     expect(foreignOperation.status).toBe(404);
+    const upstreamsA = await runtime.request(request('/v1/upstreams', {
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+    }));
+    const upstreamsB = await runtime.request(request('/v1/upstreams', {
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(upstreamsA.status).toBe(200);
+    expect(upstreamsB.status).toBe(200);
+    expect((await body<{ upstreams: Array<{ name: string }> }>(upstreamsA)).upstreams.map((upstream) => upstream.name)).toEqual(['source-a']);
+    expect((await body<{ upstreams: Array<{ name: string }> }>(upstreamsB)).upstreams.map((upstream) => upstream.name)).toEqual(['source-b']);
     const scansA = await runtime.request(request(`/v1/scans?artifactDigest=${encodeURIComponent(importA.skill.artifact.digest)}`, {
       headers: bearer(USER_A_TOKEN, TENANT_A),
     }));
@@ -719,6 +850,26 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
     expect(evePrepare.status).toBe(200);
     const prepared = await body<{ runId: string; leaseToken: string; candidates: Array<{ resourceId: string }> }>(evePrepare);
     expect(prepared.candidates.map((candidate) => candidate.resourceId)).toEqual(expect.arrayContaining([tenantA.skill.id, importA.skill.id]));
+    const eveMixedTenantComplete = await runtime.request(jsonRequest('/internal/reviewer/complete', {
+      method: 'POST',
+      headers: bearer(EVE_A_TOKEN, TENANT_A),
+      json: {
+        runId: prepared.runId,
+        leaseToken: prepared.leaseToken,
+        summary: 'Cross-company candidate attempt',
+        suggestions: [{
+          skillIds: [tenantA.skill.id, importB.skill.id],
+          title: 'Foreign candidate attempt',
+          rationale: 'This proposal must not cross company boundaries.',
+          overlap: ['The records belong to different companies.'],
+          differences: ['The records belong to different companies.'],
+          mergePlan: ['Reject the cross-company proposal.'],
+          similarity: 0.8,
+        }],
+      },
+    }));
+    expect(eveMixedTenantComplete.status).toBe(400);
+    expect(await eveMixedTenantComplete.text()).not.toContain(importB.skill.artifact.digest);
     const eveComplete = await runtime.request(jsonRequest('/internal/reviewer/complete', {
       method: 'POST',
       headers: bearer(EVE_A_TOKEN, TENANT_A),
@@ -750,6 +901,10 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
       json: { model: 'fixture-eve' },
     }));
     expect(eveBOnA.status).toBe(403);
+    const eveOnRegistry = await runtime.request(request('/v1/skills', {
+      headers: bearer(EVE_A_TOKEN, TENANT_A),
+    }));
+    expect(eveOnRegistry.status).toBe(401);
     const reviewsB = await runtime.request(request('/v1/reviews', {
       headers: bearer(USER_B_TOKEN, TENANT_B),
     }));
@@ -812,5 +967,67 @@ local('PostgreSQL multi-tenant acceptance boundary', () => {
     const persistedSearchB = (stateB as typeof stateB & { search?: { documents: Array<{ organizationId: string }> } }).search;
     expect(persistedSearchA?.documents.map((document) => document.organizationId)).toEqual([TENANT_A, TENANT_A]);
     expect(persistedSearchB?.documents.map((document) => document.organizationId)).toEqual([TENANT_B, TENANT_B]);
+
+    const sourceListA = await runtime.request(request('/v1/sources', {
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+    }));
+    const sourceListB = await runtime.request(request('/v1/sources', {
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(sourceListA.status).toBe(200);
+    expect(sourceListB.status).toBe(200);
+    expect((await body<{ sources: Array<{ id: string; availability: { state: string } }> }>(sourceListA)).sources).toEqual([
+      expect.objectContaining({ id: 'fixture-source', availability: { state: 'available' } }),
+    ]);
+    expect((await body<{ sources: Array<{ id: string; availability: { state: string } }> }>(sourceListB)).sources).toEqual([
+      expect.objectContaining({ id: 'fixture-source', availability: { state: 'available' } }),
+    ]);
+    const sourceHeaderSpoof = await runtime.request(request('/v1/sources', {
+      headers: bearer(USER_A_TOKEN, TENANT_B),
+    }));
+    expect(sourceHeaderSpoof.status).toBe(403);
+
+    const sourceSearchA = await runtime.request(request('/v1/sources/search?q=shared&source=fixture-source', {
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+    }));
+    const sourceSearchB = await runtime.request(request('/v1/sources/search?q=shared&source=fixture-source', {
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(sourceSearchA.status).toBe(200);
+    expect(sourceSearchB.status).toBe(200);
+    expect((await body<{ data: Array<{ title: string; metadata?: { owningCompany?: string } }> }>(sourceSearchA)).data).toEqual([
+      expect.objectContaining({ title: `Shared source for ${TENANT_A}`, metadata: { owningCompany: TENANT_A } }),
+    ]);
+    expect((await body<{ data: Array<{ title: string; metadata?: { owningCompany?: string } }> }>(sourceSearchB)).data).toEqual([
+      expect.objectContaining({ title: `Shared source for ${TENANT_B}`, metadata: { owningCompany: TENANT_B } }),
+    ]);
+
+    const sourceResolveA = await runtime.request(jsonRequest('/v1/sources/fixture-source/resolve', {
+      method: 'POST',
+      headers: bearer(USER_A_TOKEN, TENANT_A),
+      json: { externalId: 'shared-source' },
+    }));
+    const sourceResolveB = await runtime.request(jsonRequest('/v1/sources/fixture-source/resolve', {
+      method: 'POST',
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+      json: { externalId: 'shared-source' },
+    }));
+    expect(sourceResolveA.status).toBe(202);
+    expect(sourceResolveB.status).toBe(202);
+    const sourceOperationA = (await body<{ operation: { id: string } }>(sourceResolveA)).operation;
+    const sourceOperationB = (await body<{ operation: { id: string } }>(sourceResolveB)).operation;
+    expect(sourceOperationA.id).not.toBe(sourceOperationB.id);
+    expect(source.resolves).toEqual(expect.arrayContaining([
+      `${TENANT_A}:shared-source`,
+      `${TENANT_B}:shared-source`,
+    ]));
+    expect(source.searches).toEqual(expect.arrayContaining([
+      `${TENANT_A}:shared`,
+      `${TENANT_B}:shared`,
+    ]));
+    const foreignSourceOperation = await runtime.request(request(`/v1/operations/${encodeURIComponent(sourceOperationA.id)}`, {
+      headers: bearer(USER_B_TOKEN, TENANT_B),
+    }));
+    expect(foreignSourceOperation.status).toBe(404);
   });
 });
