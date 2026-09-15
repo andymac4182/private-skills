@@ -81,10 +81,11 @@ PostgreSQL/object-storage restore fence remain separate gates.
 
 The [Vercel entitlement readback](../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
 records the current Hobby/Fluid account. The candidate's 615-second function
-budget does not match the configured 5/15-minute cron schedule, so the user's
-Pro-versus-adaptation decision remains open. Real provider callbacks, hosted
-secrets, hosted tenant migration/restore, worker/scanner bindings, and
-commercial gates remain open.
+budget exceeds Hobby's 300-second maximum. Independently, its 5- and 15-minute
+cron schedules exceed Hobby's daily cron minimum. The user's Pro-versus-
+adaptation decision remains open. Real provider callbacks, hosted secrets,
+hosted tenant migration/restore, worker/scanner bindings, and commercial gates
+remain open.
 
 ## Remaining work count — 16 September 2026
 
@@ -199,7 +200,7 @@ remaining hosted application journey.
 
 | Owner | Requirement and observable acceptance | Authoritative evidence | Status at production main 884992f / candidate 9e5d075 / target |
 | --- | --- | --- | --- |
-| Hosting/Operations | **Hosting decision:** use the existing Vercel Pro + Nitro Node path for launch where configured: Neon PostgreSQL, Files SDK object storage, durable PostgreSQL jobs, bounded Vercel Sandbox scanning, and AI/Eve provider settings. Keep S3/R2 and other Nitro profiles as portability seams, not Friday migrations. | `docs/business/hosting-review.md`, `docs/implementation.md`, `docs/operations.md`, `vercel.json`, `docs/evidence/vercel-entitlement-readonly-20260915T225659Z.json`, and the final deployment record. | **External decision open:** the readback shows the current team is Hobby with Fluid enabled, while the candidate applies a 615-second function budget against a 5/15-minute cron schedule. Hosting review/cost model and PR #59 deployments are recorded, but Pro versus adaptation, capacity, exact hosted origin, and hosted acceptance remain open, 18 Sep. |
+| Hosting/Operations | **Hosting decision:** use the existing Vercel Pro + Nitro Node path for launch where configured: Neon PostgreSQL, Files SDK object storage, durable PostgreSQL jobs, bounded Vercel Sandbox scanning, and AI/Eve provider settings. Keep S3/R2 and other Nitro profiles as portability seams, not Friday migrations. | `docs/business/hosting-review.md`, `docs/implementation.md`, `docs/operations.md`, `vercel.json`, `docs/evidence/vercel-entitlement-readonly-20260915T225659Z.json`, and the final deployment record. | **External decision open:** the readback shows the current team is Hobby with Fluid enabled. Independently, the candidate's 615-second function budget exceeds Hobby's 300-second maximum, and its 5- and 15-minute cron schedules exceed Hobby's daily cron minimum. Hosting review/cost model and PR #59 deployments are recorded, but Pro versus adaptation, capacity, exact hosted origin, and hosted acceptance remain open, 18 Sep. |
 | Hosting/Operations | **Configuration and secrets:** production has explicit Better Auth secret/base URL/callback origins, database and storage bindings, worker/cron credentials, immutable scanner references, deny-all scanner networking, model/provider config, and bounded request/storage settings. No secret appears in source, health, browser config, logs, or evidence. | `.env.example`, `docs/identity.md`, `docs/operations.md`, hosting env readback with values redacted, and secret-scan output. | Identity/provider env contract exists in the integrated root `.env.example`, `docs/identity.md`, and Node infrastructure. Production identity readback is explicitly disabled with `providers: []`; provider wiring, secret bindings, and redacted deployment readback remain open, 18 Sep. |
 | Hosting/Operations + Identity | **Migration/rollback:** run the reviewed Better Auth migration before accepting traffic, record schema/revision/backup manifest, quiesce or fence concurrent mutations, verify row counts/digests/object references, and demonstrate rollback or a documented forward-fix when down-migration is unsafe. | `docs/identity-company-sso.md`, `docs/identity.md`, `docs/restore-rehearsal.md`, `docs/full-postgres-backup-recovery.md`, `docs/evidence/full-postgres-backup-recovery-20260916.json`, `docs/evidence/billing-hosted-migration-plan-20260916.json`, `tests/operations-postgres-rehearsal.test.ts`. | **Bounded source/restore and plan slices complete:** the read-only production PostgreSQL snapshot restored into an isolated target with 14-table/row/digest matches (`38915216`), and the billing plan's 5-relation baseline is ready. A guarded hosted apply may be in progress, but no result is accepted until its independent post-apply readback; Blob/provider state, explicit default adoption, rollback, and coordinated tenant-wide restore/fence remain open, 17–18 Sep. |
 | Hosting/Operations | **Runtime proof:** the target origin serves the current release and an authenticated browser/CLI flow. `/health` is nonsecret; hosted positive publish → required scan → approval → transfer → CLI install and negative revoked/stale/foreign-company checks are recorded against the same deployment. | `docs/verification-current.md`, `docs/evidence/production-release-reader-ui-884992f-20260916.json`, `docs/evidence/hosted-cli-v0.4.0-private-provision-20260916.json`, deployment URL/source/deployment IDs, and the tenant acceptance evidence bundle. | **Public production slice complete; hosted application flow open:** PR #59 has all four deployments READY at `884992f` with public health/route readbacks and identity disabled (`providers: []`). Private archive provisioning/readback is separately verified for all three v0.4.0 assets. Authenticated hosted multi-company positive flow and negative stale/revoked/foreign-company checks remain open, 18 Sep. |
@@ -337,30 +338,45 @@ remain labeled at their own boundaries.
 
 **Hosted-pending engineering work:**
 
-- Mount the current tenant runtime, Better Auth provider callbacks, required
-  scan, worker/Eve audiences, source/cache controls, and billing routes in one
-  selected deployment, then record an authenticated two-company browser/CLI
-  flow with stale/revoked/foreign-company negatives. The local matrix and
-  browser proof do not substitute for this hosted flow.
-- Apply the reviewed billing schema only through its explicit operator guard,
-  then capture independent post-apply shape/row readback and the
-  migration/backup/rollback fence. The [billing migration plan](../evidence/billing-hosted-migration-plan-20260916.json)
+- Bind the Better Auth provider callbacks, outer tenant router, required scan,
+  worker/Eve audiences, source/cache controls, and billing routes in one
+  selected deployment. Run the existing authenticated two-company browser/CLI
+  flow, including role/switch/revocation, stale/revoked/foreign-company
+  negatives, and the same-deployment publish → scan → approval → install path;
+  the local matrix and browser proof are the starting fixtures, not hosted
+  closure.
+- Run the reviewed billing schema through
+  `packages/billing/scripts/prepare-hosted-migration.ts` and its explicit
+  operator guard. Capture independent post-apply shape/row readback, then
+  record the migration/backup/rollback fence. The [billing migration plan](../evidence/billing-hosted-migration-plan-20260916.json)
   is ready; its accepted checkpoint still records five absent relations and no
   verified hosted DDL result.
-- Complete coordinated PostgreSQL/Blob recovery and provider-finality checks,
-  usage/ledger recovery, worker capacity and monitoring, callback/device caps,
-  and provider/secret readback. The source snapshot and Blob receipt records
-  are bounded evidence only; they do not prove this coordinated gate.
-- Decide whether the current Hobby/Fluid entitlement can support the 615-second
-  function budget and cron schedule or whether Pro/adaptation is required. Run
-  native platform qualification where support is claimed; Windows remains
-  unverified and Linux evidence is emulated.
+- Reproduce and close the existing billing/storage recovery gaps before the
+  final combined run: owner fencing on generic resolve/queue paths, worker
+  pre-scan release with delayed duplicate work, `StorageAttempt` pending/orphan
+  reconciliation with stable object identity, concurrent resume marker loss,
+  concurrent draft reservations leaving committed and orphan rows, and actual
+  ledger `restoreUsage`. Rerun the focused PostgreSQL suites and the full
+  candidate validation after each fix; do not treat the bounded local counts as
+  recovery closure.
+- Execute the coordinated PostgreSQL/Blob recovery and provider-finality proof,
+  including object state, tenant scope, negative retention, worker capacity and
+  monitoring, callback/device caps, and redacted provider/secret readback. The
+  production snapshot and 177-byte receipt records are bounded evidence only.
+- Deploy the pending public contrast/claim follow-up, verify the nine-route
+  marketing and docs-led browser pass against PR #59, and keep public pricing
+  aligned with the server catalog before enabling any paid CTA. Run native
+  platform qualification where support is claimed; Windows remains unverified
+  and Linux evidence is emulated.
 
 **External decisions:** the [Vercel entitlement readback](../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
-does not choose Pro or authorize a plan change. The user still owns the brand
-and domain choice, real OAuth/customer provider credentials, legal entity and
-support inputs, final offer, and hosted account approvals. Stripe remains the
-last activation step; the local billing adapter is not a live payment account.
+does not choose Pro or authorize a plan change. Hobby's 300-second function
+maximum and daily cron minimum are separate constraints; the candidate's
+615-second function budget and 5-/15-minute schedules exceed them independently.
+The user still owns the brand and domain choice, real OAuth/customer provider
+credentials, legal entity and support inputs, final offer, and hosted account
+approvals. Stripe remains the last activation step; the local billing adapter
+is not a live payment account.
 
 **Future scope:** preserve the later MCP, editor, OpenClaw, SCIM, residency,
 custom-domain, broad marketplace/source, organization-erasure, and
