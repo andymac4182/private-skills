@@ -58,11 +58,16 @@ export default defineTool({
         {
           runId: current.runId,
           leaseToken: current.leaseToken,
+          eveSessionId: ctx.session.id,
           summary: input.summary,
           suggestions: input.suggestions,
         },
         completionResponse,
         ctx.abortSignal,
+        {
+          session: ctx.session,
+          binding: { sessionId: ctx.session.id, runId: current.runId },
+        },
       );
     } catch (error) {
       reviewState.update((state) => state.invocation ? {

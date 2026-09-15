@@ -4,6 +4,10 @@ import type {
   Role,
 } from '../../../packages/contracts/src/index.js';
 import type { RegistryHandler } from '../../../packages/core/src/index.js';
+import type {
+  EveTenantDelegationBinding,
+  EveTenantService,
+} from '../../../packages/eve-tenant/src/index.js';
 
 /**
  * A tenant selection returned by the identity boundary after authentication
@@ -385,13 +389,54 @@ function principalForSelection(principal: Principal, selection: VerifiedTenantSe
 }
 
 function clonePrincipal(principal: Principal): Principal {
+  const extended = principal as Principal & {
+    authMethod?: unknown;
+    eveTenant?: unknown;
+  };
+  const eveTenant = cloneEveTenantMetadata(extended.eveTenant);
   return {
     organizationId: principal.organizationId,
     subject: principal.subject,
     roles: [...principal.roles],
     ...(principal.namespaces === undefined ? {} : { namespaces: [...principal.namespaces] }),
     ...(principal.scopes === undefined ? {} : { scopes: [...principal.scopes] }),
+    ...(typeof extended.authMethod === 'string' ? { authMethod: extended.authMethod } : {}),
+    ...(eveTenant === undefined ? {} : { eveTenant }),
   };
+}
+
+function cloneEveTenantMetadata(value: unknown): {
+  service: EveTenantService;
+  serviceIdentity: string;
+  delegationId: string;
+  binding?: EveTenantDelegationBinding;
+} | undefined {
+  if (!isRecord(value) ||
+      (value.service !== 'upload-reviewer' && value.service !== 'skill-builder' && value.service !== 'consolidation-reviewer') ||
+      typeof value.serviceIdentity !== 'string' || typeof value.delegationId !== 'string') {
+    return undefined;
+  }
+  const binding = isRecord(value.binding)
+    ? {
+      ...(typeof value.binding.sessionId === 'string' ? { sessionId: value.binding.sessionId } : {}),
+      ...(typeof value.binding.jobId === 'string' ? { jobId: value.binding.jobId } : {}),
+      ...(typeof value.binding.runId === 'string' ? { runId: value.binding.runId } : {}),
+      ...(typeof value.binding.registrySessionId === 'string' ? { registrySessionId: value.binding.registrySessionId } : {}),
+      ...(typeof value.binding.draftId === 'string' ? { draftId: value.binding.draftId } : {}),
+      ...(typeof value.binding.draftRevision === 'number' ? { draftRevision: value.binding.draftRevision } : {}),
+      ...(typeof value.binding.draftDigest === 'string' ? { draftDigest: value.binding.draftDigest } : {}),
+    } satisfies EveTenantDelegationBinding
+    : undefined;
+  return {
+    service: value.service,
+    serviceIdentity: value.serviceIdentity,
+    delegationId: value.delegationId,
+    ...(binding === undefined ? {} : { binding }),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function boundedOrganizationId(value: unknown): string {

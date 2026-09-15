@@ -87,6 +87,10 @@ export default defineTool({
         },
         (value) => prepareResponseSchema.parse(value),
         ctx.abortSignal,
+        {
+          session: ctx.session,
+          binding: { sessionId: ctx.session.id },
+        },
       );
     } catch (error) {
       setInvocationOutcome("request_failed");

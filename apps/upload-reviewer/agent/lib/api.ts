@@ -1,10 +1,24 @@
 import { registryEndpoint, uploadReviewToken } from './config.js';
+import {
+  createEveTenantServiceFromEnv,
+  requireEveTenantCaller,
+  type EveSessionAuthShape,
+  type EveTenantDelegationBinding,
+} from '../../../../packages/eve-tenant/src/index.js';
 
 const REQUEST_TIMEOUT_MS = 45_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 1_500_000;
 
 type JsonParser<T> = (value: unknown) => T;
+
+export interface UploadReviewerCallbackOptions {
+  readonly session?: {
+    readonly id: string;
+    readonly auth: EveSessionAuthShape;
+  };
+  readonly binding?: EveTenantDelegationBinding;
+}
 
 /** The status is retained for bounded, route-specific retry decisions. */
 export class UploadReviewApiError extends Error {
@@ -54,6 +68,7 @@ export async function postUploadReviewerJson<T>(
   body: Record<string, unknown>,
   parse: JsonParser<T>,
   signal: AbortSignal,
+  options: UploadReviewerCallbackOptions = {},
 ): Promise<T> {
   const encoded = JSON.stringify(body);
   if (new TextEncoder().encode(encoded).byteLength > MAX_REQUEST_BYTES) throw new Error('upload reviewer request exceeded the bounded size');
@@ -63,13 +78,10 @@ export async function postUploadReviewerJson<T>(
   if (signal.aborted) abort();
   else signal.addEventListener('abort', abort, { once: true });
   try {
+    const headers = await callbackHeaders(options);
     const response = await fetch(registryEndpoint(path), {
       method: 'POST',
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${uploadReviewToken()}`,
-        'content-type': 'application/json',
-      },
+      headers,
       body: encoded,
       redirect: 'error',
       signal: controller.signal,
@@ -88,4 +100,43 @@ export async function postUploadReviewerJson<T>(
     clearTimeout(timer);
     signal.removeEventListener('abort', abort);
   }
+}
+
+async function callbackHeaders(
+  options: UploadReviewerCallbackOptions,
+): Promise<Headers> {
+  const base = {
+    accept: 'application/json',
+    'content-type': 'application/json',
+  };
+  const active = options.session?.auth.current;
+  const tenantId = active?.attributes?.tenantId;
+  if (typeof tenantId !== 'string') {
+    if (active?.authenticator === 'pskills-eve-tenant-delegation') {
+      throw new Error('active tenant Eve caller has no tenant id');
+    }
+    return new Headers({ ...base, authorization: `Bearer ${uploadReviewToken()}` });
+  }
+  const caller = requireEveTenantCaller({ session: options.session! }, 'upload-reviewer');
+  const issuer = tenantIssuer();
+  const service = createEveTenantServiceFromEnv(process.env, {
+    issuer,
+    tenantId: caller.tenantId,
+    service: 'upload-reviewer',
+  });
+  if (!service) throw new Error('tenant Eve delegation is not configured');
+  const binding = {
+    ...caller.binding,
+    ...options.binding,
+  };
+  if (!binding.jobId) throw new Error('upload review callback is missing its job binding');
+  return service.headers(base, binding);
+}
+
+function tenantIssuer(): string {
+  const configured = process.env.PSKILLS_EVE_TENANT_DELEGATION_ISSUER?.trim();
+  if (configured) return configured;
+  const registry = process.env.PSKILLS_UPLOAD_REVIEW_REGISTRY_API_URL?.trim();
+  if (!registry) throw new Error('tenant Eve delegation issuer is not configured');
+  return new URL(registry).origin;
 }

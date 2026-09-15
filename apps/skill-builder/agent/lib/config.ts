@@ -4,6 +4,14 @@ import {
   SkillBuilderConfigurationError,
   SkillBuilderRegistryClient,
 } from "../../../../packages/skill-builder/src/index.js";
+import type {
+  BoundEveTenantService,
+  EveTenantDelegationBinding,
+} from "../../../../packages/eve-tenant/src/index.js";
+import {
+  bindEveTenantService,
+  createEveTenantCredentialProvider,
+} from "../../../../packages/eve-tenant/src/index.js";
 
 const DEFAULT_BUILDER_MODEL = "openai/gpt-5.5";
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/iu;
@@ -117,21 +125,22 @@ export function builderStatus(): BuilderStatus {
   if (!registryUrl) reasons.push("REGISTRY_URL_MISSING");
   else if (!registryUrlConfigured) reasons.push("REGISTRY_URL_INVALID");
   const registryTokenConfigured = validBoundedSecret("PSKILLS_BUILDER_REGISTRY_TOKEN");
-  if (!registryTokenConfigured) reasons.push("REGISTRY_TOKEN_MISSING");
+  const tenantDelegationConfigured = validTenantDelegationConfiguration();
+  if (!registryTokenConfigured && !tenantDelegationConfigured) reasons.push("REGISTRY_TOKEN_MISSING");
 
   const serviceConfigured = validBoundedSecret("PSKILLS_BUILDER_SERVICE_TOKEN");
-  if (!serviceConfigured) reasons.push("SERVICE_TOKEN_MISSING");
+  if (!serviceConfigured && !tenantDelegationConfigured) reasons.push("SERVICE_TOKEN_MISSING");
   const eveConfigured = validBoundedSecret("PSKILLS_BUILDER_EVE_API_TOKEN");
-  if (!eveConfigured) reasons.push("EVE_TOKEN_MISSING");
+  if (!eveConfigured && !tenantDelegationConfigured) reasons.push("EVE_TOKEN_MISSING");
 
   const enabled = !explicitlyDisabled && reasons.length === 0;
   return {
     enabled,
     ...(enabled && model ? { model } : {}),
     gatewayConfigured,
-    registryConfigured: registryUrlConfigured && registryTokenConfigured,
-    serviceConfigured,
-    eveConfigured,
+    registryConfigured: registryUrlConfigured && (registryTokenConfigured || tenantDelegationConfigured),
+    serviceConfigured: serviceConfigured || tenantDelegationConfigured,
+    eveConfigured: eveConfigured || tenantDelegationConfigured,
     reasonCodes: [...new Set(reasons)],
   };
 }
@@ -155,12 +164,56 @@ export function builderLanguageModel(): LanguageModel {
   return gateway.languageModel(status.model ?? builderModel());
 }
 
-export function registryClient(): SkillBuilderRegistryClient {
+export function registryClient(options: {
+  tenantService?: BoundEveTenantService;
+  tenantBinding?: EveTenantDelegationBinding;
+} = {}): SkillBuilderRegistryClient {
   assertBuilderEnabled();
   const baseUrl = nonEmptyEnv("PSKILLS_BUILDER_REGISTRY_API_URL");
   const serviceToken = nonEmptyEnv("PSKILLS_BUILDER_REGISTRY_TOKEN");
-  if (!baseUrl || !serviceToken) throw new SkillBuilderConfigurationError("builder registry credentials are not configured");
+  if (!baseUrl) throw new SkillBuilderConfigurationError("builder registry URL is not configured");
+  if (options.tenantService) {
+    return new SkillBuilderRegistryClient({
+      baseUrl,
+      tenantService: options.tenantService,
+      tenantBinding: options.tenantBinding,
+    });
+  }
+  if (!serviceToken) throw new SkillBuilderConfigurationError("builder registry credentials are not configured");
   return new SkillBuilderRegistryClient({ baseUrl, serviceToken });
+}
+
+export function validTenantDelegationConfiguration(): boolean {
+  const secret = nonEmptyEnv("PSKILLS_EVE_TENANT_DELEGATION_SECRET");
+  const issuer = nonEmptyEnv("PSKILLS_EVE_TENANT_DELEGATION_ISSUER");
+  const serviceIdentity = nonEmptyEnv("PSKILLS_EVE_TENANT_SERVICE_IDENTITY");
+  if (!secret || secret.length < 32 || /\s/u.test(secret) || !issuer || !serviceIdentity || /\s/u.test(serviceIdentity)) return false;
+  try {
+    const parsed = new URL(issuer);
+    return parsed.username === "" && parsed.password === "" && parsed.pathname === "/" && parsed.search === "" && parsed.hash === "" &&
+      (parsed.protocol === "https:" || (parsed.protocol === "http:" && isDevelopment() && LOOPBACK_HOSTS.has(parsed.hostname)));
+  } catch {
+    return false;
+  }
+}
+
+export function tenantBuilderService(tenantId: string): BoundEveTenantService {
+  if (!validTenantDelegationConfiguration()) {
+    throw new SkillBuilderConfigurationError("tenant Eve delegation is not configured");
+  }
+  const issuer = nonEmptyEnv("PSKILLS_EVE_TENANT_DELEGATION_ISSUER")!;
+  const secret = nonEmptyEnv("PSKILLS_EVE_TENANT_DELEGATION_SECRET")!;
+  const serviceIdentity = nonEmptyEnv("PSKILLS_EVE_TENANT_SERVICE_IDENTITY")!;
+  return bindEveTenantService(
+    createEveTenantCredentialProvider({
+      issuer,
+      secret,
+      serviceIdentity,
+      tenantId,
+      service: "skill-builder",
+    }),
+    { tenantId, service: "skill-builder" },
+  );
 }
 
 export function builderServiceToken(): string {

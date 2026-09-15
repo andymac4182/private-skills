@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createMemoryStateRepository, defaultRegistryState } from '../../database/src/index.js';
 import { createRegistryHandler } from '../src/index.js';
+import type { BuilderBffRuntime } from '../src/builder.js';
+import type { EveTenantDelegationBinding } from '../../eve-tenant/src/index.js';
 import { digestBytes } from '../../storage/src/index.js';
 import type {
   Authenticator,
@@ -139,7 +141,7 @@ interface Fixture {
   readonly eve: EveHarness;
 }
 
-function fixture(): Fixture {
+function fixture(runtime?: BuilderBffRuntime): Fixture {
   const state: RegistryState = defaultRegistryState({
     production: false,
     allowUnscanned: true,
@@ -159,7 +161,7 @@ function fixture(): Fixture {
       organizationId: ORGANIZATION,
       leaseSeconds: 30,
     },
-    builder: {
+    builder: runtime ?? {
       appOrigin: APP_ORIGIN,
       serviceToken: 'builder-service-token',
       eveToken: 'eve-session-token',
@@ -262,6 +264,50 @@ async function sessionState(test: Fixture, draft: { id: string; revision: number
 }
 
 describe('core skill builder Eve protocol boundary', () => {
+  it('uses one tenant-bound credential for the custom start and Eve session calls', async () => {
+    const bindings: Array<EveTenantDelegationBinding | undefined> = [];
+    const tenantService = {
+      tenantId: ORGANIZATION,
+      service: 'skill-builder' as const,
+      async credential(binding?: EveTenantDelegationBinding) {
+        bindings.push(binding);
+        return {
+          token: 'tenant-builder-token',
+          tenantId: ORGANIZATION,
+          service: 'skill-builder' as const,
+          serviceIdentity: 'registry-host',
+          expiresAt: Date.now() + 60_000,
+        };
+      },
+      async headers(init?: HeadersInit, binding?: EveTenantDelegationBinding) {
+        bindings.push(binding);
+        const headers = new Headers(init);
+        headers.set('authorization', 'Bearer tenant-builder-token');
+        return headers;
+      },
+    };
+    const base = fixture();
+    const dynamic = fixture({ appOrigin: APP_ORIGIN, tenantService, fetch: base.eve.fetch });
+    const draft = await createDraft(dynamic);
+    const sessionId = await createSession(dynamic, draft);
+    expect((await sendPrompt(dynamic, draft, sessionId)).status).toBe(202);
+    expect(bindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        registrySessionId: expect.any(String),
+        draftId: draft.id,
+        draftRevision: draft.revision,
+        draftDigest: draft.digest,
+      }),
+      expect.objectContaining({
+        registrySessionId: expect.any(String),
+        sessionId: 'eve-session-1',
+        draftId: draft.id,
+        draftRevision: draft.revision,
+        draftDigest: draft.digest,
+      }),
+    ]));
+  });
+
   it('correlates message deltas and completion by turn and step, despite distinct event ids', async () => {
     const test = fixture();
     test.eve.events = [
