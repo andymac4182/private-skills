@@ -74,3 +74,9 @@ Release increment `3809277` is in PR #52. Marketing preview ready; app/builder p
 Root inspected actual browser tab 18 at local 5407 on candidate e18ad47: Acme Candidate Demo / Alice Acme owner remained selected. Company operations rendered an empty queue, no releases, three enabled scanners, and explicit unavailable Eve/history and disabled billing states without a page error. Fresh-company SSO settings also loaded without the manual schema repair needed by the previous fixture. These are local fixture checks, not production Better Auth activation.
 
 Explicit token migration candidate 5ca2365 is held because inheriting the Better Auth custom schema changes existing token lookup from its prior public location. B27 tracks preserving existing access. B26 tracks a separate launch gap: authenticated customers need CLI acquisition without private source-repository access. Marketing research owner was reactivated for primary-source positioning and registrar-level domain availability/price checks; B14–B16 remain open.
+
+### Billing retention review and browser host pause
+
+Reviewed billing635d112. Seat subject/revision reconciliation is implemented, but root identified two remaining acceptance questions: active holds with no committed identity row require safe failed-write recovery, and newest-N usage-operation loading cannot be the authority for old-key idempotency. B28 records the exact durable-lookup/replay proof needed. Billing and Eve owners are coordinating; no billing candidate is integrated on this evidence alone.
+
+The token-display browser owner reports CUA host locked with automatic unlock paused. User unlock requested asynchronously. This pauses the browser-dependent proof only; no fixture session or production configuration was changed.
