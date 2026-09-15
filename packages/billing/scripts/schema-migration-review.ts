@@ -51,6 +51,7 @@ export interface BillingTableReadback {
     name: string;
     unique: boolean;
     primary: boolean;
+    columns: readonly string[];
     definition: string;
   }[];
 }
@@ -199,11 +200,17 @@ async function readTable(executor: SqlExecutor, schema: string, table: string, i
     name: string;
     unique: boolean;
     primary: boolean;
+    index_columns: readonly string[];
     definition: string;
   }>(executor, `
     SELECT index_class.relname AS name,
            index_info.indisunique AS unique,
            index_info.indisprimary AS primary,
+           ARRAY(
+             SELECT pg_catalog.pg_get_indexdef(index_info.indexrelid, key.ordinality, true)
+               FROM generate_series(1, index_info.indnkeyatts) AS key(ordinality)
+              ORDER BY key.ordinality
+           ) AS index_columns,
            pg_catalog.pg_get_indexdef(index_info.indexrelid) AS definition
       FROM pg_catalog.pg_index AS index_info
       JOIN pg_catalog.pg_class AS index_class ON index_class.oid = index_info.indexrelid
@@ -236,7 +243,13 @@ async function readTable(executor: SqlExecutor, schema: string, table: string, i
       ...(column.default_expression === null ? {} : { defaultExpression: column.default_expression }),
     })),
     constraints,
-    indexes,
+    indexes: indexes.map((index) => ({
+      name: index.name,
+      unique: index.unique,
+      primary: index.primary,
+      columns: Array.from(index.index_columns),
+      definition: index.definition,
+    })),
   };
 }
 
