@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.hosted-postgres-restore-physical-type-correction",
+  "observedAt": "2026-09-15T17:09:46.226Z",
+  "status": "verified",
+  "supersedes": {
+    "priorEvidenceCommit": "f081189",
+    "priorIssue": "the first local target evidence recorded semantic JSON only and did not record raw jsonb_typeof(state); the first physical-type repair attempt on port 55434 inserted a decoded native object and mismatched the production source representation",
+    "priorTargetPort": 55433,
+    "firstPhysicalRepairAttempt": {
+      "targetPort": 55434,
+      "sourceJsonbTypeObserved": "string",
+      "targetJsonbTypeObserved": "object",
+      "status": "physical-type-mismatch"
+    },
+    "intermediatePhysicalRepairAttempt": {
+      "targetPort": 55437,
+      "sourceJsonbTypeObserved": "string",
+      "targetJsonbTypeObserved": "string",
+      "exactSemanticStateDigest": true,
+      "exactJsonbTextDigest": false,
+      "status": "physical-type-mismatch"
+    }
+  },
+  "source": {
+    "table": "private_skills_registry_state",
+    "rowCount": 1,
+    "revision": 231,
+    "jsonbType": "string",
+    "sqlType": "jsonb",
+    "stateBytes": 2247761,
+    "stateDigest": "sha256:c98bd59acbdae1f3b8d4f4befb4beb70cef03252a2a484fd2da3a7b0e6d04bfd",
+    "stateJsonbTextDigest": "sha256:085a0f88bb98277581e26574343c0ecef6fb3af3ea952c56432f1346f2ddfba0",
+    "representationPreserved": true,
+    "snapshotConsistency": "one REPEATABLE READ READ ONLY transaction",
+    "dumpPathOutsideGit": "/private/tmp/private-skills-postgres-restore-proof-20260916/source-snapshot.json",
+    "rowContentsIncluded": false,
+    "organizationIdentifierIncluded": false
+  },
+  "localRestore": {
+    "target": "fresh loopback Docker PostgreSQL 16 Alpine container",
+    "targetPort": 55438,
+    "rowCountBefore": 0,
+    "rowCountAfter": 1,
+    "revision": 231,
+    "jsonbType": "string",
+    "sqlType": "jsonb",
+    "stateBytes": 2247761,
+    "stateDigest": "sha256:c98bd59acbdae1f3b8d4f4befb4beb70cef03252a2a484fd2da3a7b0e6d04bfd",
+    "stateJsonbTextDigest": "sha256:085a0f88bb98277581e26574343c0ecef6fb3af3ea952c56432f1346f2ddfba0",
+    "insertParameterMode": "to_jsonb-text-preserving-source-string",
+    "exactPhysicalType": true,
+    "exactState": true,
+    "exactRevision": true,
+    "exactSemanticStateDigest": true,
+    "exactJsonbTextDigest": true,
+    "productionDatabaseWrites": false
+  },
+  "proof": {
+    "sourceJsonbTypeProbe": "jsonb_typeof(state)",
+    "sourceSqlTypeProbe": "pg_typeof(state)::text",
+    "targetJsonbTypeProbe": "jsonb_typeof(state)",
+    "targetSqlTypeProbe": "pg_typeof(state)::text",
+    "targetReadbackTransaction": "REPEATABLE READ READ ONLY"
+  },
+  "mutationBoundary": {
+    "productionDatabaseDDL": "not-run",
+    "productionDatabaseDML": "not-run",
+    "productionBlobWrites": "not-run",
+    "productionBlobDeletes": "not-run",
+    "productionConfigChanges": "not-run",
+    "deployment": "not-run",
+    "localTargetSchemaDDL": "run-on-fresh-loopback-target-only",
+    "localTargetStateDML": "run-on-fresh-loopback-target-only"
+  },
+  "limits": [
+    "This correction proves the target preserves the production JSONB representation and complete state digest/text readback for the registry row only; the current production representation is recorded explicitly rather than assumed to be an object.",
+    "It does not add a provider pg_dump, cross-provider transaction fence, or whole-database consistency proof.",
+    "Blob integrity and registry-reference matching remain as recorded by hosted PostgreSQL proof f081189; production Better Auth remains disabled."
+  ],
+  "redaction": {
+    "rowContentsIncluded": false,
+    "identitiesIncluded": false,
+    "credentialsIncluded": false,
+    "privateUrlsIncluded": false,
+    "objectBytesIncluded": false,
+    "fullEnvironmentExported": false
+  }
+}
