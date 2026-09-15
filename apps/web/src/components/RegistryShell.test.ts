@@ -15,7 +15,7 @@ import type { AuthSession } from '../lib/types'
 
 const authState = vi.hoisted(() => ({
   error: null as string | null,
-  principal: null as { subject: string; roles: string[]; organizationId?: string } | null,
+  principal: null as { subject: string; roles: string[]; organizationId?: string; display?: { userName?: string; userEmail?: string; organizationName?: string; organizationSlug?: string } } | null,
   session: null as AuthSession | null,
   signOut: vi.fn(async () => {}),
   status: 'signed-out' as 'signed-out' | 'signed-in' | 'loading',
@@ -167,6 +167,52 @@ describe('RegistryShell auth return route', () => {
     expect(container.querySelector('.sidebar-account strong')?.textContent).toBe('Alice Example')
     expect(container.querySelector('.principal-chip')?.textContent).toContain('Alice Example')
     expect(container.textContent).not.toContain('user_opaque_7f2a')
+  })
+
+  it('uses server-derived labels for a persisted-token principal', async () => {
+    authState.status = 'signed-in'
+    authState.principal = {
+      subject: 'user_opaque_7f2a',
+      roles: ['reader'],
+      organizationId: 'org-opaque-42',
+      display: {
+        userName: 'Alice Example',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Skills',
+        organizationSlug: 'acme-skills',
+      },
+    }
+    authState.session = null
+
+    const rootRoute = createRootRoute({ component: () => createElement(Outlet) })
+    const appRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/app',
+      component: RegistryShell,
+    })
+    const catalogRoute = createRoute({
+      getParentRoute: () => appRoute,
+      path: '/catalog',
+      component: () => createElement('div', null, 'catalog'),
+    })
+    const testRouter = createRouter({
+      routeTree: rootRoute.addChildren([appRoute.addChildren([catalogRoute])]),
+      history: createMemoryHistory({ initialEntries: ['/app/catalog'] }),
+    })
+    await testRouter.load()
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(createElement(RouterProvider, { router: testRouter }))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+
+    expect(container.querySelector('.sidebar-account strong')?.textContent).toBe('Alice Example')
+    expect(container.querySelector('.principal-chip')?.textContent).toContain('Alice Example')
+    expect(container.textContent).not.toContain('user_opaque_7f2a')
+    expect(container.textContent).not.toContain('org-opaque-42')
   })
 
   it('opens a focus-trapped mobile drawer and restores the menu trigger on close', async () => {

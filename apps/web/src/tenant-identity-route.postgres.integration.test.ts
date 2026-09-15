@@ -283,7 +283,18 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
       const apiSessionB = await exchange(String(tokenB));
       const exchangedA = await dispatch(request('/v1/me', { headers: { cookie: apiSessionA, 'x-organization-id': 'tenant-b' } }));
       const exchangedB = await dispatch(request('/v1/me', { headers: { cookie: apiSessionB, 'x-organization-id': 'tenant-a' } }));
-      expect(await json(exchangedA)).toMatchObject({ organizationId: 'tenant-a', subject: 'route-user-a', roles: ['publisher'], scopes: ['skills:publish'] });
+      expect(await json(exchangedA)).toMatchObject({
+        organizationId: 'tenant-a',
+        subject: 'route-user-a',
+        roles: ['publisher'],
+        scopes: ['skills:publish'],
+        display: {
+          userName: 'Route User A',
+          userEmail: 'route-user-a@example.test',
+          organizationName: 'Tenant A',
+          organizationSlug: 'tenant-a',
+        },
+      });
       expect(await json(exchangedB)).toMatchObject({ organizationId: 'tenant-b', subject: 'route-user-b' });
 
       await direct.unsafe(`update ${table(schema, 'member')} set "role" = 'reader' where "id" = $1`, ['route-member-a']);

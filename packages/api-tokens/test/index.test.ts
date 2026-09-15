@@ -231,6 +231,51 @@ describe('company-scoped API tokens', () => {
     expect(await browserRequest()).toBeNull();
   });
 
+  it('carries bounded server-derived display labels without changing token grants', async () => {
+    const { module, identity } = fixture({ sessionSecret: 'api-token-browser-session-secret-0123456789' });
+    const created = await module.service.createToken({ userId: 'alice', organizationId: 'tenant-a' }, {
+      name: 'display labels', roleCeiling: 'reader', scopes: ['skills:read'], expiresInSeconds: 3_600,
+    });
+    identity.setMembership({
+      userId: 'alice',
+      organizationId: 'tenant-a',
+      roles: ['owner'],
+      display: {
+        userName: ' Alice Example ',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs',
+        organizationSlug: 'acme-labs',
+      },
+    });
+
+    const principal = await module.service.authenticateBearerToken(created.token);
+    expect(principal).toMatchObject({
+      organizationId: 'tenant-a',
+      subject: 'alice',
+      roles: ['reader'],
+      scopes: ['skills:read'],
+      display: {
+        userName: 'Alice Example',
+        userEmail: 'alice@example.test',
+        organizationName: 'Acme Labs',
+        organizationSlug: 'acme-labs',
+      },
+    });
+
+    identity.setMembership({
+      userId: 'alice',
+      organizationId: 'tenant-a',
+      roles: ['reader'],
+      display: {
+        userName: `bad\u0000${'x'.repeat(300)}`,
+        organizationName: 'Acme Labs',
+      },
+    });
+    const downgraded = await module.service.authenticateBearerToken(created.token);
+    expect(downgraded).toMatchObject({ organizationId: 'tenant-a', subject: 'alice', roles: ['reader'], scopes: ['skills:read'] });
+    expect(downgraded?.display).toEqual({ organizationName: 'Acme Labs' });
+  });
+
   it('rejects tampered, cross-purpose, and unsigned browser session cookies', async () => {
     const { module } = fixture({ sessionSecret: 'api-token-browser-session-secret-0123456789' });
     const created = await module.service.createToken({ userId: 'alice', organizationId: 'tenant-a' }, {

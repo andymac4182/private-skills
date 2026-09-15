@@ -1,4 +1,4 @@
-import type { Authenticator, Principal, Role } from '../../contracts/src/index.js';
+import { normalizePrincipalDisplayMetadata, type Authenticator, type Principal, type Role, type PrincipalDisplayMetadata } from '../../contracts/src/index.js';
 
 /**
  * Company scoped API tokens are deliberately independent from the bootstrap
@@ -62,6 +62,8 @@ export interface MembershipSnapshot {
   role?: IdentityRole;
   scopes?: readonly string[];
   active?: boolean;
+  /** Server-derived labels used only for authenticated UI display. */
+  display?: PrincipalDisplayMetadata;
 }
 
 /** Identity provider seam. Better Auth owns both methods in the runtime. */
@@ -139,6 +141,7 @@ export interface NormalizedMembership {
   organizationId: string;
   roles: Role[];
   scopes: string[];
+  display?: PrincipalDisplayMetadata;
 }
 
 export interface ApiTokenManagementContext extends OrganizationSession {
@@ -496,7 +499,8 @@ function normalizeMembership(value: MembershipSnapshot | null, organizationId: s
   let scopes: string[];
   if (value.scopes === undefined) scopes = roleScopes(highestRole(roles));
   else { try { scopes = normalizeScopes(value.scopes); } catch { return null; } }
-  return { userId, organizationId, roles, scopes };
+  const display = normalizePrincipalDisplayMetadata(value.display);
+  return { userId, organizationId, roles, scopes, ...(display === undefined ? {} : { display }) };
 }
 
 function normalizeSession(value: OrganizationSessionLike | null): OrganizationSession | null {
@@ -666,12 +670,14 @@ function scopesForToken(record: ApiTokenRecord, membership: NormalizedMembership
 }
 
 function clonePrincipal(principal: ApiTokenPrincipal): ApiTokenPrincipal {
+  const display = normalizePrincipalDisplayMetadata(principal.display);
   return {
     organizationId: principal.organizationId,
     subject: principal.subject,
     roles: [...principal.roles],
     ...(principal.namespaces === undefined ? {} : { namespaces: [...principal.namespaces] }),
     ...(principal.scopes === undefined ? {} : { scopes: [...principal.scopes] }),
+    ...(display === undefined ? {} : { display }),
     identity: 'user',
     tokenId: principal.tokenId,
   };
@@ -808,7 +814,7 @@ export class DefaultApiTokenService implements ApiTokenService {
     if (!membership) return null;
     const role = effectiveRole(membership, record.roleCeiling);
     if (!role) return null;
-    return clonePrincipal({ organizationId: record.organizationId, subject: record.userId, roles: [role], scopes: scopesForToken(record, membership), identity: 'user', tokenId: record.id });
+    return clonePrincipal({ organizationId: record.organizationId, subject: record.userId, roles: [role], scopes: scopesForToken(record, membership), ...(membership.display === undefined ? {} : { display: membership.display }), identity: 'user', tokenId: record.id });
   }
 
   async authenticateBearerToken(rawToken: string): Promise<ApiTokenPrincipal | null> {

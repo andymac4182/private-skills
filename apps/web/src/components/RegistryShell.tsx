@@ -36,7 +36,13 @@ export function RegistryShell() {
   // Identity sessions carry the human-facing account label. The legacy
   // principal subject is often an opaque id, so only use it after the
   // sanitized identity name/email fields and retain it for token sessions.
-  const accountName = session?.user.name?.trim() || session?.user.email?.trim() || principal?.subject?.trim() || session?.user.id?.trim() || 'Private Skills'
+  const accountName = session?.user.name?.trim()
+    || session?.user.email?.trim()
+    || principal?.display?.userName?.trim()
+    || principal?.display?.userEmail?.trim()
+    || principal?.subject?.trim()
+    || session?.user.id?.trim()
+    || 'Private Skills'
   const accountInitial = accountName.trim().slice(0, 1).toUpperCase() || 'P'
   const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
   const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
