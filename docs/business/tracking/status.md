@@ -11,7 +11,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L05 | Company-managed SSO | oauth_demo_finish | Active; pinned Better Auth SSO integration, company-bound configuration, OIDC/SAML proofs |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Active; explicit owner proof, atomic adoption and signed worker routing |
 | L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
-| L08 | Tenant-aware Eve callbacks | tenant_eve | Active; wire service authentication and tenant bindings across all three Eve flows |
+| L08 | Tenant-aware Eve callbacks | tenant_eve | Eve entrypoints integrated f486ee6, 26 tests pass; registry provider/client wiring and end-to-end tenant flows remain open |
 | L09 | Login/logout browser journey | root / editor_test_stability | dc836e7 browser proof passed: Acme sign-in, sign-out to login, Globex sign-in with only Globex membership; real customer SSO remains open |
 | L10 | Full isolation and launch acceptance | root | Open; test populated companies across every registry surface, not just empty catalogs |
 
