@@ -224,9 +224,16 @@ describe('draft editor renderer fallback', () => {
       expect(draftFileRequest?.type).toBe('return')
       await act(async () => { await (draftFileRequest as { type: 'return'; value: Promise<unknown> }).value })
 
-      const editButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === 'Edit')
-      expect(editButton).toBeDefined()
-      expect(editButton?.disabled).toBe(false)
+      const editButton = await vi.waitFor(async () => {
+        let button: HTMLButtonElement | undefined
+        await act(async () => {
+          await flushMicrotasks()
+          button = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((candidate) => candidate.textContent === 'Edit')
+          expect(button).toBeDefined()
+          expect(button?.disabled).toBe(false)
+        })
+        return button as HTMLButtonElement
+      })
       await act(async () => { editButton?.click() })
       expect(container.querySelector('.release-code-fallback')?.textContent).toBe(firstText)
       expect(container.querySelector('textarea')).toBeNull()
