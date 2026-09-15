@@ -5,6 +5,14 @@ import {
   type IdentityRuntimeAdmin,
 } from '../../../packages/identity/src/index.js';
 import {
+  createCompanySsoBetterAuthBridge,
+  createCompanySsoModule,
+  createCompanySsoPlugin,
+  createPostgresCompanySsoRepository,
+  type CompanySsoAuthorizer,
+  type CompanySsoModule,
+} from '../../../packages/identity/src/company-sso.js';
+import {
   createApiTokenModule,
   createPostgresApiTokenRepository,
   type ApiTokenModule,
@@ -23,11 +31,14 @@ export interface IdentityInfrastructureOptions {
   canonicalOrigin?: string;
   apiTokenTableName?: string;
   apiTokenAutoMigrate?: boolean;
+  companySsoTableName?: string;
+  companySsoAutoMigrate?: boolean;
 }
 
 export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
+  companySso: CompanySsoModule | null;
 }
 
 /**
@@ -117,11 +128,26 @@ export function createIdentityInfrastructure(
   env: IdentityEnvironment,
   options: IdentityInfrastructureOptions = {},
 ): IdentityInfrastructure {
-  const identity = createIdentityRuntimeFromEnv(env);
-  if (!identity) return { identity: null, apiTokens: null };
   if (!options.postgresPool) {
+    const identity = createIdentityRuntimeFromEnv(env);
+    if (!identity) return { identity: null, apiTokens: null, companySso: null };
     throw new Error('Better Auth API tokens require a shared PostgreSQL pool');
   }
+
+  const configuredCompanySsoTable = companySsoTableName(env, options);
+  const companySsoAutoMigrate = options.companySsoAutoMigrate ?? parseBoolean(
+    env.PSKILLS_COMPANY_SSO_AUTO_MIGRATE ?? env.COMPANY_SSO_AUTO_MIGRATE,
+    false,
+  );
+  const appOrigin = options.canonicalOrigin ?? canonicalOriginFromEnv(env);
+  const companySsoRepository = createPostgresCompanySsoRepository(options.postgresPool, {
+    ...(configuredCompanySsoTable === undefined ? {} : { tableName: configuredCompanySsoTable }),
+    autoMigrate: companySsoAutoMigrate,
+  });
+  const identity = createIdentityRuntimeFromEnv(env, {
+    plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
+  });
+  if (!identity) return { identity: null, apiTokens: null, companySso: null };
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
@@ -132,10 +158,50 @@ export function createIdentityInfrastructure(
   const apiTokens = createApiTokenModule({
     repository,
     membershipAuthorizer,
-    canonicalOrigin: options.canonicalOrigin ?? canonicalOriginFromEnv(env),
+    canonicalOrigin: appOrigin,
     missingOrigin: 'deny',
   });
-  return { identity, apiTokens };
+  const companySso = createCompanySsoModule({
+    repository: companySsoRepository,
+    authorizer: createCompanySsoAuthorizer(identity),
+    appOrigin,
+    allowLoopbackHttp: env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test',
+    autoMigrate: companySsoAutoMigrate,
+    bridge: createCompanySsoBetterAuthBridge(identity.auth),
+  });
+  return { identity, apiTokens, companySso };
+}
+
+function createCompanySsoAuthorizer(identity: IdentityRuntimeAdmin): CompanySsoAuthorizer {
+  return {
+    authorize: async ({ request, organizationId }) => {
+      try {
+        const session = await identity.getSession(request);
+        const membership = session?.activeMembership;
+        if (!session || !membership || session.activeOrganizationId !== organizationId || membership.organizationId !== organizationId) return null;
+        if (membership.role !== 'owner' && membership.role !== 'admin') return null;
+        return {
+          principalId: session.user.id,
+          organizationId,
+          role: membership.role,
+          mode: 'member',
+        };
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+function companySsoTableName(
+  env: IdentityEnvironment,
+  options: IdentityInfrastructureOptions,
+): string | undefined {
+  const value = options.companySsoTableName
+    ?? env.PSKILLS_COMPANY_SSO_TABLE_NAME
+    ?? env.COMPANY_SSO_TABLE_NAME;
+  const normalized = value?.trim();
+  return normalized === undefined || normalized === '' ? undefined : normalized;
 }
 
 function qualifiedMemberTable(schemaName: string | undefined): string {
