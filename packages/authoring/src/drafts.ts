@@ -17,6 +17,7 @@ import type {
   SkillBuilderProposalRecord,
   SkillBuilderSessionRecord,
   StorageAttempt,
+  StorageWriteReceipt,
   MeteredReservationOwner,
 } from '../../contracts/src/index.js';
 import { createUploadReviewSnapshot } from '../../upload-reviews/src/snapshot.js';
@@ -42,11 +43,14 @@ import {
 } from './index.js';
 import {
   allocateStorageObjectKey,
+  createVerifiedStorageWriteReceipt,
   decodeBundle,
   digestBytes,
   encodeBundle,
+  isVerifiedStorageWriteReceipt,
   parseSkillMetadata,
   putStorageAttemptBlob,
+  storageProviderBinding,
   validateBundle,
 } from '../../storage/src/index.js';
 import {
@@ -301,6 +305,7 @@ function draftStorageAttemptRecord(input: {
   digest: Digest;
   size: number;
   objectKey?: string;
+  providerBinding?: string;
   reservationGeneration?: number;
 }): StorageAttempt {
   const timestamp = new Date().toISOString();
@@ -314,6 +319,7 @@ function draftStorageAttemptRecord(input: {
     createdAt: timestamp,
     updatedAt: timestamp,
     ...(input.objectKey ? { objectKey: input.objectKey } : {}),
+    ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
     ...(input.reservationGeneration === undefined ? {} : { reservationGeneration: input.reservationGeneration }),
   };
 }
@@ -328,6 +334,7 @@ async function beginDraftStorageAttempt(
     organizationId: deps.config.organizationId,
     ...input,
     objectKey: allocateStorageObjectKey(deps.blobs),
+    providerBinding: storageProviderBinding(deps.blobs),
   });
   return await deps.repository.transaction(deps.config.organizationId, (state) => {
     state.storageAttempts ??= [];
@@ -383,6 +390,7 @@ async function markDraftStorageAttemptOrphaned(
   deps: AuthoringHandlerDependencies,
   attemptId: string,
   objectKey?: string,
+  writeReceipt?: StorageWriteReceipt,
 ): Promise<void> {
   try {
     await deps.repository.transaction(deps.config.organizationId, (state) => {
@@ -392,6 +400,14 @@ async function markDraftStorageAttemptOrphaned(
       attempt.state = 'orphaned';
       attempt.updatedAt = new Date().toISOString();
       if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
+      if (writeReceipt && attempt.providerBinding !== undefined && isVerifiedStorageWriteReceipt(writeReceipt, {
+        providerBinding: attempt.providerBinding,
+        key: attempt.objectKey,
+        digest: attempt.digest,
+        size: attempt.size,
+      })) {
+        attempt.writeReceipt = writeReceipt;
+      }
     });
   } catch {
     // Keep a pending attempt charged when its transition is uncertain. A
@@ -1236,6 +1252,7 @@ async function createDraft(
   );
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
   try {
     const storageClaim = await beginDraftStorageAttempt(deps, {
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
@@ -1247,9 +1264,10 @@ async function createDraft(
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt)
       : committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
@@ -1287,14 +1305,14 @@ async function createDraft(
     });
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
   }
   if (result.idempotent && storageAttempt) {
-    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
   } else if (result.idempotent) {
     await releaseDraftUsage(storageAdmission, deps.config.organizationId);
   }
@@ -1390,6 +1408,7 @@ async function createUploadDraft(
   );
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
   try {
     const storageClaim = await beginDraftStorageAttempt(deps, {
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
@@ -1401,9 +1420,10 @@ async function createUploadDraft(
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt)
       : committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
@@ -1434,14 +1454,14 @@ async function createUploadDraft(
     });
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
     throw error;
   }
   if (result.idempotent && storageAttempt) {
-    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
   } else if (result.idempotent) {
     await releaseDraftUsage(storageAdmission, deps.config.organizationId);
   }
@@ -1690,6 +1710,7 @@ export async function writeDraftRevision(
   );
   let storageAttempt: StorageAttempt | undefined;
   let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
   try {
     const storageClaim = await beginDraftStorageAttempt(input.deps, {
       reservationKey: await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
@@ -1701,9 +1722,10 @@ export async function writeDraftRevision(
     stored = storageClaim.ownsWrite
       ? await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt)
       : committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(input.deps.blobs, storageAttempt, stored);
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
     }
@@ -1775,14 +1797,14 @@ export async function writeDraftRevision(
     });
   } catch (error) {
     if (storageAttempt) {
-      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
     } else if (!preservesDraftStorageAdmission(error)) {
       await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
     }
     throw error;
   }
   if (result.idempotent && storageAttempt) {
-    await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+    await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
   } else if (result.idempotent) {
     await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
   }
