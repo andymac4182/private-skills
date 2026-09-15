@@ -76,6 +76,16 @@ fresh plan prefix above; the sanitized result is in
 The local result and this bounded direct adapter run do not establish
 production registry-route acceptance.
 
+The first plan reviewed while pinning the full executor SHA used the inert
+prefix `rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9/` and was
+never executed or mutated. Plan generation intentionally creates a fresh UUID;
+the only executed plan is the one committed in `52cff71ce18bb76755551ba6aad7c2a66ee4a0d8`,
+using prefix
+`rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/`. The negative
+retention cases in the evidence are local disposable Files SDK filesystem
+cases and created no additional hosted objects. The evidence capture timestamp
+is `2026-09-15T23:01:07Z`.
+
 Generate a plan without contacting Vercel or PostgreSQL. Commit the resulting
 JSON for review, then run the execute command only with a fresh plan and a
 loopback disposable PostgreSQL URL. The database URL is read from the process

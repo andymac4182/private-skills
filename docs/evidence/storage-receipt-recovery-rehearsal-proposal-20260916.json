@@ -2,6 +2,25 @@
   "schemaVersion": 2,
   "status": "executed-bounded-owned-object-without-production-route-claim",
   "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+  "executedEvidenceCapturedAt": "2026-09-15T23:01:07Z",
+  "executionProvenance": {
+    "reviewedInertPlanBeforeFullShaPin": {
+      "sourceRevision": "49f31ea",
+      "prefix": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9",
+      "objectKey": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9/sealed/bb8a233e35b5a9609de4c917c62061d4a380b34121c9747b",
+      "executed": false,
+      "mutationPerformed": false
+    },
+    "executedPlanCommit": "52cff71ce18bb76755551ba6aad7c2a66ee4a0d8",
+    "executedPrefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+    "executedObjectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+    "firstPrefixMutation": false
+  },
+  "payload": {
+    "fixture": "canonical-receipt-rehearsal-bundle-v1",
+    "digest": "sha256:dfa0d9a1bb9841a2cdf6fe3e771bef3865834d4c9dce2dc8cbe2e1af83982caa",
+    "size": 177
+  },
   "localExecution": {
     "script": "scripts/storage-receipt-recovery-rehearsal.ts",
     "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=49f31eace58149e5d7b4349a0465012f0facde39 pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
@@ -35,7 +54,7 @@
       "the verified receipt allows deletion of only the planned object",
       "the provider reports that exact object absent after delete",
       "the PostgreSQL BillingService reports zero storage after the exact generation is reconciled",
-      "unknown outcome without receipt and provider-binding mismatch remain retained and charged"
+      "unknown outcome without receipt and provider-binding mismatch remain retained and charged; these negative cases run only on the local disposable filesystem adapter"
     ],
     "failureHandling": "on upload, metadata, recovery, or cleanup failure, retain the generated local tables and emit mode hosted-recovery-failure with exact table names, organization, prefix, object key, provider binding, and next action; never emit credentials or raw provider/database errors",
     "acknowledgement": "I_UNDERSTAND_NEW_PREFIX_ONLY",
