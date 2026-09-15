@@ -70,3 +70,11 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - `da2606b`: PostgreSQL recovery rehearsal integrated. Root independently ran `tests/operations-postgres-rehearsal.test.ts` against disposable loopback PostgreSQL: 1 passed. Covers restored identity/session/membership, SSO records, revoked tokens, billing mappings/reservations, and cross-company route denial. Blob copying still uses a provider double; real Files SDK object restore is assigned separately.
 - `b15ed1b`: current hosting review and executable cost scenarios integrated. Root checked JavaScript syntax and regenerated CSV equality. Pro Sandbox allocation and shared-credit assumptions corrected; scenario totals remain planning estimates, not capacity acceptance.
 - Release remains held for persisted token browser exchange and live use/revocation verification. Copy-only explanation does not close that requirement. Company SSO admin runtime is under integration review; company login discovery remains in implementation.
+
+## 16 September — combined verification and browser findings
+
+- SSO server commits `784f39a` and `4e4ce2d` integrated. Root verified 13 focused tests, one real PostgreSQL discovery/sign-in scenario, and typecheck. Picker commits `d2fe825` and `7b6935f` integrated with seven focused tests passing; LoginForm mounting remains with the token-session work.
+- Files SDK fs provider restore `3950816` integrated and root independently passed the PostgreSQL rehearsal including authorized object transfer. Hosted provider restore remains open.
+- Combined verification checkout at `1b849db`: 1079 passed, 20 skipped, one DraftEditor fallback test failed (Edit remained disabled). The suite is not green; business_billing owns the narrow test coordination diagnosis.
+- Root browser fixture `205a28e` on loopback5403: synthetic Acme login, explicit Acme Labs Demo selection and overview navigation passed. Accepted invitations appeared under Pending invitations; tenant_auth_backend owns grouping/count and plain-language copy. This older fixture does not prove newly integrated SSO or token exchange.
+- Marketing keyboard/narrow-screen fix `f27e274` integrated. Agent browser review covered nine routes at 320px, desktop/mobile and keyboard tabs; root marketing typecheck passed. Deployment remains pending.
