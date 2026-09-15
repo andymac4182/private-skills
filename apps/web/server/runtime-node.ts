@@ -8,7 +8,11 @@ import {
   type PgPoolLike,
 } from '../../../packages/database/src/index';
 import { HttpStateRepository } from '../../../packages/database/src/http';
-import { createNodeFilesSdkBlobStore, type FilesProvider } from '../../../packages/storage/src/node';
+import {
+  createNodeFilesSdkBlobStore,
+  type FilesProvider,
+  type NodeFilesSdkOptions,
+} from '../../../packages/storage/src/node';
 import { HttpBlobStore } from '../../../packages/storage/src/http';
 import {
   createDurableStorageRecoveryProofVerifier,
@@ -355,6 +359,44 @@ function optionalEnvironmentValue(value: string | undefined): string | undefined
   return normalized === undefined || normalized === '' ? undefined : normalized;
 }
 
+/**
+ * Build the Node storage adapter options from deployment configuration. The
+ * provider binding and Blob store ID are non-secret identities used to keep
+ * durable write receipts tied to the exact provider target across restarts;
+ * credentials remain server-side adapter inputs.
+ */
+export function createNodeStorageOptionsFromEnv(
+  env: RuntimeEnvironment,
+  provider: FilesProvider,
+): NodeFilesSdkOptions {
+  return {
+    provider,
+    root: env.PSKILLS_STORAGE_ROOT ?? './work/data/blobs',
+    prefix: env.PSKILLS_STORAGE_PREFIX,
+    bucket: env.PSKILLS_STORAGE_BUCKET,
+    container: env.PSKILLS_STORAGE_CONTAINER,
+    region: env.PSKILLS_STORAGE_REGION ?? env.AWS_REGION,
+    endpoint: env.PSKILLS_STORAGE_ENDPOINT,
+    forcePathStyle: env.PSKILLS_STORAGE_PATH_STYLE === 'true',
+    projectId: env.PSKILLS_STORAGE_PROJECT_ID,
+    providerBinding: optionalEnvironmentValue(env.PSKILLS_STORAGE_PROVIDER_BINDING),
+    credentials: {
+      accessKeyId: env.PSKILLS_STORAGE_ACCESS_KEY_ID ?? env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.PSKILLS_STORAGE_SECRET_ACCESS_KEY ?? env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: env.AWS_SESSION_TOKEN,
+      accountId: env.PSKILLS_STORAGE_ACCOUNT_ID,
+      accountName: env.PSKILLS_STORAGE_ACCOUNT_NAME,
+      accountKey: env.PSKILLS_STORAGE_ACCOUNT_KEY,
+      connectionString: env.PSKILLS_STORAGE_CONNECTION_STRING,
+      sasToken: env.PSKILLS_STORAGE_SAS_TOKEN,
+      clientEmail: env.PSKILLS_STORAGE_CLIENT_EMAIL,
+      privateKey: env.PSKILLS_STORAGE_PRIVATE_KEY,
+      token: env.BLOB_READ_WRITE_TOKEN,
+      storeId: optionalEnvironmentValue(env.PSKILLS_STORAGE_BLOB_STORE_ID),
+    },
+  };
+}
+
 function billingEnvironmentBool(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === 'true' || value?.trim() === '1';
 }
@@ -567,22 +609,10 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const provider = env.PSKILLS_STORAGE_PROVIDER ?? (production ? 's3' : 'filesystem');
   const blobs = provider === 'http'
     ? new HttpBlobStore({ baseUrl: required(env, 'PSKILLS_STORAGE_ENDPOINT'), token: required(env, 'PSKILLS_STORAGE_TOKEN'), allowLoopback: !production })
-    : await createNodeFilesSdkBlobStore({
-      provider: (provider === 'filesystem' ? 'fs' : provider) as FilesProvider,
-      root: env.PSKILLS_STORAGE_ROOT ?? './work/data/blobs',
-      bucket: env.PSKILLS_STORAGE_BUCKET, container: env.PSKILLS_STORAGE_CONTAINER,
-      region: env.PSKILLS_STORAGE_REGION ?? env.AWS_REGION, endpoint: env.PSKILLS_STORAGE_ENDPOINT,
-      forcePathStyle: env.PSKILLS_STORAGE_PATH_STYLE === 'true', projectId: env.PSKILLS_STORAGE_PROJECT_ID,
-      credentials: {
-        accessKeyId: env.PSKILLS_STORAGE_ACCESS_KEY_ID ?? env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: env.PSKILLS_STORAGE_SECRET_ACCESS_KEY ?? env.AWS_SECRET_ACCESS_KEY,
-        sessionToken: env.AWS_SESSION_TOKEN, accountId: env.PSKILLS_STORAGE_ACCOUNT_ID,
-        accountName: env.PSKILLS_STORAGE_ACCOUNT_NAME, accountKey: env.PSKILLS_STORAGE_ACCOUNT_KEY,
-        connectionString: env.PSKILLS_STORAGE_CONNECTION_STRING, sasToken: env.PSKILLS_STORAGE_SAS_TOKEN,
-        clientEmail: env.PSKILLS_STORAGE_CLIENT_EMAIL, privateKey: env.PSKILLS_STORAGE_PRIVATE_KEY,
-        token: env.BLOB_READ_WRITE_TOKEN,
-      },
-    });
+    : await createNodeFilesSdkBlobStore(createNodeStorageOptionsFromEnv(
+      env,
+      (provider === 'filesystem' ? 'fs' : provider) as FilesProvider,
+    ));
   // The recoverer is available only for adapters that persist a stable sealed
   // object key. The route is separately gated by the platform recovery
   // credential in the shared runtime, so merely constructing the service does

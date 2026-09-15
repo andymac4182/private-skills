@@ -2,6 +2,7 @@ import type {
   BillingUsageAdmission,
   BlobStore,
   Digest,
+  MeteredStorageRecoveryResolution,
   MeteredUsageRestoration,
   RecoverableBlobStore,
   RegistryState,
@@ -158,22 +159,17 @@ interface BillingUsageCorrectionLookup extends BillingUsageAdmission {
  * bytes were put back, while `fenced` means the old reservation was untouched
  * and was advanced so a delayed G1 zero cannot apply later.
  */
-interface BillingUsageRecoveryResolver extends BillingUsageAdmission {
+interface BillingUsageRecoveryResolver {
   resolveStorageRecovery?(
     organizationId: string,
     reservationKey: string,
     delta: { storageBytes: number },
     operationKey: string,
     reservationGeneration: number,
-  ): Promise<unknown>;
+  ): Promise<MeteredStorageRecoveryResolution>;
 }
 
-interface BillingUsageRecoveryResolution {
-  action: "restored" | "fenced";
-  idempotent: boolean;
-  reservationGeneration: number;
-  restoredFromGeneration: number;
-}
+type BillingUsageRecoveryResolution = MeteredStorageRecoveryResolution;
 
 function storageRecoveryOperationKey(attemptId: string, generation?: number): string {
   return generation === undefined

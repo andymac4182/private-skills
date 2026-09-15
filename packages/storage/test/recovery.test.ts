@@ -5,6 +5,7 @@ import type {
   BlobStore,
   Digest,
   MeteredUsageDelta,
+  MeteredStorageRecoveryResolution,
   MeteredUsageReservation,
   MeteredUsageRestoration,
   RecoverableBlobStore,
@@ -266,7 +267,7 @@ class AtomicRecoveryBilling extends GenerationAwareBilling {
     delta: { storageBytes: number },
     operationKey: string,
     reservationGeneration: number,
-  ): Promise<unknown> {
+  ): Promise<MeteredStorageRecoveryResolution> {
     if (this.#resolution) {
       if (reservationGeneration !== this.#resolution.restoredFromGeneration) throw new Error("stale recovery generation");
       return { ...this.#resolution, idempotent: true };

@@ -10,6 +10,7 @@ vi.mock('@vercel/oidc', () => oidc);
 import {
   createDirectoryTokenProvider,
   createHostedOpenClawSourceConfigFromEnv,
+  createNodeStorageOptionsFromEnv,
   createOfficialDirectoryTokenProvider,
   createTenantStateFactory,
 } from '../server/runtime-node.js';
@@ -279,6 +280,41 @@ describe('node directory token provider', () => {
       .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
     expect(openClawConsumerRefreshResult({ kind: 'not-modified', status: 304, snapshot }).snapshot)
       .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
+  });
+});
+
+describe('node storage configuration', () => {
+  it('forwards the explicit provider binding and non-secret Blob store ID', () => {
+    const options = createNodeStorageOptionsFromEnv({
+      PSKILLS_STORAGE_ROOT: '/var/lib/private-skills/blobs',
+      PSKILLS_STORAGE_PREFIX: 'private-registry',
+      PSKILLS_STORAGE_PROVIDER_BINDING: 'files-sdk:vercel:store-123',
+      PSKILLS_STORAGE_BLOB_STORE_ID: 'store-123',
+      BLOB_READ_WRITE_TOKEN: 'server-only-token',
+    }, 'vercel-blob');
+
+    expect(options).toMatchObject({
+      provider: 'vercel-blob',
+      root: '/var/lib/private-skills/blobs',
+      prefix: 'private-registry',
+      providerBinding: 'files-sdk:vercel:store-123',
+      credentials: {
+        storeId: 'store-123',
+        token: 'server-only-token',
+      },
+    });
+  });
+
+  it('trims optional provider identity values while retaining server credentials', () => {
+    const options = createNodeStorageOptionsFromEnv({
+      PSKILLS_STORAGE_PROVIDER_BINDING: '  files-sdk:vercel:store-123  ',
+      PSKILLS_STORAGE_BLOB_STORE_ID: '  store-123  ',
+      BLOB_READ_WRITE_TOKEN: 'server-only-token',
+    }, 'vercel-blob');
+
+    expect(options.providerBinding).toBe('files-sdk:vercel:store-123');
+    expect(options.credentials?.storeId).toBe('store-123');
+    expect(options.credentials?.token).toBe('server-only-token');
   });
 });
 

@@ -20,6 +20,7 @@ import type {
   Digest,
   MeteredUsageDelta,
   MeteredUsageReservation,
+  MeteredStorageRecoveryResolution,
   MeteredUsageRestoration,
   RecoverableBlobStore,
   RegistryState,
@@ -170,6 +171,55 @@ function request(): StorageRecoveryRequest {
   };
 }
 
+function recoveryRequestFor(organizationId: string, attemptId: string): StorageRecoveryRequest {
+  return {
+    organizationId,
+    attemptId,
+    actor: {
+      organizationId,
+      subject: "platform-operator",
+      capability: "private-skills:storage-recovery-operator",
+      scopes: ["storage:recovery"],
+    },
+    proof: {
+      kind: "known-failure",
+      reference: "operator-record-pg-storage-recovery",
+    },
+    resume: true,
+  };
+}
+
+function attemptFor(
+  digest: Digest,
+  organizationId: string,
+  attemptId: string,
+  reservationKey: string,
+  objectKey: string,
+): StorageAttempt {
+  return {
+    ...attempt(digest),
+    id: attemptId,
+    organizationId,
+    reservationKey,
+    objectKey,
+    billingCorrection: "release-pending",
+  };
+}
+
+function referencedSkillFor(
+  digest: Digest,
+  organizationId: string,
+  id: string,
+  objectKey: string,
+) {
+  return {
+    ...referencedSkill(digest),
+    id,
+    organizationId,
+    artifact: { key: objectKey, digest, size: BYTES.byteLength },
+  };
+}
+
 /**
  * Bridges the real billing ledger to the storage recovery service while
  * modelling the late metadata writer and one lost restore response. The
@@ -178,14 +228,16 @@ function request(): StorageRecoveryRequest {
 class RecoveryBillingBridge implements BillingUsageAdmission {
   private lateReferenceAdded = false;
   private lostRestoreResponse: boolean;
+  private lostResolutionResponse: boolean;
 
   constructor(
     private readonly billing: BillingService,
     private readonly repository: StateRepository,
     private readonly digest: Digest,
-    options: { loseRestoreResponse: boolean; sharedReferenceState?: { added: boolean } },
+    options: { loseRestoreResponse: boolean; loseResolutionResponse?: boolean; sharedReferenceState?: { added: boolean } },
   ) {
     this.lostRestoreResponse = options.loseRestoreResponse;
+    this.lostResolutionResponse = options.loseResolutionResponse === true;
     this.referenceState = options.sharedReferenceState ?? { added: false };
   }
 
@@ -229,6 +281,27 @@ class RecoveryBillingBridge implements BillingUsageAdmission {
     if (this.lostRestoreResponse) {
       this.lostRestoreResponse = false;
       throw new Error("billing restoration response lost");
+    }
+    return result;
+  }
+
+  async resolveStorageRecovery(
+    organizationId: string,
+    reservationKey: string,
+    delta: { storageBytes: number },
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<MeteredStorageRecoveryResolution> {
+    const result = await this.billing.resolveStorageRecovery(
+      organizationId,
+      reservationKey,
+      delta,
+      operationKey,
+      reservationGeneration,
+    );
+    if (this.lostResolutionResponse) {
+      this.lostResolutionResponse = false;
+      throw new Error("billing storage recovery resolution response lost");
     }
     return result;
   }
@@ -349,5 +422,108 @@ describePostgres("integrated PostgreSQL storage recovery and billing compensatio
     await expect(restartedBilling.reconcileUsage(ORGANIZATION, RESERVATION_KEY, { storageBytes: 0 }, ZERO_KEY, 1)).rejects.toMatchObject({ code: "STALE_RESERVATION_GENERATION", status: 409 });
     await expect(restartedBilling.restoreUsage(ORGANIZATION, RESERVATION_KEY, { storageBytes: BYTES.byteLength }, RESTORE_KEY, 1)).resolves.toMatchObject({ idempotent: true, restoredFromGeneration: 1, reservationGeneration: 2 });
     await expect(restartedBilling.usageSnapshot(ORGANIZATION)).resolves.toEqual(usageBeforeOldCallbacks);
+  });
+
+  it("uses the PostgreSQL storage recovery resolver for B-only before/after-zero crashes", async () => {
+    const digest = await digestBytes(BYTES);
+    const stateRepository = new PostgresStateRepository(statePool, {
+      tableName: stateTable,
+      autoMigrate: true,
+      stateFactory: () => defaultRegistryState({ production: false, allowUnscanned: true }),
+    });
+    const blobs = new MemoryBlobStore();
+    const createBilling = () => new BillingService({
+      repository: new PostgresBillingRepository(billingPool, { tablePrefix: billingPrefix, maxUsageOperations: 1, now: () => NOW }),
+      catalog: planCatalog(),
+      enabled: true,
+      now: () => NOW,
+    });
+
+    // B starts after A's durable release intent, but before A's external zero.
+    // The resolver must fence G1 without changing the still-present charge.
+    const beforeOrganization = "org-storage-recovery-pg-before-zero";
+    const beforeAttemptId = "attempt-pg-storage-recovery-before-zero";
+    const beforeReservationKey = "pg-storage-recovery-before-zero";
+    const beforeObjectKey = "sealed/pg-storage-recovery-before-zero";
+    const beforeBilling = createBilling();
+    const beforeAdmission = await beforeBilling.reserveUsage(beforeOrganization, { storageBytes: BYTES.byteLength }, beforeReservationKey);
+    expect(beforeAdmission.reservationGeneration).toBe(1);
+    await stateRepository.transaction(beforeOrganization, (state) => {
+      state.storageAttempts = [attemptFor(digest, beforeOrganization, beforeAttemptId, beforeReservationKey, beforeObjectKey)];
+      state.skills.push(referencedSkillFor(digest, beforeOrganization, "skill-pg-before-zero", beforeObjectKey));
+    });
+    const fencedRecovery = new StorageRecoveryService({
+      repository: stateRepository,
+      blobs,
+      billing: beforeBilling,
+      verifyProof: () => true,
+    });
+    await expect(fencedRecovery.recover(recoveryRequestFor(beforeOrganization, beforeAttemptId))).resolves.toMatchObject({
+      status: "retained",
+      reason: "metadata-referenced",
+      attempt: { state: "orphaned", reservationGeneration: 2 },
+    });
+    await expect(beforeBilling.usageSnapshot(beforeOrganization)).resolves.toMatchObject({ usage: { storageBytes: BYTES.byteLength } });
+    await expect(beforeBilling.findUsageOperation(beforeOrganization, `private-skills:storage-recovery-restore:${beforeAttemptId}:generation:1`))
+      .resolves.toMatchObject({ restoration: { action: "fenced", fromGeneration: 1, toGeneration: 2 } });
+    await expect(beforeBilling.reconcileUsage(
+      beforeOrganization,
+      beforeReservationKey,
+      { storageBytes: 0 },
+      `private-skills:storage-recovery:${beforeAttemptId}:generation:1`,
+      1,
+    )).rejects.toMatchObject({ code: "STALE_RESERVATION_GENERATION", status: 409 });
+
+    // B starts after A's zero committed but before A's final metadata commit.
+    // The first resolver response is lost after the PostgreSQL transaction;
+    // the second invocation must replay the exact operation and settle G2.
+    const afterOrganization = "org-storage-recovery-pg-after-zero";
+    const afterAttemptId = "attempt-pg-storage-recovery-after-zero";
+    const afterReservationKey = "pg-storage-recovery-after-zero";
+    const afterObjectKey = "sealed/pg-storage-recovery-after-zero";
+    const afterBilling = createBilling();
+    const afterAdmission = await afterBilling.reserveUsage(afterOrganization, { storageBytes: BYTES.byteLength }, afterReservationKey);
+    await afterBilling.reconcileUsage(
+      afterOrganization,
+      afterReservationKey,
+      { storageBytes: 0 },
+      `private-skills:storage-recovery:${afterAttemptId}:generation:1`,
+      afterAdmission.reservationGeneration,
+    );
+    await stateRepository.transaction(afterOrganization, (state) => {
+      state.storageAttempts = [attemptFor(digest, afterOrganization, afterAttemptId, afterReservationKey, afterObjectKey)];
+      state.skills.push(referencedSkillFor(digest, afterOrganization, "skill-pg-after-zero", afterObjectKey));
+    });
+    const recoveryAfterLostResponse = new StorageRecoveryService({
+      repository: stateRepository,
+      blobs,
+      billing: new RecoveryBillingBridge(afterBilling, stateRepository, digest, {
+        loseRestoreResponse: false,
+        loseResolutionResponse: true,
+      }),
+      verifyProof: () => true,
+    });
+    await expect(recoveryAfterLostResponse.recover(recoveryRequestFor(afterOrganization, afterAttemptId))).resolves.toMatchObject({
+      status: "retained",
+      reason: "metadata-referenced",
+      attempt: { state: "orphaned", reservationGeneration: 1, billingCorrection: "release-pending" },
+    });
+    await expect(afterBilling.usageSnapshot(afterOrganization)).resolves.toMatchObject({ usage: { storageBytes: BYTES.byteLength } });
+    await expect(afterBilling.findUsageOperation(afterOrganization, `private-skills:storage-recovery-restore:${afterAttemptId}:generation:1`))
+      .resolves.toMatchObject({ restoration: { action: "restored", fromGeneration: 1, toGeneration: 2 } });
+
+    await expect(recoveryAfterLostResponse.recover(recoveryRequestFor(afterOrganization, afterAttemptId))).resolves.toMatchObject({
+      status: "retained",
+      reason: "billing-restored",
+      attempt: { state: "orphaned", reservationGeneration: 2 },
+    });
+    await expect(afterBilling.reconcileUsage(
+      afterOrganization,
+      afterReservationKey,
+      { storageBytes: 0 },
+      `private-skills:storage-recovery:${afterAttemptId}:generation:1`,
+      1,
+    )).rejects.toMatchObject({ code: "STALE_RESERVATION_GENERATION", status: 409 });
+    await expect(afterBilling.usageSnapshot(afterOrganization)).resolves.toMatchObject({ usage: { storageBytes: BYTES.byteLength } });
   });
 });
