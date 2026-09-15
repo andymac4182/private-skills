@@ -1,0 +1,60 @@
+{
+  "protocolVersion": 1,
+  "version": "0.4.0",
+  "releaseTag": "v0.4.0",
+  "source": {
+    "kind": "github-release",
+    "repository": "andymac4182/private-skills",
+    "tag": "v0.4.0",
+    "tagCommit": "84f712720dba74508d56f0bcb532393dad24324d"
+  },
+  "checksums": {
+    "filename": "SHA256SUMS",
+    "size": 309,
+    "digest": "sha256:02c6bf4296ee344aa9d6846e5848ba00920112361093205a7bb95ef688688889"
+  },
+  "assets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "platform": "macos",
+      "architecture": "arm64",
+      "filename": "pskills-aarch64-apple-darwin.tar.gz",
+      "archive": "tar.gz",
+      "member": "pskills",
+      "size": 2673030,
+      "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+      "storageKey": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "filename": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "archive": "tar.gz",
+      "member": "pskills",
+      "size": 2922162,
+      "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+      "storageKey": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "platform": "windows",
+      "architecture": "x86_64",
+      "filename": "pskills-x86_64-pc-windows-msvc.zip",
+      "archive": "zip",
+      "member": "pskills.exe",
+      "size": 2479997,
+      "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+      "storageKey": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6"
+    }
+  ],
+  "verification": {
+    "nativeProofTargets": [
+      "aarch64-apple-darwin"
+    ],
+    "nativeTestWaivedTargets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  }
+}
