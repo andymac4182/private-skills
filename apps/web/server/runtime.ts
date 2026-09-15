@@ -274,6 +274,7 @@ async function createRuntime(env: RuntimeEnvironment) {
           organizationId: config.organizationId,
           namespace: openClawNamespace,
           sourceProviderOrigin: openClawSourceOrigin,
+          billing: infrastructure.billing.service,
         });
       } catch {
         return undefined;
@@ -458,6 +459,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     });
     const registry = createRegistryHandler({
       ...baseInfrastructure,
+      billing: infrastructure.billing.service,
       auth: context.auth,
       config: tenantConfig,
       ...tenantDependencies,

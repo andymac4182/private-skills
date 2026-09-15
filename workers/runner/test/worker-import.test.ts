@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkerRunner } from '../src/worker.js';
 import type { WorkerClaimedJob } from '../src/client.js';
 import type { ScannerAdapter, ScanResult as AdapterScanResult } from '../../../packages/scanners/src/types.js';
+import type { BillingUsageAdmission } from '../../../packages/contracts/src/index.js';
 
 const COMMIT = '0123456789012345678901234567890123456789';
 
@@ -95,5 +96,78 @@ describe('worker import acquisition', () => {
     assert.equal(completion.artifactDigest, `sha256:${createHash('sha256').update(JSON.stringify({ format: 'pskills-bundle-v1', files: [{ path: 'SKILL.md', content: base64 }] })).digest('hex')}`);
     assert.deepEqual(completion.provenance && (completion.provenance as { kind?: string }).kind, 'github');
     assert.deepEqual(completion.bundle, { format: 'pskills-bundle-v1', files: [{ path: 'SKILL.md', content: base64 }] });
+  });
+
+  it('rejects scan admission before import acquisition or scanner execution when the allowance is exhausted', async () => {
+    const job: WorkerClaimedJob = {
+      id: 'job-import-over-quota',
+      kind: 'import',
+      organizationId: 'org-1',
+      leaseToken: 'lease-1',
+      attempt: 1,
+      import: {
+        upstreamId: 'upstream-1',
+        repository: 'octo/repo',
+        path: 'skills/demo',
+        ref: 'main',
+        name: '@team/demo',
+        version: '1.0.0',
+      },
+    };
+    let acquisitionCalls = 0;
+    let scannerCalls = 0;
+    let reservationKey: string | undefined;
+    let completion: Record<string, unknown> | undefined;
+    const billing: BillingUsageAdmission = {
+      status: () => ({ enabled: true }),
+      reserveUsage: async (_organizationId, _delta, operationKey) => {
+        reservationKey = operationKey;
+        const error = new Error('scan allowance exhausted') as Error & { code: string; status: number };
+        error.code = 'USAGE_LIMIT_EXCEEDED';
+        error.status = 429;
+        throw error;
+      },
+      reconcileUsage: async () => undefined,
+    };
+    const apiFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === '/internal/jobs/claim') return jsonResponse({ job });
+      if (url.pathname === '/internal/jobs/job-import-over-quota/complete') {
+        completion = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return jsonResponse({ operation: job });
+      }
+      return jsonResponse({ error: 'unexpected worker route' }, 404);
+    };
+    const upstreamFetch = async (): Promise<Response> => {
+      acquisitionCalls += 1;
+      return jsonResponse({ error: 'source should not be contacted' }, 500);
+    };
+    const adapter: ScannerAdapter = {
+      id: 'skillsguard',
+      command: 'fixture',
+      metadata: { id: 'skillsguard', version: 'fixture', engineVersion: 'fixture', rulesRevision: 'fixture' },
+      scan: async () => {
+        scannerCalls += 1;
+        throw new Error('scanner should not run');
+      },
+    };
+    const runner = new WorkerRunner({
+      baseUrl: 'https://registry.example.test',
+      workerToken: 'worker-token',
+      workerId: 'worker-over-quota',
+      fetch: apiFetch,
+      billing,
+      adapters: [adapter],
+      acquisition: { fetch: upstreamFetch, allowLoopbackForTests: true },
+      executor: { run: async () => { throw new Error('executor should not be called'); } },
+    });
+
+    const result = await runner.runOnce();
+    expect(result).toMatchObject({ claimed: true, jobId: job.id });
+    expect(result.error).toContain('scan allowance exhausted');
+    expect(reservationKey).toBe('private-skills:scan:job-import-over-quota');
+    expect(acquisitionCalls).toBe(0);
+    expect(scannerCalls).toBe(0);
+    expect(completion?.error).toContain('scan allowance exhausted');
   });
 });

@@ -439,6 +439,23 @@ export interface RegistryState {
 }
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
+/**
+ * Host-neutral metered admission used by registry, authoring, and worker
+ * adapters. The billing package implements this shape without making the
+ * portable contracts depend on a provider SDK or a web framework.
+ */
+export interface MeteredUsageDelta {
+  seats?: number;
+  storageBytes?: number;
+  scans?: number;
+  eveCostCents?: number;
+}
+export interface BillingUsageAdmission {
+  status(): { enabled: boolean };
+  reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<unknown>;
+  reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string): Promise<unknown>;
+  setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
+}
 export interface RegistryConfiguration {
   publicOrigin: string;
   maxBodyBytes: number;

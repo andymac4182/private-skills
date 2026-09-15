@@ -125,6 +125,19 @@ export interface BillingUsageOperation {
   createdAt: string;
 }
 
+/**
+ * A seat admission is kept separately from the aggregate usage operation log.
+ * `active` means the Better Auth write is still in flight; `settled` means the
+ * admission was committed, released, or expired and can be reused by a later
+ * lifecycle for the same subject.
+ */
+export interface BillingSeatReservation {
+  operationKey: string;
+  status: 'active' | 'settled';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BillingOrganizationState {
   organizationId: string;
   customer?: BillingCustomer;
@@ -132,6 +145,10 @@ export interface BillingOrganizationState {
   usage: BillingUsage;
   webhookEvents: BillingWebhookEvent[];
   usageOperations: BillingUsageOperation[];
+  /** Authoritative member + pending invitation count before active admissions. */
+  seatBaseline?: number;
+  /** Durable in-flight seat admissions, including their lifecycle state. */
+  seatReservations?: BillingSeatReservation[];
 }
 
 export interface BillingRepository {

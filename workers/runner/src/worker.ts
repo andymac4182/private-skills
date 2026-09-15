@@ -7,7 +7,7 @@ import {
   type WorkerAcquisitionOptions,
   type WorkerOpenClawProof,
 } from './acquisition.js';
-import type { HookConfiguration, SkillBundle } from '../../../packages/contracts/src/index.js';
+import type { BillingUsageAdmission, HookConfiguration, SkillBundle } from '../../../packages/contracts/src/index.js';
 import { encodeBundle } from '../../../packages/storage/src/index.js';
 import {
   createDefaultScannerAdapters,
@@ -19,6 +19,8 @@ import {
 } from '../../../packages/scanners/src/index.js';
 
 export interface WorkerRunnerOptions extends WorkerApiClientOptions {
+  /** Optional server-side metered admission; omitted for legacy disabled billing. */
+  billing?: BillingUsageAdmission;
   adapters?: Map<string, ScannerAdapter> | ScannerAdapter[];
   executor?: CommandExecutor;
   /** Trusted scanner image references, pinned by deployment configuration. */
@@ -127,6 +129,13 @@ export class WorkerRunner {
     let scanArtifactDigest: `sha256:${string}`;
     let completionSubmitted = false;
     try {
+      const billing = this.options.billing?.status().enabled === true ? this.options.billing : undefined;
+      // Reserve before source acquisition, artifact download, materialization,
+      // or scanner execution. The operation key is the durable job identity,
+      // so queue-time reservations and worker retries are idempotent.
+      if (billing) {
+        await billing.reserveUsage(job.organizationId, { scans: 1 }, `private-skills:scan:${job.id}`);
+      }
       let bundleForScan: SkillBundleInput;
       if (job.kind === 'import') {
         const imported = await acquireImportJob(job, {

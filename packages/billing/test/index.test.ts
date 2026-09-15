@@ -420,6 +420,33 @@ describe('transactional usage enforcement', () => {
     await expect(service.reconcileReservedUsage('org-seats', 'eve-estimate', { eveCostCents: 25 }, 'eve-actual')).resolves.toMatchObject({ idempotent: true });
   });
 
+  it('keeps concurrent seat holds across reconciliation and reuses lifecycle keys after release', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.syncSeatCount('org-seat-lifecycle', 2, 'seed');
+    const results = await Promise.allSettled([
+      service.reserveSeat('org-seat-lifecycle', 'invite-a'),
+      service.reserveSeat('org-seat-lifecycle', 'invite-b'),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const winner = results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof service.reserveSeat>>> => result.status === 'fulfilled')!.value.operationKey;
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+
+    // Cancellation releases the active hold. Re-inviting the same email/key
+    // is a new lifecycle and must reserve again rather than returning the old
+    // idempotent result.
+    await expect(service.releaseSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.reserveSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.commitSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.syncSeatCount('org-seat-lifecycle', 3, 'commit')).resolves.toMatchObject({ snapshot: { usage: { seats: 3 } } });
+
+    // Removing the committed member lowers the authoritative baseline, and a
+    // later re-add of the same subject key admits a fresh seat.
+    await service.syncSeatCount('org-seat-lifecycle', 2, 'remove');
+    await expect(service.reserveSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+  });
+
   it('resets monthly counters while retaining seats and storage', async () => {
     let now = Date.parse('2026-01-31T23:00:00.000Z');
     const service = serviceWith({ enabled: false, now: () => now });
@@ -480,11 +507,11 @@ describe('PostgreSQL repository contract', () => {
         const current = this.usage.get(String(parameters[0]));
         if (text.includes('VALUES ($1, $2::timestamptz, $3::timestamptz, 0, 0, 0, 0')) {
           const [organizationId, periodStart, periodEnd, updatedAt] = parameters;
-          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, updated_at: updatedAt });
+          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, seat_baseline: 0, seat_reservations: '[]', updated_at: updatedAt });
           return { rows: [] as Row[], rowCount: current ? 0 : 1 };
         }
-        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt] = parameters;
-        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, updated_at: updatedAt });
+        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt, seatBaseline, seatReservations] = parameters;
+        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, seat_baseline: seatBaseline ?? seats, seat_reservations: seatReservations ?? '[]', updated_at: updatedAt });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id, provider, customer_id') && text.includes('FROM "billing_contract_customers"')) {

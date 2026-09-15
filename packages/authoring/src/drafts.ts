@@ -1,5 +1,6 @@
 import type {
   BundleFile,
+  BillingUsageAdmission,
   Digest,
   Job,
   Principal,
@@ -61,6 +62,74 @@ const MAX_IDEMPOTENCY_KEY_BYTES = 256;
  * the bounded selected-file route; this limit only governs JSON responses.
  */
 export const MAX_PUBLIC_DRAFT_RESPONSE_BYTES = 4_500_000;
+
+interface DraftUsageAdmission {
+  readonly billing: BillingUsageAdmission;
+  readonly reservationKey: string;
+  readonly delta: { storageBytes?: number; scans?: number };
+}
+
+function authoringBilling(deps: AuthoringHandlerDependencies): BillingUsageAdmission | undefined {
+  const billing = deps.billing;
+  return billing && typeof billing.status === 'function' && billing.status().enabled === true ? billing : undefined;
+}
+
+function authoringMeteredError(error: unknown): AuthoringApiError {
+  if (error instanceof AuthoringApiError) return error;
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === 'USAGE_LIMIT_EXCEEDED') {
+    return new AuthoringApiError('USAGE_LIMIT_EXCEEDED', 'The organization usage limit has been reached', 429);
+  }
+  if (code === 'IDEMPOTENCY_CONFLICT') {
+    return new AuthoringApiError('IDEMPOTENCY_CONFLICT', 'The metered operation key was already used with another request', 409);
+  }
+  if (code === 'INVALID_USAGE') {
+    return new AuthoringApiError('INVALID_USAGE', 'The requested usage is invalid', 400);
+  }
+  return new AuthoringApiError('BILLING_UNAVAILABLE', 'Usage enforcement is temporarily unavailable', 503);
+}
+
+async function draftUsageKey(draftId: string, requestDigest: Digest, kind: string): Promise<string> {
+  // Billing operation keys are deliberately bounded independently of caller
+  // supplied draft and idempotency identifiers.
+  const digest = await digestText(`${kind}:${draftId}:${requestDigest}`);
+  return `private-skills:${kind}:${digest}`;
+}
+
+async function reserveDraftUsage(
+  deps: AuthoringHandlerDependencies,
+  delta: DraftUsageAdmission['delta'],
+  reservationKey: string,
+): Promise<DraftUsageAdmission | undefined> {
+  const billing = authoringBilling(deps);
+  if (!billing) return undefined;
+  try {
+    await billing.reserveUsage(deps.config.organizationId, delta, reservationKey);
+  } catch (error) {
+    throw authoringMeteredError(error);
+  }
+  return { billing, reservationKey, delta };
+}
+
+async function releaseDraftUsage(
+  admission: DraftUsageAdmission | undefined,
+  organizationId: string,
+): Promise<void> {
+  if (!admission) return;
+  try {
+    await admission.billing.reconcileUsage(
+      organizationId,
+      admission.reservationKey,
+      Object.fromEntries(Object.keys(admission.delta).map((metric) => [metric, 0])) as DraftUsageAdmission['delta'],
+      `${admission.reservationKey}:release`,
+    );
+  } catch {
+    // Preserve the primary storage or repository error. The durable billing
+    // row remains visible for an operator/reconciliation pass.
+  }
+}
 
 export interface PublicSkillDraft {
   id: string;
@@ -877,34 +946,52 @@ async function createDraft(
     idempotency: [],
   };
   await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: snapshot.bundle.files });
-  const stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
+  const storageAdmission = await reserveDraftUsage(
+    deps,
+    { storageBytes: snapshot.bytes.byteLength },
+    await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+  );
+  let stored: StoredBlob;
+  try {
+    stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    throw error;
+  }
   record.artifact = stored;
   draft.artifact = stored;
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    ensureDrafts(state);
-    const existing = state.drafts!.find(
-      (candidate) =>
-        candidate.organizationId === deps.config.organizationId &&
-        candidate.actor === principal.subject &&
-        candidate.createIdempotency?.key === idempotencyKey,
-    );
-    if (existing) {
-      if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
-      if (existing.createIdempotency?.requestDigest !== requestDigest) {
-        throw idempotencyConflict();
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      ensureDrafts(state);
+      const existing = state.drafts!.find(
+        (candidate) =>
+          candidate.organizationId === deps.config.organizationId &&
+          candidate.actor === principal.subject &&
+          candidate.createIdempotency?.key === idempotencyKey,
+      );
+      if (existing) {
+        if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
+        if (existing.createIdempotency?.requestDigest !== requestDigest) {
+          throw idempotencyConflict();
+        }
+        return { draft: existing, idempotent: true };
       }
-      return { draft: existing, idempotent: true };
-    }
 
-    const current = state.skills.find((candidate) => candidate.id === resourceId);
-    if (!current || !sameReadableBase(current, snapshot.release, state, principal, baseDigest)) {
-      throw unavailableDraft();
-    }
-    state.drafts!.push(draft);
-    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
-    return { draft, idempotent: false };
-  });
+      const current = state.skills.find((candidate) => candidate.id === resourceId);
+      if (!current || !sameReadableBase(current, snapshot.release, state, principal, baseDigest)) {
+        throw unavailableDraft();
+      }
+      state.drafts!.push(draft);
+      appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
+      return { draft, idempotent: false };
+    });
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    throw error;
+  }
+  if (result.idempotent) await releaseDraftUsage(storageAdmission, deps.config.organizationId);
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   const bundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
@@ -990,27 +1077,45 @@ async function createUploadDraft(
     idempotency: [],
   };
   await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: bundle.files });
-  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  const storageAdmission = await reserveDraftUsage(
+    deps,
+    { storageBytes: encoded.byteLength },
+    await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+  );
+  let stored: StoredBlob;
+  try {
+    stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    throw error;
+  }
   record.artifact = stored;
   draft.artifact = stored;
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    ensureDrafts(state);
-    const current = state.drafts!.find(
-      (candidate) =>
-        candidate.organizationId === deps.config.organizationId &&
-        candidate.actor === principal.subject &&
-        candidate.createIdempotency?.key === idempotencyKey,
-    );
-    if (current) {
-      if (!canReadNamespace(principal, current.name)) throw unavailableDraft();
-      if (current.createIdempotency?.requestDigest !== requestDigest) throw idempotencyConflict();
-      return { draft: current, idempotent: true };
-    }
-    state.drafts!.push(draft);
-    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
-    return { draft, idempotent: false };
-  });
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      ensureDrafts(state);
+      const current = state.drafts!.find(
+        (candidate) =>
+          candidate.organizationId === deps.config.organizationId &&
+          candidate.actor === principal.subject &&
+          candidate.createIdempotency?.key === idempotencyKey,
+      );
+      if (current) {
+        if (!canReadNamespace(principal, current.name)) throw unavailableDraft();
+        if (current.createIdempotency?.requestDigest !== requestDigest) throw idempotencyConflict();
+        return { draft: current, idempotent: true };
+      }
+      state.drafts!.push(draft);
+      appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
+      return { draft, idempotent: false };
+    });
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    throw error;
+  }
+  if (result.idempotent) await releaseDraftUsage(storageAdmission, deps.config.organizationId);
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   await syncDraftReview(responseDraft, responseDraft.files, deps, false);
@@ -1249,68 +1354,86 @@ export async function writeDraftRevision(
     { format: 'pskills-bundle-v1', files: bundle!.files },
     input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
   );
-  const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
+  const storageAdmission = await reserveDraftUsage(
+    input.deps,
+    { storageBytes: encoded!.byteLength },
+    await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
+  );
+  let stored: StoredBlob;
+  try {
+    stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    throw error;
+  }
   record.artifact = stored;
 
-  const result = await input.deps.repository.transaction(input.deps.config.organizationId, (state) => {
-    const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
-    const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
-    if (concurrent) {
-      if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
-      const replay = {
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await input.deps.repository.transaction(input.deps.config.organizationId, (state) => {
+      const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
+      const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
+      if (concurrent) {
+        if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
+        const replay = {
+          ...current,
+          revision: concurrent.revision,
+          digest: concurrent.digest,
+          artifact: concurrent.artifact,
+          updatedAt: concurrent.updatedAt,
+        };
+        assertDraftEnvelopeSizeWithManifest(
+          replay,
+          concurrent.manifest,
+          input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
+        );
+        return { draft: current, idempotent: true };
+      }
+      if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+      if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+      if (expectedDigest !== undefined && current.digest !== expectedDigest) {
+        throw draftDigestConflict(current.revision);
+      }
+      if (publicDraftStateFingerprint(current) !== publicStateFingerprint) {
+        throw publicDraftStateConflict(current.revision);
+      }
+      const nextIdempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
+      const nextDraft: SkillDraft = {
         ...current,
-        revision: concurrent.revision,
-        digest: concurrent.digest,
-        artifact: concurrent.artifact,
-        updatedAt: concurrent.updatedAt,
+        revision: expectedRevision + 1,
+        digest: digest!,
+        artifact: stored,
+        files: bundle!.files,
+        updatedAt: now,
+        idempotency: nextIdempotency,
       };
       assertDraftEnvelopeSizeWithManifest(
-        replay,
-        concurrent.manifest,
-        input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
+        nextDraft,
+        record.manifest,
+        input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
       );
-      return { draft: current, idempotent: true };
-    }
-    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
-    if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
-    if (expectedDigest !== undefined && current.digest !== expectedDigest) {
-      throw draftDigestConflict(current.revision);
-    }
-    if (publicDraftStateFingerprint(current) !== publicStateFingerprint) {
-      throw publicDraftStateConflict(current.revision);
-    }
-    const nextIdempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
-    const nextDraft: SkillDraft = {
-      ...current,
-      revision: expectedRevision + 1,
-      digest: digest!,
-      artifact: stored,
-      files: bundle!.files,
-      updatedAt: now,
-      idempotency: nextIdempotency,
-    };
-    assertDraftEnvelopeSizeWithManifest(
-      nextDraft,
-      record.manifest,
-      input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
-    );
-    current.revision = expectedRevision + 1;
-    current.digest = digest!;
-    current.artifact = stored;
-    current.files = bundle!.files;
-    current.updatedAt = now;
-    current.idempotency = nextIdempotency;
-    appendDraftAudit(
-      state,
-      input.principal,
-      'draft.update',
-      current,
-      input.deps.config.organizationId,
-      kind === 'builder-proposal' ? { source: 'builder-proposal', proposalId } : {},
-    );
-    if (kind === 'builder-proposal' && input.onCommit) input.onCommit(state, current);
-    return { draft: current, idempotent: false };
-  });
+      current.revision = expectedRevision + 1;
+      current.digest = digest!;
+      current.artifact = stored;
+      current.files = bundle!.files;
+      current.updatedAt = now;
+      current.idempotency = nextIdempotency;
+      appendDraftAudit(
+        state,
+        input.principal,
+        'draft.update',
+        current,
+        input.deps.config.organizationId,
+        kind === 'builder-proposal' ? { source: 'builder-proposal', proposalId } : {},
+      );
+      if (kind === 'builder-proposal' && input.onCommit) input.onCommit(state, current);
+      return { draft: current, idempotent: false };
+    });
+  } catch (error) {
+    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    throw error;
+  }
+  if (result.idempotent) await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
 
   const responseDraft = result.idempotent
     ? await draftFromIdempotency(result.draft, findIdempotency(result.draft, idempotencyKey, input.principal.subject)!, input.deps)
@@ -1662,56 +1785,68 @@ async function publishDraft(
     createdAt: now,
   };
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    const current = findDraft(state, draftId, principal, deps.config.organizationId);
-    const concurrent = findPublication(current, idempotencyKey, principal.subject);
-    if (concurrent) {
-      if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
-      return { operation: operationFromPublication(concurrent), idempotent: true };
-    }
-    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
-    if (current.status !== 'open') {
-      throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
-    }
-    if (
-      draftOrigin(current) !== draftOrigin(before) ||
-      current.baseResourceId !== before.baseResourceId ||
-      current.baseDigest !== before.baseDigest
-    ) {
-      throw unavailableDraft();
-    }
-    const currentBase = current.baseResourceId === undefined
-      ? undefined
-      : state.skills.find((candidate) => candidate.id === current.baseResourceId);
-    if (draftOrigin(current) === 'release') {
-      if (!currentBase || current.baseDigest === undefined || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+  const scanAdmission = await reserveDraftUsage(
+    deps,
+    { scans: 1 },
+    `private-skills:scan:${jobId}`,
+  );
+  let result: { operation: DraftPublishOperation; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      const current = findDraft(state, draftId, principal, deps.config.organizationId);
+      const concurrent = findPublication(current, idempotencyKey, principal.subject);
+      if (concurrent) {
+        if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
+        return { operation: operationFromPublication(concurrent), idempotent: true };
+      }
+      if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+      if (current.status !== 'open') {
+        throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+      }
+      if (
+        draftOrigin(current) !== draftOrigin(before) ||
+        current.baseResourceId !== before.baseResourceId ||
+        current.baseDigest !== before.baseDigest
+      ) {
         throw unavailableDraft();
       }
-    } else if (current.baseResourceId !== undefined || current.baseDigest !== undefined) {
-      throw unavailableDraft();
-    }
-    if (state.policy.revision !== policy.revision) {
-      throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
-    }
-    if (currentBase !== undefined && (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal))) {
-      throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
-    }
-    if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
-      throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
-    }
-    state.skills.push(skill);
-    state.jobs.push(job);
-    current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
-    appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
-      digest: publication.digest,
-      version,
-      resourceId,
-      jobId,
-      draftRevision: expectedRevision,
-      scanRequired: true,
-    }, now);
-    return { operation: operationFromPublication(publication), idempotent: false };
-  });
+      const currentBase = current.baseResourceId === undefined
+        ? undefined
+        : state.skills.find((candidate) => candidate.id === current.baseResourceId);
+      if (draftOrigin(current) === 'release') {
+        if (!currentBase || current.baseDigest === undefined || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+          throw unavailableDraft();
+        }
+      } else if (current.baseResourceId !== undefined || current.baseDigest !== undefined) {
+        throw unavailableDraft();
+      }
+      if (state.policy.revision !== policy.revision) {
+        throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
+      }
+      if (currentBase !== undefined && (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal))) {
+        throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
+      }
+      if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
+        throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
+      }
+      state.skills.push(skill);
+      state.jobs.push(job);
+      current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
+      appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
+        digest: publication.digest,
+        version,
+        resourceId,
+        jobId,
+        draftRevision: expectedRevision,
+        scanRequired: true,
+      }, now);
+      return { operation: operationFromPublication(publication), idempotent: false };
+    });
+  } catch (error) {
+    await releaseDraftUsage(scanAdmission, deps.config.organizationId);
+    throw error;
+  }
+  if (result.idempotent) await releaseDraftUsage(scanAdmission, deps.config.organizationId);
 
   return jsonResponse(result, result.idempotent ? 200 : 202, {
     'cache-control': 'private, no-store',

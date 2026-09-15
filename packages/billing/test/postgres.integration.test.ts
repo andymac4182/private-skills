@@ -138,6 +138,55 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     expect(rows[0]?.operation_key).toBe('pg-scan-a')
   })
 
+  it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {
+    const catalog = planCatalog()
+    const first = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const second = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const organizationId = 'org-pg-seat-barrier'
+    await first.syncSeatCount(organizationId, 1, 'pg-seat-seed')
+
+    let arrivals = 0
+    let openBarrier!: () => void
+    const barrier = new Promise<void>((resolve) => { openBarrier = resolve })
+    const reserveAtBarrier = async (service: BillingService, key: string) => {
+      arrivals += 1
+      if (arrivals === 2) openBarrier()
+      await barrier
+      return service.reserveSeat(organizationId, key)
+    }
+    const results = await Promise.allSettled([
+      reserveAtBarrier(first, 'pg-invite-a'),
+      reserveAtBarrier(second, 'pg-invite-b'),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect((results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED' })
+    const winner = (results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<BillingService['reserveSeat']>>> => result.status === 'fulfilled')!).value.operationKey
+    await expect(first.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 2 } })
+
+    // Cancel and re-invite the same subject. The settled lifecycle tombstone
+    // must reactivate the key and consume the last seat again.
+    await expect(first.releaseSeat(organizationId, winner)).resolves.toMatchObject({ idempotent: false })
+    await expect(second.reserveSeat(organizationId, winner)).resolves.toMatchObject({ idempotent: false })
+    await first.commitSeat(organizationId, winner)
+    await first.syncSeatCount(organizationId, 2, 'pg-seat-invite-committed')
+
+    // Remove and re-add the same subject after the committed count falls.
+    await first.syncSeatCount(organizationId, 1, 'pg-seat-member-removed')
+    await expect(second.reserveSeat(organizationId, winner)).resolves.toMatchObject({ idempotent: false })
+    await expect(second.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 2 } })
+  })
+
   it('claims one signed webhook delivery across concurrent service instances', async () => {
     const catalog = planCatalog()
     const first = new BillingService({

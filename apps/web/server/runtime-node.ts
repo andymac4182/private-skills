@@ -444,6 +444,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const identityInfrastructure = createIdentityInfrastructure(env, {
     ...(postgresPool === undefined ? {} : { postgresPool }),
     ...(identityEnabled(env) ? { canonicalOrigin: canonicalOriginFromEnv(env) } : {}),
+    billing: billing.service,
   });
   // Do not expose a partially migrated identity runtime. When the deployment
   // explicitly opts into startup migrations, this waits for Better Auth's
@@ -520,6 +521,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     : undefined;
   const hostedWorkerEnv = { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL?.trim() || env.PSKILLS_PUBLIC_ORIGIN?.trim() };
   const hostedWorkerOverrides = {
+    billing: billing.service,
     ...(directoryOfficialAvailable ? { acquisition: { getSkillsShToken: hostedSkillsShToken } } : {}),
     ...(hostedOpenClawSource === undefined ? {} : { openClawSource: hostedOpenClawSource }),
   };

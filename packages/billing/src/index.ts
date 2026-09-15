@@ -33,6 +33,7 @@ import {
   type BillingProvider,
   type BillingProviderId,
   type BillingRepository,
+  type BillingSeatReservation,
   type BillingServiceOptions,
   type BillingStatus,
   type BillingSubscription,
@@ -84,6 +85,8 @@ const REFUND_EVENTS = new Set(['charge.refunded', 'refund.created', 'refund.upda
 const MAX_OPERATION_KEY_BYTES = 256;
 export const MAX_WEBHOOK_BODY_BYTES = 10 * 1024 * 1024;
 const MAX_WEBHOOK_EVENTS = 2_000;
+/** A failed Better Auth write cannot run an after-hook; bound that stale hold. */
+const SEAT_RESERVATION_TTL_MS = 15 * 60 * 1_000;
 
 type JsonObject = Record<string, unknown>;
 
@@ -264,6 +267,49 @@ function applyDelta(usage: BillingUsage, delta: UsageDelta, nowMs: number): Bill
     result[metric] = value;
   }
   return result;
+}
+
+function seatState(state: BillingOrganizationState): { baseline: number; reservations: BillingSeatReservation[] } {
+  const baseline = state.seatBaseline ?? state.usage.seats;
+  if (!Number.isSafeInteger(baseline) || baseline < 0) throw new BillingError('INVALID_USAGE', 'stored seat baseline is invalid', 500);
+  const reservations = state.seatReservations ?? [];
+  if (!Array.isArray(reservations)) throw new BillingError('INVALID_USAGE', 'stored seat reservations are invalid', 500);
+  state.seatBaseline = baseline;
+  state.seatReservations = reservations;
+  return { baseline, reservations };
+}
+
+function seatReservationSnapshot(
+  organizationId: string,
+  operationKey: string,
+  delta: UsageDelta,
+  usage: BillingUsage,
+  entitlement: BillingEntitlement,
+  idempotent: boolean,
+): UsageReservation {
+  return {
+    operationKey,
+    idempotent,
+    delta: { ...delta },
+    snapshot: {
+      organizationId,
+      limits: { ...entitlement.limits },
+      usage: { ...usage },
+      entitlement,
+    },
+  };
+}
+
+function expireSeatReservations(state: BillingOrganizationState, nowMs: number): void {
+  const { reservations } = seatState(state);
+  for (const reservation of reservations) {
+    if (reservation.status !== 'active') continue;
+    const updatedAt = Date.parse(reservation.updatedAt);
+    if (!Number.isFinite(updatedAt) || nowMs - updatedAt < SEAT_RESERVATION_TTL_MS) continue;
+    state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
+    reservation.status = 'settled';
+    reservation.updatedAt = new Date(nowMs).toISOString();
+  }
 }
 
 function digestBytes(bytes: Uint8Array): Promise<string> {
@@ -903,16 +949,134 @@ export class BillingService {
     return this.reserveUsage(organizationId, delta, operationKey);
   }
 
-  /** Identity backend calls this with its authoritative active membership count. */
+  /** Compatibility alias for callers that provide an authoritative seat count. */
   async setSeatCount(organizationId: string, seats: number, operationKey: string): Promise<UsageReservation> {
+    return this.syncSeatCount(organizationId, seats, operationKey);
+  }
+
+  /**
+   * Reserve one organization seat before Better Auth creates a member or
+   * invitation. The reservation and its lifecycle are stored with the locked
+   * organization usage row, so another process cannot reset an in-flight
+   * admission while it is reading the authoritative identity rows.
+   */
+  async reserveSeat(organizationId: string, operationKey: string): Promise<UsageReservation> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const nowMs = this.now();
+    return this.repository.transaction(normalized, (state) => {
+      state.usage = periodUsage(state.usage, nowMs);
+      const { reservations } = seatState(state);
+      expireSeatReservations(state, nowMs);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (existing?.status === 'active') {
+        const exceeded = firstExceeded(entitlement.limits, state.usage, {});
+        if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+        return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, state.usage, entitlement, true);
+      }
+      const next = applyDelta(state.usage, { seats: 1 }, nowMs);
+      const exceeded = firstExceeded(entitlement.limits, next, { seats: 1 });
+      if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+      const timestamp = new Date(nowMs).toISOString();
+      if (existing) {
+        existing.status = 'active';
+        existing.updatedAt = timestamp;
+      } else {
+        reservations.push({ operationKey: normalizedKey, status: 'active', createdAt: timestamp, updatedAt: timestamp });
+      }
+      state.usage = next;
+      return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, next, entitlement, false);
+    });
+  }
+
+  /**
+   * Release an admission that never became an authoritative member or
+   * invitation. Settled reservations remain as lifecycle tombstones so a
+   * remove-and-readd or cancel-and-reinvite can safely reactivate the same
+   * subject key instead of being mistaken for an old idempotent request.
+   */
+  async releaseSeat(organizationId: string, operationKey: string): Promise<UsageReservation> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const nowMs = this.now();
+    return this.repository.transaction(normalized, (state) => {
+      state.usage = periodUsage(state.usage, nowMs);
+      const { reservations } = seatState(state);
+      expireSeatReservations(state, nowMs);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (!existing || existing.status === 'settled') {
+        return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, true);
+      }
+      state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
+      existing.status = 'settled';
+      existing.updatedAt = new Date(nowMs).toISOString();
+      return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, false);
+    });
+  }
+
+  /**
+   * Convert a successful Better Auth write from an in-flight hold into the
+   * authoritative seat baseline. The aggregate usage is unchanged; only the
+   * durable lifecycle marker moves, which keeps a later remove/readd safe.
+   */
+  async commitSeat(organizationId: string, operationKey: string): Promise<UsageReservation> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const nowMs = this.now();
+    return this.repository.transaction(normalized, (state) => {
+      state.usage = periodUsage(state.usage, nowMs);
+      const { baseline, reservations } = seatState(state);
+      expireSeatReservations(state, nowMs);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (!existing || existing.status === 'settled') {
+        const exceeded = firstExceeded(entitlement.limits, state.usage, {});
+        if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+        return seatReservationSnapshot(normalized, normalizedKey, {}, state.usage, entitlement, true);
+      }
+      existing.status = 'settled';
+      existing.updatedAt = new Date(nowMs).toISOString();
+      state.seatBaseline = baseline + 1;
+      const exceeded = firstExceeded(entitlement.limits, state.usage, {});
+      if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+      return seatReservationSnapshot(normalized, normalizedKey, {}, state.usage, entitlement, false);
+    });
+  }
+
+  /**
+   * Reconcile Better Auth's member plus pending-invitation count without
+   * erasing active reservations. A count decrease is authoritative and lowers
+   * the committed baseline; a count increase is left for the corresponding
+   * after-hook's commitSeat call so one concurrent write can never settle a
+   * different request's in-flight hold.
+   */
+  async syncSeatCount(organizationId: string, seats: number, operationKey: string): Promise<UsageReservation> {
     if (!Number.isSafeInteger(seats) || seats < 0) throw new BillingError('INVALID_USAGE', 'seat count must be a non-negative safe integer', 400);
     const normalized = validateBillingOrganizationId(organizationId);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
     return this.repository.transaction(normalized, (state) => {
-      const current = periodUsage(state.usage, nowMs);
-      state.usage = current;
-      return this.reserveUsageInState(state, normalized, { seats: seats - current.seats }, normalizedKey, nowMs);
+      state.usage = periodUsage(state.usage, nowMs);
+      const seat = seatState(state);
+      expireSeatReservations(state, nowMs);
+      const activeCount = seat.reservations.filter((reservation) => reservation.status === 'active').length;
+      // An increase may belong to a concurrent write whose after-hook has not
+      // committed its key yet. Preserve the holds and wait for that explicit
+      // lifecycle transition. With no active holds the count is fully
+      // authoritative and can advance the baseline directly.
+      const nextBaseline = activeCount === 0 ? seats : Math.min(seat.baseline, seats);
+      const desiredSeats = nextBaseline + activeCount;
+      const delta = desiredSeats - state.usage.seats;
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const normalizedDeltaValue = delta === 0 ? {} : { seats: delta };
+      const next = applyDelta(state.usage, normalizedDeltaValue, nowMs);
+      const exceeded = firstExceeded(entitlement.limits, next, normalizedDeltaValue);
+      if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+      state.seatBaseline = nextBaseline;
+      state.usage = next;
+      return seatReservationSnapshot(normalized, normalizedKey, normalizedDeltaValue, next, entitlement, delta === 0);
     });
   }
 

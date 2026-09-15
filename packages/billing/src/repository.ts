@@ -4,6 +4,7 @@ import type {
   BillingProviderId,
   BillingRepository,
   BillingSubscription,
+  BillingSeatReservation,
   BillingUsage,
   BillingUsageOperation,
   BillingWebhookEvent,
@@ -110,6 +111,8 @@ export function defaultBillingState(organizationId: string, nowMs = Date.now()):
     usage: defaultBillingUsage(normalized, nowMs),
     webhookEvents: [],
     usageOperations: [],
+    seatBaseline: 0,
+    seatReservations: [],
   };
 }
 
@@ -152,6 +155,19 @@ export function assertBillingState(state: BillingOrganizationState): void {
   validateUsage(state.usage, organizationId);
   if (!Array.isArray(state.webhookEvents) || !Array.isArray(state.usageOperations)) {
     throw new BillingRepositoryError('INVALID_STATE', 'billing collections are invalid');
+  }
+  if (state.seatBaseline !== undefined) nonnegativeInteger(state.seatBaseline, 'seatBaseline');
+  if (state.seatReservations !== undefined) {
+    if (!Array.isArray(state.seatReservations)) throw new BillingRepositoryError('INVALID_STATE', 'seat reservations are invalid');
+    const reservationKeys = new Set<string>();
+    for (const reservation of state.seatReservations) {
+      if (!reservation || typeof reservation !== 'object') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation is invalid');
+      validateBillingIdentifier(reservation.operationKey, 'seatReservation.operationKey');
+      if (reservationKeys.has(reservation.operationKey)) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation is duplicated');
+      reservationKeys.add(reservation.operationKey);
+      if (reservation.status !== 'active' && reservation.status !== 'settled') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation status is invalid');
+      if (!Number.isFinite(Date.parse(reservation.createdAt)) || !Number.isFinite(Date.parse(reservation.updatedAt))) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation timestamp is invalid');
+    }
   }
   if (state.customer !== undefined) {
     if (state.customer.organizationId !== organizationId) throw new BillingRepositoryError('INVALID_STATE', 'billing customer organization does not match state');
@@ -435,13 +451,22 @@ CREATE TABLE IF NOT EXISTS ${tables.usage} (
   storage_bytes bigint NOT NULL DEFAULT 0,
   scans bigint NOT NULL DEFAULT 0,
   eve_cost_cents bigint NOT NULL DEFAULT 0,
+  seat_baseline bigint NOT NULL DEFAULT 0,
+  seat_reservations jsonb NOT NULL DEFAULT '[]'::jsonb,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (period_end > period_start),
   CHECK (seats >= 0),
   CHECK (storage_bytes >= 0),
   CHECK (scans >= 0),
-  CHECK (eve_cost_cents >= 0)
+  CHECK (eve_cost_cents >= 0),
+  CHECK (seat_baseline >= 0),
+  CHECK (jsonb_typeof(seat_reservations) = 'array')
 );
+
+ALTER TABLE ${tables.usage}
+  ADD COLUMN IF NOT EXISTS seat_baseline bigint NOT NULL DEFAULT 0;
+ALTER TABLE ${tables.usage}
+  ADD COLUMN IF NOT EXISTS seat_reservations jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS ${tables.events} (
   provider text NOT NULL,
@@ -537,6 +562,30 @@ function rowUsage(row: Record<string, unknown>, organizationId: string): Billing
   };
 }
 
+function rowSeatReservations(row: Record<string, unknown>): BillingSeatReservation[] {
+  if (row.seat_reservations === undefined || row.seat_reservations === null) return [];
+  let value: unknown;
+  try {
+    value = typeof row.seat_reservations === 'string' ? JSON.parse(row.seat_reservations) : row.seat_reservations;
+  } catch {
+    throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservations are invalid JSON');
+  }
+  if (!Array.isArray(value)) throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservations are invalid');
+  return value.map((candidate) => {
+    if (!candidate || typeof candidate !== 'object') throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
+    const reservation = candidate as Partial<BillingSeatReservation>;
+    if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
+      throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
+    }
+    return {
+      operationKey: reservation.operationKey,
+      status: reservation.status,
+      createdAt: reservation.createdAt,
+      updatedAt: reservation.updatedAt,
+    };
+  });
+}
+
 function rowCustomer(row: Record<string, unknown>, organizationId: string): BillingCustomer {
   return {
     organizationId,
@@ -591,8 +640,19 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
   };
 }
 
-function usageRowParameters(usage: BillingUsage): unknown[] {
-  return [usage.organizationId, usage.periodStart, usage.periodEnd, usage.seats, usage.storageBytes, usage.scans, usage.eveCostCents, usage.updatedAt];
+function usageRowParameters(usage: BillingUsage, state: BillingOrganizationState): unknown[] {
+  return [
+    usage.organizationId,
+    usage.periodStart,
+    usage.periodEnd,
+    usage.seats,
+    usage.storageBytes,
+    usage.scans,
+    usage.eveCostCents,
+    usage.updatedAt,
+    state.seatBaseline ?? usage.seats,
+    JSON.stringify(state.seatReservations ?? []),
+  ];
 }
 
 function eventKey(event: Pick<BillingWebhookEvent, 'provider' | 'eventId'>): string {
@@ -647,19 +707,24 @@ export class PostgresBillingRepository implements BillingRepository {
     // protocol races on transaction-scoped clients.
     const customerResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, customer_id, created_at, updated_at FROM ${this.tables.customers} WHERE organization_id = $1${suffix}`, [normalized]);
     const subscriptionResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, subscription_id, customer_id, price_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end, event_created_at, last_event_id, source, updated_at FROM ${this.tables.subscriptions} WHERE organization_id = $1${suffix}`, [normalized]);
-    const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
+    const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, seat_baseline, seat_reservations, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
     const eventsResult = await executor.query<Record<string, unknown>>(`SELECT provider, event_id, event_type, organization_id, created_at, received_at, payload_digest, handled, ignored_reason FROM ${this.tables.events} WHERE organization_id = $1 ORDER BY received_at DESC LIMIT ${this.maxWebhookEvents}${suffix}`, [normalized]);
     const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
     const base = cloneBillingState(this.stateFactory(normalized));
     if (base.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
     const usageRow = usageResult.rows[0];
+    const usage = usageRow ? rowUsage(usageRow, normalized) : base.usage;
     const state: BillingOrganizationState = {
       ...base,
       customer: customerResult.rows[0] ? rowCustomer(customerResult.rows[0], normalized) : undefined,
       subscription: subscriptionResult.rows[0] ? rowSubscription(subscriptionResult.rows[0], normalized) : undefined,
-      usage: usageRow ? rowUsage(usageRow, normalized) : base.usage,
+      usage,
       webhookEvents: eventsResult.rows.map(rowEvent),
       usageOperations: operationsResult.rows.map((row) => rowOperation(row, normalized)),
+      seatBaseline: usageRow?.seat_baseline === undefined || usageRow.seat_baseline === null
+        ? usage.seats
+        : asNumber(usageRow.seat_baseline, 'usage.seat_baseline'),
+      seatReservations: usageRow ? rowSeatReservations(usageRow) : [],
     };
     assertBillingState(state);
     return state;
@@ -709,10 +774,10 @@ export class PostgresBillingRepository implements BillingRepository {
       await executor.query(`DELETE FROM ${this.tables.subscriptions} WHERE organization_id = $1`, [state.organizationId]);
     }
     await executor.query(
-      `INSERT INTO ${this.tables.usage} (organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, updated_at)
-       VALUES ($1, $2::timestamptz, $3::timestamptz, $4, $5, $6, $7, $8::timestamptz)
-       ON CONFLICT (organization_id) DO UPDATE SET period_start = EXCLUDED.period_start, period_end = EXCLUDED.period_end, seats = EXCLUDED.seats, storage_bytes = EXCLUDED.storage_bytes, scans = EXCLUDED.scans, eve_cost_cents = EXCLUDED.eve_cost_cents, updated_at = EXCLUDED.updated_at`,
-      usageRowParameters(state.usage),
+      `INSERT INTO ${this.tables.usage} (organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, updated_at, seat_baseline, seat_reservations)
+       VALUES ($1, $2::timestamptz, $3::timestamptz, $4, $5, $6, $7, $8::timestamptz, $9, $10::jsonb)
+       ON CONFLICT (organization_id) DO UPDATE SET period_start = EXCLUDED.period_start, period_end = EXCLUDED.period_end, seats = EXCLUDED.seats, storage_bytes = EXCLUDED.storage_bytes, scans = EXCLUDED.scans, eve_cost_cents = EXCLUDED.eve_cost_cents, updated_at = EXCLUDED.updated_at, seat_baseline = EXCLUDED.seat_baseline, seat_reservations = EXCLUDED.seat_reservations`,
+      usageRowParameters(state.usage, state),
     );
     for (const event of state.webhookEvents) {
       // Existing rows are immutable.  Only rows appended by this

@@ -113,19 +113,37 @@ Unsupported, stale, and unbound events do not grant paid access.
 
 ## Usage enforcement
 
-`reserveUsage()` and `setSeatCount()` must be called inside the repository
-transaction seam. They enforce finite seats, retained bytes, monthly scans,
-and monthly Eve cents limits against the current entitlement. Operation keys
-make retries idempotent and reject a reused key with a different delta.
-`reconcileUsage()` supports measured post-operation corrections; omitted
-metrics retain their reservation, while an explicit zero releases it. UTC
-month rollover resets scans and Eve spend while retaining current seats and
-storage.
+`reserveUsage()` and `setSeatCount()` enforce finite seats, retained bytes,
+monthly scans, and monthly Eve cents limits against the current entitlement.
+Operation keys make retries idempotent and reject a reused key with a
+different delta. `reconcileUsage()` supports measured post-operation
+corrections; omitted metrics retain their reservation, while an explicit zero
+releases it. UTC month rollover resets scans and Eve spend while retaining
+current seats and storage.
+
+The core registry reserves scan work before native publish, rescan, source
+import, and OpenClaw queue admission. It reserves retained bytes before a
+publish blob write and before import completion stores an acquired bundle.
+Authoring reserves draft bytes before create/upload/revision writes and scan
+units before draft publication. The worker repeats the scan reservation with
+the same job key before source acquisition, download, materialization, or
+scanner execution, so queue admission and retries charge one operation. A
+failed repository/storage step releases its reservation; successful import
+storage remains charged for reconciliation. Better Auth organization hooks
+sync active members plus unexpired pending invitations and reserve a new seat
+before direct member or invitation writes. Seat holds are stored beside the
+locked usage row, and reconciliation preserves other requests' in-flight
+holds. Successful writes settle their own key; cancellations, removals, and
+re-invites can reuse a settled lifecycle key, while an abandoned hold expires
+after a bounded lease. These adapters are omitted when billing explicitly
+reports disabled, preserving the legacy deployment path.
 
 The service exposes `getEntitlement()`, `usageSnapshot()`, `checkUsage()`,
 `enforceUsage()`, and `recordUsage()` aliases for identity, storage, scanner,
-and Eve runtime adapters. Those mutation callers still need to invoke the
-transactional reservation seam at their scan, storage, seat, and Eve admission
-boundaries; the console only reports the durable counters. A passing local
-fixture or component test does not prove a configured Stripe account,
-production database, charge, or launch price approval.
+and Eve runtime adapters. Eve invocation cost reservation remains a separate
+runtime-owned seam. Focused route, authoring, and worker tests prove that an
+over-limit request performs no blob/source/scanner/member write; the
+disposable PostgreSQL suite separately proves concurrent durable reservations,
+last-seat seat admission with lifecycle reuse, webhook deduplication, and event
+ordering. These tests do not prove a
+configured Stripe account, production charge, or launch price approval.

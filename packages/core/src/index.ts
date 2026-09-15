@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   type AuditEvent,
   type Authenticator,
+  type BillingUsageAdmission,
   type CurrentSkillAdmission,
   type Digest,
   type DistributionState,
@@ -43,6 +44,7 @@ import {
   type TransferGrant,
   type Upstream,
   type UpstreamRequestObserver,
+  type MeteredUsageDelta,
 } from '../../contracts/src/index.js';
 import {
   digestBytes,
@@ -332,6 +334,8 @@ export interface RegistryOpenClawConsumerDependencies {
  */
 export interface RegistryOpenClawImportQueueOptions {
   repository: StateRepository;
+  /** Optional server-side metered admission for trusted-feed imports. */
+  billing?: BillingUsageAdmission;
   organizationId: string;
   namespace: string;
   /** Operator-owned HTTPS origin used by the hosted source adapter. */
@@ -411,7 +415,21 @@ export function createOpenClawImportQueue(
           ...(input.feedCompatibilityProfile === undefined ? {} : { compatibilityProfile: input.feedCompatibilityProfile }),
         },
       };
-      return await options.repository.transaction(options.organizationId, (state) => {
+      const candidateJobId = randomId('job');
+      const reservationKey = meteredOperationKey('scan', candidateJobId);
+      const reservationDelta: MeteredUsageDelta = { scans: 1 };
+      let billing: BillingUsageAdmission | undefined;
+      if (options.billing?.status().enabled === true) {
+        try {
+          await options.billing.reserveUsage(options.organizationId, reservationDelta, reservationKey);
+          billing = options.billing;
+        } catch (error) {
+          throw meteredError(error);
+        }
+      }
+      let result: OpenClawImportOperation;
+      try {
+        result = await options.repository.transaction(options.organizationId, (state) => {
         const mutable = ensureState(state, defaultPolicy());
         const sameSource = (job: Job): boolean => {
           if (job.organizationId !== options.organizationId || job.kind !== 'import' || !job.import || !isObject(job.openclawSource)) return false;
@@ -439,7 +457,7 @@ export function createOpenClawImportQueue(
           throw new RegistryApiError('PROVENANCE_CONFLICT', 'The OpenClaw source identity is already bound to a different release', 409);
         }
         const job: Job = {
-          id: randomId('job'),
+          id: candidateJobId,
           organizationId: options.organizationId,
           kind: 'import',
           state: 'queued',
@@ -461,7 +479,15 @@ export function createOpenClawImportQueue(
           source: source.kind,
         }, options.organizationId));
         return { operationId: job.id, state: 'queued' as const };
-      });
+        });
+      } catch (error) {
+        await releaseMeteredUsage(billing, options.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+        throw error;
+      }
+      if (result.operationId !== candidateJobId) {
+        await releaseMeteredUsage(billing, options.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+      }
+      return result;
     },
   };
 }
@@ -504,6 +530,8 @@ export interface RegistryOpenClawDependencies {
 }
 
 export type RegistryHandlerDependencies = RegistryDependencies & {
+  /** Optional server-side metered admission. Omitted means legacy billing-disabled behavior. */
+  billing?: BillingUsageAdmission;
   /** Optional federated source discovery/resolve facade. */
   sourceCatalog?: SourceCatalogClient;
   directory?: RegistryDirectoryClient;
@@ -1391,6 +1419,7 @@ function createAuthoringHandlerDependencies(
       organizationId: config.organizationId,
       maxBodyBytes: config.maxBodyBytes,
     },
+    ...(deps.billing === undefined ? {} : { billing: deps.billing }),
     releaseAdmission: (state, release, releasePrincipal) =>
       releasePrincipal.organizationId === config.organizationId &&
       canReadNamespace(releasePrincipal, release.name) &&
@@ -1903,7 +1932,13 @@ async function queueSourceCatalogImport(
 ): Promise<SourceCatalogQueueResult> {
   const sourceCatalog = deps.sourceCatalog;
   if (!sourceCatalog) throw new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is not configured for this registry', 503, { retryable: true });
-  const committed = await deps.repository.transaction<SourceCatalogQueueResult>(config.organizationId, (state) => {
+  const candidateJobId = randomId('job');
+  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationDelta: MeteredUsageDelta = { scans: 1 };
+  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  let committed: SourceCatalogQueueResult;
+  try {
+    committed = await deps.repository.transaction<SourceCatalogQueueResult>(config.organizationId, (state) => {
     const mutable = ensureState(state, defaultPolicy());
     if (sourceCatalog.configRevision(mapping.sourceId) !== mapping.importRequest.sourceCatalogConfigRevision) {
       throw new RegistryApiError('SOURCE_CONFIGURATION_CHANGED', 'Source configuration changed while this import was being queued', 409, { retryable: true });
@@ -1970,7 +2005,7 @@ async function queueSourceCatalogImport(
       importRequest = { ...importRequest, version: sourceCatalogRetryVersion() };
     }
     const job: Job = {
-      id: randomId('job'),
+      id: candidateJobId,
       organizationId: config.organizationId,
       kind: 'import',
       state: 'queued',
@@ -1992,7 +2027,14 @@ async function queueSourceCatalogImport(
       requestId,
     }, config.organizationId));
     return { status: 202, job, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
-  });
+    });
+  } catch (error) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    throw error;
+  }
+  if (committed.status !== 202 || committed.job.id !== candidateJobId) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  }
   return committed;
 }
 
@@ -2797,54 +2839,81 @@ async function publishSkill(
   );
   if (duplicate) throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
 
-  const stored = await putVerifiedBlob(deps, bytes, digest);
   const now = nowIso();
   const policy = clonePolicy(state.policy);
   const jobId = randomId('job');
   const skillId = randomId('skill');
-  const skill: SkillVersion = {
-    id: skillId,
-    organizationId: config.organizationId,
-    name,
-    skillName: normalizeSkillName(parsedMetadata.skillName) || name.slice(name.indexOf('/') + 1),
-    version,
-    description: requestedDescription || stringValue(parsedMetadata.description) || '',
-    artifact: stored,
-    state: 'pending',
-    policyRevision: policy.revision,
-    createdAt: now,
-    provenance: { kind: 'native' },
-    fileCount: bundle.files.length,
-    scanIds: [],
-  };
-  const job: Job = {
-    id: jobId,
-    organizationId: config.organizationId,
-    kind: 'scan',
-    state: 'queued',
-    resourceId: skillId,
-    artifact: stored,
-    policyRevision: policy.revision,
-    policy,
-    createdAt: now,
-    updatedAt: now,
-    attempts: 0,
-  };
-  const result = await deps.repository.transaction(config.organizationId, (current) => {
-    const mutable = ensureState(current, state.policy);
-    if (mutable.skills.some((candidate) => candidate.name === name && candidate.version === version)) {
-      throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
-    }
-    mutable.skills.push(skill);
-    mutable.jobs.push(job);
-    appendAudit(mutable, audit(principal, 'skill.publish.queued', skillId, {
-      digest,
+  const storageReservationKey = meteredOperationKey('publish-storage', jobId);
+  const storageReservationDelta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
+  const storageBilling = await reserveMeteredUsage(deps, config.organizationId, storageReservationDelta, storageReservationKey);
+  const scanReservationKey = meteredOperationKey('scan', jobId);
+  let scanBilling: BillingUsageAdmission | undefined;
+  try {
+    // Keep the scan reservation on the same durable job key used by the
+    // worker. A queued job is therefore charged once across queue admission,
+    // retries, and worker execution rather than once per phase.
+    scanBilling = await reserveMeteredUsage(
+      deps,
+      config.organizationId,
+      { scans: 1 },
+      scanReservationKey,
+    );
+  } catch (error) {
+    await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
+    throw error;
+  }
+  try {
+    // Admission happens before the first blob write. A rejected plan therefore
+    // cannot leave a newly stored artifact or enqueue scanner work.
+    const stored = await putVerifiedBlob(deps, bytes, digest);
+    const skill: SkillVersion = {
+      id: skillId,
+      organizationId: config.organizationId,
+      name,
+      skillName: normalizeSkillName(parsedMetadata.skillName) || name.slice(name.indexOf('/') + 1),
       version,
-      requestId,
-    }, config.organizationId));
-    return job;
-  });
-  return jsonResponse({ operation: result }, 202);
+      description: requestedDescription || stringValue(parsedMetadata.description) || '',
+      artifact: stored,
+      state: 'pending',
+      policyRevision: policy.revision,
+      createdAt: now,
+      provenance: { kind: 'native' },
+      fileCount: bundle.files.length,
+      scanIds: [],
+    };
+    const job: Job = {
+      id: jobId,
+      organizationId: config.organizationId,
+      kind: 'scan',
+      state: 'queued',
+      resourceId: skillId,
+      artifact: stored,
+      policyRevision: policy.revision,
+      policy,
+      createdAt: now,
+      updatedAt: now,
+      attempts: 0,
+    };
+    const result = await deps.repository.transaction(config.organizationId, (current) => {
+      const mutable = ensureState(current, state.policy);
+      if (mutable.skills.some((candidate) => candidate.name === name && candidate.version === version)) {
+        throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
+      }
+      mutable.skills.push(skill);
+      mutable.jobs.push(job);
+      appendAudit(mutable, audit(principal, 'skill.publish.queued', skillId, {
+        digest,
+        version,
+        requestId,
+      }, config.organizationId));
+      return job;
+    });
+    return jsonResponse({ operation: result }, 202);
+  } catch (error) {
+    await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
+    await releaseMeteredUsage(scanBilling, config.organizationId, scanReservationKey, { scans: 1 }, `${scanReservationKey}:release`);
+    throw error;
+  }
 }
 
 async function handleOperationsRoute(
@@ -3777,8 +3846,9 @@ async function rescanSkill(
   const skill = state.skills.find((candidate) => candidate.id === id && canReadNamespace(principal, candidate.name));
   if (!skill) throw unavailable();
   const now = nowIso();
+  const jobId = randomId('job');
   const job: Job = {
-    id: randomId('job'),
+    id: jobId,
     organizationId: config.organizationId,
     kind: 'scan',
     state: 'queued',
@@ -3790,19 +3860,27 @@ async function rescanSkill(
     updatedAt: now,
     attempts: 0,
   };
-  const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
-    const mutable = ensureState(mutableState, state.policy);
-    const currentSkill = mutable.skills.find((candidate) => candidate.id === id);
-    if (!currentSkill || !canReadNamespace(principal, currentSkill.name)) throw unavailable();
-    if (currentSkill.state !== 'revoked') currentSkill.state = 'pending';
-    mutable.jobs.push(job);
-    appendAudit(mutable, audit(principal, 'skill.rescan.queued', id, {
-      digest: skill.artifact.digest,
-      requestId,
-    }, config.organizationId));
-    return job;
-  });
-  return jsonResponse({ operation: result }, 202);
+  const reservationKey = meteredOperationKey('scan', jobId);
+  const reservationDelta: MeteredUsageDelta = { scans: 1 };
+  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  try {
+    const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
+      const mutable = ensureState(mutableState, state.policy);
+      const currentSkill = mutable.skills.find((candidate) => candidate.id === id);
+      if (!currentSkill || !canReadNamespace(principal, currentSkill.name)) throw unavailable();
+      if (currentSkill.state !== 'revoked') currentSkill.state = 'pending';
+      mutable.jobs.push(job);
+      appendAudit(mutable, audit(principal, 'skill.rescan.queued', id, {
+        digest: skill.artifact.digest,
+        requestId,
+      }, config.organizationId));
+      return job;
+    });
+    return jsonResponse({ operation: result }, 202);
+  } catch (error) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    throw error;
+  }
 }
 
 async function revokeSkill(
@@ -5198,7 +5276,13 @@ async function queueSourceReferenceImport(
   requestId: string,
 ): Promise<SourceCachedResult> {
   const state = await readState(deps.repository, config.organizationId);
-  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+  const candidateJobId = randomId('job');
+  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationDelta: MeteredUsageDelta = { scans: 1 };
+  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  let result: SourceCachedResult;
+  try {
+    result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
     const current = mutable.upstreams.find((candidate) => candidate.id === upstream.id);
     if (!current || !current.enabled || !sameUpstreamOrigin(current, upstream) || !canReadNamespace(principal, current.namespace)) {
@@ -5239,7 +5323,7 @@ async function queueSourceReferenceImport(
       sourceReference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
     };
     const job: Job = {
-      id: randomId('job'),
+      id: candidateJobId,
       organizationId: config.organizationId,
       kind: 'import',
       state: 'queued',
@@ -5259,7 +5343,15 @@ async function queueSourceReferenceImport(
       requestId,
     }, config.organizationId));
     return { status: 202 as const, job };
-  });
+    });
+  } catch (error) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    throw error;
+  }
+  if (result.status !== 202 || result.job.id !== candidateJobId) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  }
+  return result;
 }
 
 function canonicalSourceFromSkill(skill: SkillVersion): CanonicalSourceIdentity | undefined {
@@ -5597,7 +5689,13 @@ async function queueTransparentImport(
     throw new RegistryApiError('PROVENANCE_CONFLICT', 'The feed configuration changed while this import was being resolved', 409);
   }
   const upstream = feedAsUpstream(configuredFeed);
-  const committed = await deps.repository.transaction<{ value: TransparentCachedResult; created: boolean }>(config.organizationId, (mutableState) => {
+  const candidateJobId = randomId('job');
+  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationDelta: MeteredUsageDelta = { scans: 1 };
+  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  let committed: { value: TransparentCachedResult; created: boolean };
+  try {
+    committed = await deps.repository.transaction<{ value: TransparentCachedResult; created: boolean }>(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
     const currentFeed = (mutable.feeds ?? []).find((candidate) => candidate.id === feed.id);
     if (!currentFeed || currentFeed.name !== feed.name || !currentFeed.enabled || !canReadNamespace(principal, feedNamespace(currentFeed))) {
@@ -5655,7 +5753,7 @@ async function queueTransparentImport(
     const version = generatedTransparentVersion();
     const importRequest: ImportRequest = { ...template, version };
     const job: Job = {
-      id: randomId('job'),
+      id: candidateJobId,
       organizationId: config.organizationId,
       kind: 'import',
       state: 'queued',
@@ -5679,7 +5777,14 @@ async function queueTransparentImport(
       requestId,
     }, config.organizationId));
     return { value: { status: 202 as const, job }, created: true };
-  });
+    });
+  } catch (error) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    throw error;
+  }
+  if (!committed.created) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  }
   // The transaction may retry or roll back. Count only the committed result,
   // after the repository has returned successfully, so one request cannot
   // overcount a job created by an abandoned transaction attempt.
@@ -5721,8 +5826,13 @@ async function resolveOrQueueImport(
   // the directory routes before entering the transaction or any worker fetch.
   if (upstream.kind === 'skills-sh') requireDirectoryId(importRequest.path);
   const cacheKey = importCacheKey(config.organizationId, importRequest);
-
-  return await deps.repository.transaction(config.organizationId, (mutableState) => {
+  const candidateJobId = randomId('job');
+  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationDelta: MeteredUsageDelta = { scans: 1 };
+  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  let result: ImportResolutionResult;
+  try {
+    result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
     const currentUpstream = findImportUpstream(mutable, importRequest, principal);
     if (!sameUpstreamOrigin(currentUpstream, upstream)) {
@@ -5816,7 +5926,7 @@ async function resolveOrQueueImport(
     }
 
     const job: Job = {
-      id: randomId('job'),
+      id: candidateJobId,
       organizationId: config.organizationId,
       kind: 'import',
       state: 'queued',
@@ -5837,7 +5947,15 @@ async function resolveOrQueueImport(
       requestId,
     }, config.organizationId));
     return { job, status: 202 as const };
-  });
+    });
+  } catch (error) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    throw error;
+  }
+  if (result.status !== 202 || result.job.id !== candidateJobId) {
+    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  }
+  return result;
 }
 
 function parseImportRequest(body: JsonObject): ImportRequest {
@@ -6208,12 +6326,17 @@ async function completeJob(
   }
 
   let imported: { bundle: SkillBundle; bytes: Uint8Array; stored: StoredBlob; digest: Digest; metadata: { skillName?: string; description?: string } } | undefined;
+  let importedStorageAdmission: { billing: BillingUsageAdmission; reservationKey: string; delta: MeteredUsageDelta } | undefined;
   if (job.kind === 'import' && !body.error) {
     if (!isObject(body.bundle)) throw new RegistryApiError('INVALID_JOB_RESULT', 'An import completion requires a bundle', 400);
     try {
       const bundle = validateBundle(body.bundle) as SkillBundle;
       const bytes = encodeBundle(bundle);
       const digest = await digestBytes(bytes);
+      const reservationKey = meteredOperationKey('import-storage', job.id);
+      const delta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
+      const billing = await reserveMeteredUsage(deps, config.organizationId, delta, reservationKey);
+      if (billing) importedStorageAdmission = { billing, reservationKey, delta };
       const stored = await putVerifiedBlob(deps, bytes, digest);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
       if (requestedDigest && requestedDigest !== digest) {
@@ -6221,6 +6344,16 @@ async function completeJob(
       }
       imported = { bundle, bytes, stored, digest, metadata };
     } catch (error) {
+      if (importedStorageAdmission) {
+        await releaseMeteredUsage(
+          importedStorageAdmission.billing,
+          config.organizationId,
+          importedStorageAdmission.reservationKey,
+          importedStorageAdmission.delta,
+          `${importedStorageAdmission.reservationKey}:release`,
+        );
+        importedStorageAdmission = undefined;
+      }
       throw bundleError(error);
     }
   }
@@ -6228,17 +6361,33 @@ async function completeJob(
   const rawScanResults = body.scanResults;
   let scanResults: ScanResult[] = [];
   if (!body.error && rawScanResults !== undefined) {
-    if (!Array.isArray(rawScanResults)) throw new RegistryApiError('INVALID_SCAN_RESULT', 'scanResults must be an array', 400);
-    const expectedDigest = imported?.digest || job.artifact?.digest;
-    if (!expectedDigest) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan evidence is missing an artifact digest', 400);
-    scanResults = rawScanResults.map((value) => parseScanResult(value, job, config.organizationId, expectedDigest));
-    const scannerIds = new Set(scanResults.map((scan) => scan.scannerId));
-    if (scannerIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'A scanner may return only one result per job', 400);
-    const resultIds = new Set(scanResults.map((scan) => scan.id));
-    if (resultIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result ids must be unique', 400);
+    try {
+      if (!Array.isArray(rawScanResults)) throw new RegistryApiError('INVALID_SCAN_RESULT', 'scanResults must be an array', 400);
+      const expectedDigest = imported?.digest || job.artifact?.digest;
+      if (!expectedDigest) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan evidence is missing an artifact digest', 400);
+      scanResults = rawScanResults.map((value) => parseScanResult(value, job, config.organizationId, expectedDigest));
+      const scannerIds = new Set(scanResults.map((scan) => scan.scannerId));
+      if (scannerIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'A scanner may return only one result per job', 400);
+      const resultIds = new Set(scanResults.map((scan) => scan.id));
+      if (resultIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result ids must be unique', 400);
+    } catch (error) {
+      if (importedStorageAdmission) {
+        await releaseMeteredUsage(
+          importedStorageAdmission.billing,
+          config.organizationId,
+          importedStorageAdmission.reservationKey,
+          importedStorageAdmission.delta,
+          `${importedStorageAdmission.reservationKey}:release`,
+        );
+        importedStorageAdmission = undefined;
+      }
+      throw error;
+    }
   }
 
-  const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
+  let result: Job;
+  try {
+    result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
     const currentJob = mutable.jobs.find((candidate) => candidate.id === id);
     if (!currentJob || currentJob.state !== 'running' || currentJob.leaseToken !== leaseToken || timestampExpired(currentJob.leaseExpiresAt)) {
@@ -6340,7 +6489,30 @@ async function completeJob(
       requestId,
     }, config.organizationId));
     return currentJob;
-  });
+    });
+  } catch (error) {
+    if (importedStorageAdmission) {
+      await releaseMeteredUsage(
+        importedStorageAdmission.billing,
+        config.organizationId,
+        importedStorageAdmission.reservationKey,
+        importedStorageAdmission.delta,
+        `${importedStorageAdmission.reservationKey}:release`,
+      );
+      importedStorageAdmission = undefined;
+    }
+    throw error;
+  }
+  if (importedStorageAdmission && !(result.kind === 'import' && result.state === 'completed')) {
+    await releaseMeteredUsage(
+      importedStorageAdmission.billing,
+      config.organizationId,
+      importedStorageAdmission.reservationKey,
+      importedStorageAdmission.delta,
+      `${importedStorageAdmission.reservationKey}:release`,
+    );
+    importedStorageAdmission = undefined;
+  }
   const recordSourceProof = (deps as RegistryHandlerDependencies).openClaw?.recordSourceProof;
   if (recordSourceProof && result.kind === 'import' && result.state === 'completed' && result.resourceId && body.error === undefined) {
     const proof = openClawCompletionProof(job, body.provenance, result.artifact?.digest);
@@ -7300,6 +7472,83 @@ function bundleError(error: unknown): RegistryApiError {
   if (error instanceof RegistryApiError) return error;
   const message = error instanceof Error && error.message ? error.message : 'Bundle validation failed';
   return new RegistryApiError('BUNDLE_INVALID', message.slice(0, 300), 400);
+}
+
+/**
+ * Resolve the optional metering adapter without making the portable registry
+ * depend on the billing package. An absent or explicitly disabled adapter
+ * preserves the legacy registry behavior; a configured adapter is the only
+ * path that can deny a metered operation.
+ */
+function meteredAdmission(deps: RegistryDependencies): BillingUsageAdmission | undefined {
+  const candidate = (deps as RegistryHandlerDependencies).billing;
+  if (!candidate || typeof candidate.status !== 'function') return undefined;
+  return candidate.status().enabled === true ? candidate : undefined;
+}
+
+function meteredError(error: unknown): RegistryApiError {
+  if (error instanceof RegistryApiError) return error;
+  if (isObject(error) && typeof error.code === 'string') {
+    const code = error.code;
+    const status = Number(error.status);
+    if (code === 'USAGE_LIMIT_EXCEEDED') {
+      return new RegistryApiError('USAGE_LIMIT_EXCEEDED', 'The organization usage limit has been reached', 429);
+    }
+    if (code === 'IDEMPOTENCY_CONFLICT') {
+      return new RegistryApiError('IDEMPOTENCY_CONFLICT', 'The metered operation was retried with different usage', 409);
+    }
+    if (code === 'INVALID_USAGE' && Number.isSafeInteger(status) && status >= 400 && status < 500) {
+      return new RegistryApiError('INVALID_USAGE', 'The requested usage is invalid', status);
+    }
+  }
+  return new RegistryApiError('BILLING_UNAVAILABLE', 'Usage enforcement is temporarily unavailable', 503, { retryable: true });
+}
+
+function meteredOperationKey(kind: string, id: string): string {
+  return `private-skills:${kind}:${id}`;
+}
+
+async function reserveMeteredUsage(
+  deps: RegistryDependencies,
+  organizationId: string,
+  delta: MeteredUsageDelta,
+  operationKey: string,
+): Promise<BillingUsageAdmission | undefined> {
+  const billing = meteredAdmission(deps);
+  if (!billing) return undefined;
+  try {
+    await billing.reserveUsage(organizationId, delta, operationKey);
+    return billing;
+  } catch (error) {
+    throw meteredError(error);
+  }
+}
+
+function releaseDelta(delta: MeteredUsageDelta): MeteredUsageDelta {
+  return Object.fromEntries(
+    Object.entries(delta)
+      .filter(([, value]) => value !== undefined && value !== 0)
+      .map(([metric]) => [metric, 0]),
+  ) as MeteredUsageDelta;
+}
+
+async function releaseMeteredUsage(
+  billing: BillingUsageAdmission | undefined,
+  organizationId: string,
+  reservationKey: string,
+  delta: MeteredUsageDelta,
+  operationKey: string,
+): Promise<void> {
+  if (!billing) return;
+  const actual = releaseDelta(delta);
+  if (Object.keys(actual).length === 0) return;
+  try {
+    await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+  } catch {
+    // The caller's durable transaction error is more useful than a cleanup
+    // error. A later reconciliation can repair a reservation if the provider
+    // repository is temporarily unavailable.
+  }
 }
 
 function unavailable(): RegistryApiError {
