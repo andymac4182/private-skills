@@ -11,13 +11,15 @@ export interface EveTenantCostReservation {
     service: EveTenantService;
     operation: string;
     idempotencyKey: string;
-  }): Promise<{ reservationId: string }>;
+  }): Promise<{ reservationId: string; reservationGeneration: number }>;
   settle(input: {
     reservationId: string;
+    /** Exact billing lifecycle returned by reserve; never re-read as current state. */
+    reservationGeneration: number;
     /** Optional measured cost; an adapter may use its bounded estimate. */
     actualCostCents?: number;
   }): Promise<void>;
-  release(input: { reservationId: string }): Promise<void>;
+  release(input: { reservationId: string; reservationGeneration: number }): Promise<void>;
   /**
    * Reconcile a completed invocation after the provider reports its measured
    * token cost. This is optional so a host can begin with estimate-only
@@ -25,6 +27,8 @@ export interface EveTenantCostReservation {
    */
   reconcile?(input: {
     reservationId: string;
+    /** Exact billing lifecycle returned by reserve; never infer current generation. */
+    reservationGeneration: number;
     actualCostCents: number;
     operationKey?: string;
   }): Promise<void>;
@@ -48,11 +52,12 @@ export class EveCostReservationError extends Error {
   readonly uncertain: boolean;
   readonly retryable: boolean;
   readonly reservationId?: string;
+  readonly reservationGeneration?: number;
 
   constructor(
     code: EveCostFailureCode,
     message: string,
-    options: { uncertain?: boolean; retryable?: boolean; reservationId?: string } = {},
+    options: { uncertain?: boolean; retryable?: boolean; reservationId?: string; reservationGeneration?: number } = {},
   ) {
     super(message);
     this.name = 'EveCostReservationError';
@@ -60,6 +65,7 @@ export class EveCostReservationError extends Error {
     this.uncertain = options.uncertain ?? false;
     this.retryable = options.retryable ?? this.uncertain;
     this.reservationId = options.reservationId;
+    this.reservationGeneration = options.reservationGeneration;
   }
 }
 
@@ -113,6 +119,7 @@ export async function runWithEveCostReservation<T>(input: {
   if (typeof reservationId !== 'string' || reservationId.trim() === '') {
     throw new EveCostReservationError('COST_RESERVATION_FAILED', 'Eve cost reservation is invalid');
   }
+  const reservationGeneration = boundedReservationGeneration(held.reservationGeneration);
   let started = false;
   try {
     const result = await input.action();
@@ -120,6 +127,7 @@ export async function runWithEveCostReservation<T>(input: {
     const actual = input.actualCostCents?.(result);
     await input.reservation.settle({
       reservationId,
+      reservationGeneration,
       ...(actual === undefined ? {} : { actualCostCents: actual }),
     });
     return result;
@@ -131,20 +139,27 @@ export async function runWithEveCostReservation<T>(input: {
       throw new EveCostReservationError(
         'COST_RECONCILIATION_REQUIRED',
         'Eve cost settlement requires reconciliation',
-        { uncertain: true, reservationId },
+        { uncertain: true, reservationId, reservationGeneration },
       );
     }
     try {
-      await input.reservation.release({ reservationId });
+      await input.reservation.release({ reservationId, reservationGeneration });
     } catch {
       // A failed release is itself uncertain: the reservation may still be
       // counted and must not be silently retried as free work.
       throw new EveCostReservationError(
         'COST_RECONCILIATION_REQUIRED',
         'Eve cost release requires reconciliation',
-        { uncertain: true, reservationId },
+        { uncertain: true, reservationId, reservationGeneration },
       );
     }
     throw error;
   }
+}
+
+function boundedReservationGeneration(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new EveCostReservationError('COST_RESERVATION_FAILED', 'Eve reservation generation is invalid');
+  }
+  return value as number;
 }

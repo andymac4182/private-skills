@@ -32,12 +32,14 @@ export interface EveBillingUsageAdmission {
     reservationKey: string,
     actual: { eveCostCents: number },
     operationKey: string,
+    reservationGeneration?: number,
   ): Promise<unknown>;
   /** Resolve a retained usage operation after an adapter restart or eviction. */
   findUsageOperation(operationKey: string): Promise<{
     organizationId: unknown;
     operationKey: unknown;
     delta: unknown;
+    reservationGeneration?: unknown;
   } | undefined>;
 }
 
@@ -58,6 +60,7 @@ interface ReservationInput {
 interface ReservationRecord {
   tenantId: string;
   reservationId: string;
+  reservationGeneration: number;
   estimateCents: number;
 }
 
@@ -75,6 +78,10 @@ export function createBillingEveCostReservation(
   const reservations = new Map<string, ReservationRecord>();
 
   const remember = (record: ReservationRecord): void => {
+    const existing = reservations.get(record.reservationId);
+    // Concurrent retries can resolve out of order. Never let an older
+    // reserve response replace the newer lifecycle in the local handoff map.
+    if (existing && existing.reservationGeneration > record.reservationGeneration) return;
     reservations.delete(record.reservationId);
     reservations.set(record.reservationId, record);
     while (reservations.size > maxReservations) {
@@ -117,6 +124,10 @@ export function createBillingEveCostReservation(
       const recovered: ReservationRecord = {
         tenantId,
         reservationId: normalized,
+        // Rows written before lifecycle fencing are generation 1. Keep the
+        // caller's generation separate below: a delayed callback may carry
+        // G1 while the durable row has already been reopened as G2.
+        reservationGeneration: eveReservationGeneration(durable.reservationGeneration),
         estimateCents: durableEstimate,
       };
       remember(recovered);
@@ -160,39 +171,45 @@ export function createBillingEveCostReservation(
       throw billingFailure(error, 'Eve cost reservation failed');
     }
     const reservationId = reservationIdFromResult(result, operationKey);
-    remember({ tenantId: normalized.tenantId, reservationId, estimateCents });
-    return { reservationId };
+    const reservationGeneration = reservationGenerationFromResult(result);
+    remember({ tenantId: normalized.tenantId, reservationId, reservationGeneration, estimateCents });
+    return { reservationId, reservationGeneration };
   };
 
-  const settle: EveTenantCostReservation['settle'] = async ({ reservationId, actualCostCents }) => {
+  const settle: EveTenantCostReservation['settle'] = async ({ reservationId, reservationGeneration, actualCostCents }) => {
+    const generation = boundedReservationGeneration(reservationGeneration);
     const record = await lookup(reservationId);
     const actual = boundedCost(actualCostCents ?? record.estimateCents, 'Eve actual cost');
-    await reconcileRecord(record, actual, 'settle');
+    await reconcileRecord(record, actual, 'settle', generation);
   };
 
-  const release: EveTenantCostReservation['release'] = async ({ reservationId }) => {
+  const release: EveTenantCostReservation['release'] = async ({ reservationId, reservationGeneration }) => {
+    const generation = boundedReservationGeneration(reservationGeneration);
     const record = await lookup(reservationId);
-    await reconcileRecord(record, 0, 'release');
+    await reconcileRecord(record, 0, 'release', generation);
   };
 
   const reconcile: NonNullable<EveTenantCostReservation['reconcile']> = async ({
     reservationId,
     actualCostCents,
     operationKey,
+    reservationGeneration,
   }) => {
+    const generation = boundedReservationGeneration(reservationGeneration);
     const record = await lookup(reservationId);
     const actual = boundedCost(actualCostCents, 'Eve actual cost');
-    await reconcileRecord(record, actual, operationKey === undefined ? 'reconcile' : boundedOperation(operationKey, 'operationKey'));
+    await reconcileRecord(record, actual, operationKey === undefined ? 'reconcile' : boundedOperation(operationKey, 'operationKey'), generation);
   };
 
-  async function reconcileRecord(record: ReservationRecord, actual: number, phase: string): Promise<void> {
-    const operationKey = await reconciliationOperationKey(record.reservationId, phase);
+  async function reconcileRecord(record: ReservationRecord, actual: number, phase: string, reservationGeneration: number): Promise<void> {
+    const operationKey = await reconciliationOperationKey(record.reservationId, reservationGeneration, phase);
     try {
       await billing.reconcileUsage(
         record.tenantId,
         record.reservationId,
         { eveCostCents: actual },
         operationKey,
+        reservationGeneration,
       );
     } catch {
       // A reconciliation response can be lost after the correction commits;
@@ -202,7 +219,7 @@ export function createBillingEveCostReservation(
       throw new EveCostReservationError(
         'COST_RECONCILIATION_REQUIRED',
         'Eve cost reconciliation requires retry',
-        { uncertain: true, reservationId: record.reservationId },
+        { uncertain: true, reservationId: record.reservationId, reservationGeneration },
       );
     }
   }
@@ -269,6 +286,28 @@ function eveReservationEstimate(value: unknown): number | undefined {
     : undefined;
 }
 
+function eveReservationGeneration(value: unknown): number {
+  // The billing repository treats pre-fencing rows as generation 1. Preserve
+  // that compatibility while rejecting malformed generation values.
+  return value === undefined ? 1 : boundedReservationGeneration(value);
+}
+
+function boundedReservationGeneration(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new EveCostReservationError('COST_RESERVATION_UNKNOWN', 'Eve cost reservation generation is invalid', { retryable: false });
+  }
+  return value as number;
+}
+
+function reservationGenerationFromResult(result: unknown): number {
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    return eveReservationGeneration((result as { reservationGeneration?: unknown }).reservationGeneration);
+  }
+  // Older billing adapters returned only the operation key; their durable
+  // rows are generation 1 and remain safe to reconcile with that identity.
+  return 1;
+}
+
 function reservationIdFromResult(result: unknown, fallback: string): string {
   if (result && typeof result === 'object' && !Array.isArray(result)) {
     const candidate = (result as { operationKey?: unknown; reservationId?: unknown }).operationKey
@@ -301,16 +340,19 @@ async function usageOperationKey(record: {
 }
 
 /**
- * Reconciliation keys intentionally depend only on the durable reservation
- * identity and a bounded phase. This lets a fresh process settle or release a
- * reservation without retaining the original request payload in memory.
+ * Reconciliation keys depend on the durable reservation identity, exact
+ * lifecycle generation, and a bounded phase. This lets a fresh process settle
+ * or release a reservation without retaining the original request payload,
+ * while ensuring a reopened key receives a distinct correction operation.
  */
-async function reconciliationOperationKey(reservationId: string, phase: string): Promise<string> {
+async function reconciliationOperationKey(reservationId: string, reservationGeneration: number, phase: string): Promise<string> {
   const normalizedReservationId = boundedOperation(reservationId, 'reservationId');
+  const normalizedGeneration = boundedReservationGeneration(reservationGeneration);
   const normalizedPhase = boundedOperation(phase, 'phase');
   const material = JSON.stringify([
     'private-skills-eve-reconcile-v1',
     normalizedReservationId,
+    normalizedGeneration,
     normalizedPhase,
   ]);
   const digest = await sha256Hex(material);

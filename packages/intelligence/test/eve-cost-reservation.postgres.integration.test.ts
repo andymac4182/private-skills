@@ -119,6 +119,7 @@ describePostgres('billing-backed Eve reservation recovery (requires PSKILLS_BILL
     });
     await expect(restarted.reconcile?.({
       reservationId: held.reservationId,
+      reservationGeneration: held.reservationGeneration,
       actualCostCents: 11,
       operationKey: 'operator-reconcile-eve-recovery-acme',
     })).resolves.toBeUndefined();
@@ -154,7 +155,7 @@ describePostgres('billing-backed Eve reservation recovery (requires PSKILLS_BILL
       operation: 'daily-review',
       idempotencyKey: 'providerless-review:2026-09-16',
     });
-    await adapter.settle({ reservationId: held.reservationId, actualCostCents: 11 });
+    await adapter.settle({ reservationId: held.reservationId, reservationGeneration: held.reservationGeneration, actualCostCents: 11 });
     await expect(service.usageSnapshot('eve-providerless-acme')).resolves.toMatchObject({
       usage: { eveCostCents: 11 },
       entitlement: { state: 'inactive', source: 'no-subscription' },
