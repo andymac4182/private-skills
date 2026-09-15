@@ -6,7 +6,7 @@ import '../styles/public-marketing.css'
 
 interface PublicLayoutProps {
   children: ReactNode
-  current?: 'home' | 'product' | 'pricing' | 'docs' | 'faq' | 'legal' | 'contact'
+  current?: 'home' | 'product' | 'demo' | 'pricing' | 'docs' | 'faq' | 'legal' | 'contact'
 }
 
 export function PublicLogo({ compact = false }: { compact?: boolean }) {
@@ -24,6 +24,7 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
       <nav className="marketing-nav" aria-label="Public navigation">
         <a aria-current={current === 'product' ? 'page' : undefined} className={current === 'product' ? 'marketing-nav-active' : ''} href="/product">Product</a>
         <a href="/product#how-it-works">How it works</a>
+        <a aria-current={current === 'demo' ? 'page' : undefined} className={current === 'demo' ? 'marketing-nav-active' : ''} href="/demo">Demo</a>
         <a aria-current={current === 'pricing' ? 'page' : undefined} className={current === 'pricing' ? 'marketing-nav-active' : ''} href="/pricing">Pricing</a>
         <a aria-current={current === 'docs' ? 'page' : undefined} className={current === 'docs' ? 'marketing-nav-active' : ''} href="/docs">Docs</a>
         <a aria-current={current === 'faq' ? 'page' : undefined} className={current === 'faq' ? 'marketing-nav-active' : ''} href="/faq">FAQ</a>
@@ -53,7 +54,7 @@ export function ProductFlowDemo() {
       number: '02',
       label: 'Scan',
       title: 'Check the candidate',
-      description: 'The registry validates the bundle and records scanner evidence. A required failure keeps the release unavailable.',
+      description: 'The registry validates the bundle and records scanner evidence. Configured policy can admit a release after required checks, or route it through a separate review gate. A required failure keeps it unavailable.',
       code: 'pskills scan status sha256:<release-digest>',
       status: 'Policy gate',
     },
@@ -191,7 +192,7 @@ function MarketingFooter() {
     </div>
     <div className="marketing-footer-grid">
       <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>Private registry, pull-through, and packs for engineering teams.</p></div>
-      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
+      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/demo">Demo walkthrough</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
       <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Sign in to registry</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
       <div><span className="marketing-footer-label">Boundaries</span><span className="marketing-footer-note">Scans and source adapters depend on deployment configuration.</span><span className="marketing-footer-note">Eve suggests review and draft changes; a human controls publishing.</span><a href="/legal">Legal and product notes</a></div>
     </div>

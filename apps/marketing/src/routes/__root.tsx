@@ -8,7 +8,7 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'Private Skills · A private registry for engineering teams' },
-      { name: 'description', content: 'Private Skills helps engineering teams review and install trusted agent skills.' },
+      { name: 'description', content: 'Private Skills helps engineering teams review and install agent skills with source and policy context.' },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),
