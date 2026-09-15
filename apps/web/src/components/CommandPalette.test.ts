@@ -8,7 +8,7 @@ const harness = vi.hoisted(() => ({ navigate: vi.fn() }))
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => harness.navigate }))
 
-import { CommandPalette } from './CommandPalette'
+import { CommandPalette, registryNavGroups, registrySections } from './CommandPalette'
 
 const sections = [
   { id: 'overview', label: 'Discover', hint: 'Registry pulse', glyph: '⌂' },
@@ -48,6 +48,23 @@ describe('CommandPalette', () => {
     if (dialogPrototype && originalShowModal) dialogPrototype.showModal = originalShowModal
     if (dialogPrototype && originalClose) dialogPrototype.close = originalClose
     vi.unstubAllGlobals()
+  })
+
+  it('keeps every registry route in the palette while grouping the shell navigation', () => {
+    expect(registryNavGroups.map((group) => group.label)).toEqual([
+      'Overview',
+      'Skills',
+      'Packs',
+      'Discover',
+      'Activity',
+      'Company admin',
+    ])
+    expect(registryNavGroups.at(-1)?.admin).toBe(true)
+
+    const groupedIds = registryNavGroups.flatMap((group) => group.sections.map((section) => section.id)).sort()
+    const paletteIds = registrySections.map((section) => section.id).sort()
+    expect(groupedIds).toEqual(paletteIds)
+    expect(registrySections.find((section) => section.id === 'overview')?.label).toBe('Overview')
   })
 
   it('traps Tab within the modal and restores the element that opened it after Escape', async () => {

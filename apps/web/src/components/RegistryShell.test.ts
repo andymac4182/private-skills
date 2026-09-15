@@ -14,9 +14,9 @@ import {
 
 const authState = vi.hoisted(() => ({
   error: null as string | null,
-  principal: null,
+  principal: null as { subject: string; roles: string[]; organizationId?: string } | null,
   signOut: vi.fn(async () => {}),
-  status: 'signed-out' as const,
+  status: 'signed-out' as 'signed-out' | 'signed-in' | 'loading',
 }))
 
 vi.mock('../lib/auth', async () => {
@@ -31,6 +31,14 @@ vi.mock('../lib/directoryFeed', () => ({
 vi.mock('./CommandPalette', () => ({
   CommandPalette: () => null,
   registrySections: [{ id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' }],
+  registryNavGroups: [{
+    id: 'skills',
+    label: 'Skills',
+    hint: 'Build and publish',
+    glyph: '⌕',
+    defaultSectionId: 'catalog',
+    sections: [{ id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' }],
+  }],
 }))
 
 vi.mock('./HealthStatus', () => ({ HealthStatus: () => null }))
@@ -56,6 +64,9 @@ describe('RegistryShell auth return route', () => {
     })
     root = null
     document.body.replaceChildren()
+    authState.error = null
+    authState.principal = null
+    authState.status = 'signed-out'
     vi.unstubAllGlobals()
   })
 
@@ -107,5 +118,85 @@ describe('RegistryShell auth return route', () => {
       version: '0.4.0',
       digest: 'sha256:abc123',
     })
+  })
+
+  it('opens a focus-trapped mobile drawer and restores the menu trigger on close', async () => {
+    authState.status = 'signed-in'
+    authState.principal = { subject: 'reader', roles: ['reader'] }
+
+    const rootRoute = createRootRoute({ component: () => createElement(Outlet) })
+    const appRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/app',
+      component: RegistryShell,
+    })
+    const catalogRoute = createRoute({
+      getParentRoute: () => appRoute,
+      path: '/catalog',
+      component: () => createElement('div', null, 'catalog'),
+    })
+    const testRouter = createRouter({
+      routeTree: rootRoute.addChildren([appRoute.addChildren([catalogRoute])]),
+      history: createMemoryHistory({ initialEntries: ['/app/catalog'] }),
+    })
+    await testRouter.load()
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(createElement(RouterProvider, { router: testRouter }))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Open navigation"]')
+    expect(trigger).not.toBeNull()
+    await act(async () => {
+      trigger?.click()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+
+    const drawer = container.querySelector<HTMLElement>('#registry-navigation')
+    const close = container.querySelector<HTMLButtonElement>('[aria-label="Close navigation"]')
+    expect(drawer?.classList.contains('sidebar-mobile-open')).toBe(true)
+    expect(drawer?.getAttribute('role')).toBe('dialog')
+    expect(drawer?.getAttribute('aria-modal')).toBe('true')
+    expect(container.querySelector('.app-frame')?.getAttribute('aria-hidden')).toBe('true')
+    expect(container.querySelector('.app-frame')?.hasAttribute('inert')).toBe(true)
+    expect(close).not.toBeNull()
+    expect(document.activeElement).toBe(close)
+
+    const focusable = Array.from(drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
+    const last = focusable.at(-1)
+    last?.focus()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    })
+    expect(document.activeElement).toBe(focusable[0])
+
+    focusable[0]?.focus()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    })
+    expect(document.activeElement).toBe(last)
+
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+    expect(drawer?.classList.contains('sidebar-mobile-open')).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+
+    await act(async () => {
+      trigger?.click()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+    expect(drawer?.classList.contains('sidebar-mobile-open')).toBe(false)
+    expect(document.activeElement).toBe(trigger)
   })
 })

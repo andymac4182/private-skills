@@ -10,7 +10,7 @@ export interface RegistrySection {
 }
 
 export const registrySections = [
-  { id: 'overview', label: 'Discover', hint: 'Registry pulse', glyph: '⌂' },
+  { id: 'overview', label: 'Overview', hint: 'Registry pulse', glyph: '⌂' },
   { id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' },
   { id: 'packs', label: 'Skill packs', hint: 'Curated installs', glyph: '▦' },
   { id: 'directory', label: 'Cloud directory', hint: 'All / trending / hot', glyph: '◌' },
@@ -27,6 +27,92 @@ export const registrySections = [
   { id: 'audit', label: 'Audit', hint: 'Change history', glyph: '◷' },
   { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
 ] as const satisfies readonly RegistrySection[]
+
+export interface RegistryNavGroup {
+  id: string
+  label: string
+  hint: string
+  glyph: string
+  defaultSectionId: string
+  sections: readonly RegistrySection[]
+  admin?: boolean
+}
+
+const registrySectionsById: Record<string, RegistrySection> = Object.fromEntries(
+  registrySections.map((section) => [section.id, section]),
+)
+
+/**
+ * The shell shows one contextual group at a time. The palette still receives
+ * `registrySections` above so every route remains directly searchable.
+ */
+export const registryNavGroups = [
+  {
+    id: 'overview',
+    label: 'Overview',
+    hint: 'Registry pulse',
+    glyph: '⌂',
+    defaultSectionId: 'overview',
+    admin: false,
+    sections: [registrySectionsById.overview],
+  },
+  {
+    id: 'skills',
+    label: 'Skills',
+    hint: 'Build and publish',
+    glyph: '⌕',
+    defaultSectionId: 'catalog',
+    admin: false,
+    sections: [registrySectionsById.catalog, registrySectionsById.publish],
+  },
+  {
+    id: 'packs',
+    label: 'Packs',
+    hint: 'Curated installs',
+    glyph: '▦',
+    defaultSectionId: 'packs',
+    admin: false,
+    sections: [registrySectionsById.packs],
+  },
+  {
+    id: 'discover',
+    label: 'Discover',
+    hint: 'External sources',
+    glyph: '◌',
+    defaultSectionId: 'directory',
+    admin: false,
+    sections: [
+      registrySectionsById.directory,
+      registrySectionsById['source-discovery'],
+      registrySectionsById.official,
+      registrySectionsById.topics,
+      registrySectionsById['cloud-audits'],
+    ],
+  },
+  {
+    id: 'activity',
+    label: 'Activity',
+    hint: 'Reviews and installs',
+    glyph: '↗',
+    defaultSectionId: 'operations',
+    admin: false,
+    sections: [registrySectionsById.operations, registrySectionsById.analytics, registrySectionsById.reviews],
+  },
+  {
+    id: 'company-admin',
+    label: 'Company admin',
+    hint: 'Team and controls',
+    glyph: '◍',
+    defaultSectionId: 'company',
+    admin: true,
+    sections: [
+      registrySectionsById.company,
+      registrySectionsById.policy,
+      registrySectionsById.upstreams,
+      registrySectionsById.audit,
+    ],
+  },
+] as const satisfies readonly RegistryNavGroup[]
 
 interface CommandPaletteProps {
   sections: readonly RegistrySection[]

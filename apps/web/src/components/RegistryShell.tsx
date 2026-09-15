@@ -1,21 +1,43 @@
 import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { needsCompanySetup, safeAppReturnTo, useAuth } from '../lib/auth'
 import { DirectoryFeedProvider } from '../lib/directoryFeed'
-import { CommandPalette, registrySections } from './CommandPalette'
+import { CommandPalette, registryNavGroups, registrySections } from './CommandPalette'
 import { CompanySwitcher } from './CompanySwitcher'
 import { HealthStatus } from './HealthStatus'
 import { Button, LoadingState } from './Primitives'
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled])'))
+    .filter((element) => {
+      if (element.tabIndex < 0 || element.hidden || element.getAttribute('aria-hidden') === 'true') return false
+      if (element.closest('[hidden], [aria-hidden="true"]')) return false
+      const style = window.getComputedStyle(element)
+      return style.display !== 'none' && style.visibility !== 'hidden'
+    })
+}
 
 export function RegistryShell() {
   const { principal, session, status, error, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [routeIsEntering, setRouteIsEntering] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const mobileNavRef = useRef<HTMLElement>(null)
+  const mobileNavTriggerRef = useRef<HTMLButtonElement>(null)
 
   const returnTo = safeAppReturnTo(`${location.pathname}${location.searchStr}${location.hash ? (location.hash.startsWith('#') ? location.hash : `#${location.hash}`) : ''}`)
   const isCompanyRoute = location.pathname === '/app/company'
   const needsCompany = needsCompanySetup(session)
+  const routeSection = location.pathname.split('/')[2] || 'overview'
+  const activeSection = routeSection === 'topic' ? 'topics' : routeSection
+  const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
+  const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
+  const accountName = principal?.subject ?? session?.user.name ?? session?.user.email ?? session?.user.id ?? 'Private Skills'
+  const accountInitial = accountName.trim().slice(0, 1).toUpperCase() || 'P'
+  const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
+  const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), [])
 
   useEffect(() => {
     if (!returnTo || status === 'loading') return
@@ -46,20 +68,78 @@ export function RegistryShell() {
     }
   }, [location.pathname])
 
+  useEffect(() => {
+    // Navigation and company changes both close the drawer. The search string
+    // is included because CompanySwitcher clears draft context while landing
+    // on the same shell route.
+    setMobileNavOpen(false)
+  }, [location.pathname, location.searchStr, tenantKey])
+
+  useEffect(() => {
+    if (!mobileNavOpen) return
+    const navigation = mobileNavRef.current
+    if (!navigation) return
+
+    const previousOverflow = document.body.style.overflow
+    const focusFrame = window.requestAnimationFrame(() => getFocusableElements(navigation)[0]?.focus())
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMobileNav()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = getFocusableElements(navigation)
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !navigation.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !navigation.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    const desktopBreakpoint = window.matchMedia('(min-width: 781px)')
+    const onResize = () => {
+      if (window.innerWidth > 780 || desktopBreakpoint.matches) closeMobileNav()
+    }
+    window.addEventListener('resize', onResize)
+    desktopBreakpoint.addEventListener?.('change', onResize)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', onResize)
+      desktopBreakpoint.removeEventListener?.('change', onResize)
+      document.body.style.overflow = previousOverflow
+      if (mobileNavTriggerRef.current?.isConnected) mobileNavTriggerRef.current.focus()
+    }
+  }, [closeMobileNav, mobileNavOpen])
+
   if (status === 'loading') return <LoadingState label="Opening your private registry…" />
   if (status !== 'signed-in' || (!principal && !(session && isCompanyRoute))) return <LoadingState label={error ?? 'Redirecting to sign in…'} />
-
-  const activeSection = location.pathname.split('/')[2] || 'overview'
-  const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
-  const accountName = principal?.subject ?? session?.user.name ?? session?.user.email ?? session?.user.id ?? 'Private Skills'
-  const accountInitial = accountName.trim().slice(0, 1).toUpperCase() || 'P'
-  const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
-  const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
 
   return (
     <DirectoryFeedProvider key={tenantKey}>
       <div className="app-shell">
-        <aside className="sidebar">
+        <aside
+          aria-label="Registry navigation"
+          aria-modal={mobileNavOpen ? true : undefined}
+          className={`sidebar${mobileNavOpen ? ' sidebar-mobile-open' : ''}`}
+          id="registry-navigation"
+          role={mobileNavOpen ? 'dialog' : undefined}
+          ref={mobileNavRef}
+        >
+          <button aria-label="Close navigation" className="mobile-nav-close" type="button" onClick={closeMobileNav}>
+            <span aria-hidden="true">×</span>
+          </button>
           <Link className="brand" to="/app">
             <span className="brand-mark">PS</span>
             <span>
@@ -69,24 +149,54 @@ export function RegistryShell() {
           </Link>
 
           <nav className="primary-nav" aria-label="Registry sections">
-            {registrySections.map((section) => (
-              <Link
-                activeProps={{ className: 'nav-item nav-item-active' }}
-                className="nav-item"
-                key={section.id}
-                params={{ section: section.id }}
-                to="/app/$section"
-              >
-                <span aria-hidden="true" className="nav-glyph">{section.glyph}</span>
-                <span className="nav-label">{section.label}</span>
-                <small>{section.hint}</small>
-              </Link>
-            ))}
+            {registryNavGroups.map((group) => {
+              const defaultSection = group.sections.find((section) => section.id === group.defaultSectionId)
+              if (!defaultSection) return null
+              const isActiveGroup = group.id === activeGroup.id
+              return (
+                <div className={`nav-group${isActiveGroup ? ' nav-group-active' : ''}${group.admin ? ' nav-group-admin' : ''}`} key={group.id}>
+                  <Link
+                    className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
+                    params={{ section: defaultSection.id }}
+                    to="/app/$section"
+                    onClick={closeMobileNav}
+                  >
+                    <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
+                    <span className="nav-group-copy">
+                      <strong>{group.label}</strong>
+                      <small>{group.hint}</small>
+                    </span>
+                    {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
+                  </Link>
+
+                  {group.sections.length > 1 && (isActiveGroup || mobileNavOpen) && (
+                    <div aria-label={`${group.label} sections`} className="nav-subnav">
+                      {group.sections.map((section) => (
+                        <Link
+                          activeProps={{ className: 'nav-subitem nav-subitem-active' }}
+                          className="nav-subitem"
+                          key={section.id}
+                          params={{ section: section.id }}
+                          to="/app/$section"
+                          onClick={closeMobileNav}
+                        >
+                          <span aria-hidden="true" className="nav-subitem-glyph">{section.glyph}</span>
+                          <span className="nav-subitem-copy">
+                            <strong>{section.label}</strong>
+                            <small>{section.hint}</small>
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </nav>
 
           <div className="sidebar-note">
             <span className="eyebrow">Private by default</span>
-            <p>Releases stay private until checks pass and you have access.</p>
+            <p>Only authorized members can access this company’s skills.</p>
           </div>
 
           <div className="sidebar-account">
@@ -98,9 +208,23 @@ export function RegistryShell() {
           </div>
         </aside>
 
-        <div className="app-frame">
+        {mobileNavOpen && <button aria-label="Close navigation" className="mobile-nav-scrim" tabIndex={-1} type="button" onClick={closeMobileNav} />}
+
+        <div aria-hidden={mobileNavOpen ? true : undefined} className="app-frame" inert={mobileNavOpen ? true : undefined}>
           <header className="topbar">
             <div className="topbar-leading">
+              <button
+                ref={mobileNavTriggerRef}
+                aria-controls="registry-navigation"
+                aria-expanded={mobileNavOpen}
+                aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+                className="mobile-nav-trigger"
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+              >
+                <span aria-hidden="true" className="mobile-nav-trigger-icon">☰</span>
+                <span className="mobile-nav-trigger-label">Menu</span>
+              </button>
               <div className="mobile-brand">
                 <span className="brand-mark">PS</span>
                 <strong>Private Skills</strong>
