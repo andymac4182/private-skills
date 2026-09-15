@@ -55,6 +55,7 @@ import { canonicalOriginFromEnv } from './identity-origin.js';
 import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
 import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
+import { createOperationsStatusHandler } from './operations-status.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
 import { readSessionExchangeToken } from './session-exchange.js';
 import {
@@ -480,9 +481,20 @@ async function createRuntime(env: RuntimeEnvironment) {
         },
       }),
     });
+    const operationsStatus = createOperationsStatusHandler({
+      repository: infrastructure.repository,
+      billing: infrastructure.billing.service,
+      authenticate: context.auth.authenticate,
+      organizationId: context.organizationId,
+      eveConfigured: isLegacyTenant
+        ? legacyReviewTrigger !== undefined || uploadReviewRuntime?.configured === true
+        : tenantReviewTrigger !== undefined || tenantUploadReview?.configured === true,
+    });
     const tenantHostedWorker = infrastructure.createHostedWorkerForTenant?.(context.organizationId)
       ?? (isLegacyTenant ? infrastructure.hostedWorker : undefined);
     return async (request: Request): Promise<Response> => {
+      const operationsStatusResponse = await operationsStatus(request);
+      if (operationsStatusResponse) return operationsStatusResponse;
       const billingResponse = await billing(request);
       if (billingResponse) return billingResponse;
       const intelligenceResponse = await intelligence(request);
