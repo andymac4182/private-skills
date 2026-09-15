@@ -57,11 +57,12 @@ import {
   digestBytes,
   encodeBundle,
   isVerifiedStorageWriteReceipt,
+  isRecoverableBlobStore,
   parseSkillMetadata,
   putStorageAttemptBlob,
   storageProviderBinding,
   validateBundle,
-} from '../../storage/src/index.js';
+  } from '../../storage/src/index.js';
 import {
   SkillsDirectoryError,
   classifyNestedDetailFallback,
@@ -2935,7 +2936,7 @@ async function publishSkill(
   try {
     // Admission happens before the first blob write. A rejected plan therefore
     // cannot leave a newly stored artifact or enqueue scanner work.
-    storageAttempt = await beginStorageAttempt(deps, {
+    const storageClaim = await beginStorageAttempt(deps, {
       organizationId: config.organizationId,
       reservationKey: storageReservationKey,
       digest,
@@ -2943,8 +2944,11 @@ async function publishSkill(
       jobId,
       reservationGeneration: storageReservation?.reservationGeneration,
     });
-    stored = await putVerifiedBlob(deps, bytes, digest, storageAttempt);
-    writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedBlob(deps, bytes, digest, storageAttempt)
+      : storageClaim.stored ?? committedStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
     const skill: SkillVersion = {
       id: skillId,
       organizationId: config.organizationId,
@@ -2995,7 +2999,7 @@ async function publishSkill(
     return jsonResponse({ operation: result }, 202);
   } catch (error) {
     if (storageAttempt) await markStorageAttemptOrphaned(deps, config.organizationId, storageAttempt.id, stored?.key, writeReceipt);
-    else {
+    else if (!preservesStorageAttemptAdmission(error)) {
       // beginStorageAttempt completed no provider call.  If its transaction
       // failed after an uncertain metadata write, the external object is still
       // known absent, so reconcile the admission back to zero safely.
@@ -6555,7 +6559,7 @@ async function completeJob(
         ...(reservation.reservationGeneration === undefined ? {} : { reservationGeneration: reservation.reservationGeneration }),
       };
 
-      importedStorageAttempt = await beginStorageAttempt(deps, {
+      const storageClaim = await beginStorageAttempt(deps, {
         organizationId: config.organizationId,
         reservationKey,
         digest,
@@ -6563,8 +6567,11 @@ async function completeJob(
         jobId: job.id,
         reservationGeneration: reservation?.reservationGeneration,
       });
-      importedStored = await putVerifiedBlob(deps, bytes, digest, importedStorageAttempt);
-      importedWriteReceipt = createVerifiedStorageWriteReceipt(deps.blobs, importedStorageAttempt, importedStored);
+      importedStorageAttempt = storageClaim.attempt;
+      importedStored = storageClaim.ownsWrite
+        ? await putVerifiedBlob(deps, bytes, digest, importedStorageAttempt)
+        : storageClaim.stored ?? committedStorageBlob(importedStorageAttempt);
+      if (storageClaim.ownsWrite) importedWriteReceipt = createVerifiedStorageWriteReceipt(deps.blobs, importedStorageAttempt, importedStored);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
       if (requestedDigest && requestedDigest !== digest) {
         throw new RegistryApiError('DIGEST_MISMATCH', 'Completion artifact digest does not match the imported bundle', 409);
@@ -6575,7 +6582,7 @@ async function completeJob(
         await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
         importedStorageAttempt = undefined;
         importedStorageAdmission = undefined;
-      } else if (importedStorageAdmission) {
+      } else if (importedStorageAdmission && !preservesStorageAttemptAdmission(error)) {
         await releaseMeteredUsage(
           importedStorageAdmission.billing,
           config.organizationId,
@@ -6607,7 +6614,7 @@ async function completeJob(
         await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
         importedStorageAttempt = undefined;
         importedStorageAdmission = undefined;
-      } else if (importedStorageAdmission) {
+      } else if (importedStorageAdmission && !preservesStorageAttemptAdmission(error)) {
         await releaseMeteredUsage(
           importedStorageAdmission.billing,
           config.organizationId,
@@ -6746,7 +6753,7 @@ async function completeJob(
       await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key, importedWriteReceipt);
       importedStorageAttempt = undefined;
       importedStorageAdmission = undefined;
-    } else if (importedStorageAdmission) {
+    } else if (importedStorageAdmission && !preservesStorageAttemptAdmission(error)) {
       await releaseMeteredUsage(
         importedStorageAdmission.billing,
         config.organizationId,
@@ -7693,8 +7700,11 @@ async function putVerifiedBlob(
   deps: RegistryDependencies,
   bytes: Uint8Array,
   digest: Digest,
-  attempt?: Pick<StorageAttempt, 'objectKey'>,
+  attempt?: Pick<StorageAttempt, 'objectKey' | 'state'>,
 ): Promise<StoredBlob> {
+  if (attempt && (attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released')) {
+    throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for provider write', 409);
+  }
   let stored: StoredBlob;
   try {
     stored = await (attempt ? putStorageAttemptBlob(deps.blobs, attempt, bytes) : deps.blobs.put(bytes));
@@ -8363,7 +8373,7 @@ async function beginStorageAttempt(
     jobId?: string;
     reservationGeneration?: number;
   },
-): Promise<StorageAttempt> {
+): Promise<StorageAttemptClaim> {
   // Persist the provider object identity before any write. Legacy BlobStores
   // remain supported, but their attempts cannot be recovered after an
   // ambiguous provider response because no stable key is available.
@@ -8372,11 +8382,150 @@ async function beginStorageAttempt(
     objectKey: allocateStorageObjectKey(deps.blobs),
     providerBinding: storageProviderBinding(deps.blobs),
   });
-  await deps.repository.transaction(input.organizationId, (state) => {
+  const claim = await deps.repository.transaction(input.organizationId, (state) => {
     const mutable = ensureState(state, defaultPolicy());
+    const sameLifecycle = mutable.storageAttempts!.filter((candidate) =>
+      candidate.organizationId === input.organizationId &&
+      candidate.reservationKey === input.reservationKey &&
+      candidate.reservationGeneration === input.reservationGeneration,
+    );
+    for (const existing of sameLifecycle) {
+      if (existing.digest !== input.digest || existing.size !== input.size) {
+        throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage reservation is already bound to another artifact', 409);
+      }
+    }
+    // A historical retry may have left an orphan beside a committed sibling.
+    // Reuse the committed object and leave the orphan charged for recovery;
+    // never start another provider writer for this reservation lifecycle.
+    const committed = sameLifecycle.find((candidate) => candidate.state === 'committed');
+    if (committed) return { attempt: { ...committed }, ownsWrite: false, stored: committedStorageBlob(committed) };
+    const existing = sameLifecycle.find((candidate) => candidate.state !== 'released');
+    if (existing) {
+      if (existing.state === 'orphaned') return { orphaned: true as const, attempt: { ...existing } };
+      if (existing.state === 'pending' || existing.state === 'recovering' || existing.state === 'releasing') {
+        throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503, { retryable: true });
+      }
+      throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    }
     mutable.storageAttempts!.push(attempt);
+    return { attempt, ownsWrite: true };
   });
-  return attempt;
+  if ('orphaned' in claim) return await resumeOrphanedStorageAttempt(deps, input, claim.attempt);
+  return claim;
+}
+
+type StorageAttemptClaim = {
+  attempt: StorageAttempt;
+  ownsWrite: boolean;
+  stored?: StoredBlob;
+};
+
+async function resumeOrphanedStorageAttempt(
+  deps: RegistryDependencies,
+  input: { organizationId: string; reservationKey: string; digest: Digest; size: number; jobId?: string; reservationGeneration?: number },
+  observed: StorageAttempt,
+): Promise<StorageAttemptClaim> {
+  const key = observed.objectKey;
+  if (!key || !isRecoverableBlobStore(deps.blobs)) {
+    throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503, { retryable: true });
+  }
+
+  let inspection;
+  try {
+    inspection = await deps.blobs.inspectObject(key);
+  } catch {
+    throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503, { retryable: true });
+  }
+  if (inspection.state === 'present') {
+    if (inspection.digest !== input.digest || inspection.size !== input.size) {
+      throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the provider object', 409);
+    }
+    const stored: StoredBlob = { key: inspection.key, digest: inspection.digest, size: inspection.size };
+    return await deps.repository.transaction(input.organizationId, (state) => {
+      const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+      if (!sameStorageAttempt(current, observed, input)) {
+        throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503, { retryable: true });
+      }
+      const committedSibling = state.storageAttempts?.find((candidate) =>
+        candidate.id !== current.id &&
+        candidate.state === 'committed' &&
+        storageAttemptIdentityMatches(candidate, input),
+      );
+      if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedStorageBlob(committedSibling) };
+      if (current.state === 'orphaned') return { attempt: { ...current }, ownsWrite: false, stored };
+      if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedStorageBlob(current) };
+      if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+        throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503, { retryable: true });
+      }
+      throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    });
+  }
+  if (inspection.state !== 'absent') {
+    throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503, { retryable: true });
+  }
+
+  let writeTerminated = false;
+  try {
+    writeTerminated = typeof deps.blobs.confirmWriteTerminated === 'function' && await deps.blobs.confirmWriteTerminated(key);
+  } catch {
+    writeTerminated = false;
+  }
+  if (!writeTerminated) {
+    throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503, { retryable: true });
+  }
+  return await deps.repository.transaction(input.organizationId, (state) => {
+    const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+    if (!sameStorageAttempt(current, observed, input)) {
+      throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503, { retryable: true });
+    }
+    const committedSibling = state.storageAttempts?.find((candidate) =>
+      candidate.id !== current.id &&
+      candidate.state === 'committed' &&
+      storageAttemptIdentityMatches(candidate, input),
+    );
+    if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedStorageBlob(committedSibling) };
+    if (current.state === 'orphaned') {
+      current.state = 'pending';
+      current.updatedAt = nowIso();
+      return { attempt: { ...current }, ownsWrite: true };
+    }
+    if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedStorageBlob(current) };
+    if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+      throw new RegistryApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503, { retryable: true });
+    }
+    throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+  });
+}
+
+function sameStorageAttempt(
+  current: StorageAttempt | undefined,
+  observed: StorageAttempt,
+  input: { organizationId: string; reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+): current is StorageAttempt {
+  return current !== undefined &&
+    current.id === observed.id &&
+    storageAttemptIdentityMatches(current, input) &&
+    current.objectKey === observed.objectKey;
+}
+
+function storageAttemptIdentityMatches(
+  current: StorageAttempt,
+  input: { organizationId: string; reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+): boolean {
+  return current.organizationId === input.organizationId &&
+    current.reservationKey === input.reservationKey &&
+    current.reservationGeneration === input.reservationGeneration &&
+    current.digest === input.digest &&
+    current.size === input.size;
+}
+
+function committedStorageBlob(attempt: StorageAttempt): StoredBlob {
+  if (!attempt.objectKey) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Committed storage attempt has no object key', 409);
+  return { key: attempt.objectKey, digest: attempt.digest, size: attempt.size };
+}
+
+function preservesStorageAttemptAdmission(error: unknown): boolean {
+  return error instanceof RegistryApiError && (error.code === 'STORAGE_ATTEMPT_BUSY' || error.code === 'STORAGE_ATTEMPT_CONFLICT');
 }
 
 async function markStorageAttemptOrphaned(

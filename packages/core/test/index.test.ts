@@ -8,8 +8,11 @@ import {
 import { digestBytes, encodeBundle } from '../../storage/src/index.js';
 import type {
   Authenticator,
+  BillingUsageAdmission,
   BlobStore,
   Digest,
+  MeteredUsageDelta,
+  MeteredUsageReservation,
   Policy,
   Principal,
   RegistryDependencies,
@@ -90,6 +93,49 @@ class MemoryBlobs implements BlobStore {
 
   async remove(key: string): Promise<void> {
     this.values.delete(key);
+  }
+}
+
+class RecoverableMemoryBlobs extends MemoryBlobs {
+  readonly attemptWriteKeys: string[] = [];
+
+  allocateObjectKey(): string {
+    return `sealed-${this.nextKey++}`;
+  }
+
+  async putAtKey(key: string, bytes: Uint8Array) {
+    this.attemptWriteKeys.push(key);
+    const copy = bytes.slice();
+    this.values.set(key, copy);
+    return { key, digest: await digestBytes(copy), size: copy.byteLength };
+  }
+
+  async inspectObject(key: string) {
+    const value = this.values.get(key);
+    if (!value) return { state: 'absent' as const, key };
+    return { state: 'present' as const, key, digest: await digestBytes(value), size: value.byteLength };
+  }
+
+  async confirmWriteTerminated(_key: string): Promise<boolean> {
+    return true;
+  }
+}
+
+class RecordingBilling implements BillingUsageAdmission {
+  readonly reservations = new Set<string>();
+
+  status(): { enabled: boolean } {
+    return { enabled: true };
+  }
+
+  async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation> {
+    const idempotent = this.reservations.has(operationKey);
+    this.reservations.add(operationKey);
+    return { idempotent, reservationGeneration: 1 };
+  }
+
+  async reconcileUsage(): Promise<void> {
+    return undefined;
   }
 }
 
@@ -198,9 +244,9 @@ function principalFor(subject: string, roles: Principal['roles'], namespaces?: s
   return { organizationId: 'org-test', subject, roles, namespaces };
 }
 
-function setup(options: { allowUnscanned?: boolean; principal?: Principal | null } = {}) {
+function setup(options: { allowUnscanned?: boolean; principal?: Principal | null; blobs?: MemoryBlobs; billing?: BillingUsageAdmission } = {}) {
   const repository = new MemoryRepository(options.allowUnscanned ?? true);
-  const blobs = new MemoryBlobs();
+  const blobs = options.blobs ?? new MemoryBlobs();
   let principal = options.principal === undefined
     ? principalFor('publisher', ['publisher'], ['@team'])
     : options.principal;
@@ -217,17 +263,18 @@ function setup(options: { allowUnscanned?: boolean; principal?: Principal | null
       : null,
     clearSessionCookie: () => 'pskills_session=; Max-Age=0; HttpOnly; SameSite=Lax',
   };
-  const deps: RegistryDependencies = {
+  const deps = {
     repository,
     blobs,
     auth,
+    ...(options.billing ? { billing: options.billing } : {}),
     config: {
       publicOrigin: ORIGIN,
       maxBodyBytes: 1024 * 1024,
       organizationId: 'org-test',
       leaseSeconds: 30,
     },
-  };
+  } as RegistryDependencies;
   const handler = createRegistryHandler(deps);
   return {
     repository,
@@ -544,6 +591,96 @@ describe('registry core handler', () => {
     expect((await json(complete)).operation.id).toBe(operation.id);
     expect(test.repository.state.skills[0]?.artifact.digest).toBe(digest);
     expect(test.repository.state.skills[0]?.state).toBe('approved');
+  });
+
+  it('reuses a committed import reservation owner after a retry without a second provider write', async () => {
+    const blobs = new RecoverableMemoryBlobs();
+    const billing = new RecordingBilling();
+    const test = setup({ blobs, billing });
+    test.setPrincipal(principalFor('admin', ['admin']));
+    const upstream = await test.handler(new Request(`${ORIGIN}/v1/upstreams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'retry-source',
+        kind: 'registry',
+        namespace: '@team',
+        baseUrl: 'https://source.example.test',
+      }),
+    }));
+    expect(upstream.status).toBe(201);
+    const upstreamId = (await json(upstream)).upstream.id;
+
+    test.setPrincipal(principalFor('publisher', ['publisher'], ['@team']));
+    const importedBundle = bundle('retried-import');
+    const queued = await test.handler(new Request(`${ORIGIN}/v1/imports`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        upstreamId,
+        path: 'skills/retried-import',
+        name: '@team/retried-import',
+        version: '1.0.0',
+      }),
+    }));
+    expect(queued.status).toBe(202);
+
+    test.setPrincipal(principalFor('worker', ['worker']));
+    const claim = await test.handler(new Request(`${ORIGIN}/internal/jobs/claim`, { method: 'POST' }));
+    const job = (await json(claim)).job;
+    const bytes = encodeBundle(importedBundle);
+    const digest = await digestBytes(bytes);
+    const wrongDigest = `sha256:${'0'.repeat(64)}`;
+    const completionBody = {
+      leaseToken: job.leaseToken,
+      artifactDigest: wrongDigest,
+      bundle: importedBundle,
+      provenance: {
+        kind: 'registry',
+        upstreamId,
+        repository: 'https://source.example.test',
+        path: 'skills/retried-import',
+        revision: digest,
+      },
+    };
+    const failed = await test.handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(completionBody),
+    }));
+    expect(failed.status).toBe(409);
+    expect((await json(failed)).error.code).toBe('DIGEST_MISMATCH');
+
+    const failedState = await test.repository.read();
+    const reservationKey = `private-skills:import-storage:${job.id}`;
+    const orphan = (failedState.storageAttempts ?? []).find((attempt) => attempt.reservationKey === reservationKey);
+    expect(orphan).toMatchObject({ state: 'orphaned', reservationGeneration: 1 });
+    expect(blobs.attemptWriteKeys).toEqual([orphan!.objectKey]);
+
+    const retry = await test.handler(new Request(`${ORIGIN}/internal/jobs/${job.id}/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...completionBody, artifactDigest: digest }),
+    }));
+    expect(retry.status).toBe(200);
+    expect((await json(retry)).operation.state).toBe('completed');
+    expect(blobs.attemptWriteKeys).toEqual([orphan!.objectKey]);
+
+    const finalState = await test.repository.read();
+    expect((finalState.storageAttempts ?? []).filter((attempt) => attempt.reservationKey === reservationKey)).toEqual([
+      expect.objectContaining({
+        id: orphan!.id,
+        state: 'committed',
+        reservationGeneration: 1,
+        objectKey: orphan!.objectKey,
+      }),
+    ]);
+    expect(finalState.skills).toHaveLength(1);
+    expect(finalState.skills[0]!.artifact).toEqual({
+      key: orphan!.objectKey,
+      digest,
+      size: bytes.byteLength,
+    });
   });
 
   it('pins exact approved pack members and blocks grants after revocation', async () => {
