@@ -58,6 +58,8 @@ declare module '#pskills-infrastructure' {
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;
     /** Optional Node-owned provider for verified private CLI release archives. */
     cliReleaseProvider?: import('../../../packages/cli-release/src/index').CliReleaseAssetProvider;
+    /** Server-owned Better Auth organization enumeration for daily Eve dispatch. */
+    listTenantReviewTargets?: () => Promise<readonly import('./tenant-review-dispatch').TenantReviewTarget[]>;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;
     createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;

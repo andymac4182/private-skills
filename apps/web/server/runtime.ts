@@ -72,6 +72,7 @@ import {
   type EveTenantService,
 } from '../../../packages/eve-tenant/src/index.js';
 import { createEveTenantHostRuntime } from './eve-tenant-runtime.js';
+import { createTenantReviewRuntime } from './tenant-review-runtime.js';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -109,6 +110,15 @@ async function createRuntime(env: RuntimeEnvironment) {
   const cliReleaseManifest = resolveCliReleaseManifest(env.PSKILLS_CLI_RELEASE_MANIFEST);
   const cliReleaseProvider = infrastructure.cliReleaseProvider ?? createBlobCliReleaseAssetProvider(infrastructure.blobs);
   const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
+  const tenantReviewDispatch = eveTenant && infrastructure.listTenantReviewTargets
+    ? createTenantReviewRuntime({
+      env,
+      repository: infrastructure.repository,
+      billing: infrastructure.billing.service,
+      eveTenant,
+      listTenants: infrastructure.listTenantReviewTargets,
+    })
+    : undefined;
   // Better Auth is optional and Node-owned. The infrastructure profile may
   // provide it without making the shared runtime import a database driver;
   // edge keeps this value absent and continues to serve legacy tokens.
@@ -641,6 +651,14 @@ async function createRuntime(env: RuntimeEnvironment) {
         ?? infrastructure.createHostedWorkerForTenant?.(defaultOrganizationId);
       return workerHandler ? workerHandler(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
+    }
+    if (path === '/internal/reviewer/dispatch' || path === '/internal/reviewer/dispatch/') {
+      const response = await tenantReviewDispatch?.(request);
+      if (response) return response;
+      return Response.json({ code: 'REVIEW_DISPATCH_UNAVAILABLE', message: 'Tenant review dispatch is not configured.', retryable: false }, {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
     }
     if (path === '/v1/tokens' || path.startsWith('/v1/tokens/')) {
       const response = await apiTokenRuntime?.handler(request);

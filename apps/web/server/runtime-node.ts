@@ -59,6 +59,7 @@ import {
   createNodeCliReleaseAssetProvider,
 } from '../../../packages/cli-release/src/node.js';
 import type { CliReleaseAssetProvider } from '../../../packages/cli-release/src/index.js';
+import { createPostgresTenantReviewTargetLister } from './tenant-review-runtime.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -414,7 +415,7 @@ export function createBillingRuntime(
   };
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -455,6 +456,9 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     await identityInfrastructure.identity?.close().catch(() => undefined);
     throw error;
   }
+  const listTenantReviewTargets = identityInfrastructure.identity && postgresPool
+    ? createPostgresTenantReviewTargetLister(postgresPool, { schemaName: identitySchemaName })
+    : undefined;
   // Adoption is an explicit deployment operation. Construct only when the
   // Better Auth runtime and its shared PostgreSQL pool are both present; the
   // endpoint remains unavailable for file/edge/legacy-only profiles.
@@ -590,6 +594,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(identityInfrastructure.operationsEvents === null ? {} : { operationsEvents: identityInfrastructure.operationsEvents }),
     ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),
     cliReleaseProvider,
+    ...(listTenantReviewTargets === undefined ? {} : { listTenantReviewTargets }),
     createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {

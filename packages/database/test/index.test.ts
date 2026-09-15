@@ -12,6 +12,7 @@ import {
   StateRepositoryError,
   UnsupportedTransportError,
   defaultRegistryState,
+  validateAndCloneState,
 } from '../src/index.js';
 import type { PgPoolLike } from '../src/index.js';
 
@@ -35,6 +36,32 @@ describe('state repositories', () => {
     expect(state.policy.scanners).toHaveLength(3);
     expect(state.policy.allowUnscanned).toBe(false);
     expect(defaultRegistryState({ production: false, allowUnscanned: true }).policy.allowUnscanned).toBe(true);
+  });
+
+  it('preserves bounded tenant review dispatch state through clone and validation', async () => {
+    const state = defaultRegistryState();
+    state.tenantReviewDispatches = [{
+      operationKey: 'common-skill-review:2026-09-16',
+      state: 'completed',
+      leaseExpiresAt: '2026-09-16T00:15:00.000Z',
+      sessionId: 'eve-session',
+      updatedAt: '2026-09-16T00:01:00.000Z',
+      completedAt: '2026-09-16T00:01:00.000Z',
+    }];
+    state.tenantReviewDispatchCursor = {
+      day: '2026-09-16',
+      pendingOrganizationIds: ['globex'],
+      completedOrganizationIds: ['acme'],
+      updatedAt: '2026-09-16T00:01:00.000Z',
+    };
+    expect(validateAndCloneState(state)).toEqual(state);
+    const repository = new MemoryStateRepository({ initial: { acme: state } });
+    const read = await repository.read('acme');
+    expect(read.tenantReviewDispatches).toEqual(state.tenantReviewDispatches);
+    expect(read.tenantReviewDispatchCursor).toEqual(state.tenantReviewDispatchCursor);
+    await expect(repository.transaction('acme', (mutable) => {
+      mutable.tenantReviewDispatchCursor!.pendingOrganizationIds.push('other');
+    })).resolves.toBeUndefined();
   });
 
   it('isolates organizations and rolls back failed transactions', async () => {

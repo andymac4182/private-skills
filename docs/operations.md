@@ -208,6 +208,12 @@ cron is liveness, not durable retry. Keep at least one reviewed required
 scanner configured and do not enable `PSKILLS_ALLOW_UNSCANNED` to fit a
 function limit.
 
+When tenant-bound Eve review is enabled, the same deployment invokes
+`/internal/reviewer/dispatch` every 15 minutes (`*/15 * * * *` UTC). Each
+invocation drains one bounded cursor page and persists the next page in the
+registry state row, allowing all explicitly provisioned organizations to be
+attempted within the daily UTC window without making one function unbounded.
+
 Use immutable scanner references. A SkillsGuard source-built snapshot must
 include its source revision and prepared artifact digest:
 

@@ -436,8 +436,31 @@ export interface RegistryState {
   builderSessions?: SkillBuilderSessionRecord[];
   grants: TransferGrant[];
   audit: AuditEvent[];
+  /** Optional host-owned daily Eve dispatch records. */
+  tenantReviewDispatches?: TenantReviewDispatchRecord[];
+  /** Optional host-owned cursor for bounded tenant review fan-out. */
+  tenantReviewDispatchCursor?: TenantReviewDispatchCursor;
 }
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
+
+/** Durable scheduler bookkeeping; no prompts, credentials, or candidate text. */
+export interface TenantReviewDispatchRecord {
+  operationKey: string;
+  state: 'claimed' | 'completed';
+  claimToken?: string;
+  leaseExpiresAt: string;
+  sessionId?: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+/** Durable bounded queue state used when a deployment has more tenants than one page. */
+export interface TenantReviewDispatchCursor {
+  day: string;
+  pendingOrganizationIds: string[];
+  completedOrganizationIds: string[];
+  updatedAt: string;
+}
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
 /**
  * Host-neutral metered admission used by registry, authoring, and worker
