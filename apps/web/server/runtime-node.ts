@@ -495,7 +495,7 @@ function hostedWorkerDispatchOption(value: string | undefined, minimum: number, 
   return parsed;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; billingRecovery?: IdentityInfrastructure['billingRecovery']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -677,6 +677,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(uploadReview === undefined ? {} : { uploadReview }),
     ...(identityInfrastructure.identity === null ? {} : { identity: identityInfrastructure.identity }),
     ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
+    ...(identityInfrastructure.billingRecovery === undefined ? {} : { billingRecovery: identityInfrastructure.billingRecovery }),
     ...(identityInfrastructure.companySso === null ? {} : { companySso: identityInfrastructure.companySso }),
     ...(identityInfrastructure.operationsEvents === null ? {} : { operationsEvents: identityInfrastructure.operationsEvents }),
     ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),

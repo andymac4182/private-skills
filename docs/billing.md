@@ -44,27 +44,32 @@ work.
 The bounded route factory is `createBillingRoutes()` in
 `apps/web/server/routes/billing.ts`. It exposes the company snapshot at
 `GET /v1/billing`, the most recent 100 invoice records at
-`GET /v1/billing/invoices`, active Better Auth seat holds at
-`GET /v1/billing/seat-reservations`, and POST
-checkout, portal, and raw-body webhook paths. The route factory authenticates
-the request, requires an `owner` or `admin` role, derives the organization from
-the server principal, and never accepts a browser organization, customer, or
-subscription selector. Hosted actions are closed unless the service reports a
-provider, a configured recurring Price ID, trusted return URLs, and verified
-webhook signing.
+`GET /v1/billing/invoices`, and POST checkout, portal, and raw-body webhook
+paths. The route factory authenticates the request, requires an `owner` or
+`admin` role, derives the organization from the server principal, and never
+accepts a browser organization, customer, or subscription selector. Hosted
+actions are closed unless the service reports a provider, a configured
+recurring Price ID, trusted return URLs, and verified webhook signing.
 
-When a Better Auth member or invitation write fails after `beforeAddMember` or
-`beforeCreateInvitation` reserves a seat, the host can first inspect the exact
-opaque hold key through `GET /v1/billing/seat-reservations`, then call
-`POST /v1/billing/seat-recovery` with that key and a proof object whose kind is
-`known-failure` or `writer-terminated` plus a bounded operator incident or
-request reference. The route is owner/admin-only and takes the tenant only from
-the authenticated principal. Billing records the proof with the settled hold,
-retries with the same proof idempotently, rejects a different proof, and
-rejects a hold already committed or released by an identity lifecycle hook.
-The operator must establish that the identity writer returned a known failure
-or was terminated and verify that no member/invitation row was committed before
-calling recovery; an old hold is never expired automatically.
+Seat-hold inspection and recovery are platform operations, not company billing
+actions. `createBillingSeatRecoveryRoutes()` is a separate route factory whose
+operator authenticator returns the target organization from a server-owned
+credential; an owner/admin session or company API token cannot reach it. The
+request includes the subject kind/id and an operator `writer-terminated` proof,
+while `PostgresIdentityBillingAdmission.recoverFailedSeat()` derives the opaque
+operation key and rejects a mismatch. It acquires the same PostgreSQL advisory
+lock that wraps every Better Auth organization mutation, rechecks the exact
+member or invitation row, and releases the hold only when no row exists. A
+committed row therefore wins over recovery even when its after hook was lost;
+a failed request can be retried with the same proof after its writer lock has
+ended. There is no automatic age-based expiry and no tenant self-attestation.
+The Node mount is enabled only when `PSKILLS_BILLING_RECOVERY_TOKEN` or its
+SHA-256 `PSKILLS_BILLING_RECOVERY_TOKEN_HASH` is supplied together with
+`PSKILLS_BILLING_RECOVERY_ORGANIZATION_ID`. It accepts exactly one of the two
+credential forms, forces the `billing:seat-recovery` capability in code, and
+uses a bearer-only worker authenticator. This credential must be provisioned
+separately from `PSKILLS_WORKER_TOKEN`; ordinary scanner, Eve, and queue worker
+credentials are rejected even when they carry the worker role.
 
 The Node runtime now constructs this service from the environment, using the
 separate PostgreSQL billing repository whenever a PostgreSQL pool is present.
@@ -127,10 +132,12 @@ records fail closed and require reconciliation rather than reopening Eve work.
 instance it runs two independent repository/service instances concurrently to
 prove one usage reservation wins a finite limit, retries and released-key
 re-admission are idempotent, seat admission survives stale identity snapshots
-and lifecycle expiry/removal/missed hooks, one signed webhook delivery is
-durably claimed, and an older out-of-order event cannot replace newer
-subscription state. The normal unit suite uses the provider-neutral fake
-repository and is not presented as this database proof.
+and lifecycle expiry/removal/missed hooks, recovery waits behind an active
+Better Auth mutation and rejects a committed row while releasing a failed
+writer's absent row, one signed webhook delivery is durably claimed, and an
+older out-of-order event cannot replace newer subscription state. The normal
+unit suite uses the provider-neutral fake repository and is not presented as
+this database proof.
 
 ## Webhooks
 
@@ -181,14 +188,14 @@ holds. Successful writes settle their own key; cancellations, removals, and
 re-invites can reuse a settled lifecycle key. Active identity holds do not
 expire automatically because the billing transaction cannot prove that a
 Better Auth write has stopped; they remain fail-closed until an explicit
-success/failure lifecycle hook or operator reconciliation resolves them. When
-a Better Auth write aborts before its after-hook, the host must use the
-owner/admin `seat-recovery` path with the exact generated subject key and
-explicit failure proof; that durable abort path is safe to retry and is covered
-by the disposable PostgreSQL lifecycle proof. The identity source currently
-calls `releaseSeat()` only from `afterRemoveMember`, `afterRejectInvitation`,
-and `afterCancelInvitation`; Better Auth has no failed-write after hook for
-`createMember` or `createInvitation`, so those failures use the recovery path.
+success/failure lifecycle hook or platform reconciliation resolves them. When
+a Better Auth write aborts before its after-hook, the platform recovery route
+must acquire the shared organization mutation lock, verify the exact generated
+subject row is absent, and then release the hold with a writer-termination
+proof. The identity source currently calls `releaseSeat()` only from
+`afterRemoveMember`, `afterRejectInvitation`, and `afterCancelInvitation`;
+Better Auth has no failed-write after hook for `createMember` or
+`createInvitation`, so those failures use the platform recovery path.
 These adapters are omitted when billing explicitly reports disabled, preserving
 the legacy deployment path.
 

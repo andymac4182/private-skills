@@ -16,12 +16,19 @@ import {
   type CompanySsoAuthorizer,
   type CompanySsoModule,
 } from '../../../packages/identity/src/company-sso.js';
-import type { BillingService } from '../../../packages/billing/src/index.js';
+import {
+  BillingError,
+  type BillingSeatRecoveryProof,
+  type BillingSeatRecoveryResult,
+  type BillingSeatReservation,
+  type BillingService,
+} from '../../../packages/billing/src/index.js';
 import {
   createApiTokenModule,
   createPostgresApiTokenRepository,
   DEFAULT_API_TOKEN_SESSION_COOKIE,
   type ApiTokenModule,
+  type ApiTokenPgExecutor,
   type ApiTokenPgPool,
   type IdentityRole as ApiTokenIdentityRole,
   type MembershipAuthorizer,
@@ -56,12 +63,39 @@ export interface IdentityInfrastructureOptions {
 export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
+  /** Server-only Better Auth hold inspection and recovery. */
+  billingRecovery?: IdentitySeatRecovery;
   companySso: CompanySsoModule | null;
   operationsEvents: IdentityOperationsEventSink | null;
   /** Resolves only after opted-in identity, company SSO, API-token, and operations-event migrations finish. */
   ready: Promise<void>;
   /** Runs all reviewed identity and API-token migrations explicitly for a controlled deployment job. */
   runMigrations: () => Promise<void>;
+}
+
+export type IdentitySeatSubjectKind = 'member' | 'invitation';
+
+/**
+ * The subject is carried by the operator request so the adapter can derive
+ * and verify the opaque operation key. It is never accepted from a tenant
+ * billing principal.
+ */
+export interface IdentitySeatRecoveryRequest {
+  organizationId: string;
+  operationKey: string;
+  subjectKind: IdentitySeatSubjectKind;
+  subjectId: string;
+  proof: BillingSeatRecoveryProof;
+}
+
+/**
+ * Internal platform recovery capability. Runtime code should expose this only
+ * behind an operator or server-worker authenticator; company owner/admin
+ * routes deliberately do not receive it.
+ */
+export interface IdentitySeatRecovery {
+  activeSeatReservations(organizationId: string): Promise<readonly BillingSeatReservation[]>;
+  recoverFailedSeat(input: IdentitySeatRecoveryRequest): Promise<BillingSeatRecoveryResult>;
 }
 
 /**
@@ -95,6 +129,10 @@ export class PostgresIdentityBillingAdmission implements IdentityBillingAdmissio
     await this.billing.commitSeat(organizationId, operationKey);
   }
 
+  async activeSeatReservations(organizationId: string): Promise<readonly BillingSeatReservation[]> {
+    return this.billing.activeSeatReservations(organizationId);
+  }
+
   async syncSeats(organizationId: string, operationKey: string): Promise<void> {
     const observedRevision = await this.billing.seatRevision(organizationId);
     const result = await this.pool.query<{
@@ -120,6 +158,74 @@ export class PostgresIdentityBillingAdmission implements IdentityBillingAdmissio
     }));
     await this.billing.syncSeatSubjects(organizationId, subjectOperationKeys, operationKey, observedRevision);
   }
+
+  /**
+   * Recover one Better Auth hold after a platform writer has failed. The
+   * transaction-scoped advisory lock is the same lock held around every
+   * Better Auth organization request by the identity runtime. Holding it
+   * across the row check and billing release makes the check authoritative:
+   * a committed member/invitation is observed and rejected, while a failed
+   * request has no row and can be released safely.
+   */
+  async recoverFailedSeat(input: IdentitySeatRecoveryRequest): Promise<BillingSeatRecoveryResult> {
+    const organizationId = validateIdentityRecoveryOrganization(input.organizationId);
+    const operationKey = validateIdentityRecoveryString(input.operationKey, 'operationKey');
+    const subjectId = validateIdentityRecoveryString(input.subjectId, 'subjectId');
+    if (input.subjectKind !== 'member' && input.subjectKind !== 'invitation') {
+      throw new BillingError('INVALID_SEAT_RECOVERY_SUBJECT', 'The Better Auth seat subject kind is invalid', 400);
+    }
+    if (!input.proof || input.proof.kind !== 'writer-terminated') {
+      throw new BillingError('SEAT_RECOVERY_PROOF_UNTRUSTED', 'Only a platform writer-termination proof can recover a seat hold', 403);
+    }
+    const expectedOperationKey = await seatOperationKey(input.subjectKind, organizationId, subjectId);
+    if (expectedOperationKey !== operationKey) {
+      throw new BillingError('SEAT_RECOVERY_SUBJECT_MISMATCH', 'The seat hold does not match the requested identity subject', 409);
+    }
+    return this.withOrganizationMutationLock(async (connection) => {
+      const table = input.subjectKind === 'member' ? this.memberTable : this.invitationTable;
+      const result = await connection.query<{ present?: unknown }>(
+        `SELECT 1 AS "present" FROM ${table} WHERE "organizationId" = $1 AND "id" = $2 LIMIT 1`,
+        [organizationId, subjectId],
+      );
+      if (result.rows.length > 0) {
+        throw new BillingError('SEAT_RECOVERY_CONFLICT', 'The Better Auth identity row already exists; use its lifecycle hook', 409);
+      }
+      return this.billing.releaseSeatAfterFailure(organizationId, operationKey, input.proof);
+    });
+  }
+
+  /** Keep the lock connection open while the identity row and billing hold are checked. */
+  private async withOrganizationMutationLock<T>(operation: (connection: ApiTokenPgExecutor) => Promise<T>): Promise<T> {
+    const connection = await this.pool.connect();
+    let transactionStarted = false;
+    try {
+      await connection.query('BEGIN');
+      transactionStarted = true;
+      await connection.query('SELECT pg_advisory_xact_lock($1)', [IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY]);
+      const result = await operation(connection);
+      await connection.query('COMMIT');
+      return result;
+    } catch (error) {
+      if (transactionStarted) await connection.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      await connection.release?.();
+    }
+  }
+}
+
+function validateIdentityRecoveryOrganization(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > 256 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new BillingError('INVALID_SEAT_RECOVERY_SUBJECT', 'The Better Auth seat organization is invalid', 400);
+  }
+  return value.trim();
+}
+
+function validateIdentityRecoveryString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > 256 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new BillingError('INVALID_SEAT_RECOVERY_SUBJECT', `The Better Auth seat ${field} is invalid`, 400);
+  }
+  return value.trim();
 }
 
 /** Keep the API-token browser exchange on the same durable secret boundary as identity. */
@@ -339,7 +445,15 @@ export function createIdentityInfrastructure(
     }
   });
   void ready.catch(() => undefined);
-  return { identity, apiTokens, companySso, operationsEvents: operationsEventsStore, ready, runMigrations };
+  return {
+    identity,
+    apiTokens,
+    companySso,
+    operationsEvents: operationsEventsStore,
+    ready,
+    runMigrations,
+    ...(billingAdmission === undefined ? {} : { billingRecovery: billingAdmission }),
+  };
 }
 
 function operationsEventsAutoMigrate(options: IdentityInfrastructureOptions, env: IdentityEnvironment): boolean {

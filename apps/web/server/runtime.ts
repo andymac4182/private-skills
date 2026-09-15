@@ -54,7 +54,12 @@ import {
 import { canonicalOriginFromEnv } from './identity-origin.js';
 import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
-import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
+import {
+  BILLING_ROUTE_PATHS,
+  BILLING_SEAT_RECOVERY_SCOPE,
+  createBillingRoutes,
+  createBillingSeatRecoveryRoutes,
+} from './routes/billing.js';
 import { createOperationsStatusHandler } from './operations-status.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
 import {
@@ -110,6 +115,18 @@ async function createRuntime(env: RuntimeEnvironment) {
   const cliReleaseManifest = resolveCliReleaseManifest(env.PSKILLS_CLI_RELEASE_MANIFEST);
   const cliReleaseProvider = infrastructure.cliReleaseProvider ?? createBlobCliReleaseAssetProvider(infrastructure.blobs);
   const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
+  const billingRecoveryAuthenticator = infrastructure.billingRecovery === undefined
+    ? undefined
+    : await createBillingRecoveryAuthenticator(env);
+  const billingRecovery = infrastructure.billingRecovery && billingRecoveryAuthenticator
+    ? createBillingSeatRecoveryRoutes({
+      // Recovery is bearer-only. The dedicated authenticator has no user
+      // tokens and authenticateWorker rejects browser session cookies.
+      authorizeOperator: (request) => billingRecoveryAuthenticator.authenticateWorker(request),
+      listReservations: (organizationId) => infrastructure.billingRecovery!.activeSeatReservations(organizationId),
+      recoverSeat: (input) => infrastructure.billingRecovery!.recoverFailedSeat(input),
+    })
+    : undefined;
   const tenantReviewDispatch = eveTenant && infrastructure.listTenantReviewTargets
     ? createTenantReviewRuntime({
       env,
@@ -646,6 +663,11 @@ async function createRuntime(env: RuntimeEnvironment) {
       if (response) return response;
     }
     if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return billingWebhook(request);
+    if (path === BILLING_ROUTE_PATHS.seatReservations || path.startsWith(`${BILLING_ROUTE_PATHS.seatReservations}/`)
+      || path === BILLING_ROUTE_PATHS.seatRecovery || path.startsWith(`${BILLING_ROUTE_PATHS.seatRecovery}/`)) {
+      const response = await billingRecovery?.(request);
+      if (response) return response;
+    }
     if (path === '/internal/worker/run') {
       const workerHandler = infrastructure.hostedWorkerDispatcher
         ?? infrastructure.hostedWorker
@@ -749,6 +771,45 @@ function isBetterAuthPrincipal(value: Principal & { authMethod?: unknown }): boo
 function optionalEnvironmentValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+/**
+ * Resolve the platform-only recovery credential without inheriting any
+ * bootstrap, gateway, scanner, or ordinary worker token. The route remains
+ * absent when this separately provisioned credential is not complete.
+ */
+async function createBillingRecoveryAuthenticator(env: RuntimeEnvironment) {
+  const token = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN);
+  const tokenHash = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN_HASH);
+  if (token === undefined && tokenHash === undefined) return undefined;
+  if (token !== undefined && tokenHash !== undefined) {
+    console.error('Billing seat recovery route disabled: configure exactly one dedicated operator token or token hash.');
+    return undefined;
+  }
+  const organizationId = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_ORGANIZATION_ID);
+  if (organizationId === undefined) {
+    console.error('Billing seat recovery route disabled: PSKILLS_BILLING_RECOVERY_ORGANIZATION_ID is required.');
+    return undefined;
+  }
+  const dedicatedEnvironment: RuntimeEnvironment = {
+    PSKILLS_ENVIRONMENT: env.PSKILLS_ENVIRONMENT,
+    PSKILLS_PUBLIC_ORIGIN: env.PSKILLS_PUBLIC_ORIGIN,
+    PSKILLS_SESSION_SECRET: env.PSKILLS_SESSION_SECRET,
+    PSKILLS_WORKER_TOKEN: token,
+    PSKILLS_WORKER_TOKEN_HASH: tokenHash,
+    PSKILLS_WORKER_TOKEN_ID: optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN_ID) ?? 'billing-recovery-operator',
+    PSKILLS_WORKER_ORGANIZATION_ID: organizationId,
+    PSKILLS_WORKER_SUBJECT: optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_SUBJECT) ?? 'billing-recovery-operator',
+    // This scope is fixed in code; deployment config cannot accidentally turn
+    // an ordinary worker token into a recovery credential.
+    PSKILLS_WORKER_SCOPES: BILLING_SEAT_RECOVERY_SCOPE,
+  };
+  try {
+    return await createAuthenticatorFromEnv(dedicatedEnvironment);
+  } catch {
+    console.error('Billing seat recovery route disabled: the dedicated operator credential is invalid.');
+    return undefined;
+  }
 }
 
 interface EveTenantInboundRoute {

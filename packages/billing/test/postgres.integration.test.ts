@@ -1,7 +1,7 @@
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PostgresIdentityBillingAdmission } from '../../../apps/web/server/identity-infrastructure.js'
-import { seatOperationKey } from '../../../packages/identity/src/index.js'
+import { IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY, seatOperationKey } from '../../../packages/identity/src/index.js'
 import {
   BillingService,
   createBillingServiceFromEnv,
@@ -517,6 +517,89 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await first.reserveSeat(organizationId, 'pg-committed-member', { subjectKey: true })
     await first.commitSeat(organizationId, 'pg-committed-member')
     await expect(second.releaseSeatAfterFailure(organizationId, 'pg-committed-member', { kind: 'writer-terminated', reference: 'writer-terminated-pg' })).rejects.toMatchObject({ code: 'SEAT_RESERVATION_SETTLED' })
+  })
+
+  it('fences recovery behind Better Auth writes and rechecks the committed identity row', async () => {
+    const catalog = planCatalog()
+    const service = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const schema = `billing_identity_recovery_${process.pid}_${Math.floor(Math.random() * 10_000)}`
+    const quotedSchema = `"${schema}"`
+    const memberTable = `${quotedSchema}."member"`
+    const invitationTable = `${quotedSchema}."invitation"`
+    await sql!.unsafe(`CREATE SCHEMA ${quotedSchema}`)
+    await sql!.unsafe(`CREATE TABLE ${memberTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "userId" text NOT NULL, "role" text NOT NULL)`)
+    await sql!.unsafe(`CREATE TABLE ${invitationTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "status" text NOT NULL, "expiresAt" timestamptz NOT NULL)`)
+
+    const organizationId = 'org-pg-recovery-fence'
+    const subjectId = 'member-pg-recovery-fence'
+    const operationKey = await seatOperationKey('member', organizationId, subjectId)
+    const proof = { kind: 'writer-terminated' as const, reference: 'operator-termination-pg-fence' }
+    await service.reserveSeat(organizationId, operationKey, { subjectKey: true })
+    const identityPool = pool
+    const admission = new PostgresIdentityBillingAdmission(service, identityPool, schema)
+
+    // The runtime's Better Auth request holds this same transaction lock
+    // across its before hook, adapter write, and after hook. Start a writer
+    // that owns it, then prove recovery cannot inspect a partial snapshot.
+    const writer = await identityPool.connect()
+    let writerTransaction = false
+    try {
+      await writer.query('BEGIN')
+      writerTransaction = true
+      await writer.query('SELECT pg_advisory_xact_lock($1)', [IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY])
+      let recoveryConnected!: () => void
+      const recoveryStarted = new Promise<void>((resolve) => { recoveryConnected = resolve })
+      const recoveryPool: BillingPgPoolLike = {
+        query: <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => identityPool.query<Row>(statement, parameters),
+        connect: async () => {
+          recoveryConnected()
+          return identityPool.connect()
+        },
+      }
+      const recoveryAdmission = new PostgresIdentityBillingAdmission(service, recoveryPool, schema)
+      const recovery = recoveryAdmission.recoverFailedSeat({ organizationId, operationKey, subjectKind: 'member', subjectId, proof })
+      await recoveryStarted
+      // The advisory lock is held by the writer, so this operation remains
+      // pending until the writer transaction commits or rolls back.
+      const beforeCommit = await Promise.race([
+        recovery.then(() => 'finished', () => 'finished'),
+        Promise.resolve('still-waiting'),
+      ])
+      expect(beforeCommit).toBe('still-waiting')
+      await writer.query(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, [subjectId, organizationId, 'user-pg-recovery-fence', 'reader'])
+      await writer.query('COMMIT')
+      writerTransaction = false
+      await expect(recovery).rejects.toMatchObject({ code: 'SEAT_RECOVERY_CONFLICT' })
+      // A committed identity row cannot be released by the recovery path.
+      await expect(service.usageSnapshot(organizationId)).resolves.toMatchObject({ usage: { seats: 1 } })
+
+      // A failed writer leaves no identity row. Once the same platform lock is
+      // available, the exact subject check permits one durable release.
+      await sql!.unsafe(`DELETE FROM ${memberTable} WHERE "organizationId" = $1 AND "id" = $2`, [organizationId, subjectId])
+      const failedOrganizationId = 'org-pg-recovery-failed'
+      const failedSubjectId = 'member-pg-recovery-failed'
+      const failedOperationKey = await seatOperationKey('member', failedOrganizationId, failedSubjectId)
+      await service.reserveSeat(failedOrganizationId, failedOperationKey, { subjectKey: true })
+      await expect(admission.recoverFailedSeat({
+        organizationId: failedOrganizationId,
+        operationKey: failedOperationKey,
+        subjectKind: 'member',
+        subjectId: failedSubjectId,
+        proof,
+      })).resolves.toMatchObject({
+        reservation: { operationKey: failedOperationKey, status: 'settled', committed: false, recoveryProof: proof },
+      })
+      await expect(service.usageSnapshot(failedOrganizationId)).resolves.toMatchObject({ usage: { seats: 0 } })
+    } finally {
+      if (writerTransaction) await writer.query('ROLLBACK').catch(() => undefined)
+      await writer.release?.()
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`)
+    }
   })
 
   it('claims one signed webhook delivery across concurrent service instances', async () => {

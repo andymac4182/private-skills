@@ -221,8 +221,13 @@ const IDENTITY_ROLES: readonly IdentityRole[] = ['owner', 'admin', 'publisher', 
 const BUILTIN_PROVIDER_IDS = new Set<IdentityProviderId>(['github', 'google', 'microsoft']);
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SCHEMA_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
-/** One database-wide lock key for Better Auth organization state changes. */
-const ORGANIZATION_MUTATION_LOCK_KEY = 2_147_483_647;
+/**
+ * Shared PostgreSQL advisory-lock key for organization writes and billing
+ * recovery. The host holds this transaction lock around the complete Better
+ * Auth organization request; a recovery operation must use the same key
+ * before checking the identity row and releasing a failed seat hold.
+ */
+export const IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY = 2_147_483_647 as const;
 
 /** Environment variables accepted by the server-side identity factory. */
 export type IdentityEnvironment = Readonly<Record<string, string | undefined>>;
@@ -1195,7 +1200,7 @@ export function createIdentityRuntime(
           // leaving the plugin's membership and permission checks authoritative.
           const response = isOrganizationMutation(request, config.basePath)
             ? await lockSql.begin(async (transaction) => {
-                await transaction`select pg_advisory_xact_lock(${ORGANIZATION_MUTATION_LOCK_KEY})`;
+                await transaction`select pg_advisory_xact_lock(${IDENTITY_ORGANIZATION_MUTATION_LOCK_KEY})`;
                 return auth.handler(request);
               })
             : await auth.handler(request);

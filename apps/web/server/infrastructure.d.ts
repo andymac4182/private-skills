@@ -33,6 +33,17 @@ declare module '#pskills-infrastructure' {
       handler: import('../../../packages/api-tokens/src/index').ApiTokenHandler;
       authenticator: import('../../../packages/contracts/src/index').Authenticator;
     };
+    /** Optional platform-only Better Auth seat recovery capability. */
+    billingRecovery?: {
+      activeSeatReservations: (organizationId: string) => Promise<readonly import('../../../packages/billing/src/index').BillingSeatReservation[]>;
+      recoverFailedSeat: (input: {
+        organizationId: string;
+        operationKey: string;
+        subjectKind: 'member' | 'invitation';
+        subjectId: string;
+        proof: import('../../../packages/billing/src/index').BillingSeatRecoveryProof;
+      }) => Promise<import('../../../packages/billing/src/index').BillingSeatRecoveryResult>;
+    };
     /** Optional Node-owned company SSO registry and Better Auth bridge. */
     companySso?: {
       handler: (request: Request) => Promise<Response | undefined>;

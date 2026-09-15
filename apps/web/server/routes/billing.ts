@@ -8,6 +8,8 @@ import type {
   BillingEntitlement,
   BillingMode,
   BillingProviderId,
+  BillingSeatRecoveryResult,
+  BillingSeatReservation,
   BillingSeatRecoveryProof,
   BillingStatus,
   HostedBillingSession,
@@ -27,6 +29,9 @@ export const BILLING_ROUTE_PATHS = Object.freeze({
   portal: '/v1/billing/portal',
   webhook: '/v1/billing/webhook',
 })
+
+/** Capability carried only by the separately provisioned recovery operator credential. */
+export const BILLING_SEAT_RECOVERY_SCOPE = 'billing:seat-recovery' as const
 
 const BILLING_PROTOCOL_VERSION = 1 as const
 const BILLING_ROLES = new Set(['owner', 'admin'])
@@ -115,6 +120,26 @@ export interface BillingRoutesOptions {
    * request fields are never forwarded. Results are checked again here.
    */
   invoiceHistory?: (input: BillingInvoiceLookup) => Promise<readonly BillingInvoiceRecord[]>
+  maxBodyBytes?: number
+}
+
+/**
+ * A platform-only capability for repairing a Better Auth write that failed
+ * after its before hook. This is intentionally separate from
+ * `BillingRoutesOptions`: owner/admin company principals must never receive a
+ * recovery callback or be able to self-attest a failed identity write.
+ */
+export interface BillingSeatRecoveryRoutesOptions {
+  /** Authenticator for a server-owned worker/operator credential. */
+  authorizeOperator: Authenticator['authenticate']
+  listReservations: (organizationId: string) => Promise<readonly BillingSeatReservation[]>
+  recoverSeat: (input: {
+    organizationId: string
+    operationKey: string
+    subjectKind: 'member' | 'invitation'
+    subjectId: string
+    proof: BillingSeatRecoveryProof
+  }) => Promise<BillingSeatRecoveryResult>
   maxBodyBytes?: number
 }
 
@@ -353,7 +378,10 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
   return async (request: Request): Promise<Response | undefined> => {
     const path = safePath(request)
     if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return webhook(request)
-    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.seatReservations && path !== BILLING_ROUTE_PATHS.seatRecovery && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal) return undefined
+    // Seat hold inspection/recovery is deliberately not part of the
+    // owner/admin company surface. A tenant must not be able to release a
+    // hold by posting a self-attested failure proof.
+    if (path !== BILLING_ROUTE_PATHS.root && path !== BILLING_ROUTE_PATHS.invoices && path !== BILLING_ROUTE_PATHS.checkout && path !== BILLING_ROUTE_PATHS.portal) return undefined
     try {
       const principal = await billingPrincipal(options, request)
       const organizationId = principal.organizationId.trim()
@@ -366,27 +394,6 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
         const status = options.service.status()
         const entitlement = await options.service.entitlement(organizationId)
         return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, invoices: await invoicesFor(options, organizationId, status, entitlement) }, { headers: { 'cache-control': 'no-store' } })
-      }
-      if (path === BILLING_ROUTE_PATHS.seatReservations) {
-        if (method(request) !== 'GET') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat reservations only accept GET.', 405)
-        return Response.json({
-          protocolVersion: BILLING_PROTOCOL_VERSION,
-          reservations: await options.service.activeSeatReservations(organizationId),
-        }, { headers: { 'cache-control': 'no-store' } })
-      }
-      if (path === BILLING_ROUTE_PATHS.seatRecovery) {
-        if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat recovery only accepts POST.', 405)
-        const body = await readJsonBody(request, maxBodyBytes)
-        const operationKey = optionalString(body.operationKey, 'operationKey', 256)
-        if (!operationKey) throw new BillingRouteError('INVALID_REQUEST', 'operationKey is required.', 400)
-        const rawProof = body.proof
-        if (!rawProof || typeof rawProof !== 'object' || Array.isArray(rawProof)) throw new BillingRouteError('INVALID_REQUEST', 'proof is required.', 400)
-        const proof = rawProof as Partial<BillingSeatRecoveryProof>
-        if (proof.kind !== 'known-failure' && proof.kind !== 'writer-terminated') throw new BillingRouteError('INVALID_REQUEST', 'proof.kind is invalid.', 400)
-        const reference = optionalString(proof.reference, 'proof.reference', 256)
-        if (!reference) throw new BillingRouteError('INVALID_REQUEST', 'proof.reference is required.', 400)
-        const recovery = await options.service.releaseSeatAfterFailure(organizationId, operationKey, { kind: proof.kind, reference })
-        return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, recovery }, { headers: { 'cache-control': 'no-store' } })
       }
       if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Billing actions only accept POST.', 405)
       const body = await readJsonBody(request, maxBodyBytes)
@@ -402,6 +409,71 @@ export function createBillingRoutes(options: BillingRoutesOptions): BillingRoute
       if (!status.portal || !status.webhookVerification) throw new BillingRouteError('BILLING_UNAVAILABLE', 'Hosted subscription management is not configured for this deployment.', 503, true)
       const session = await options.service.portal({ organizationId, subject: principal.subject, ...(idempotencyKey === undefined ? {} : { idempotencyKey }) })
       return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, session } satisfies BillingSessionResponse, { headers: { 'cache-control': 'no-store' } })
+    } catch (error) {
+      return routeErrorResponse(error)
+    }
+  }
+}
+
+/**
+ * Build the platform/operator recovery endpoint separately from the company
+ * billing console. The operator authenticator returns the target organization
+ * from a server-owned credential; the request body cannot select a tenant.
+ * The callback must perform the authoritative identity-row check while the
+ * Better Auth organization mutation fence is held.
+ */
+export function createBillingSeatRecoveryRoutes(options: BillingSeatRecoveryRoutesOptions): BillingRoutes {
+  if (typeof options.authorizeOperator !== 'function') throw new Error('billing recovery operator authenticator is required')
+  if (typeof options.listReservations !== 'function') throw new Error('billing recovery listing callback is required')
+  if (typeof options.recoverSeat !== 'function') throw new Error('billing recovery callback is required')
+  const maxBodyBytes = validBodyLimit(options.maxBodyBytes)
+
+  return async (request: Request): Promise<Response | undefined> => {
+    const path = safePath(request)
+    if (path !== BILLING_ROUTE_PATHS.seatReservations && path !== BILLING_ROUTE_PATHS.seatRecovery) return undefined
+    try {
+      let operator: Principal | null
+      try {
+        operator = await options.authorizeOperator(request)
+      } catch {
+        throw new BillingRouteError('BILLING_AUTH_UNAVAILABLE', 'Billing recovery authorization is temporarily unavailable.', 503, true)
+      }
+      const operatorRecord = operator as (Principal & { identity?: unknown; scopes?: unknown }) | null
+      if (!operatorRecord || !Array.isArray(operatorRecord.roles) || !operatorRecord.roles.includes('worker') || operatorRecord.identity !== 'worker' || !Array.isArray(operatorRecord.scopes) || !operatorRecord.scopes.includes(BILLING_SEAT_RECOVERY_SCOPE) || typeof operatorRecord.organizationId !== 'string' || operatorRecord.organizationId.trim() === '') {
+        throw new BillingRouteError('BILLING_FORBIDDEN', 'Platform operator access is required for seat recovery.', 403)
+      }
+      const organizationId = operatorRecord.organizationId.trim()
+      if (path === BILLING_ROUTE_PATHS.seatReservations) {
+        if (method(request) !== 'GET') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat reservations only accept GET.', 405)
+        return Response.json({
+          protocolVersion: BILLING_PROTOCOL_VERSION,
+          reservations: await options.listReservations(organizationId),
+        }, { headers: { 'cache-control': 'no-store' } })
+      }
+      if (method(request) !== 'POST') throw new BillingRouteError('METHOD_NOT_ALLOWED', 'Seat recovery only accepts POST.', 405)
+      const body = await readJsonBody(request, maxBodyBytes)
+      const operationKey = optionalString(body.operationKey, 'operationKey', 256)
+      const subjectId = optionalString(body.subjectId, 'subjectId', 256)
+      const subjectKind = optionalString(body.subjectKind, 'subjectKind', 32)
+      if (!operationKey || !subjectId || (subjectKind !== 'member' && subjectKind !== 'invitation')) {
+        throw new BillingRouteError('INVALID_REQUEST', 'operationKey, subjectKind, and subjectId are required.', 400)
+      }
+      const rawProof = body.proof
+      if (!rawProof || typeof rawProof !== 'object' || Array.isArray(rawProof)) throw new BillingRouteError('INVALID_REQUEST', 'proof is required.', 400)
+      const proof = rawProof as Partial<BillingSeatRecoveryProof>
+      // A failed Better Auth writer can only be recovered by the platform
+      // writer-fencing path. There is no tenant-visible known-failure mode.
+      if (proof.kind !== 'writer-terminated') throw new BillingRouteError('INVALID_REQUEST', 'proof.kind must be writer-terminated.', 400)
+      const reference = optionalString(proof.reference, 'proof.reference', 256)
+      if (!reference) throw new BillingRouteError('INVALID_REQUEST', 'proof.reference is required.', 400)
+      const recovery = await options.recoverSeat({
+        organizationId,
+        operationKey,
+        subjectKind,
+        subjectId,
+        proof: { kind: 'writer-terminated', reference },
+      })
+      return Response.json({ protocolVersion: BILLING_PROTOCOL_VERSION, recovery }, { headers: { 'cache-control': 'no-store' } })
     } catch (error) {
       return routeErrorResponse(error)
     }
