@@ -137,6 +137,18 @@ function usageOperationIndexKey(organizationId: string, operationKey: string): s
   return `${organizationId}\u0000${operationKey}`;
 }
 
+function retainRecentOperations(operations: readonly BillingUsageOperation[]): BillingUsageOperation[] {
+  if (operations.length <= MAX_RETAINED_OPERATIONS) return [...operations];
+  return operations
+    .map((operation, index) => ({ operation, index }))
+    .sort((left, right) => {
+      const byCreatedAt = Date.parse(left.operation.createdAt) - Date.parse(right.operation.createdAt);
+      return byCreatedAt !== 0 ? byCreatedAt : left.index - right.index;
+    })
+    .slice(-MAX_RETAINED_OPERATIONS)
+    .map(({ operation }) => operation);
+}
+
 function nonnegativeInteger(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new BillingRepositoryError('INVALID_STATE', `${field} must be a non-negative safe integer`);
@@ -355,13 +367,23 @@ export class MemoryBillingRepository implements BillingRepository {
     });
   }
 
-  async transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T> {
+  private async transactionWithRequestedOperations<T>(
+    organizationId: string,
+    requestedOperationKeys: readonly string[],
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T> {
     const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedOperationKeys = [...new Set(requestedOperationKeys.map((key) => validateBillingIdentifier(key, 'operationKey', MAX_OPERATION_KEY_BYTES)))];
     return this.commitMutex.run(GLOBAL_TRANSACTION_KEY, () => this.mutex.run(normalized, () => {
       const current = this.states.get(normalized);
       const working = cloneBillingState(current ?? this.stateFactory(normalized));
       if (working.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
       assertBillingState(working);
+      for (const operationKey of normalizedOperationKeys) {
+        if (working.usageOperations.some((operation) => operation.operationKey === operationKey)) continue;
+        const durable = this.operationIndex.get(usageOperationIndexKey(normalized, operationKey));
+        if (durable) working.usageOperations.push(cloneBillingOperation(durable));
+      }
       working.seatRevision = (working.seatRevision ?? 0) + 1;
       const result = updater(working);
       syncResult(result);
@@ -371,7 +393,13 @@ export class MemoryBillingRepository implements BillingRepository {
       // the local adapter equally strict so tests and single-process mode do
       // not permit a provider identifier to be claimed by two organizations.
       assertCrossOrganizationUniqueness(this.states, normalized, working);
-      for (const operation of working.usageOperations) {
+      // Keep the visible in-memory snapshot bounded even when an exact old
+      // key was temporarily reloaded into the transaction. Index every
+      // touched row first so an aged operation remains durable for future
+      // exact-key retries after it leaves the bounded snapshot.
+      const operationsToIndex = [...working.usageOperations];
+      working.usageOperations = retainRecentOperations(working.usageOperations);
+      for (const operation of operationsToIndex) {
         this.operationIndex.set(usageOperationIndexKey(normalized, operation.operationKey), cloneBillingOperation(operation));
       }
       this.states.set(normalized, cloneBillingState(working));
@@ -379,14 +407,17 @@ export class MemoryBillingRepository implements BillingRepository {
     }));
   }
 
+  async transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T> {
+    return this.transactionWithRequestedOperations(organizationId, [], updater);
+  }
+
   async transactionWithUsageOperation<T>(organizationId: string, operationKey: string, updater: (state: BillingOrganizationState) => T): Promise<T> {
-    // The memory repository retains its complete in-process operation list;
-    // this alias keeps the transaction contract symmetric with PostgreSQL.
-    return this.transaction(organizationId, updater);
+    return this.transactionWithRequestedOperations(organizationId, [operationKey], updater);
   }
 
   async transactionWithUsageOperations<T>(organizationId: string, operationKeys: readonly string[], updater: (state: BillingOrganizationState) => T): Promise<T> {
-    return this.transaction(organizationId, updater);
+    if (!Array.isArray(operationKeys) || operationKeys.length > 16) throw new BillingRepositoryError('INVALID_OPERATION', 'usage operation key list is invalid');
+    return this.transactionWithRequestedOperations(organizationId, operationKeys, updater);
   }
 
   async findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined> {
@@ -407,25 +438,53 @@ export class MemoryBillingRepository implements BillingRepository {
     return undefined;
   }
 
-  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined> {
-    const normalizedOrganization = validateBillingOrganizationId(organizationId);
-    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
-    const indexed = this.operationIndex.get(usageOperationIndexKey(normalizedOrganization, normalizedKey));
-    if (indexed) return cloneBillingOperation(indexed);
-    const state = this.states.get(normalizedOrganization);
-    if (state) {
-      const operation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
-      if (operation) {
-        this.operationIndex.set(usageOperationIndexKey(normalizedOrganization, normalizedKey), cloneBillingOperation(operation));
-        return cloneBillingOperation(operation);
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(first: string, second?: string): Promise<BillingUsageOperation | undefined> {
+    if (second !== undefined) {
+      const normalizedOrganization = validateBillingOrganizationId(first);
+      const normalizedKey = validateBillingIdentifier(second, 'operationKey', MAX_OPERATION_KEY_BYTES);
+      const indexed = this.operationIndex.get(usageOperationIndexKey(normalizedOrganization, normalizedKey));
+      if (indexed) return cloneBillingOperation(indexed);
+      const state = this.states.get(normalizedOrganization);
+      if (state) {
+        const operation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+        if (operation) {
+          this.operationIndex.set(usageOperationIndexKey(normalizedOrganization, normalizedKey), cloneBillingOperation(operation));
+          return cloneBillingOperation(operation);
+        }
+        return undefined;
       }
-      return undefined;
+      // Initialize a state created by stateFactory before checking its
+      // operations, preserving the same behavior as read().
+      const created = await this.read(normalizedOrganization);
+      const operation = created.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+      return operation ? cloneBillingOperation(operation) : undefined;
     }
-    // Initialize a state created by stateFactory before checking its
-    // operations, preserving the same behavior as read().
-    const created = await this.read(normalizedOrganization);
-    const operation = created.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
-    return operation ? cloneBillingOperation(operation) : undefined;
+    const normalized = validateBillingIdentifier(first, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    let found: BillingUsageOperation | undefined;
+    // The visible memory snapshot is bounded just like PostgreSQL reads, but
+    // operationIndex retains every committed key. Search the durable index
+    // first so a global recovery lookup remains correct after an old row has
+    // aged out of the recent snapshot.
+    for (const candidate of this.operationIndex.values()) {
+      if (candidate.operationKey !== normalized) continue;
+      if (found !== undefined && found.organizationId !== candidate.organizationId) {
+        throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
+      }
+      found = candidate;
+    }
+    if (found !== undefined) return cloneBillingOperation(found);
+    for (const state of this.states.values()) {
+      const candidate = state.usageOperations.find((operation) => operation.operationKey === normalized);
+      if (!candidate) continue;
+      if (found !== undefined && found.organizationId !== candidate.organizationId) {
+        throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
+      }
+      found = candidate;
+    }
+    if (found === undefined) return undefined;
+    return cloneBillingOperation(found);
   }
 
   async findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined> {
@@ -438,20 +497,6 @@ export class MemoryBillingRepository implements BillingRepository {
     return undefined;
   }
 
-  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
-    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
-    let found: BillingUsageOperation | undefined;
-    for (const state of this.states.values()) {
-      const candidate = state.usageOperations.find((operation) => operation.operationKey === normalized);
-      if (!candidate) continue;
-      if (found !== undefined && found.organizationId !== candidate.organizationId) {
-        throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
-      }
-      found = candidate;
-    }
-    if (found === undefined) return undefined;
-    return JSON.parse(JSON.stringify(found)) as BillingUsageOperation;
-  }
 }
 
 export interface BillingPgQueryResult<Row = Record<string, unknown>> {
@@ -1051,15 +1096,26 @@ export class PostgresBillingRepository implements BillingRepository {
     return value === undefined ? undefined : validateBillingOrganizationId(value);
   }
 
-  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined> {
-    const normalizedOrganization = validateBillingOrganizationId(organizationId);
-    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(first: string, second?: string): Promise<BillingUsageOperation | undefined> {
+    const normalizedKey = validateBillingIdentifier(second === undefined ? first : second, 'operationKey', MAX_OPERATION_KEY_BYTES);
     await this.ensureSchema();
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2`,
-      [normalizedOrganization, normalizedKey],
+      second === undefined
+        ? `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE operation_key = $1 ORDER BY organization_id ASC LIMIT 2`
+        : `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2`,
+      second === undefined ? [normalizedKey] : [validateBillingOrganizationId(first), normalizedKey],
     );
-    return result.rows[0] ? rowOperation(result.rows[0], normalizedOrganization) : undefined;
+    if (second === undefined) {
+      if (result.rows.length > 1) throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
+      const row = result.rows[0];
+      if (!row) return undefined;
+      const organizationId = validateBillingOrganizationId(row.organization_id);
+      return rowOperation(row, organizationId);
+    }
+    const organizationId = validateBillingOrganizationId(first);
+    return result.rows[0] ? rowOperation(result.rows[0], organizationId) : undefined;
   }
 
   async findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined> {
@@ -1073,19 +1129,6 @@ export class PostgresBillingRepository implements BillingRepository {
     return result.rows[0] ? rowEvent(result.rows[0]) : undefined;
   }
 
-  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
-    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
-    await this.ensureSchema();
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at FROM ${this.tables.operations} WHERE operation_key = $1 ORDER BY organization_id ASC LIMIT 2`,
-      [normalized],
-    );
-    if (result.rows.length > 1) throw new BillingRepositoryError('AMBIGUOUS_OPERATION', 'usage operation key belongs to multiple organizations');
-    const row = result.rows[0];
-    if (!row) return undefined;
-    const organizationId = validateBillingOrganizationId(row.organization_id);
-    return rowOperation(row, organizationId);
-  }
 }
 
 export const createMemoryBillingRepository = (options: MemoryBillingRepositoryOptions = {}): MemoryBillingRepository => new MemoryBillingRepository(options);

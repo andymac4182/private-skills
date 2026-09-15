@@ -31,11 +31,13 @@ The free plan still has finite Eve limits, and
 admission status before reserving them. A no-Stripe launch demo can use the
 explicit providerless metered evaluation profile by setting
 `PSKILLS_BILLING_ENABLED=true` and
-`PSKILLS_BILLING_METERED_EVALUATION=true` in development/test with a durable
-PostgreSQL billing repository. The service reports `provider: null`, keeps
-checkout, portal, and webhook routes closed, and still enforces the free-plan
-Eve budget. Production and non-durable file/memory profiles refuse this mode;
-flipping the status gate would permit unmetered Eve work.
+`PSKILLS_BILLING_METERED_EVALUATION=true` with a durable PostgreSQL billing
+repository. This mode is valid in hosted production when PostgreSQL is
+explicitly configured; the service reports `provider: null`, keeps checkout,
+portal, invoice-provider reads, and webhook routes unavailable, and still
+enforces the free-plan limits. Production profiles without that durable
+boundary refuse the mode; flipping the status gate would permit unmetered Eve
+work.
 
 ## Company-admin console
 

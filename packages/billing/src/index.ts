@@ -654,7 +654,11 @@ export class BillingService {
     }
     this.enabled = options.enabled ?? options.provider !== undefined;
     if (options.usageEnabled !== undefined && typeof options.usageEnabled !== 'boolean') throw new BillingError('INVALID_CONFIGURATION', 'billing usage mode is invalid', 500);
-    this.usageEnabled = options.usageEnabled ?? (this.enabled && this.provider !== undefined);
+    // Explicit billing enablement is also the admission switch. A provider
+    // is only required for hosted payment calls; the durable usage ledger can
+    // enforce the free or verified plan limits while provider setup is being
+    // completed. Hosts may explicitly disable usage with `usageEnabled:false`.
+    this.usageEnabled = options.usageEnabled ?? this.enabled;
     this.webhookSecret = options.webhookSecret;
     this.webhookToleranceSeconds = options.webhookToleranceSeconds ?? 300;
     this.maxWebhookBodyBytes = options.maxWebhookBodyBytes ?? MAX_WEBHOOK_BODY_BYTES;
@@ -877,9 +881,16 @@ export class BillingService {
    * record is the billing system's durable source of tenant identity and
    * reserved Eve amount; callers must not reconstruct it from request data.
    */
-  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined> {
-    const normalized = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
-    return this.repository.findUsageOperation(normalized);
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
+  async findUsageOperation(first: string, second?: string): Promise<BillingUsageOperation | undefined> {
+    if (second === undefined) {
+      const normalized = validateBillingIdentifier(first, 'operationKey', MAX_OPERATION_KEY_BYTES);
+      return this.repository.findUsageOperation(normalized);
+    }
+    const normalizedOrganization = validateBillingOrganizationId(first);
+    const normalized = validateBillingIdentifier(second, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    return this.repository.findUsageOperation(normalizedOrganization, normalized);
   }
 
   async checkUsage(organizationId: string, delta: UsageDelta = {}): Promise<{ allowed: boolean; snapshot: UsageSnapshot; projected: BillingUsage; exceeded?: UsageLimitDetails }> {
@@ -1513,8 +1524,11 @@ export function createBillingServiceFromEnv(options: BillingEnvironmentOptions):
   const env = options.env ?? {};
   const catalog = options.catalog ?? createPlanCatalog({ env });
   const requested = envBool(env.PSKILLS_BILLING_ENABLED, false);
-  const evaluationEnvironment = env.PSKILLS_ENVIRONMENT === 'development' || env.PSKILLS_ENVIRONMENT === 'test';
-  const meteredEvaluation = requested && envBool(env.PSKILLS_BILLING_METERED_EVALUATION, false) && evaluationEnvironment;
+  // The Node host only enables this providerless mode when it has a durable
+  // PostgreSQL repository. Keeping the factory independent of environment
+  // labels also lets a reviewed deployment runner construct the same service
+  // for a hosted production database.
+  const meteredEvaluation = requested && envBool(env.PSKILLS_BILLING_METERED_EVALUATION, false);
   const providerName = env.PSKILLS_BILLING_PROVIDER ?? 'stripe';
   let provider: BillingProvider | undefined;
   if (requested && providerName === 'stripe' && env.STRIPE_SECRET_KEY) {
@@ -1530,12 +1544,23 @@ export function createBillingServiceFromEnv(options: BillingEnvironmentOptions):
   } else if (requested && providerName === 'local' && env.PSKILLS_BILLING_LOCAL_TEST === 'true') {
     provider = createLocalBillingAdapter({ baseUrl: env.PSKILLS_BILLING_LOCAL_BASE_URL });
   }
+  const providerSetupRequested = providerName === 'stripe'
+    ? env.STRIPE_SECRET_KEY?.trim() !== undefined
+    : providerName === 'local'
+      ? env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true'
+      : true;
+  const usageEnabled = requested && (!providerSetupRequested || provider !== undefined);
   return new BillingService({
     repository: options.repository,
     catalog,
     provider,
     enabled: requested,
-    ...(meteredEvaluation ? { usageEnabled: true } : {}),
+    // A missing provider is a supported providerless posture. If an operator
+    // supplied provider settings but adapter construction rejected them, keep
+    // usage admission disabled rather than treating the invalid setup as a
+    // valid hosted deployment. The runtime separately requires PostgreSQL
+    // before allowing providerless admission.
+    usageEnabled: usageEnabled || (meteredEvaluation && !providerSetupRequested),
     ...(env.STRIPE_WEBHOOK_SECRET ? { webhookSecret: env.STRIPE_WEBHOOK_SECRET } : env.PSKILLS_BILLING_WEBHOOK_SECRET ? { webhookSecret: env.PSKILLS_BILLING_WEBHOOK_SECRET } : {}),
     ...(options.successUrl ? { successUrl: options.successUrl } : env.PSKILLS_BILLING_SUCCESS_URL ? { successUrl: env.PSKILLS_BILLING_SUCCESS_URL } : {}),
     ...(options.cancelUrl ? { cancelUrl: options.cancelUrl } : env.PSKILLS_BILLING_CANCEL_URL ? { cancelUrl: env.PSKILLS_BILLING_CANCEL_URL } : {}),

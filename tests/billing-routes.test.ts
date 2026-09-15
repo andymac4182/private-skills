@@ -158,6 +158,37 @@ describe('company billing route factory', () => {
     expect(missingCalls.checkouts).toHaveLength(0)
   })
 
+  it('serves providerless usage and limits while keeping hosted actions and invoices unavailable', async () => {
+    const service = new BillingService({
+      repository: createMemoryBillingRepository({ now: () => NOW }),
+      enabled: true,
+      usageEnabled: true,
+      now: () => NOW,
+    })
+    const routes = createBillingRoutes({ service, authenticate: auth(principal('org-providerless')) })
+
+    const response = await routes(new Request('https://private-skills.example/v1/billing'))
+    expect(response?.status).toBe(200)
+    const body = await json(response!)
+    expect(body).toMatchObject({
+      organizationId: 'org-providerless',
+      readiness: 'unconfigured',
+      status: { enabled: true, usageEnforcement: true, providerReady: false, provider: null, checkout: false, portal: false, webhookVerification: false },
+      entitlement: { planId: 'free', state: 'inactive', reason: 'no-active-subscription' },
+      usage: { limits: { seats: 3, scansPerMonth: 50 } },
+      actions: { checkout: false, portal: false },
+      invoices: { state: 'unconfigured' },
+    })
+
+    const checkout = await routes(new Request('https://private-skills.example/v1/billing/checkout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: 'team' }),
+    }))
+    expect(checkout?.status).toBe(503)
+    await expect(json(checkout!)).resolves.toMatchObject({ code: 'BILLING_UNAVAILABLE' })
+  })
+
   it('passes an actual signed webhook through the route and keeps it tenant-bound', async () => {
     const service = serviceWith()
     const routes = createBillingRoutes({ service, authenticate: auth(null) })

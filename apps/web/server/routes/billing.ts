@@ -300,6 +300,7 @@ async function invoicesFor(
   entitlement: BillingEntitlement,
 ): Promise<BillingInvoiceHistory> {
   if (!status.enabled || status.mode === 'disabled') return { state: 'disabled', invoices: [], message: 'Billing is disabled for this deployment.' }
+  if (!status.providerReady) return { state: 'unconfigured', invoices: [], message: 'Usage limits remain available; invoice history is unavailable until hosted billing is configured.' }
   if (!status.checkout && !status.portal) return { state: 'unconfigured', invoices: [], message: 'Invoice history is unavailable until hosted billing is configured.' }
   const customerId = entitlement.customerId
   const provider = entitlement.provider ?? status.provider

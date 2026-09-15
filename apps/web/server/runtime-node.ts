@@ -363,7 +363,10 @@ export function createBillingRuntime(
   const requested = billingEnvironmentBool(env.PSKILLS_BILLING_ENABLED);
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const meteredEvaluationRequested = requested && billingEnvironmentBool(env.PSKILLS_BILLING_METERED_EVALUATION);
-  const meteredEvaluationAllowed = meteredEvaluationRequested && !production && postgresPool !== undefined;
+  // Providerless finite usage is a hosted production mode when its state is
+  // durable. The PostgreSQL boundary is the safety requirement; deployment
+  // labels must not silently disable enforcement.
+  const meteredEvaluationAllowed = meteredEvaluationRequested && postgresPool !== undefined;
   const localTest = requested && !production && env.PSKILLS_BILLING_PROVIDER === 'local'
     && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
   const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local';
@@ -405,7 +408,7 @@ export function createBillingRuntime(
     // credential-free reason when an enabled request could not be honoured.
     const reason = meteredEvaluationRequested && !meteredEvaluationAllowed
       ? production
-        ? 'metered evaluation is test-only'
+        ? 'metered evaluation requires a durable PostgreSQL billing boundary'
         : 'a durable PostgreSQL billing boundary is required'
       : !providerAllowed
       ? 'the local billing provider is test-only'

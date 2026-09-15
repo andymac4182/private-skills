@@ -118,6 +118,24 @@ describe('Node billing runtime composition', () => {
     });
   });
 
+  it('keeps providerless finite usage enabled in hosted production with PostgreSQL', () => {
+    const runtime = createBillingRuntime({
+      PSKILLS_ENVIRONMENT: 'production',
+      PSKILLS_BILLING_ENABLED: 'true',
+      PSKILLS_BILLING_METERED_EVALUATION: 'true',
+    }, {} as BillingPgPoolLike, 'https://private-skills.example');
+    expect(runtime.service.status()).toMatchObject({
+      enabled: true,
+      usageEnforcement: true,
+      providerReady: false,
+      provider: null,
+      mode: 'test',
+      checkout: false,
+      portal: false,
+      webhookVerification: false,
+    });
+  });
+
   it('keeps providerless evaluation disabled without a durable PostgreSQL boundary', () => {
     const runtime = createBillingRuntime({
       PSKILLS_ENVIRONMENT: 'test',

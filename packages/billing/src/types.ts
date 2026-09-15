@@ -347,8 +347,8 @@ export interface BillingServiceOptions {
   enabled?: boolean;
   /**
    * Enable finite usage admission without a payment provider. This is an
-   * explicit development/test evaluation mode and still requires a durable
-   * repository; checkout, portal, and webhooks remain unavailable.
+   * explicitly configured providerless metered mode and still requires a
+   * durable repository; checkout, portal, and webhooks remain unavailable.
    */
   usageEnabled?: boolean;
   webhookSecret?: string;

@@ -22,7 +22,7 @@ function fixture(overrides: Partial<BillingConsoleViewData> = {}): BillingConsol
   return {
     protocolVersion: 1,
     organizationId: 'org-console',
-    status: { enabled: true, provider: 'local', mode: 'test', webhookVerification: true, checkout: true, portal: true },
+    status: { enabled: true, providerReady: true, usageEnforcement: true, provider: 'local', mode: 'test', webhookVerification: true, checkout: true, portal: true },
     readiness: 'test',
     plans: [
       { id: 'free', label: 'Free', description: 'Free plan', limits, priceConfigured: false, checkoutAvailable: false },
@@ -106,7 +106,7 @@ describe('BillingView', () => {
   it('keeps actions disabled and states invoice unavailability truthfully when billing is disabled', async () => {
     const fetcher = vi.fn(async () => response(fixture({
       readiness: 'disabled',
-      status: { enabled: false, provider: null, mode: 'disabled', webhookVerification: false, checkout: false, portal: false },
+      status: { enabled: false, providerReady: false, usageEnforcement: false, provider: null, mode: 'disabled', webhookVerification: false, checkout: false, portal: false },
       invoices: { state: 'disabled', invoices: [], message: 'Billing is disabled for this deployment.' },
       actions: { checkout: false, portal: false },
     })))
@@ -118,6 +118,28 @@ describe('BillingView', () => {
 
     expect(container.textContent).toContain('Billing is disabled for this deployment')
     expect(container.textContent).toContain('Billing is disabled for this deployment.')
+    expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Start checkout'))?.disabled).toBe(true)
+    expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Manage subscription'))?.disabled).toBe(true)
+  })
+
+  it('keeps providerless usage and limits readable while payment actions stay unavailable', async () => {
+    const fetcher = vi.fn(async () => response(fixture({
+      readiness: 'unconfigured',
+      status: { enabled: true, providerReady: false, usageEnforcement: true, provider: null, mode: 'test', webhookVerification: false, checkout: false, portal: false },
+      entitlement: { ...entitlement, state: 'inactive', source: 'no-subscription', reason: 'no-active-subscription' },
+      invoices: { state: 'unconfigured', invoices: [], message: 'Usage limits remain available; invoice history is unavailable until hosted billing is configured.' },
+      actions: { checkout: false, portal: false },
+    })))
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => { root!.render(createElement(BillingView, { fetcher })); await flushEffects() })
+
+    expect(container.textContent).toContain('Usage limits are enforced from the durable billing ledger')
+    expect(container.textContent).toContain('No provider configured')
+    expect(container.textContent).toContain('2 / 10')
+    expect(container.textContent).toContain('invoice history is unavailable until hosted billing is configured')
     expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Start checkout'))?.disabled).toBe(true)
     expect([...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('Manage subscription'))?.disabled).toBe(true)
   })

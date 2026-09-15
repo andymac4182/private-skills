@@ -4,6 +4,7 @@ import { PostgresIdentityBillingAdmission } from '../../../apps/web/server/ident
 import { seatOperationKey } from '../../../packages/identity/src/index.js'
 import {
   BillingService,
+  createBillingServiceFromEnv,
   PostgresBillingRepository,
   billingPostgresSchemaSql,
   createPlanCatalog,
@@ -145,6 +146,40 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } })
     await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release')).resolves.toMatchObject({ idempotent: false })
     await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } })
+  })
+
+  it('enforces finite providerless usage in an explicitly configured production PostgreSQL profile', async () => {
+    const repository = new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW })
+    const service = createBillingServiceFromEnv({
+      repository,
+      catalog: planCatalog(),
+      env: {
+        PSKILLS_ENVIRONMENT: 'production',
+        PSKILLS_BILLING_ENABLED: 'true',
+        PSKILLS_BILLING_METERED_EVALUATION: 'true',
+      },
+    })
+    expect(service.status()).toMatchObject({
+      enabled: true,
+      usageEnforcement: true,
+      providerReady: false,
+      provider: null,
+      mode: 'test',
+      checkout: false,
+      portal: false,
+      webhookVerification: false,
+    })
+
+    await expect(service.reserveUsage('org-pg-providerless-production', { scans: 1 }, 'providerless-production-scan')).resolves.toMatchObject({ idempotent: false })
+    await expect(service.reserveUsage('org-pg-providerless-production', { scans: 1 }, 'providerless-production-over-limit')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED' })
+    await expect(service.usageSnapshot('org-pg-providerless-production')).resolves.toMatchObject({ usage: { scans: 1 }, entitlement: { state: 'inactive', source: 'no-subscription' } })
+    await expect(service.findUsageOperation('org-pg-providerless-production', 'providerless-production-scan')).resolves.toMatchObject({ organizationId: 'org-pg-providerless-production', status: 'reserved' })
+    await expect(service.findUsageOperation('providerless-production-scan')).resolves.toMatchObject({ organizationId: 'org-pg-providerless-production', status: 'reserved' })
+
+    await expect(service.reserveUsage('org-pg-global-a', { storageBytes: 1 }, 'global-operation-key')).resolves.toMatchObject({ idempotent: false })
+    await expect(service.reserveUsage('org-pg-global-b', { storageBytes: 1 }, 'global-operation-key')).resolves.toMatchObject({ idempotent: false })
+    await expect(service.findUsageOperation('org-pg-global-a', 'global-operation-key')).resolves.toMatchObject({ organizationId: 'org-pg-global-a' })
+    await expect(service.findUsageOperation('global-operation-key')).rejects.toMatchObject({ code: 'AMBIGUOUS_OPERATION' })
   })
 
   it('replays an aged usage key through the durable exact-key ledger', async () => {

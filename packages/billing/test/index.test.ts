@@ -427,6 +427,29 @@ describe('provider invoice read model', () => {
 });
 
 describe('transactional usage enforcement', () => {
+  it('keeps global memory operation lookup available after the recent window ages out', async () => {
+    const repository = createMemoryBillingRepository({ now: () => NOW });
+    await repository.transaction('org-memory-aged', (state) => {
+      state.usageOperations = Array.from({ length: 20_001 }, (_, index) => ({
+        organizationId: 'org-memory-aged',
+        operationKey: index === 0 ? 'memory-aged-operation' : `memory-operation-${index}`,
+        delta: { scans: 1 },
+        usage: { ...state.usage },
+        createdAt: new Date(NOW + index).toISOString(),
+        status: 'released' as const,
+      }));
+    });
+
+    const recent = await repository.read('org-memory-aged');
+    expect(recent.usageOperations).toHaveLength(20_000);
+    expect(recent.usageOperations.some((operation) => operation.operationKey === 'memory-aged-operation')).toBe(false);
+    await expect(repository.findUsageOperation('memory-aged-operation')).resolves.toMatchObject({
+      organizationId: 'org-memory-aged',
+      operationKey: 'memory-aged-operation',
+      status: 'released',
+    });
+  });
+
   it('enforces all finite limits atomically and makes retries idempotent', async () => {
     const service = serviceWith({ enabled: false });
     const limit = (await service.entitlement('org-limits')).limits;

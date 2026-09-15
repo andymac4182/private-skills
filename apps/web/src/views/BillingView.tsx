@@ -7,6 +7,8 @@ type BillingInvoiceStatus = 'draft' | 'open' | 'paid' | 'uncollectible' | 'void'
 
 interface BillingStatus {
   enabled: boolean
+  providerReady: boolean
+  usageEnforcement: boolean
   provider: 'stripe' | 'local' | null
   mode: BillingMode
   webhookVerification: boolean
@@ -33,6 +35,7 @@ interface BillingEntitlement {
   planId: string
   limits: PlanLimits
   state: 'active' | 'inactive' | 'disabled' | 'unconfigured'
+  source: 'verified-webhook' | 'no-subscription' | 'billing-disabled'
   reason: string
   currentPeriodEnd?: string
 }
@@ -199,13 +202,15 @@ export function BillingView({ fetcher = fetch }: BillingViewProps) {
 
   const currentPlan = data.plans.find((plan) => plan.id === data.entitlement.planId)
   const rows = usageRows(data.usage)
+  const providerlessUsage = data.status.usageEnforcement && !data.status.providerReady
   return <div className="view-heading billing-view">
     <div className="page-intro">
       <div><span className="eyebrow">Company billing</span><h1>Billing &amp; usage</h1><p className="muted">Plan, enforced limits, provider state, and invoices for the active company.</p></div>
       <div className="billing-heading-status"><Badge tone={readinessTone(data.readiness)} value={readinessLabel(data.readiness)} /><span className="muted">{data.status.provider ? `${title(data.status.provider)} · ${title(data.status.mode)}` : 'No provider configured'}</span></div>
     </div>
     {data.readiness === 'disabled' && <Notice kind="warning">Billing is disabled for this deployment. No checkout, portal, or payment action is available.</Notice>}
-    {data.readiness === 'unconfigured' && <Notice kind="warning">Billing is not configured for this company yet. Checkout and subscription management stay closed until server Price IDs and provider settings are present.</Notice>}
+    {data.readiness === 'unconfigured' && providerlessUsage && <Notice kind="info">Usage limits are enforced from the durable billing ledger. Hosted checkout, subscription management, and invoice history are unavailable until a billing provider is configured.</Notice>}
+    {data.readiness === 'unconfigured' && !providerlessUsage && <Notice kind="warning">Billing is not configured for this company yet. Checkout and subscription management stay closed until server Price IDs and provider settings are present.</Notice>}
     {data.readiness === 'test' && <Notice kind="warning">Test mode is active. Provider sessions and webhooks are fixtures or test transactions; this view does not imply a live charge.</Notice>}
     {!canManage && <Notice kind="info">Billing changes require an owner or admin role. The server enforces this role for every billing request.</Notice>}
     {actionError && <Notice kind="error">{actionError}</Notice>}
