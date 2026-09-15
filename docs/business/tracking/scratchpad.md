@@ -163,3 +163,7 @@ Root served the built caca65c marketing app on loopback port 5488 and fetched al
 ### Worker scheduler component acceptance — 16 September, 01:56 AEST
 
 Root independently tested c759d6e as verification commit f64c7ea: all 11 dispatcher tests passed with disposable PostgreSQL enabled (2.72 seconds). Runtime 57a26e6 depends on the pending Eve tenant-review module; the attempted verification cherry-pick was skipped rather than inventing missing interfaces. Scheduler/runtime integration remains held for that dependency and the combined billing review. Release preparation was delegated from integration 7ab3cfc for the independently finished CLI, identity telemetry and SEO increment; no merge/deployment is yet claimed.
+
+### Exact release-candidate gate — 16 September
+
+Release owner verified clean candidate 7ab3cfc522ced9f591381967d264ee74a0f0aaf4 with frozen install and 1,145 tests passed / 27 skipped. Reviewer and marketing TypeScript checks passed, but root TypeScript fails on newly integrated SEO global declarations and test descriptor types. This supersedes any implication that the combined SEO candidate had passed the root type gate: earlier root type checks preceded SEO, and the later check was marketing-only. Marketing owner is correcting the exact types; release remains held until the revised immutable candidate passes. Hosted CLI provisioning owner is checking targeted production storage access; filesystem proof alone does not close that gate.
