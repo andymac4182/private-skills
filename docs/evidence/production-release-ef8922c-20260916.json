@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.production-release-readonly-verification",
+  "observedAtUtc": "2026-09-15T22:15:40Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+    "pullRequest": 58,
+    "pullRequestUrl": "https://github.com/andymac4182/private-skills/pull/58",
+    "releaseHeadSha": "8089270ff1947773e92f5fc3fdcbc76a84753ad9",
+    "mergedAtUtc": "2026-09-15T22:12:22Z",
+    "trigger": "Git",
+    "deployedMainBaseline": "c8709858659767850dfc35d39a925e83aace55bb"
+  },
+  "includedChanges": {
+    "edgeOperationsStatus": "9ba903c",
+    "marketingUsability": "5cb4b75",
+    "qualification": "The runtime change imports the dependency-free identity operations event seam directly for edge-safe bundling. The marketing change makes the plan comparison scroll region keyboard-focusable on narrow screens and keeps visitor copy customer-facing. The release contains the reviewed identity/preflight evidence and tracker updates in the selected snapshot and excludes the unfinished billing/runtime candidate."
+  },
+  "localGates": {
+    "frozenInstall": {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "rootTypecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "webBuild": {
+      "command": "CI=true pnpm build",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9",
+      "qualification": "Build completed; Vite reported existing non-fatal WASM fallback and ineffective dynamic-import notices."
+    },
+    "marketingTypecheck": {
+      "command": "CI=true pnpm --filter @private-skills/marketing typecheck",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "marketingBuild": {
+      "command": "APP_ORIGIN=https://private-skills-theta.vercel.app CI=true pnpm --filter @private-skills/marketing build",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9",
+      "qualification": "The local production build used the documented app origin and safe default marketing mode; no deployment environment was changed."
+    },
+    "marketingTests": {
+      "command": "CI=true pnpm --filter @private-skills/marketing test -- --reporter=dot",
+      "result": "passed",
+      "files": 1,
+      "passed": 5,
+      "skipped": 0,
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "identityOperationsTests": {
+      "command": "CI=true pnpm exec vitest run apps/web/src/operations-status.test.ts packages/identity/test/operations-events.test.ts --reporter=dot",
+      "result": "passed",
+      "files": 2,
+      "passed": 11,
+      "skipped": 0,
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "identityPreflightTests": {
+      "command": "CI=true node --test tests/hosted-identity-preflight.test.mjs",
+      "result": "passed",
+      "passed": 16,
+      "failed": 0,
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    },
+    "diffCheck": {
+      "command": "git diff --check origin/main",
+      "result": "passed",
+      "testedSnapshot": "8089270ff1947773e92f5fc3fdcbc76a84753ad9"
+    }
+  },
+  "pullRequestChecks": {
+    "headSha": "8089270ff1947773e92f5fc3fdcbc76a84753ad9",
+    "vercelPreviews": {
+      "Vercel – private-skills": "success",
+      "Vercel – private-skills-builder": "success",
+      "Vercel – private-skills-marketing": "success",
+      "Vercel – private-skills-upload-reviewer": "success"
+    },
+    "nativeCiWorkflowRun": "35029574682",
+    "nativeCiAdmission": "failed_before_steps",
+    "nativeCiQualification": "All native jobs produced no runner steps and failed at account billing admission; the previously authorized native-CI billing waiver was applied."
+  },
+  "nativeCi": {
+    "workflowRun": "35029574682",
+    "status": "blocked_before_runner",
+    "jobs": {
+      "webNode24": "failure_before_steps",
+      "rustLinux": "failure_before_steps",
+      "rustMacArm64": "failure_before_steps",
+      "rustWindows": "failure_before_steps",
+      "nodeContainer": "skipped"
+    },
+    "allJobsReportedZeroSteps": true,
+    "userWaiver": true,
+    "qualification": "Native CI was unavailable before runner execution and is recorded as waived; no native Linux or Windows pass is claimed."
+  },
+  "deployments": [
+    {
+      "service": "app",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "vercelDeploymentId": "dpl_4CWcbR3FT8kVbQWLp5ChaHTmNS8t",
+      "deploymentUrl": "https://private-skills-theta.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills",
+      "githubDeploymentId": 6469517684,
+      "githubDeploymentStatusId": 18397258802,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-8rshdwllg-andrewmcclenaghan-6046s-projects.vercel.app"
+    },
+    {
+      "service": "marketing",
+      "project": "private-skills-marketing",
+      "alias": "private-skills-marketing.vercel.app",
+      "vercelDeploymentId": "dpl_EVunsS8M5VG1gp3MUZLKeeV2TUZd",
+      "deploymentUrl": "https://private-skills-marketing.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-marketing",
+      "githubDeploymentId": 6469511482,
+      "githubDeploymentStatusId": 18397244189,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-marketing-c6f7s1xkt.vercel.app"
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "vercelDeploymentId": "dpl_2qK4nn964Fe4udfFKNtM5b3hbpen",
+      "deploymentUrl": "https://private-skills-builder-fko6b4s21.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-builder",
+      "githubDeploymentId": 6469507404,
+      "githubDeploymentStatusId": 18397235178,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-builder-fko6b4s21.vercel.app"
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "vercelDeploymentId": "dpl_HZAevr5AzvuhrZPKqjf6v7p6hfiT",
+      "deploymentUrl": "https://private-skills-upload-reviewer.vercel.app",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-upload-reviewer",
+      "githubDeploymentId": 6469506933,
+      "githubDeploymentStatusId": 18397234083,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-upload-reviewer-7qguhyvjt.vercel.app"
+    }
+  ],
+  "publicChecks": {
+    "registry": {
+      "origin": "https://private-skills-theta.vercel.app",
+      "health": {
+        "path": "/health",
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service": "private-skills",
+          "version": "0.4.0"
+        }
+      },
+      "identityConfig": {
+        "path": "/auth/identity/config",
+        "status": 200,
+        "protocolVersion": 1,
+        "enabled": false,
+        "basePath": "/api/auth",
+        "providers": [],
+        "organization": {
+          "enabled": false,
+          "roles": ["owner", "admin", "publisher", "reader"],
+          "maxOrganizationsPerUser": 10,
+          "maxMembersPerOrganization": 100,
+          "maxInvitationsPerMember": 100
+        },
+        "bootstrap": {
+          "enabled": false,
+          "requiresExplicitOwnerClaim": true,
+          "implicitSocialTenantAdoption": false
+        },
+        "qualification": "Hosted Better Auth remains disabled in this production deployment; no hosted identity-provider acceptance is claimed."
+      }
+    },
+    "marketing": {
+      "origin": "https://private-skills-marketing.vercel.app/",
+      "status": 200,
+      "title": "Private Skills · A private registry for engineering teams",
+      "hero": "Give your team control of",
+      "pricing": {
+        "path": "/pricing",
+        "status": 200,
+        "heading": "Choose the right fit for your team.",
+        "comparisonHeading": "Compare plan limits",
+        "comparisonHint": "Swipe to compare all plans"
+      },
+      "qualification": "The public marketing and pricing HTML served successfully; this evidence records an HTTP probe and does not claim an additional interactive browser run."
+    }
+  },
+  "configurationBoundary": {
+    "productionEnvironmentChanges": "none",
+    "databaseChanges": "none",
+    "identityProviderChanges": "none",
+    "manualDeployments": "none",
+    "qualification": "All four production deployments were Git-triggered from the merged main commit ef8922c82eca9c4e008c39f49cbac5ae5addf6fc."
+  },
+  "qualifications": {
+    "releaseType": "incremental production verification",
+    "marketing": "The public pricing page remains a browser-safe preview with finite limits and no purchase or checkout action; this release improves narrow-screen comparison focus and visitor copy.",
+    "hostedIdentity": "Hosted Better Auth remains disabled with providers empty; no hosted identity-provider or customer callback acceptance is claimed.",
+    "nativeMac": "Native macOS CI did not reach a runner; no new native archive execution claim was made.",
+    "nativeLinuxWindows": "Native execution and native CI remain unverified; no native Linux or Windows pass is claimed.",
+    "fullLaunch": false,
+    "businessLaunch": false
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "credentialPathsIncluded": false,
+    "rawTokensIncluded": false,
+    "storageKeysIncluded": false,
+    "privateReleaseUrlsIncluded": false,
+    "archiveBytesIncluded": false
+  }
+}
