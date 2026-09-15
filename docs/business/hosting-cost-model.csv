@@ -1,0 +1,19 @@
+scenario,teams,candidate,known_usd_low,known_usd_base,known_usd_high,scanner_compute_included,ai_usage_included,notes
+launch-1-team,1,vercel-pro-neon-vercel-blob-sandbox,34.94,34.94,34.94,yes-bounded-sandbox,no-dynamic-provider-rate,Vercel Pro credit applied once; Blob private-delivery FDT/FOT excluded
+launch-1-team,1,fly-node-neon-r2-control-plane,30.5,30.5,30.5,no-external-scanner-required,no,Control plane plus DB/R2 only; scanner runtime and AI are excluded
+launch-1-team,1,cloudflare-edge-fly-node-neon-r2,35.5,35.5,35.5,no-external-scanner-required,no,Edge front door plus external Node worker; scanner runtime excluded
+launch-1-team,1,railway-node-neon-r2-control-plane,39.94,39.94,39.94,no-external-scanner-required,no,Hobby plus 0.5 vCPU and 1 GB always-on control plane; scanner excluded
+launch-1-team,1,render-node-neon-r2-control-plane,53.94,53.94,53.94,no-external-scanner-required,no,Workspace plus two small services; scanner runtime excluded
+launch-1-team,1,supabase-pro-micro-floor,25,25,25,no,no,Database floor only; larger compute/PITR/additional projects excluded
+growth-100-teams,100,vercel-pro-neon-vercel-blob-sandbox,287.8,502.3,1010.8,yes-bounded-sandbox,no-dynamic-provider-rate,Vercel Pro credit applied once; Blob private-delivery FDT/FOT excluded
+growth-100-teams,100,fly-node-neon-r2-control-plane,102.23,102.23,102.23,no-external-scanner-required,no,Control plane plus DB/R2 only; scanner runtime and AI are excluded
+growth-100-teams,100,cloudflare-edge-fly-node-neon-r2,107.83,107.83,107.83,no-external-scanner-required,no,Edge front door plus external Node worker; scanner runtime excluded
+growth-100-teams,100,railway-node-neon-r2-control-plane,111.67,111.67,111.67,no-external-scanner-required,no,Hobby plus 0.5 vCPU and 1 GB always-on control plane; scanner excluded
+growth-100-teams,100,render-node-neon-r2-control-plane,125.67,125.67,125.67,no-external-scanner-required,no,Workspace plus two small services; scanner runtime excluded
+growth-100-teams,100,supabase-pro-micro-floor,27.13,27.13,27.13,no,no,Database floor only; larger compute/PITR/additional projects excluded
+scale-1000-teams,1000,vercel-pro-neon-vercel-blob-sandbox,2526.48,4671.48,9756.48,yes-bounded-sandbox,no-dynamic-provider-rate,Vercel Pro credit applied once; Blob private-delivery FDT/FOT excluded
+scale-1000-teams,1000,fly-node-neon-r2-control-plane,438.41,438.41,438.41,no-external-scanner-required,no,Control plane plus DB/R2 only; scanner runtime and AI are excluded
+scale-1000-teams,1000,cloudflare-edge-fly-node-neon-r2,460.81,460.81,460.81,no-external-scanner-required,no,Edge front door plus external Node worker; scanner runtime excluded
+scale-1000-teams,1000,railway-node-neon-r2-control-plane,447.85,447.85,447.85,no-external-scanner-required,no,Hobby plus 0.5 vCPU and 1 GB always-on control plane; scanner excluded
+scale-1000-teams,1000,render-node-neon-r2-control-plane,461.85,461.85,461.85,no-external-scanner-required,no,Workspace plus two small services; scanner runtime excluded
+scale-1000-teams,1000,supabase-pro-micro-floor,55.25,55.25,55.25,no,no,Database floor only; larger compute/PITR/additional projects excluded

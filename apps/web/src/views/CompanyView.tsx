@@ -1,0 +1,161 @@
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useNavigate } from '@tanstack/react-router'
+import { api, ApiError } from '../lib/api'
+import { useAuth } from '../lib/auth'
+import { clearTenantScopedClientState } from '../lib/tenant'
+import type { IdentityMembership, OrganizationInvitation, OrganizationRole, TeamMember } from '../lib/types'
+import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Notice, Panel } from '../components/Primitives'
+
+const INVITABLE_ROLES: OrganizationRole[] = ['reader', 'publisher', 'admin']
+const ROLE_OPTIONS: OrganizationRole[] = ['reader', 'publisher', 'admin', 'owner']
+
+function displayRole(role: string | null | undefined): string {
+  if (!role) return 'No role'
+  return role.slice(0, 1).toUpperCase() + role.slice(1)
+}
+
+function memberName(member: TeamMember): string {
+  return member.name || member.user?.name || member.email || member.user?.email || member.userId || 'Team member'
+}
+
+function memberEmail(member: TeamMember): string | undefined {
+  return member.email || member.user?.email || undefined
+}
+
+function safeSlug(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 64)
+}
+
+export function CompanyView() {
+  const navigate = useNavigate()
+  const { principal, session, refresh, switchOrganization } = useAuth()
+  const memberships = session?.organizations ?? []
+  const activeOrganization = session?.activeOrganization ?? null
+  const activeMembership = session?.activeMembership ?? null
+  const needsOrganization = session?.needsOnboarding === true
+  const needsSelection = !needsOrganization && memberships.length > 0 && !activeOrganization
+
+  if (!session && principal) return <LegacyCompanyState organizationId={principal.organizationId} />
+  if (!session) return <LoadingState label="Loading company access…" />
+  if (needsOrganization) return <OnboardingPanel onCreated={async (organizationId) => {
+    clearTenantScopedClientState()
+    await refresh()
+    if (organizationId) await switchOrganization(organizationId)
+    await navigate({ to: '/app', search: {}, replace: true })
+  }} />
+  if (needsSelection) return <CompanySelection memberships={memberships} onSelect={async (organizationId) => {
+    clearTenantScopedClientState()
+    await switchOrganization(organizationId)
+    await navigate({ to: '/app', search: {}, replace: true })
+  }} />
+  if (!activeOrganization || !activeMembership) return <ErrorState message="Your company session is missing an active membership." onRetry={() => void refresh()} />
+  return <CompanyManagement activeMembership={activeMembership} organization={activeOrganization} />
+}
+
+function LegacyCompanyState({ organizationId }: { organizationId: string }) {
+  return <div className="view-heading"><div><span className="eyebrow">Company</span><h1>{organizationId}</h1><p className="muted">This registry is using the existing token sign-in. Company switching and team controls appear after an identity session is configured.</p></div><Notice kind="info">Your current registry role is enforced by the server. Ask an owner to configure company identity access before inviting teammates.</Notice></div>
+}
+
+function OnboardingPanel({ onCreated }: { onCreated: (organizationId?: string) => Promise<void> }) {
+  const [name, setName] = useState('')
+  const [slug, setSlug] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmedName = name.trim()
+    if (!trimmedName) { setError('Enter a company name to continue.'); return }
+    const normalizedSlug = safeSlug(slug || trimmedName)
+    if (!normalizedSlug) { setError('Enter a company slug using letters, numbers, or hyphens.'); return }
+    setBusy(true); setError(null)
+    try {
+      const result = await api.createOrganization({ name: trimmedName, slug: normalizedSlug })
+      await onCreated(result.organization.id)
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not create your company.') } finally { setBusy(false) }
+  }
+  return <div className="company-onboarding"><div className="company-onboarding-copy"><span className="eyebrow">First step</span><h1>Create your company</h1><p className="muted">Your identity is signed in. Create a company to keep releases, policy, and team access in one private workspace.</p><div className="company-onboarding-steps"><span><strong>01</strong> Name the company</span><span><strong>02</strong> Invite teammates when ready</span><span><strong>03</strong> Keep access server-managed</span></div></div><Panel title="Set up a company" description="You become the owner. This does not import or alter any existing token registry data."><form className="form-grid" onSubmit={submit}><Field label="Company name" hint="Use the name your team will recognize."><input autoFocus maxLength={120} name="companyName" onChange={(event) => setName(event.target.value)} placeholder="Acme Skills" value={name} /></Field><Field label="Company slug" hint="Optional. Letters, numbers, and hyphens are accepted."><input maxLength={64} name="companySlug" onChange={(event) => setSlug(event.target.value)} placeholder="acme-skills" value={slug} /></Field>{error && <div className="form-grid-message"><Notice kind="error">{error}</Notice></div>}<div className="form-actions"><Button busy={busy} type="submit">Create company</Button></div></form></Panel></div>
+}
+
+function CompanySelection({ memberships, onSelect }: { memberships: readonly IdentityMembership[]; onSelect: (organizationId: string) => Promise<void> }) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const choose = async (organizationId: string) => { setBusy(organizationId); try { await onSelect(organizationId) } finally { setBusy(null) } }
+  return <div className="company-selection"><div className="view-heading"><div><span className="eyebrow">Company access</span><h1>Choose a company</h1><p className="muted">Your account belongs to more than one company. Choose where this registry session should work.</p></div></div><div className="company-card-grid">{memberships.map((membership) => <article className="company-card" key={membership.organization.id}><div className="company-card-mark" aria-hidden="true">{membership.organization.name.slice(0, 1).toUpperCase()}</div><div className="company-card-copy"><h2>{membership.organization.name}</h2><p>{membership.organization.slug}</p><span className="badge badge-muted">{displayRole(membership.role)}</span></div><Button busy={busy === membership.organization.id} kind="secondary" onClick={() => void choose(membership.organization.id)}>Open company</Button></article>)}</div></div>
+}
+
+function CompanyManagement({ activeMembership, organization }: { activeMembership: IdentityMembership; organization: IdentityMembership['organization'] }) {
+  const canManage = activeMembership.role === 'owner' || activeMembership.role === 'admin'
+  const [members, setMembers] = useState<TeamMember[] | null>(null)
+  const [invitations, setInvitations] = useState<OrganizationInvitation[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const requestGeneration = useRef(0)
+  const reload = useCallback(async () => {
+    const generation = ++requestGeneration.current
+    setError(null)
+    const membersPromise = api.organizationMembers()
+    const invitationsPromise = canManage ? api.organizationInvitations() : null
+    const membersResult = await membersPromise.then((value) => ({ status: 'fulfilled' as const, value }), (reason: unknown) => ({ status: 'rejected' as const, reason }))
+    const invitationResult = invitationsPromise ? await invitationsPromise.then((value) => ({ status: 'fulfilled' as const, value }), (reason: unknown) => ({ status: 'rejected' as const, reason })) : null
+    if (generation !== requestGeneration.current) return
+    if (membersResult.status === 'rejected') { const cause = membersResult.reason; setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load team access.'); return }
+    if (invitationResult?.status === 'rejected') { const cause = invitationResult.reason; setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not load team access.'); return }
+    setMembers(membersResult.value.members)
+    setInvitations(invitationResult?.status === 'fulfilled' ? invitationResult.value.invitations : [])
+  }, [canManage, organization.id])
+  useEffect(() => {
+    requestGeneration.current += 1
+    setMembers(null)
+    setInvitations(null)
+    void reload()
+    return () => { requestGeneration.current += 1 }
+  }, [reload, reloadKey])
+  return <div className="company-management"><div className="page-intro"><div><span className="eyebrow">Company</span><h1>{organization.name}</h1><p className="muted">Manage membership and access for this company. The server remains the authority for every role and invitation.</p></div><div className="company-heading-meta"><span className="badge badge-good">Active</span><code>{organization.slug}</code></div></div>{error && <Notice kind="error">{error}</Notice>}<div className="company-management-grid"><InvitePanel disabled={!canManage} onInvited={() => setReloadKey((current) => current + 1)} /><TeamPanel canManage={canManage} invitations={invitations} members={members} onChanged={() => setReloadKey((current) => current + 1)} /></div></div>
+}
+
+function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: () => void }) {
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState<OrganizationRole>('reader')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
+  const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); if (disabled) return
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail || !/^\S+@\S+\.\S+$/u.test(trimmedEmail)) { setMessage({ kind: 'error', text: 'Enter a valid teammate email.' }); return }
+    setBusy(true); setMessage(null); setInviteLink(null); setCopied(false)
+    try {
+      const invitation = await api.inviteOrganizationMember({ email: trimmedEmail, role })
+      setEmail('')
+      setInviteLink(invitation.url ?? null)
+      setMessage({ kind: 'success', text: invitation.url ? 'Invitation created. Copy the link to share it securely.' : 'Invitation created. Copy-link delivery is controlled by the identity service.' })
+      onInvited()
+    }
+    catch (cause) { setMessage({ kind: 'error', text: cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not create the invitation.' }) }
+    finally { setBusy(false) }
+  }
+  async function copyInviteLink() {
+    if (!inviteLink || !navigator.clipboard) return
+    try { await navigator.clipboard.writeText(inviteLink); setCopied(true) } catch { setCopied(false) }
+  }
+  return <Panel className="company-invite-panel" title="Invite a teammate" description={disabled ? 'Owner or admin access is required to invite teammates.' : 'The identity service creates a bounded invitation. Email delivery may be disabled.'}><form className="stack-form company-invite-form" onSubmit={submit}><Field label="Email address"><input disabled={disabled} name="inviteEmail" onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" type="email" value={email} /></Field><Field label="Role"><select disabled={disabled} name="inviteRole" onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{INVITABLE_ROLES.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select></Field>{message && <Notice kind={message.kind}>{message.text}</Notice>}{inviteLink && <div className="invite-link-block"><code>{inviteLink}</code><Button kind="secondary" type="button" onClick={() => void copyInviteLink()}>{copied ? 'Copied' : 'Copy invitation link'}</Button></div>}<Button busy={busy} disabled={disabled} type="submit">Create invitation</Button></form></Panel>
+}
+
+function TeamPanel({ canManage, invitations, members, onChanged }: { canManage: boolean; invitations: OrganizationInvitation[] | null; members: TeamMember[] | null; onChanged: () => void }) {
+  return <Panel className="company-team-panel" title="Team access" description={canManage ? 'Update roles only when the server confirms the membership change.' : 'You can view team access. Ask an owner or admin to change roles.'}>{members === null ? <LoadingState label="Loading team access…" /> : members.length === 0 ? <EmptyState title="No team members yet" description="The active company has no memberships in the current response." /> : <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{members.map((member) => <MemberRow canManage={canManage} key={member.id} member={member} onChanged={onChanged} />)}</tbody></table></div>}{canManage ? <div className="company-invitations"><div className="company-subheading"><div><h3>Pending invitations</h3><p className="muted">Invitations expire and are checked by the identity service.</p></div><span className="badge badge-muted">{invitations?.length ?? '…'}</span></div>{invitations === null ? <LoadingState label="Loading invitations…" /> : invitations.length === 0 ? <p className="company-empty-note">No pending invitations.</p> : <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.email}</strong><span>{displayRole(invitation.role)} · {invitation.status ?? 'pending'}</span></div><Badge tone="muted" value={invitation.status ?? 'pending'} /></div>)}</div>}</div> : <p className="company-empty-note">Pending invitations are visible to owners and admins.</p>}</Panel>
+}
+
+function MemberRow({ canManage, member, onChanged }: { canManage: boolean; member: TeamMember; onChanged: () => void }) {
+  const [role, setRole] = useState(member.role)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const changed = role !== member.role
+  const save = async () => {
+    if (!changed || !canManage) return
+    setBusy(true); setError(null)
+    try { await api.updateOrganizationMemberRole(member.id, role); onChanged() }
+    catch (cause) { setRole(member.role); setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'The server rejected this role change.') }
+    finally { setBusy(false) }
+  }
+  return <tr><td><strong>{memberName(member)}</strong>{memberEmail(member) && <span className="cell-sub">{memberEmail(member)}</span>}{error && <span className="cell-sub company-error-text">{error}</span>}</td><td>{canManage ? <select aria-label={`Role for ${memberName(member)}`} disabled={busy} onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{ROLE_OPTIONS.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select> : <Badge tone="muted" value={displayRole(member.role)} />}</td><td><Badge tone="muted" value={member.status ?? 'active'} /></td><td>{canManage && changed ? <Button busy={busy} kind="secondary" onClick={() => void save()}>Save role</Button> : <span className="muted company-server-note">Server managed</span>}</td></tr>
+}

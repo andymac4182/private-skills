@@ -9,6 +9,9 @@ import type {
   SourceListResponse, SourceSearchResponse, SourceResolveResponse,
   BuilderAvailabilityResponse, BuilderProposalResponse, BuilderSessionResponse,
   DraftFileUpdate, DraftFileResponse, DraftReviewsResponse, DraftReviewResponse,
+  AuthSession, OrganizationInvitation, OrganizationInvitationsResponse, OrganizationListResponse,
+  OrganizationMembersResponse, OrganizationResponse, OrganizationSummary, PublicProviderConfig,
+  ProviderSignInResponse,
 } from './types'
 
 export class ApiError extends Error {
@@ -57,11 +60,84 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 function unwrap<T>(value: T | { data: T }): T { return isRecord(value) && 'data' in value ? value.data as T : value as T }
 
+function unwrapSession(value: unknown): AuthSession | null {
+  const payload = unwrap(value as AuthSession | { session?: AuthSession } | null)
+  if (!payload) return null
+  return isRecord(payload) && 'session' in payload ? payload.session as AuthSession | null : payload as AuthSession
+}
+
+function unwrapProviders(value: unknown): PublicProviderConfig {
+  const payload = unwrap(value as PublicProviderConfig | { config?: PublicProviderConfig })
+  if (isRecord(payload) && 'config' in payload && isRecord(payload.config)) return payload.config as PublicProviderConfig
+  return payload as PublicProviderConfig
+}
+
+/**
+ * Keep identity endpoints in one place. `/auth/session` remains the legacy
+ * registry-token exchange; identity session/config are sanitized Nitro
+ * routes, while organization actions are Better Auth organization plugin
+ * endpoints under its configured handler.
+ */
+export const identityRoutes = {
+  config: '/auth/identity/config',
+  session: '/auth/identity/session',
+  betterAuthBase: '/api/auth',
+  createOrganization: '/api/auth/organization/create',
+  listOrganizations: '/api/auth/organization/list',
+  activeOrganization: '/api/auth/organization/set-active',
+  members: '/api/auth/organization/list-members',
+  invitations: '/api/auth/organization/list-invitations',
+  inviteMember: '/api/auth/organization/invite-member',
+  updateMemberRole: '/api/auth/organization/update-member-role',
+} as const
+
 export const api = {
   health() { return request<HealthResponse>('/health') },
   me() { return request<Principal>('/v1/me').then(unwrap) },
   signIn(token: string) { return request<SessionResponse>('/auth/session', { method: 'POST', body: { token } }).then(unwrap) },
   signOut() { return request<void>('/auth/session', { method: 'DELETE' }) },
+  /** Public metadata only; provider credentials never cross this boundary. */
+  authProviders() { return request<PublicProviderConfig>(identityRoutes.config).then(unwrapProviders) },
+  /** Better Auth session data is sanitized by the server before it reaches the browser. */
+  authSession() { return request<AuthSession | { session?: AuthSession }>(identityRoutes.session).then(unwrapSession) },
+  authSignIn(provider: string, callbackURL: string, basePath: string = identityRoutes.betterAuthBase) {
+    return request<ProviderSignInResponse>(`${basePath.replace(/\/$/u, '')}/sign-in/social`, {
+      method: 'POST', body: { provider, callbackURL },
+    }).then(unwrap)
+  },
+  listOrganizations() {
+    return request<OrganizationSummary[] | OrganizationListResponse>(identityRoutes.listOrganizations).then((value) => {
+      const payload = unwrap(value)
+      return Array.isArray(payload) ? { organizations: payload } : payload
+    })
+  },
+  createOrganization(input: { name: string; slug?: string }) {
+    return request<OrganizationSummary | OrganizationResponse>(identityRoutes.createOrganization, { method: 'POST', body: input }).then((value) => {
+      const payload = unwrap(value)
+      if (isRecord(payload) && 'organization' in payload && isRecord(payload.organization)) return payload as OrganizationResponse
+      return { organization: payload as OrganizationSummary }
+    })
+  },
+  switchOrganization(organizationId: string) {
+    return request<OrganizationSummary | null>(identityRoutes.activeOrganization, { method: 'POST', body: { organizationId } }).then(unwrap)
+  },
+  organizationMembers() { return request<OrganizationMembersResponse>(identityRoutes.members).then(unwrap) },
+  organizationInvitations() {
+    return request<OrganizationInvitation[] | OrganizationInvitationsResponse>(identityRoutes.invitations).then((value) => {
+      const payload = unwrap(value)
+      return Array.isArray(payload) ? { invitations: payload } : payload
+    })
+  },
+  inviteOrganizationMember(input: { email: string; role: string }) {
+    return request<OrganizationInvitation | { invitation: OrganizationInvitation }>(identityRoutes.inviteMember, { method: 'POST', body: input }).then((value) => {
+      const payload = unwrap(value)
+      if (isRecord(payload) && 'invitation' in payload && isRecord(payload.invitation)) return payload.invitation as OrganizationInvitation
+      return payload as OrganizationInvitation
+    })
+  },
+  updateOrganizationMemberRole(memberId: string, role: string) {
+    return request<void>(identityRoutes.updateMemberRole, { method: 'POST', body: { memberId, role } })
+  },
   skills(query?: string) { return request<SkillListResponse>('/v1/skills', { query: { q: query } }).then(unwrap) },
   skill(id: string) { return request<SkillResponse>(`/v1/skills/${encodeURIComponent(id)}`).then(unwrap) },
   resolve(input: { kind: 'skill' | 'pack'; ref: string; version?: string }) { return request<ResolveResponse>('/v1/resolve', { method: 'POST', body: input }).then(unwrap) },

@@ -14,3 +14,11 @@ minimumReleaseAgeExclude:
   - ai@7.0.94
   - eve@0.52.3
   - '@vercel/sandbox@3.2.2'
+  - '@better-auth/core@1.7.5'
+  - '@better-auth/drizzle-adapter@1.7.5'
+  - '@better-auth/kysely-adapter@1.7.5'
+  - '@better-auth/memory-adapter@1.7.5'
+  - '@better-auth/mongo-adapter@1.7.5'
+  - '@better-auth/prisma-adapter@1.7.5'
+  - '@better-auth/telemetry@1.7.5'
+  - better-auth@1.7.5

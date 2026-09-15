@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { safeAppReturnTo } from './auth'
+import { providerSignInHref, safeAppReturnTo } from './auth'
 
 describe('safeAppReturnTo', () => {
   it('keeps an app destination and its draft query intact', () => {
@@ -15,5 +15,11 @@ describe('safeAppReturnTo', () => {
     expect(safeAppReturnTo('app/catalog')).toBeUndefined()
     expect(safeAppReturnTo('/login?returnTo=/app/catalog')).toBeUndefined()
     expect(safeAppReturnTo('/app/catalog?draft=' + 'x'.repeat(2049))).toBeUndefined()
+  })
+
+  it('builds a provider endpoint with only a safe app callback', () => {
+    expect(providerSignInHref('github', '/app/catalog?draft=draft-42', '/api/auth')).toBe('/api/auth/sign-in/social?provider=github&callbackURL=%2Fapp%2Fcatalog%3Fdraft%3Ddraft-42')
+    expect(providerSignInHref('github', 'https://attacker.example/app', '/api/auth')).toBe('/api/auth/sign-in/social?provider=github')
+    expect(providerSignInHref('bad provider', '/app', '/api/auth')).toBeUndefined()
   })
 })

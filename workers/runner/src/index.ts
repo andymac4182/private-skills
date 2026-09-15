@@ -1,5 +1,6 @@
 export * from './bundle.js';
 export * from './client.js';
+export * from './identity.js';
 export * from './acquisition.js';
 export * from './protocol.js';
 export * from './worker.js';

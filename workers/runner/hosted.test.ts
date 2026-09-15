@@ -6,6 +6,7 @@ import {
   createHostedWorkerHandlerFromEnv,
   type HostedWorkerOptions,
 } from './src/hosted.js';
+import { createWorkerTenantCredentialProvider } from './src/identity.js';
 import type { WorkerRunner, WorkerRunnerOptions } from './src/worker.js';
 import type { OpenClawNormalizedSource } from '../../packages/openclaw/src/types.js';
 
@@ -78,6 +79,69 @@ describe('hosted worker route', () => {
       },
     });
     expect(handler).toBeTypeOf('function');
+  });
+
+  it('passes a tenant provider without copying the default worker token', async () => {
+    const provider = createWorkerTenantCredentialProvider({
+      issuer: 'https://registry.example.test',
+      secret: 'tenant-worker-hosted-secret-0123456789abcdef',
+      serviceIdentity: 'hosted-worker-service',
+      tenantId: 'company-a',
+    });
+    let runnerOptions: WorkerRunnerOptions | undefined;
+    const handler = createHostedWorkerHandlerFromEnv({
+      PSKILLS_API_URL: 'https://registry.example.test',
+      PSKILLS_WORKER_TOKEN: 'default-company-token-must-not-cross-tenant',
+      CRON_SECRET: SECRET,
+      PSKILLS_IMAGE_SKILLSGUARD: IMAGE,
+    }, {
+      tenantId: 'company-a',
+      tenantCredentialProvider: provider,
+      executor: { run: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '', durationMs: 1, timedOut: false, outputTruncated: false }) },
+      createRunner: (options) => {
+        runnerOptions = options;
+        return { runOnce: async () => ({ claimed: false }) } as unknown as WorkerRunner;
+      },
+    });
+    const response = await handler(new Request('https://app.example.test/api/worker', {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    expect(response.status).toBe(200);
+    expect(runnerOptions?.workerToken).toBeUndefined();
+    expect(runnerOptions?.tenantId).toBe('company-a');
+    expect(runnerOptions?.tenantCredentialProvider).toBe(provider);
+  });
+
+  it('allows a tenant-only hosted environment without a legacy worker token', () => {
+    const provider = createWorkerTenantCredentialProvider({
+      issuer: 'https://registry.example.test',
+      secret: 'tenant-worker-hosted-secret-0123456789abcdef',
+      serviceIdentity: 'hosted-worker-service',
+      tenantId: 'company-a',
+    });
+    expect(() => createHostedWorkerHandlerFromEnv({
+      PSKILLS_API_URL: 'https://registry.example.test',
+      CRON_SECRET: SECRET,
+      PSKILLS_IMAGE_SKILLSGUARD: IMAGE,
+    }, {
+      tenantId: 'company-a',
+      tenantCredentialProvider: provider,
+      executor: { run: async () => ({ exitCode: 0, signal: null, stdout: '', stderr: '', durationMs: 1, timedOut: false, outputTruncated: false }) },
+    })).not.toThrow();
+  });
+
+  it('rejects a hosted route with both a fixed worker token and tenant provider', () => {
+    const provider = createWorkerTenantCredentialProvider({
+      issuer: 'https://registry.example.test',
+      secret: 'tenant-worker-hosted-secret-0123456789abcdef',
+      serviceIdentity: 'hosted-worker-service',
+      tenantId: 'company-a',
+    });
+    expect(() => createHostedWorkerHandler({
+      ...options({ claimed: false }),
+      tenantId: 'company-a',
+      tenantCredentialProvider: provider,
+    })).toThrow('mutually exclusive');
   });
 
   it('wires an enabled gateway credential to the hosted runner without exposing its token', async () => {

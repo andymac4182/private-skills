@@ -25,6 +25,7 @@ import {
   type WorkerOpenClawSourceProofRecorder,
   type WorkerRunnerOptions,
 } from './worker.js';
+import type { WorkerTenantCredentialProvider } from './identity.js';
 
 /**
  * Configuration for a single protected worker invocation. The route remains
@@ -32,7 +33,8 @@ import {
  * server target without changing the worker protocol.
  *
  * Required environment names when using createHostedWorkerHandlerFromEnv:
- * PSKILLS_API_URL, PSKILLS_WORKER_TOKEN, CRON_SECRET, and any configured
+ * PSKILLS_API_URL, CRON_SECRET, and either PSKILLS_WORKER_TOKEN or a
+ * deployment-owned tenantCredentialProvider override. Any configured
  * scanner image references in PSKILLS_IMAGE_CISCO, PSKILLS_IMAGE_NVIDIA, and
  * PSKILLS_IMAGE_SKILLSGUARD. PSKILLS_SANDBOX_DRIVER defaults to computesdk;
  * set it to native only for an explicit regression fallback. The provider
@@ -42,9 +44,14 @@ import {
  */
 export interface HostedWorkerOptions {
   apiUrl: string;
-  workerToken: string;
+  /** Legacy fixed worker credential. Omit when a tenant provider is supplied. */
+  workerToken?: string;
   cronSecret: string;
   scannerImages: SandboxImageMap;
+  /** Server-selected tenant bound into every hosted worker delegation. */
+  tenantId?: string;
+  /** Fresh signed credentials for this tenant; never supplied by browser input. */
+  tenantCredentialProvider?: WorkerTenantCredentialProvider;
   /** ComputeSDK is the production driver; native is an explicit regression fallback. */
   sandboxDriver?: HostedSandboxDriver;
   /** Provider selected by PSKILLS_SANDBOX_PROVIDER; currently Vercel is supported. */
@@ -124,8 +131,10 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
 
     const runnerOptions: WorkerRunnerOptions = {
       baseUrl: options.apiUrl,
-      workerToken: options.workerToken,
       workerId: resolveWorkerId(options.workerId),
+      ...(options.workerToken === undefined ? {} : { workerToken: options.workerToken }),
+      ...(options.tenantId === undefined ? {} : { tenantId: options.tenantId }),
+      ...(options.tenantCredentialProvider === undefined ? {} : { tenantCredentialProvider: options.tenantCredentialProvider }),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       executor,
       scannerImages,
@@ -220,7 +229,7 @@ export function hostedWorkerOptionsFromEnv(
   return {
     ...overrides,
     apiUrl: requiredEnv(env, 'PSKILLS_API_URL'),
-    workerToken: requiredEnv(env, 'PSKILLS_WORKER_TOKEN'),
+    ...(overrides.tenantCredentialProvider === undefined ? { workerToken: requiredEnv(env, 'PSKILLS_WORKER_TOKEN') } : {}),
     cronSecret: requiredEnv(env, 'CRON_SECRET'),
     scannerImages: { ...baseImages, ...(overrides.scannerImages ?? {}) },
     sandboxDriver: resolveSandboxDriver(overrides.sandboxDriver ?? env.PSKILLS_SANDBOX_DRIVER),
@@ -242,7 +251,19 @@ export function createHostedWorkerHandlerFromEnv(
 
 function validateHostedOptions(options: HostedWorkerOptions): void {
   if (!isHttpOrigin(options.apiUrl)) throw new Error('hosted worker API URL must be an HTTP(S) origin');
-  if (!options.workerToken || /[\u0000\r\n]/.test(options.workerToken)) throw new Error('hosted worker token is required');
+  if (options.workerToken && options.tenantCredentialProvider) {
+    throw new Error('hosted worker token and tenant credential provider are mutually exclusive');
+  }
+  if (!options.workerToken && !options.tenantCredentialProvider) {
+    throw new Error('hosted worker token or tenant credential provider is required');
+  }
+  if (options.tenantCredentialProvider && typeof options.tenantCredentialProvider.resolve !== 'function') {
+    throw new Error('tenant credential provider is invalid');
+  }
+  if (options.workerToken && /[\u0000\r\n]/.test(options.workerToken)) throw new Error('hosted worker token is invalid');
+  if (options.tenantCredentialProvider && (typeof options.tenantId !== 'string' || options.tenantId.trim().length === 0 || /[\u0000-\u001f\u007f]/.test(options.tenantId) || options.tenantId.length > 256)) {
+    throw new Error('tenant id is required for tenant credentials');
+  }
   if (!options.cronSecret || options.cronSecret.length < 16 || options.cronSecret.length > 4096 || /[\u0000\r\n]/.test(options.cronSecret)) {
     throw new Error('CRON_SECRET must be 16-4096 characters without control characters');
   }

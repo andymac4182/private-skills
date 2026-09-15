@@ -1,10 +1,19 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { PropsWithChildren } from 'react'
 import { api, ApiError } from './api'
-import type { Principal } from './types'
+import type { AuthSession, Principal } from './types'
 
 type AuthStatus = 'loading' | 'signed-in' | 'signed-out'
-interface AuthContextValue { principal: Principal | null; status: AuthStatus; error: string | null; signIn: (token: string) => Promise<Principal>; signOut: () => Promise<void>; refresh: () => Promise<Principal | null> }
+export interface AuthContextValue {
+  principal: Principal | null
+  session: AuthSession | null
+  status: AuthStatus
+  error: string | null
+  signIn: (token: string) => Promise<Principal>
+  signOut: () => Promise<void>
+  refresh: () => Promise<Principal | null>
+  switchOrganization: (organizationId: string) => Promise<AuthSession>
+}
 const AuthContext = createContext<AuthContextValue | null>(null)
 function getErrorMessage(error: unknown) { return error instanceof ApiError || error instanceof Error ? error.message : 'The registry could not be reached.' }
 
@@ -32,18 +41,106 @@ export function safeAppReturnTo(value: unknown): string | undefined {
   return `${target.pathname}${target.search}${target.hash}`
 }
 
+function principalFromSession(session: AuthSession): Principal | null {
+  const organization = session.activeOrganization
+  if (!organization) return null
+
+  // This is a display fallback for a brief identity/API handoff. Every
+  // registry mutation is still authorized by the server's session principal.
+  const role = session.activeMembership?.role && ['owner', 'admin', 'publisher', 'reader'].includes(session.activeMembership.role)
+    ? session.activeMembership.role as Principal['roles'][number]
+    : 'reader'
+  return {
+    organizationId: organization.id,
+    subject: session.user.email || session.user.name || session.user.id,
+    roles: [role],
+  }
+}
+
+/** A valid identity session still needs a company choice before registry access. */
+export function needsCompanySetup(session: AuthSession | null | undefined): boolean {
+  return Boolean(session && (session.needsOnboarding || (!session.activeOrganizationId && session.organizations.length > 0)))
+}
+
+export function providerSignInHref(providerId: string, returnTo?: string, basePath = '/api/auth'): string | undefined {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/iu.test(providerId)) return undefined
+  if (!/^\/[a-z0-9/_-]*$/iu.test(basePath)) return undefined
+  const safeReturnTo = safeAppReturnTo(returnTo)
+  const params = new URLSearchParams({ provider: providerId })
+  if (safeReturnTo) params.set('callbackURL', safeReturnTo)
+  return `${basePath.replace(/\/$/u, '')}/sign-in/social?${params.toString()}`
+}
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [principal, setPrincipal] = useState<Principal | null>(null)
+  const [session, setSession] = useState<AuthSession | null>(null)
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [error, setError] = useState<string | null>(null)
-  const refresh = useCallback(async () => {
-    try { const current = await api.me(); setPrincipal(current); setStatus('signed-in'); setError(null); return current }
-    catch (cause) { if (cause instanceof ApiError && cause.status === 401) { setPrincipal(null); setStatus('signed-out'); setError(null); return null }; setStatus('signed-out'); setError(getErrorMessage(cause)); return null }
+  const refresh = useCallback(async (knownIdentitySession?: AuthSession | null) => {
+    let identitySession: AuthSession | null = null
+    if (knownIdentitySession !== undefined) {
+      identitySession = knownIdentitySession
+    } else {
+      try {
+        identitySession = await api.authSession()
+      } catch (cause) {
+        // Older deployments expose only the token session and /v1/me. Keep
+        // those deployments usable while the identity handler rolls out.
+        if (cause instanceof ApiError && cause.status === 401) {
+          setPrincipal(null); setSession(null); setStatus('signed-out'); setError(null); return null
+        }
+        if (!(cause instanceof ApiError && [404, 405, 501].includes(cause.status))) {
+          setStatus('signed-out'); setError(getErrorMessage(cause)); return null
+        }
+      }
+    }
+
+    try {
+      const current = await api.me()
+      // An identity session is authoritative for the browser flow. Do not let
+      // a stale legacy token principal bypass company onboarding or selection.
+      if (identitySession && needsCompanySetup(identitySession)) {
+        setSession(identitySession)
+        setPrincipal(null)
+        setStatus('signed-in')
+        setError(null)
+        return null
+      }
+      setPrincipal(current)
+      setSession(identitySession)
+      setStatus('signed-in')
+      setError(null)
+      return current
+    } catch (cause) {
+      // A signed-in identity without an active organization is expected to be
+      // rejected by /v1/me until onboarding creates the first company.
+      if (identitySession && needsCompanySetup(identitySession)) {
+        setSession(identitySession)
+        const fallbackPrincipal = principalFromSession(identitySession)
+        setPrincipal(fallbackPrincipal)
+        setStatus('signed-in')
+        setError(null)
+        return fallbackPrincipal
+      }
+      if (cause instanceof ApiError && cause.status === 401) {
+        setPrincipal(null); setSession(null); setStatus('signed-out'); setError(null); return null
+      }
+      setStatus('signed-out'); setError(getErrorMessage(cause)); return null
+    }
   }, [])
   useEffect(() => { void refresh() }, [refresh])
   const signIn = useCallback(async (token: string) => { setError(null); await api.signIn(token); const current = await refresh(); if (!current) throw new Error('The token was accepted but no principal was returned.'); return current }, [refresh])
-  const signOut = useCallback(async () => { try { await api.signOut() } finally { setPrincipal(null); setStatus('signed-out') } }, [])
-  const value = useMemo<AuthContextValue>(() => ({ principal, status, error, signIn, signOut, refresh }), [principal, status, error, signIn, signOut, refresh])
+  const signOut = useCallback(async () => { try { await api.signOut() } finally { setPrincipal(null); setSession(null); setStatus('signed-out') } }, [])
+  const switchOrganization = useCallback(async (organizationId: string) => {
+    if (!organizationId.trim()) throw new Error('Choose a company to continue.')
+    await api.switchOrganization(organizationId)
+    const next = await api.authSession()
+    if (!next) throw new Error('The company session could not be refreshed.')
+    setSession(next)
+    await refresh(next)
+    return next
+  }, [refresh])
+  const value = useMemo<AuthContextValue>(() => ({ principal, session, status, error, signIn, signOut, refresh, switchOrganization }), [principal, session, status, error, signIn, signOut, refresh, switchOrganization])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 export function useAuth() { const context = useContext(AuthContext); if (!context) throw new Error('useAuth must be used inside AuthProvider'); return context }

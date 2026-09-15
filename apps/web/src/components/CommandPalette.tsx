@@ -25,6 +25,7 @@ export const registrySections = [
   { id: 'policy', label: 'Settings', hint: 'Review rules', glyph: '⚙' },
   { id: 'upstreams', label: 'Sources', hint: 'Approved sources', glyph: '⌘' },
   { id: 'audit', label: 'Audit', hint: 'Change history', glyph: '◷' },
+  { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
 ] as const satisfies readonly RegistrySection[]
 
 interface CommandPaletteProps {

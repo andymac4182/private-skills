@@ -75,3 +75,47 @@ describe('multi-source discovery API', () => {
     expect(resolveInit.credentials).toBe('include')
   })
 })
+
+describe('identity API', () => {
+  it('uses the sanitized identity routes and normalizes Better Auth organization payloads', async () => {
+    const organization = { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ protocolVersion: 1, enabled: true, basePath: '/api/auth', providers: [], organization: { enabled: true, roles: ['owner', 'admin', 'publisher', 'reader'], maxOrganizationsPerUser: 3, maxMembersPerOrganization: 50, maxInvitationsPerMember: 5 }, invitations: { mode: 'copy-link', emailDelivery: 'disabled', requiresVerifiedEmail: true, allowedRoles: ['reader'] }, bootstrap: { enabled: true, requiresExplicitOwnerClaim: true, implicitSocialTenantAdoption: false } }))
+      .mockResolvedValueOnce(response({ session: null }))
+      .mockResolvedValueOnce(response([organization]))
+      .mockResolvedValueOnce(response(organization))
+      .mockResolvedValueOnce(response(organization))
+      .mockResolvedValueOnce(response({ members: [] }))
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response({ id: 'invite-1', email: 'new@acme.test', role: 'reader', status: 'pending' }))
+      .mockResolvedValueOnce(response({ id: 'member-1', role: 'admin' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.authProviders()
+    expect(await api.authSession()).toBeNull()
+    expect(await api.listOrganizations()).toEqual({ organizations: [organization] })
+    expect(await api.createOrganization({ name: organization.name, slug: organization.slug })).toEqual({ organization })
+    expect(await api.switchOrganization(organization.id)).toEqual(organization)
+    expect(await api.organizationMembers()).toEqual({ members: [] })
+    expect(await api.organizationInvitations()).toEqual({ invitations: [] })
+    expect(await api.inviteOrganizationMember({ email: 'new@acme.test', role: 'reader' })).toEqual({ id: 'invite-1', email: 'new@acme.test', role: 'reader', status: 'pending' })
+    await api.updateOrganizationMemberRole('member-1', 'admin')
+
+    const paths = fetchMock.mock.calls.map(([path]) => new URL(path as string, 'https://registry.test').pathname)
+    expect(paths).toEqual([
+      '/auth/identity/config',
+      '/auth/identity/session',
+      '/api/auth/organization/list',
+      '/api/auth/organization/create',
+      '/api/auth/organization/set-active',
+      '/api/auth/organization/list-members',
+      '/api/auth/organization/list-invitations',
+      '/api/auth/organization/invite-member',
+      '/api/auth/organization/update-member-role',
+    ])
+    const [, createInit] = fetchMock.mock.calls[3] as [string, RequestInit]
+    expect(JSON.parse(String(createInit.body))).toEqual({ name: organization.name, slug: organization.slug })
+    const [, roleInit] = fetchMock.mock.calls[8] as [string, RequestInit]
+    expect(JSON.parse(String(roleInit.body))).toEqual({ memberId: 'member-1', role: 'admin' })
+  })
+})

@@ -1,23 +1,31 @@
 import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { safeAppReturnTo, useAuth } from '../lib/auth'
+import { needsCompanySetup, safeAppReturnTo, useAuth } from '../lib/auth'
 import { DirectoryFeedProvider } from '../lib/directoryFeed'
 import { CommandPalette, registrySections } from './CommandPalette'
+import { CompanySwitcher } from './CompanySwitcher'
 import { HealthStatus } from './HealthStatus'
 import { Button, LoadingState } from './Primitives'
 
 export function RegistryShell() {
-  const { principal, status, error, signOut } = useAuth()
+  const { principal, session, status, error, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [routeIsEntering, setRouteIsEntering] = useState(false)
 
   const returnTo = safeAppReturnTo(`${location.pathname}${location.searchStr}${location.hash ? (location.hash.startsWith('#') ? location.hash : `#${location.hash}`) : ''}`)
+  const isCompanyRoute = location.pathname === '/app/company'
+  const needsCompany = needsCompanySetup(session)
 
   useEffect(() => {
-    if (!returnTo || status === 'loading' || (status === 'signed-in' && principal)) return
+    if (!returnTo || status === 'loading') return
+    if (status === 'signed-in' && (principal || (session && isCompanyRoute))) return
+    if (status === 'signed-in' && needsCompany) {
+      void navigate({ to: '/app/$section', params: { section: 'company' }, replace: true })
+      return
+    }
     void navigate({ to: '/login', search: { returnTo }, replace: true })
-  }, [navigate, principal, returnTo, status])
+  }, [isCompanyRoute, navigate, needsCompany, principal, returnTo, session, status])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -39,14 +47,17 @@ export function RegistryShell() {
   }, [location.pathname])
 
   if (status === 'loading') return <LoadingState label="Opening your private registry…" />
-  if (status !== 'signed-in' || !principal) return <LoadingState label={error ?? 'Redirecting to sign in…'} />
+  if (status !== 'signed-in' || (!principal && !(session && isCompanyRoute))) return <LoadingState label={error ?? 'Redirecting to sign in…'} />
 
   const activeSection = location.pathname.split('/')[2] || 'overview'
   const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
-  const accountInitial = principal.subject.trim().slice(0, 1).toUpperCase() || 'P'
+  const accountName = principal?.subject ?? session?.user.name ?? session?.user.email ?? session?.user.id ?? 'Private Skills'
+  const accountInitial = accountName.trim().slice(0, 1).toUpperCase() || 'P'
+  const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
+  const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
 
   return (
-    <DirectoryFeedProvider>
+    <DirectoryFeedProvider key={tenantKey}>
       <div className="app-shell">
         <aside className="sidebar">
           <Link className="brand" to="/app">
@@ -81,8 +92,8 @@ export function RegistryShell() {
           <div className="sidebar-account">
             <span aria-hidden="true" className="account-avatar">{accountInitial}</span>
             <span>
-              <strong>{principal.subject}</strong>
-              <small>{principal.roles.join(' · ')}</small>
+              <strong>{accountName}</strong>
+              <small>{accountRoles}</small>
             </span>
           </div>
         </aside>
@@ -99,11 +110,12 @@ export function RegistryShell() {
 
             <div className="topbar-status">
               <CommandPalette sections={registrySections} />
+              <CompanySwitcher />
               <HealthStatus />
               <span className="divider" aria-hidden="true" />
               <span className="principal-chip">
-                {principal.subject}
-                <span>{principal.roles.join(' · ')}</span>
+                {accountName}
+                <span>{accountRoles}</span>
               </span>
               <Button kind="quiet" onClick={() => void signOut().then(() => navigate({ to: '/login' }))}>
                 Sign out

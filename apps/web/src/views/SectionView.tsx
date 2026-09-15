@@ -13,6 +13,7 @@ import { OfficialView } from './OfficialView'
 import { TopicsView } from './TopicsView'
 import { DirectoryAuditsView } from './DirectoryAuditsView'
 import { SourceDiscoveryView } from './SourceDiscoveryView'
+import { CompanyView } from './CompanyView'
 import type { AppSectionSearch } from '../routes/app.$section'
 
 export function SectionView({ section, draftSearch }: { section: string; draftSearch?: AppSectionSearch }) {
@@ -32,6 +33,7 @@ export function SectionView({ section, draftSearch }: { section: string; draftSe
     case 'policy': return <PolicyView />
     case 'upstreams': return <UpstreamsView />
     case 'audit': return <AuditView />
+    case 'company': return <CompanyView />
     default: return <div className="view-heading"><div><span className="eyebrow">Registry</span><h1>Section not found</h1><p className="muted">The requested registry section does not exist.</p></div></div>
   }
 }

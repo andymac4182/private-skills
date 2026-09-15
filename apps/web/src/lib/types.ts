@@ -40,6 +40,16 @@ import type {
   SourceSearchSourceStatus,
   SourceCatalogListResponse,
 } from '../../../../packages/source-catalog/src/types'
+import type {
+  IdentityMembership,
+  IdentityOrganization,
+  IdentityPrincipal,
+  IdentityProviderPublicConfig,
+  IdentityPublicConfig,
+  IdentityRole,
+  IdentitySession,
+  IdentityUser,
+} from '../../../../packages/identity/src/index'
 
 export type {
   AuditEvent,
@@ -103,6 +113,16 @@ export type {
   SkillView,
 }
 export type { SkillsPackManifest, SkillsPackMember }
+export type {
+  IdentityMembership,
+  IdentityOrganization,
+  IdentityPrincipal,
+  IdentityProviderPublicConfig,
+  IdentityPublicConfig,
+  IdentityRole,
+  IdentitySession,
+  IdentityUser,
+}
 
 export interface ApiErrorShape {
   code?: string
@@ -111,6 +131,48 @@ export interface ApiErrorShape {
   details?: unknown
   retryable?: boolean
 }
+
+/** Browser-safe identity aliases. The server-owned definitions live in packages/identity. */
+export type IdentityProviderId = IdentityProviderPublicConfig['id']
+export type IdentityProviderDescriptor = IdentityProviderPublicConfig
+export type PublicProviderConfig = IdentityPublicConfig
+export type OrganizationSummary = IdentityOrganization
+export type AuthUser = IdentityUser
+export type OrganizationRole = IdentityRole
+export type AuthSession = IdentitySession
+
+export interface ProviderSignInResponse {
+  redirect?: boolean
+  url?: string
+  token?: string
+}
+
+export interface TeamMember {
+  id: string
+  userId?: string
+  user?: Pick<AuthUser, 'id' | 'name' | 'email' | 'image'>
+  name?: string | null
+  email?: string | null
+  role: OrganizationRole
+  status?: string
+  createdAt?: string
+  image?: string | null
+}
+
+export interface OrganizationInvitation {
+  id: string
+  email: string
+  role: OrganizationRole
+  url?: string
+  status?: string
+  expiresAt?: string
+  createdAt?: string
+}
+
+export interface OrganizationMembersResponse { members: TeamMember[] }
+export interface OrganizationInvitationsResponse { invitations: OrganizationInvitation[] }
+export interface OrganizationResponse { organization: OrganizationSummary }
+export interface OrganizationListResponse { organizations: OrganizationSummary[] }
 
 export type CatalogSkillVersion = SkillVersion & { currentAdmission?: CurrentSkillAdmission }
 export interface SkillListResponse { skills: CatalogSkillVersion[] }
