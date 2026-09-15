@@ -369,6 +369,21 @@ describe('tenant review dispatch', () => {
     expect(queries).toEqual([{ text: 'SELECT "id" FROM "auth"."organization" ORDER BY "id" ASC LIMIT $1', parameters: [4097] }]);
   });
 
+  it('shares a keyset organization page with the hosted worker dispatcher', async () => {
+    const queries: Array<{ text: string; parameters?: readonly unknown[] }> = [];
+    const listTenants = createPostgresTenantReviewTargetLister({
+      async query(text, parameters) {
+        queries.push({ text, parameters });
+        return { rows: [{ id: 'company-03' }, { id: 'company-04' }] } as never;
+      },
+    }, { schemaName: 'auth' });
+    await expect(listTenants.listOrganizations({ after: 'company-02', limit: 2 })).resolves.toEqual(['company-03', 'company-04']);
+    expect(queries).toEqual([{
+      text: 'SELECT "id" FROM "auth"."organization" WHERE ($1::text IS NULL OR "id" > $1) ORDER BY "id" ASC LIMIT $2',
+      parameters: ['company-02', 2],
+    }]);
+  });
+
   it('does not compose a cron route without the host-owned cron secret', () => {
     const repo = repository();
     const runtime = createTenantReviewRuntime({

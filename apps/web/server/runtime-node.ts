@@ -1,7 +1,12 @@
 import postgres from 'postgres';
 import { getVercelOidcToken } from '@vercel/oidc';
 import { FileStateRepository } from '../../../packages/database/src/file';
-import { PostgresStateRepository, type PgPoolLike } from '../../../packages/database/src/postgres';
+import {
+  PostgresStateRepository,
+  PostgresHostedWorkerDispatchStore,
+  createHostedWorkerDispatcher,
+  type PgPoolLike,
+} from '../../../packages/database/src/index';
 import { HttpStateRepository } from '../../../packages/database/src/http';
 import { createNodeFilesSdkBlobStore, type FilesProvider } from '../../../packages/storage/src/node';
 import { HttpBlobStore } from '../../../packages/storage/src/http';
@@ -59,7 +64,10 @@ import {
   createNodeCliReleaseAssetProvider,
 } from '../../../packages/cli-release/src/node.js';
 import type { CliReleaseAssetProvider } from '../../../packages/cli-release/src/index.js';
-import { createPostgresTenantReviewTargetLister } from './tenant-review-runtime.js';
+import {
+  createPostgresTenantReviewTargetLister,
+  type PostgresTenantOrganizationCatalog,
+} from './tenant-review-runtime.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -77,6 +85,10 @@ export interface BillingRuntime {
   service: BillingService;
   /** Server-only provider read model; never returned to browser code. */
   invoiceHistory: (lookup: BillingInvoiceLookup) => Promise<readonly BillingProviderInvoice[]>;
+}
+
+export interface HostedWorkerDispatcherRuntime {
+  handler: (request: Request) => Promise<Response>;
 }
 
 const OPENCLAW_SOURCE_CONFIG_MAX_BYTES = 512 * 1024;
@@ -423,7 +435,67 @@ export function createBillingRuntime(
   };
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+/**
+ * Compose the durable cross-company worker cron boundary. This is kept as a
+ * small Node-only adapter so the database dispatcher remains host-neutral and
+ * the edge runtime never imports PostgreSQL or worker/provider code.
+ *
+ * The dispatcher is available only when all server-owned inputs are present:
+ * a Better Auth organization catalog, a durable PostgreSQL pool, the signed
+ * tenant worker factory, and the operator cron secret. Missing dispatch
+ * tables remain an explicit migration/configuration error at request time;
+ * automatic DDL is opt-in through the dedicated environment flag.
+ */
+export function createHostedWorkerDispatcherRuntime(options: {
+  env: RuntimeEnvironment;
+  postgresPool?: PgPoolLike;
+  catalog?: PostgresTenantOrganizationCatalog;
+  workerForOrganization?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
+}): HostedWorkerDispatcherRuntime | undefined {
+  const cronSecret = options.env.CRON_SECRET?.trim();
+  if (options.env.PSKILLS_HOSTED_WORKER !== 'true' || !cronSecret || options.postgresPool === undefined || options.catalog === undefined || options.workerForOrganization === undefined) {
+    return undefined;
+  }
+
+  const store = new PostgresHostedWorkerDispatchStore({
+    pool: options.postgresPool,
+    autoMigrate: billingEnvironmentBool(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_AUTO_MIGRATE),
+    ...(optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_TABLE) === undefined ? {} : {
+      tableName: optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_TABLE),
+    }),
+    ...(optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_RETRY_TABLE) === undefined ? {} : {
+      retryTableName: optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_RETRY_TABLE),
+    }),
+  });
+  const maxOrganizations = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_ORGANIZATIONS, 1, 1_024, 'max organizations');
+  const pageSize = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_PAGE_SIZE, 1, 256, 'page size');
+  const maxJobsPerOrganization = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_JOBS_PER_ORGANIZATION, 1, 16, 'max jobs per organization');
+  const maxDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS, 1_000, 15 * 60_000, 'max duration');
+  const leaseDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_LEASE_DURATION_MS, 1_000, 30 * 60_000, 'lease duration');
+  const handler = createHostedWorkerDispatcher({
+    cronSecret,
+    catalog: options.catalog,
+    store,
+    workerForOrganization: options.workerForOrganization,
+    ...(maxOrganizations === undefined ? {} : { maxOrganizations }),
+    ...(pageSize === undefined ? {} : { pageSize }),
+    ...(maxJobsPerOrganization === undefined ? {} : { maxJobsPerOrganization }),
+    ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
+    ...(leaseDurationMs === undefined ? {} : { leaseDurationMs }),
+  });
+  return { handler };
+}
+
+function hostedWorkerDispatchOption(value: string | undefined, minimum: number, maximum: number, label: string): number | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized === '') return undefined;
+  if (!/^\d+$/u.test(normalized)) throw new Error(`Hosted worker dispatch ${label} is invalid`);
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error(`Hosted worker dispatch ${label} is invalid`);
+  return parsed;
+}
+
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; bootstrapAdoptionStore?: BootstrapAdoptionStore; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -582,6 +654,12 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
       return handler;
     }
     : undefined;
+  const hostedWorkerDispatcher = createHostedWorkerDispatcherRuntime({
+    env,
+    postgresPool,
+    catalog: listTenantReviewTargets,
+    workerForOrganization: createHostedWorkerForTenant,
+  });
   const uploadReviewEnabled = env.PSKILLS_UPLOAD_REVIEW_ENABLED === 'true';
   const uploadReview = uploadReviewEnabled
     ? createUploadReviewRuntime(env, repository)
@@ -591,6 +669,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     blobs,
     billing,
     hostedWorker,
+    ...(hostedWorkerDispatcher === undefined ? {} : { hostedWorkerDispatcher: hostedWorkerDispatcher.handler }),
     ...(createHostedWorkerForTenant === undefined ? {} : { createHostedWorkerForTenant }),
     directoryTokenProvider,
     directoryOfficialTokenProvider,

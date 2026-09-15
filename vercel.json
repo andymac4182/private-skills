@@ -5,7 +5,7 @@
   "buildCommand": "node scripts/build-vercel.mjs",
   "env": { "PSKILLS_BUILDER_APP_ORIGIN": "https://private-skills-builder.vercel.app" },
   "crons": [
-    { "path": "/internal/worker/run", "schedule": "0 21 * * *" },
+    { "path": "/internal/worker/run", "schedule": "*/5 * * * *" },
     { "path": "/internal/reviewer/dispatch", "schedule": "*/15 * * * *" }
   ]
 }

@@ -647,7 +647,8 @@ async function createRuntime(env: RuntimeEnvironment) {
     }
     if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return billingWebhook(request);
     if (path === '/internal/worker/run') {
-      const workerHandler = infrastructure.hostedWorker
+      const workerHandler = infrastructure.hostedWorkerDispatcher
+        ?? infrastructure.hostedWorker
         ?? infrastructure.createHostedWorkerForTenant?.(defaultOrganizationId);
       return workerHandler ? workerHandler(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });

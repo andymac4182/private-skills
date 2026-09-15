@@ -164,12 +164,15 @@ candidate execution. See [`docs/eve-reviewer.md`](docs/eve-reviewer.md).
 
 For Vercel Node deployments, the optional hosted worker route
 `GET /internal/worker/run` requires `Authorization: Bearer $CRON_SECRET` and
-returns queue metadata only. The root Vercel fallback cron is `0 21 * * *`
-UTC; successful publish/import/rescan requests also schedule a bounded drain of
-up to two jobs through Nitro's `waitUntil` hook. Configure immutable scanner
-image references, including a source-revision/artifact-digest snapshot for
-SkillsGuard when used. This route is not available in the Cloudflare edge
-runtime; see [`docs/operations.md`](docs/operations.md).
+returns queue metadata only. When Better Auth, PostgreSQL, and signed
+tenant-worker delegation are configured, the route walks a bounded,
+server-listed organization page with a durable cursor and retry backoff; it
+never accepts a caller-selected tenant. The root Vercel fallback cron runs
+every five minutes; successful publish/import/rescan requests also schedule a
+bounded drain of up to two jobs through Nitro's `waitUntil` hook. Configure
+immutable scanner image references, including a source-revision/artifact-digest
+snapshot for SkillsGuard when used. This route is not available in the
+Cloudflare edge runtime; see [`docs/operations.md`](docs/operations.md).
 
 ## Data and trust boundaries
 

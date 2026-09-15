@@ -42,6 +42,17 @@ export interface PostgresTenantReviewTargetListerOptions {
   isProvisioned?: (organizationId: string) => Promise<boolean> | boolean;
 }
 
+export interface PostgresTenantOrganizationCatalog {
+  /** Return a keyset page from the server-owned Better Auth organization table. */
+  listOrganizations(input: {
+    after: string | null;
+    limit: number;
+    signal?: AbortSignal;
+  }): Promise<readonly string[]>;
+}
+
+export type PostgresTenantReviewTargetLister = (() => Promise<readonly TenantReviewTarget[]>) & PostgresTenantOrganizationCatalog;
+
 /**
  * Enumerate Better Auth organizations from the shared PostgreSQL pool. This
  * is intentionally an explicit host helper: it never infers a company from a
@@ -50,10 +61,29 @@ export interface PostgresTenantReviewTargetListerOptions {
 export function createPostgresTenantReviewTargetLister(
   pool: TenantReviewOrganizationPool,
   options: PostgresTenantReviewTargetListerOptions = {},
-): () => Promise<readonly TenantReviewTarget[]> {
+): PostgresTenantReviewTargetLister {
   const table = qualifiedOrganizationTable(options.schemaName);
   const maxTenants = boundedTenantListLimit(options.maxTenants);
-  return async () => {
+  const catalog: PostgresTenantOrganizationCatalog = {
+    listOrganizations: async (input) => {
+      if (input === undefined || input === null || typeof input !== 'object') throw new Error('Tenant organization page is invalid');
+      const after = input.after;
+      if (after !== null && typeof after !== 'string') throw new Error('Tenant organization cursor is invalid');
+      if (after !== null && normalizeTenantOrganizationId(after) !== after) throw new Error('Tenant organization cursor is invalid');
+      if (!Number.isSafeInteger(input.limit) || input.limit <= 0 || input.limit > 256) throw new Error('Tenant organization page size is invalid');
+      const result = await pool.query<{ id?: unknown }>(
+        `SELECT "id" FROM ${table} WHERE ($1::text IS NULL OR "id" > $1) ORDER BY "id" ASC LIMIT $2`,
+        [after, input.limit],
+      );
+      const organizations: string[] = [];
+      for (const row of result.rows) {
+        if (!row || typeof row.id !== 'string') throw new Error('Better Auth organization identity is invalid');
+        organizations.push(normalizeTenantOrganizationId(row.id));
+      }
+      return organizations;
+    },
+  };
+  const listTenants = async () => {
     const result = await pool.query<{ id?: unknown }>(
       `SELECT "id" FROM ${table} ORDER BY "id" ASC LIMIT $1`,
       [maxTenants + 1],
@@ -72,6 +102,7 @@ export function createPostgresTenantReviewTargetLister(
     }
     return targets;
   };
+  return Object.assign(listTenants, catalog);
 }
 
 /**
@@ -145,4 +176,10 @@ function boundedTenantListLimit(value: number | undefined): number {
   if (value === undefined) return 4_096;
   if (!Number.isSafeInteger(value) || value <= 0 || value > 4_096) throw new Error('Tenant review target limit is invalid');
   return value;
+}
+
+function normalizeTenantOrganizationId(value: string): string {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 256 || /[\u0000-\u001f\u007f]/u.test(normalized)) throw new Error('Better Auth organization identity is invalid');
+  return normalized;
 }

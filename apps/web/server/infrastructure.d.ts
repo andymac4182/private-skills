@@ -8,6 +8,8 @@ declare module '#pskills-infrastructure' {
       invoiceHistory?: (lookup: import('../../../packages/billing/src/index').BillingInvoiceLookup) => Promise<readonly import('../../../packages/billing/src/index').BillingProviderInvoice[]>;
     };
     hostedWorker?: (request: Request) => Promise<Response>;
+    /** Optional durable cross-company worker dispatcher for the cron route. */
+    hostedWorkerDispatcher?: (request: Request) => Promise<Response>;
     /** Optional signed worker factory bound to one server-selected tenant. */
     createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
     directoryTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
