@@ -1,0 +1,111 @@
+{
+  "evidenceVersion": 1,
+  "status": "rolled-back",
+  "operation": "bounded additive identity schema preparation",
+  "sourceSha": "e9b8a4158cf1fd09d3f5dcc50178d10221b54aca",
+  "sqlArtifacts": {
+    "betterAuth": {
+      "filename": "hosted-identity-migration-review-20260916.better-auth.sql",
+      "bytes": 3027,
+      "digest": "sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b"
+    },
+    "companySso": {
+      "filename": "hosted-identity-migration-review-20260916.company-sso.sql",
+      "bytes": 1099,
+      "digest": "sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5"
+    },
+    "serviceTokens": {
+      "filename": "hosted-identity-migration-review-20260916.service-tokens.sql",
+      "bytes": 722,
+      "digest": "sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492"
+    },
+    "identityOperations": {
+      "filename": "hosted-identity-migration-review-20260916.identity-operations.sql",
+      "bytes": 1210,
+      "digest": "sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c"
+    }
+  },
+  "transaction": {
+    "isolation": "REPEATABLE READ",
+    "searchPath": "public, pg_catalog",
+    "lockTimeout": "5s",
+    "statementTimeout": "30s",
+    "advisoryLock": "hashtextextended(private-skills.identity-schema-preparation, 0)",
+    "registryRowLock": "FOR UPDATE"
+  },
+  "mutation": {
+    "identityActivation": false,
+    "providerRowsCreated": false,
+    "tokenRowsCreated": false,
+    "adoptionPerformed": false,
+    "existingDataDml": false,
+    "blobChanges": false,
+    "environmentChanges": false
+  },
+  "recoveryPlan": {
+    "preCommitError": "rollback the single transaction and leave identity disabled",
+    "commitUncertain": "do not retry; perform a fresh relation/count/registry readback first",
+    "postCommitMismatch": "hold traffic and identity disabled; use a reviewed forward fix, never a down migration against populated tables",
+    "legacyAccess": "preserve the existing bearer/session path throughout"
+  },
+  "database": {
+    "serverVersionNum": "180006",
+    "transactionReadOnly": "off"
+  },
+  "pre": {
+    "relations": [
+      { "schema": "public", "table": "private_skills_registry_state", "relationKind": "table" }
+    ],
+    "registry": {
+      "schema": "public",
+      "table": "private_skills_registry_state",
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": ["jsonb"],
+      "stateJsonbTypeSet": ["string"],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c",
+      "stateContentDigest": "sha256:16ef9b8ffc02f2c0a7352a20249b3ac71e5f0cce4aa386598bcc47bbb762e366"
+    },
+    "reviewBaselineComparison": {
+      "matched": false,
+      "expectedRevision": "231",
+      "observedRevision": "232",
+      "expectedStateSetDigest": "sha256:0b5d502133e09c353a2a336dfe2ab2e6d2772d16b099335271396ffe559c6bd8",
+      "observedStateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c",
+      "unchangedFields": ["rowCount", "stateSqlTypeSet", "stateJsonbTypeSet", "minStateBytes", "maxStateBytes"],
+      "driftFields": ["minRevision", "maxRevision", "stateSetDigest"]
+    }
+  },
+  "ddlExecuted": false,
+  "postRollbackReadback": {
+    "status": "verified",
+    "matchedRelations": [
+      { "schema": "public", "table": "private_skills_registry_state", "relationKind": "table" }
+    ],
+    "newIdentityTargetsPresent": false,
+    "serviceTokenTargetPresent": false,
+    "billingTargetsPresent": false,
+    "registry": {
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": ["jsonb"],
+      "stateJsonbTypeSet": ["string"],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c",
+      "stateContentDigest": "sha256:16ef9b8ffc02f2c0a7352a20249b3ac71e5f0cce4aa386598bcc47bbb762e366"
+    },
+    "registryMatchesPre": true
+  },
+  "failure": {
+    "code": null,
+    "name": "MigrationAbort"
+  },
+  "failureReason": "fresh registry baseline differs from the reviewed revision, type, byte, or digest",
+  "rollback": "rolled-back",
+  "observedAt": "2026-09-15T21:36:07.061Z"
+}
