@@ -98,8 +98,12 @@ the ledger still rejects a reopened key.
 If a metadata reference appears after the exact zero correction, the attempt is
 marked `billingCorrection: "restore-pending"` in the same durable transition
 that retains it. Retries settle the inverse reservation under a stable
-operation key before clearing that marker; a failed inverse leaves the marker
-and the original reservation charged.
+operation key bound to the original reservation generation (G1) before clearing
+that marker. The ledger returns a fresh generation (G2); the storage attempt
+persists G2 and removes the marker in one transaction. A lost response retries
+the same G1 restoration operation, while a delayed G1 zero is rejected and a
+later cleanup uses a G2-specific correction key. A failed inverse leaves the
+marker and the original reservation charged.
 
 The current Node factory does not claim this finality for any built-in provider.
 The filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters expose

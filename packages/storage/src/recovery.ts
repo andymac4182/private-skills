@@ -143,14 +143,46 @@ interface FinalizeResult {
 }
 
 interface BillingUsageRestoration extends BillingUsageAdmission {
-  /** Exact inverse of a previously released reservation; ledger-owned. */
+  /**
+   * Exact inverse of a previously released reservation; ledger-owned. The
+   * returned generation is a new lifecycle and replay must remain bound to
+   * the supplied source generation even after another admission advances the
+   * ledger.
+   */
   restoreUsage(
     organizationId: string,
     reservationKey: string,
     delta: { storageBytes: number },
     operationKey: string,
-    reservationGeneration?: number,
-  ): Promise<unknown>;
+    reservationGeneration: number,
+  ): Promise<BillingUsageRestorationResult>;
+}
+
+interface BillingUsageRestorationResult {
+  idempotent: boolean;
+  /** Fresh lifecycle returned by the ledger after restoring the old release. */
+  reservationGeneration: number;
+  /** The exact lifecycle that was restored; must equal the request generation. */
+  restoredFromGeneration: number;
+}
+
+function storageRecoveryOperationKey(attemptId: string, generation?: number): string {
+  return generation === undefined
+    ? `private-skills:storage-recovery:${attemptId}`
+    : `private-skills:storage-recovery:${attemptId}:generation:${generation}`;
+}
+
+function storageRecoveryRestoreOperationKey(attemptId: string, generation: number): string {
+  return `private-skills:storage-recovery-restore:${attemptId}:generation:${generation}`;
+}
+
+function validBillingRestorationResult(value: unknown, fromGeneration: number): value is BillingUsageRestorationResult {
+  return isRecord(value) &&
+    typeof value.idempotent === "boolean" &&
+    Number.isSafeInteger(value.reservationGeneration) &&
+    (value.reservationGeneration as number) > fromGeneration &&
+    Number.isSafeInteger(value.restoredFromGeneration) &&
+    value.restoredFromGeneration === fromGeneration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -382,7 +414,10 @@ export class StorageRecoveryService {
     // succeeded. Retry its inverse from the durable marker before the normal
     // metadata-reference guard; otherwise every retry would stop before the
     // compensation and leave the tenant permanently under-metered.
-    if (this.#billing && initialAttempt.billingCorrection === "restore-pending") {
+    if (initialAttempt.billingCorrection === "restore-pending") {
+      if (!this.#billing) {
+        return this.#retain(request.organizationId, request.attemptId, undefined, "billing-unavailable");
+      }
       return this.#retryBillingRestoration(request.organizationId, initialAttempt);
     }
 
@@ -477,7 +512,7 @@ export class StorageRecoveryService {
           request.organizationId,
           attempt.reservationKey,
           { storageBytes: 0 },
-          `private-skills:storage-recovery:${attempt.id}`,
+          storageRecoveryOperationKey(attempt.id, attempt.reservationGeneration),
           attempt.reservationGeneration,
         );
       } catch {
@@ -498,8 +533,16 @@ export class StorageRecoveryService {
         // appeared after the pre-release check. Restore the retained bytes
         // with a separate durable operation before reporting the reference;
         // never leave the original zero unpaired.
-        const restored = billing ? await this.#restoreBilling(attempt) : true;
-        if (!restored) {
+        if (!billing) {
+          return {
+            status: "retained",
+            reason: "metadata-referenced",
+            attempt: finalized.attempt ?? claimedAttempt,
+            inspection,
+          };
+        }
+        const restoration = await this.#restoreBilling(attempt);
+        if (!restoration) {
           return {
             status: "retained",
             reason: "billing-failed",
@@ -507,11 +550,19 @@ export class StorageRecoveryService {
             inspection,
           };
         }
-        const settled = await this.#clearBillingCorrection(request.organizationId, request.attemptId);
+        const settled = await this.#clearBillingCorrection(
+          request.organizationId,
+          request.attemptId,
+          restoration.restoredFromGeneration,
+          restoration.reservationGeneration,
+        );
+        if (!settled.applied) {
+          return { status: "retained", reason: "stale-recovery", attempt: settled.attempt, inspection };
+        }
         return {
           status: "retained",
           reason: "metadata-referenced",
-          attempt: settled,
+          attempt: settled.attempt,
           inspection,
         };
       }
@@ -525,28 +576,29 @@ export class StorageRecoveryService {
     };
   }
 
-  async #restoreBilling(attempt: StorageAttempt): Promise<boolean> {
+  async #restoreBilling(attempt: StorageAttempt): Promise<BillingUsageRestorationResult | undefined> {
     const billing = this.#billing;
-    if (!billing) return true;
+    if (!billing || attempt.reservationGeneration === undefined) return undefined;
+    if (!Number.isSafeInteger(attempt.reservationGeneration) || attempt.reservationGeneration < 1) return undefined;
     try {
-      if (billing.status().enabled !== true) return false;
+      if (billing.status().enabled !== true) return undefined;
       const restoreUsage = (billing as Partial<BillingUsageRestoration>).restoreUsage;
       // A positive reserveUsage would re-run the normal quota check and can
       // fail after another admission fills the cap. Restoration is a ledger
       // owned inverse of this exact released lifecycle; without that seam,
       // fail closed and keep the durable marker/charge for operator retry.
-      if (typeof restoreUsage !== "function") return false;
-      await restoreUsage.call(
+      if (typeof restoreUsage !== "function") return undefined;
+      const result = await restoreUsage.call(
         billing,
         attempt.organizationId,
         attempt.reservationKey,
         { storageBytes: attempt.size },
-        `private-skills:storage-recovery-restore:${attempt.id}`,
+        storageRecoveryRestoreOperationKey(attempt.id, attempt.reservationGeneration),
         attempt.reservationGeneration,
       );
-      return true;
+      return validBillingRestorationResult(result, attempt.reservationGeneration) ? result : undefined;
     } catch {
-      return false;
+      return undefined;
     }
   }
 
@@ -557,26 +609,52 @@ export class StorageRecoveryService {
     if (!this.#billing) {
       return { status: "retained", reason: "billing-unavailable", attempt: cloneAttempt(attempt) };
     }
-    if (!(await this.#restoreBilling(attempt))) {
+    const restoration = await this.#restoreBilling(attempt);
+    if (!restoration) {
       return { status: "retained", reason: "billing-failed", attempt: cloneAttempt(attempt) };
     }
-    const settled = await this.#clearBillingCorrection(organizationId, attempt.id);
-    return { status: "retained", reason: "billing-restored", attempt: settled };
+    const settled = await this.#clearBillingCorrection(
+      organizationId,
+      attempt.id,
+      restoration.restoredFromGeneration,
+      restoration.reservationGeneration,
+    );
+    if (!settled.applied) {
+      return { status: "retained", reason: "stale-recovery", attempt: settled.attempt };
+    }
+    return { status: "retained", reason: "billing-restored", attempt: settled.attempt };
   }
 
   async #clearBillingCorrection(
     organizationId: string,
     attemptId: string,
-  ): Promise<StorageAttempt> {
+    restoredFromGeneration: number,
+    restoredGeneration: number,
+  ): Promise<{ applied: boolean; attempt: StorageAttempt }> {
     try {
       return await this.#repository.transaction(organizationId, (state) => {
         const current = (state.storageAttempts ?? []).find((candidate) => candidate.id === attemptId);
         if (!current || current.organizationId !== organizationId) {
           throw new StorageRecoveryError("STORAGE_ATTEMPT_NOT_FOUND", "storage attempt was not found");
         }
-        if (current.billingCorrection === "restore-pending") delete current.billingCorrection;
+        // A concurrent retry may have completed the exact same restoration
+        // before this transaction acquired the organization lock. Treat that
+        // replay as settled only when the persisted lifecycle is the exact G2
+        // returned for this G1. Any other state is stale and must remain
+        // untouched; never overwrite a newer lifecycle with an old response.
+        if (current.billingCorrection !== "restore-pending") {
+          return {
+            applied: current.reservationGeneration === restoredGeneration,
+            attempt: cloneAttempt(current),
+          };
+        }
+        if (current.reservationGeneration !== restoredFromGeneration) {
+          return { applied: false, attempt: cloneAttempt(current) };
+        }
+        current.reservationGeneration = restoredGeneration;
+        delete current.billingCorrection;
         current.updatedAt = nowIso(this.#now);
-        return cloneAttempt(current);
+        return { applied: true, attempt: cloneAttempt(current) };
       });
     } catch (error) {
       if (error instanceof StorageRecoveryError) throw error;

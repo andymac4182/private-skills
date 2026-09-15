@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStateRepository, defaultRegistryState } from "../../database/src/index.js";
-import { BillingService, createMemoryBillingRepository } from "../../billing/src/index.js";
 import type {
   BillingUsageAdmission,
   BlobStore,
@@ -147,6 +146,79 @@ class RecordingBilling implements BillingUsageAdmission {
   }
 }
 
+type BillingUsageRestorationResult = {
+  idempotent: boolean;
+  reservationGeneration: number;
+  restoredFromGeneration: number;
+};
+
+/** Small generation-aware ledger double for the storage recovery lifecycle. */
+class GenerationAwareBilling implements BillingUsageAdmission {
+  readonly reconciliations: Array<{
+    actual: MeteredUsageDelta;
+    operationKey: string;
+    reservationGeneration?: number;
+  }> = [];
+  readonly restorations: Array<{
+    operationKey: string;
+    reservationGeneration: number;
+  }> = [];
+  usage = BYTES.byteLength;
+  generation = 1;
+  lostRestoreResponse = true;
+  onReconciled?: () => Promise<void>;
+  #restoration?: BillingUsageRestorationResult;
+
+  status(): { enabled: boolean } {
+    return { enabled: true };
+  }
+
+  async reserveUsage(): Promise<unknown> {
+    throw new Error("storage recovery must never restore through reserveUsage");
+  }
+
+  async reconcileUsage(
+    _organizationId: string,
+    _reservationKey: string,
+    actual: MeteredUsageDelta,
+    operationKey: string,
+    reservationGeneration?: number,
+  ): Promise<unknown> {
+    if (reservationGeneration !== this.generation) throw new Error("stale reservation generation");
+    this.reconciliations.push({ actual, operationKey, reservationGeneration });
+    if (actual.storageBytes === 0) this.usage = 0;
+    await this.onReconciled?.();
+    return { idempotent: false, reservationGeneration: this.generation };
+  }
+
+  async restoreUsage(
+    _organizationId: string,
+    _reservationKey: string,
+    delta: { storageBytes: number },
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<BillingUsageRestorationResult> {
+    this.restorations.push({ operationKey, reservationGeneration });
+    if (this.#restoration) {
+      if (reservationGeneration !== this.#restoration.restoredFromGeneration) throw new Error("stale restoration generation");
+      return { ...this.#restoration, idempotent: true };
+    }
+    if (reservationGeneration !== this.generation) throw new Error("stale restoration generation");
+    this.usage += delta.storageBytes;
+    this.generation += 1;
+    this.#restoration = {
+      idempotent: false,
+      reservationGeneration: this.generation,
+      restoredFromGeneration: reservationGeneration,
+    };
+    if (this.lostRestoreResponse) {
+      this.lostRestoreResponse = false;
+      throw new Error("billing restoration response lost");
+    }
+    return this.#restoration;
+  }
+}
+
 function actor(organizationId = ORGANIZATION): StorageRecoveryActor {
   return {
     organizationId,
@@ -213,7 +285,7 @@ describe("durable storage-attempt recovery", () => {
       organizationId: ORGANIZATION,
       reservationKey: "private-skills:publish-storage:job-1",
       actual: { storageBytes: 0 },
-      operationKey: "private-skills:storage-recovery:attempt-storage-1",
+      operationKey: "private-skills:storage-recovery:attempt-storage-1:generation:1",
       reservationGeneration: 1,
     }]);
     expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({ state: "released", objectKey: KEY });
@@ -428,64 +500,30 @@ describe("durable storage-attempt recovery", () => {
     expect(billing.reconciliations[0]?.reservationGeneration).toBe(1);
   });
 
-  it("durably retries restoration without reissuing the old zero after a late reference", async () => {
+  it("persists G2 after a lost restoration response, rejects delayed G1 zero, and cleans up with G2", async () => {
     const blobs = new RecoverableMemoryBlobStore();
     const digest = await digestForFixture();
     const repository = await repositoryWithAttempt(attempt());
-    const ledger = new BillingService({
-      repository: createMemoryBillingRepository(),
-      enabled: true,
-      usageEnabled: true,
-    });
-    const candidate = attempt();
-    await ledger.reserveUsage(ORGANIZATION, { storageBytes: BYTES.byteLength }, candidate.reservationKey);
-    let failRestoreOnce = true;
-    let zeroCorrectionCalls = 0;
-    const billing: BillingUsageAdmission & {
-      restoreUsage: (
-        organizationId: string,
-        reservationKey: string,
-        delta: MeteredUsageDelta,
-        operationKey: string,
-        generation?: number,
-      ) => Promise<unknown>;
-    } = {
-      status: () => ledger.status(),
-      reserveUsage: (organizationId, delta, operationKey) => ledger.reserveUsage(organizationId, delta, operationKey),
-      restoreUsage: async (organizationId, reservationKey, delta, operationKey, generation) => {
-        void reservationKey;
-        void generation;
-        const result = await ledger.reserveUsage(organizationId, delta, operationKey);
-        if (operationKey === `private-skills:storage-recovery-restore:${candidate.id}` && failRestoreOnce) {
-          failRestoreOnce = false;
-          // Model a lost response after the inverse reservation committed.
-          // The durable storage marker must make a later retry idempotent.
-          throw new Error("billing restoration response lost");
-        }
-        return result;
-      },
-      reconcileUsage: async (organizationId, reservationKey, actual, operationKey, generation) => {
-        zeroCorrectionCalls += 1;
-        const result = await ledger.reconcileUsage(organizationId, reservationKey, actual, operationKey, generation);
-        await repository.transaction(ORGANIZATION, (state) => {
-          state.skills.push({
-            id: "late-reference",
-            organizationId: ORGANIZATION,
-            name: "@team/late-reference",
-            skillName: "late-reference",
-            version: "1.0.0",
-            description: "late reference",
-            artifact: { key: KEY, digest, size: BYTES.byteLength },
-            state: "approved",
-            policyRevision: state.policy.revision,
-            createdAt: "2026-09-16T00:00:00.000Z",
-            provenance: { kind: "native" },
-            fileCount: 1,
-            scanIds: [],
-          });
+    const billing = new GenerationAwareBilling();
+    billing.onReconciled = async () => {
+      if (billing.reconciliations.length !== 1) return;
+      await repository.transaction(ORGANIZATION, (state) => {
+        state.skills.push({
+          id: "late-reference",
+          organizationId: ORGANIZATION,
+          name: "@team/late-reference",
+          skillName: "late-reference",
+          version: "1.0.0",
+          description: "late reference",
+          artifact: { key: KEY, digest, size: BYTES.byteLength },
+          state: "approved",
+          policyRevision: state.policy.revision,
+          createdAt: "2026-09-16T00:00:00.000Z",
+          provenance: { kind: "native" },
+          fileCount: 1,
+          scanIds: [],
         });
-        return result;
-      },
+      });
     };
     const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof: () => true });
 
@@ -493,15 +531,108 @@ describe("durable storage-attempt recovery", () => {
     expect(result).toMatchObject({ status: "retained", reason: "billing-failed" });
     expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
       state: "orphaned",
+      reservationGeneration: 1,
       billingCorrection: "restore-pending",
     });
-    await expect(ledger.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { storageBytes: BYTES.byteLength } });
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect(billing.restorations).toEqual([{
+      operationKey: "private-skills:storage-recovery-restore:attempt-storage-1:generation:1",
+      reservationGeneration: 1,
+    }]);
 
     const restored = await service.recover({ ...request(), cleanupConfirmed: false });
     expect(restored).toMatchObject({ status: "retained", reason: "billing-restored" });
-    expect(zeroCorrectionCalls).toBe(1);
-    expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({ state: "orphaned" });
+    expect(billing.restorations).toHaveLength(2);
+    expect(billing.restorations[1]).toEqual(billing.restorations[0]);
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 2,
+    });
     expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
+
+    await expect(billing.reconcileUsage(
+      ORGANIZATION,
+      attempt().reservationKey,
+      { storageBytes: 0 },
+      "private-skills:storage-recovery:attempt-storage-1:generation:1",
+      1,
+    )).rejects.toThrow("stale reservation generation");
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect(billing.reconciliations).toHaveLength(1);
+
+    await repository.transaction(ORGANIZATION, (state) => {
+      state.skills = [];
+    });
+    const cleaned = await service.recover(request());
+    expect(cleaned).toMatchObject({ status: "released", inspection: "absent", billing: "reconciled" });
+    expect(billing.usage).toBe(0);
+    expect(billing.reconciliations).toHaveLength(2);
+    expect(billing.reconciliations[1]).toMatchObject({
+      operationKey: "private-skills:storage-recovery:attempt-storage-1:generation:2",
+      reservationGeneration: 2,
+    });
+    expect((await repository.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "released",
+      reservationGeneration: 2,
+    });
+  });
+
+  it("keeps G1 pending when the atomic G2 marker update fails, then replays the same restore", async () => {
+    const blobs = new RecoverableMemoryBlobStore();
+    const digest = await digestForFixture();
+    const inner = await repositoryWithAttempt(attempt());
+    const billing = new GenerationAwareBilling();
+    billing.lostRestoreResponse = false;
+    billing.onReconciled = async () => {
+      if (billing.reconciliations.length !== 1) return;
+      await inner.transaction(ORGANIZATION, (state) => {
+        state.skills.push({
+          id: "late-reference-after-persist-failure",
+          organizationId: ORGANIZATION,
+          name: "@team/late-reference-after-persist-failure",
+          skillName: "late-reference-after-persist-failure",
+          version: "1.0.0",
+          description: "late reference after persist failure",
+          artifact: { key: KEY, digest, size: BYTES.byteLength },
+          state: "approved",
+          policyRevision: state.policy.revision,
+          createdAt: "2026-09-16T00:00:00.000Z",
+          provenance: { kind: "native" },
+          fileCount: 1,
+          scanIds: [],
+        });
+      });
+    };
+    let transactions = 0;
+    const repository = {
+      read: (organizationId: string) => inner.read(organizationId),
+      transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
+        transactions += 1;
+        if (transactions === 4) throw new Error("metadata response lost after G2 restore");
+        return inner.transaction(organizationId, updater);
+      },
+    };
+    const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof: () => true });
+
+    await expect(service.recover(request())).rejects.toMatchObject({ code: "RECOVERY_PERSISTENCE_UNCERTAIN" });
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 1,
+      billingCorrection: "restore-pending",
+    });
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect(billing.restorations).toHaveLength(1);
+
+    const replayed = await service.recover(request());
+    expect(replayed).toMatchObject({ status: "retained", reason: "billing-restored" });
+    expect(billing.restorations).toHaveLength(2);
+    expect(billing.restorations[1]).toEqual(billing.restorations[0]);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 2,
+    });
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
   });
 
   it("keeps a restoration marker when the billing ledger has no inverse seam", async () => {
