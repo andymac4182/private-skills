@@ -202,6 +202,17 @@ User-confirmed on 15 September 2026: every company has a complete isolated porta
 
 ## Verified increment — 15 September 2026
 
+### Latest local verification update
+
+This update supersedes the older open logout and marketing-provisioning observations below, without treating local evidence as hosted acceptance.
+
+- Root completed local Acme login, company selection, logout, and Globex login on the logout-fixed fixture. A separate owner-role-fixed fixture on port 5401 completed owner invitation creation, invited Ben's Acme OIDC callback, invitation acceptance and entry into the correct company with reader role. Clipboard-copy and browser negative invitation cases remain tracked separately.
+- `668f53e` restores Better Auth's built-in owner/admin organization permission mappings. Actual PostgreSQL permission regression covers owner/admin success and reader denial.
+- `cfa7769` adds a composed identity/tenant routing test with real Better Auth cookies, persisted memberships and API tokens. Root reran it alongside the integrated billing PostgreSQL, route and UI suites on 15 September: four files, 11 tests passed, with the explicit loopback database variables supplied. This is actual local database evidence, not hosted Nitro startup or customer IdP proof.
+- Billing patch `9c92c68` includes the console and route factory, plus PostgreSQL concurrent-reservation, webhook-deduplication and event-ordering proofs. Runtime/navigation wiring and payment-provider journey acceptance remain open.
+- Separate marketing project exists at `private-skills-marketing.vercel.app`; root verified anonymous homepage HTTP 200 and rendered content. Refined marketing and navigation changes still require their own release/browser evidence. No business launch or payment readiness is claimed.
+- Hosting cost completeness and identity/billing-aware recovery are assigned independent follow-up reviews. The older model's unpriced AI, transfer legs and portable scanner execution must not be presented as an all-in budget.
+
 - Origin/main `6c8b958a088c6924c6c204aae530c41ce5d0c05c`: identity foundation and separate marketing source merged.
 - Release agent verified Git-triggered Vercel production deployment `dpl_9fXQEjtsWrM6epgXVVMeTFGh9DRM` READY for that exact SHA, aliased to `private-skills-theta.vercel.app`; unauthenticated read-only checks passed. Separate marketing project provisioning is still outstanding.
 - Integration `2211bdd` before merging main: typecheck and app build passed; 946 tests passed, 8 skipped. This includes tenant runtime and delegation primitives beyond the deployed foundation.
