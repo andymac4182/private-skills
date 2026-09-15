@@ -6,7 +6,7 @@ import '../styles/public-marketing.css'
 
 interface PublicLayoutProps {
   children: ReactNode
-  current?: 'home' | 'product' | 'pricing' | 'docs' | 'faq' | 'legal'
+  current?: 'home' | 'product' | 'pricing' | 'docs' | 'faq' | 'legal' | 'contact'
 }
 
 export function PublicLogo({ compact = false }: { compact?: boolean }) {
@@ -22,15 +22,15 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
     <header className="marketing-header">
       <a className="marketing-brand-link" href="/" aria-label={`${brand.name} home`}><PublicLogo /></a>
       <nav className="marketing-nav" aria-label="Public navigation">
-        <a aria-current={current === 'home' || current === 'product' ? 'page' : undefined} className={current === 'home' || current === 'product' ? 'marketing-nav-active' : ''} href="/product">Product</a>
+        <a aria-current={current === 'product' ? 'page' : undefined} className={current === 'product' ? 'marketing-nav-active' : ''} href="/product">Product</a>
         <a href="/product#how-it-works">How it works</a>
         <a aria-current={current === 'pricing' ? 'page' : undefined} className={current === 'pricing' ? 'marketing-nav-active' : ''} href="/pricing">Pricing</a>
         <a aria-current={current === 'docs' ? 'page' : undefined} className={current === 'docs' ? 'marketing-nav-active' : ''} href="/docs">Docs</a>
         <a aria-current={current === 'faq' ? 'page' : undefined} className={current === 'faq' ? 'marketing-nav-active' : ''} href="/faq">FAQ</a>
+        <a aria-current={current === 'contact' ? 'page' : undefined} className={current === 'contact' ? 'marketing-nav-active' : ''} href="/contact">Contact</a>
       </nav>
       <div className="marketing-header-actions">
-        <a className="marketing-signin-link" href={appLoginHref()}>Sign in</a>
-        <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Open registry <span aria-hidden="true">↗</span></a>
+        <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Sign in to registry <span aria-hidden="true">↗</span></a>
       </div>
     </header>
     <main id="main-content">{children}</main>
@@ -46,7 +46,7 @@ export function ProductFlowDemo() {
       label: 'Source',
       title: 'Bring the source into view',
       description: 'Search a configured catalog and confirm the source record before any bytes enter your registry.',
-      code: 'pskills search --source skills-sh "release notes"',
+      code: 'pskills sources search --source skills-sh "release notes"',
       status: 'Metadata only',
     },
     {
@@ -54,7 +54,7 @@ export function ProductFlowDemo() {
       label: 'Scan',
       title: 'Check the candidate',
       description: 'The registry validates the bundle and records scanner evidence. A required failure keeps the release unavailable.',
-      code: 'pskills scan report @team/release',
+      code: 'pskills scan status sha256:<release-digest>',
       status: 'Policy gate',
     },
     {
@@ -117,7 +117,7 @@ export function InstallWalkthrough() {
   const [activeStep, setActiveStep] = useState(0)
   const [copied, setCopied] = useState(false)
   const steps = [
-    { label: 'Discover', title: 'Start with a known source', code: 'pskills search --source skills-sh "frontend"', note: 'Compare metadata before requesting a pull-through.' },
+    { label: 'Discover', title: 'Start with a known source', code: 'pskills sources search --source skills-sh "frontend"', note: 'Compare metadata before requesting a pull-through.' },
     { label: 'Inspect', title: 'Choose a release', code: 'pskills show @team/web-guidelines', note: 'Keep the source identity and scan status in view.' },
     { label: 'Install', title: 'Install into an agent scope', code: 'pskills install @team/web-guidelines@1.2.0 --agent codex', note: 'The final authorization is checked immediately before activation.' },
   ] as const
@@ -182,17 +182,17 @@ function MarketingFooter() {
       <div>
         <span className="marketing-eyebrow">Start with one real workflow</span>
         <h2>Give your team a calmer path to approved skills.</h2>
-        <p>Read the rollout guide, then open the registry and sign in through your provider. If this is your first visit, company setup will guide you to the right workspace.</p>
+        <p>Read the pilot guide, then use the registry's configured sign-in when your pilot environment is ready.</p>
       </div>
       <div className="marketing-footer-cta-actions">
-        <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read getting started <span aria-hidden="true">↗</span></a>
-        <a className="marketing-button marketing-button-secondary" href={appLoginHref()}>Open registry</a>
+        <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the pilot guide <span aria-hidden="true">↗</span></a>
+        <a className="marketing-button marketing-button-secondary" href={appLoginHref()}>Sign in to registry</a>
       </div>
     </div>
     <div className="marketing-footer-grid">
       <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>Private registry, pull-through, and packs for engineering teams.</p></div>
-      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a></div>
-      <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Setup guide</a><a href={appLoginHref()}>Sign in</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
+      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
+      <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Sign in to registry</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
       <div><span className="marketing-footer-label">Boundaries</span><span className="marketing-footer-note">Scans and source adapters depend on deployment configuration.</span><span className="marketing-footer-note">Eve suggests review and draft changes; a human controls publishing.</span><a href="/legal">Legal and product notes</a></div>
     </div>
     <div className="marketing-footer-bottom"><span>© {new Date().getFullYear()} {brand.name}</span><span>Working name · launch preview</span></div>

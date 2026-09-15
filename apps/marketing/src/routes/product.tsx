@@ -15,7 +15,7 @@ function ProductPage() {
   return <PublicLayout current="product">
     <section className="marketing-page-hero" aria-labelledby="product-page-title">
       <div className="marketing-page-hero-grid">
-        <div><span className="marketing-eyebrow">A registry around your agent stack</span><h1 id="product-page-title">Keep every skill decision <em>close to the code.</em></h1><p>Private Skills connects the source, the checks, the review, and the install plan so teams can move quickly with a record they can read.</p></div>
+        <div><span className="marketing-eyebrow">A registry around your agent stack</span><h1 id="product-page-title">Keep every skill decision <em>close to the code.</em></h1><p>Private Skills connects your AI agent skills, source checks, review, and install plan so teams can move quickly with a record they can read.</p></div>
         <div className="marketing-page-hero-note"><strong>One workflow, shared context</strong>Start with one source and one approved release. Add packs, review proposals, and more teams as the workflow earns its place.</div>
       </div>
     </section>

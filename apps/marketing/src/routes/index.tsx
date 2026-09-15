@@ -17,11 +17,11 @@ function HomePage() {
     <section className="marketing-hero" aria-labelledby="marketing-hero-title">
       <div className="marketing-hero-copy">
         <span className="marketing-eyebrow">Private registry for engineering teams</span>
-        <h1 id="marketing-hero-title">Give every skill a <em>clear path</em> to production.</h1>
-        <p className="marketing-hero-lede">Private Skills brings your team’s agent skills into one deliberate workflow: discover a source, review the release, pin the pack, and install with confidence.</p>
+        <h1 id="marketing-hero-title">Give your team control of <em>private AI agent skills.</em></h1>
+        <p className="marketing-hero-lede">Private Skills brings your team’s AI agent skills into one deliberate workflow: discover a source, review the release, pin the pack, and install with confidence.</p>
         <div className="marketing-hero-actions">
-          <a className="marketing-button marketing-button-primary" href={appLoginHref()}>Open your registry <span aria-hidden="true">↗</span></a>
-          <a className="marketing-hero-link" href="/docs/getting-started">See the setup path <span aria-hidden="true">→</span></a>
+          <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the pilot guide <span aria-hidden="true">↗</span></a>
+          <a className="marketing-hero-link" href={appLoginHref()}>Sign in to registry <span aria-hidden="true">→</span></a>
         </div>
         <p className="marketing-hero-note"><span aria-hidden="true" className="marketing-status-dot" />Private by default <span aria-hidden="true">·</span> policy stays visible <span aria-hidden="true">·</span> human review stays in the loop</p>
       </div>
@@ -29,7 +29,7 @@ function HomePage() {
         <div className="marketing-product-window">
           <div className="marketing-product-window-bar"><i /><i /><i /><small>registry / release review</small></div>
           <div className="marketing-product-window-body">
-            <div className="marketing-product-window-rail"><strong>Private Skills</strong><span>Overview</span><span>Catalog</span><span>Sources</span><span>Packs</span><span>Policy</span></div>
+            <div aria-label="Example registry sections" className="marketing-product-window-rail" role="group" tabIndex={0}><strong>Private Skills</strong><span>Overview</span><span>Catalog</span><span>Sources</span><span>Packs</span><span>Policy</span></div>
             <div className="marketing-product-window-main">
               <div className="marketing-window-kicker"><span>Release pathway</span><b className="marketing-window-example-label"><span aria-hidden="true" className="marketing-status-dot" />Example release</b></div>
               <h2 className="marketing-window-title">A decision trail your team can read.</h2>

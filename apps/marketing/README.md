@@ -11,6 +11,16 @@ public calls to action cannot accidentally point back to the marketing site.
 Development uses the explicit app default `http://localhost:5173` when the
 variable is unset. Links use `/login?returnTo=%2Fapp` on that origin.
 
+The optional `PUBLIC_CONTACT_URL` may point to a real public intake form or
+scheduling page. It must be an HTTPS URL in Preview and Production. When it
+is unset, `/contact` shows the setup guide and app sign-in paths and clearly
+marks the public contact link as pending; it never invents an email address or
+renders a nonfunctional email link. The marketing app does not accept or
+store contact submissions. If first-party intake is needed later, add a
+durable, rate-limited route in the authenticated app (for example,
+`POST /v1/support/requests` with an operator-facing queue), then point
+`PUBLIC_CONTACT_URL` at its real public entry point.
+
 For local work from the repository root:
 
 ```sh

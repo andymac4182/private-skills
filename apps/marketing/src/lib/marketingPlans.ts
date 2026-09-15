@@ -38,7 +38,7 @@ export const marketingPlans: MarketingPlan[] = [
     cadence: 'packaging under review',
     description: 'A broader workspace for teams that publish, import, review, and repeat.',
     features: ['Multiple source connections', 'Fixed skill packs', 'Scanner evidence in review', 'Eve review proposals'],
-    cta: 'Sign in and set up a company',
+    cta: 'Sign in to registry',
     href: '/app',
     featured: true,
   },

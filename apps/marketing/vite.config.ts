@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 
 /**
  * The marketing app is intentionally a small static-facing TanStack/Nitro
- * deployment. APP_ORIGIN is the public URL of the authenticated app and is
- * the only app configuration exposed to browser code.
+ * deployment. APP_ORIGIN is the public URL of the authenticated app. An
+ * optional PUBLIC_CONTACT_URL may point to a public, durable intake or
+ * scheduling page; no contact destination is guessed when it is absent.
  */
 function appOriginForBuild(value: string | undefined, mode: string): string {
   const raw = value?.trim() ?? ''
@@ -28,14 +29,44 @@ function appOriginForBuild(value: string | undefined, mode: string): string {
   throw new Error('APP_ORIGIN is required for a production marketing build')
 }
 
+function publicContactUrlForBuild(value: string | undefined, mode: string): string {
+  const raw = value?.trim() ?? ''
+  if (!raw) return ''
+  if (raw.length > 2048 || /[\u0000-\u001f\u007f]/u.test(raw)) {
+    throw new Error('PUBLIC_CONTACT_URL must be at most 2048 characters without control characters')
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error('PUBLIC_CONTACT_URL must be a valid public URL')
+  }
+
+  const localDevelopmentUrl = mode === 'development'
+    && parsed.protocol === 'http:'
+    && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]')
+  if (parsed.protocol !== 'https:' && !localDevelopmentUrl) {
+    throw new Error('PUBLIC_CONTACT_URL must use HTTPS (HTTP is allowed only for localhost development)')
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('PUBLIC_CONTACT_URL cannot include credentials')
+  }
+  return parsed.href
+}
+
 export default defineConfig(({ mode }) => {
   const root = fileURLToPath(new URL('./', import.meta.url))
   const environment = loadEnv(mode, fileURLToPath(new URL('../../', import.meta.url)), '')
   const appOrigin = appOriginForBuild(process.env.APP_ORIGIN ?? environment.APP_ORIGIN, mode)
+  const contactUrl = publicContactUrlForBuild(process.env.PUBLIC_CONTACT_URL ?? environment.PUBLIC_CONTACT_URL, mode)
 
   return {
     root,
-    define: { __MARKETING_APP_ORIGIN__: JSON.stringify(appOrigin) },
+    define: {
+      __MARKETING_APP_ORIGIN__: JSON.stringify(appOrigin),
+      __MARKETING_CONTACT_URL__: JSON.stringify(contactUrl),
+    },
     plugins: [
       tanstackStart(),
       nitro({ serverDir: './server' }),

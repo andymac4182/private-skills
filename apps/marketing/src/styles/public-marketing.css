@@ -35,13 +35,11 @@
 .marketing-logo-copy strong { color: var(--marketing-ink); font-size: 14px; letter-spacing: -.03em; }
 .marketing-logo-copy small { overflow: hidden; color: var(--marketing-muted); font-size: 9px; font-weight: 600; letter-spacing: .01em; text-overflow: ellipsis; white-space: nowrap; }
 .marketing-nav { display: flex; align-items: center; gap: clamp(17px, 2.4vw, 32px); margin-right: auto; }
-.marketing-nav a { position: relative; padding: 7px 0; color: var(--marketing-muted); font-size: 11px; font-weight: 750; text-decoration: none; transition: color .15s ease; }
+.marketing-nav a { position: relative; display: inline-flex; min-height: 40px; align-items: center; padding: 7px 0; color: var(--marketing-muted); font-size: 11px; font-weight: 750; text-decoration: none; transition: color .15s ease; }
 .marketing-nav a::after { position: absolute; right: 0; bottom: 0; left: 0; height: 2px; border-radius: 2px; background: var(--marketing-cobalt); content: ''; opacity: 0; transform: scaleX(.3); transition: opacity .15s ease, transform .15s ease; }
 .marketing-nav a:hover, .marketing-nav a:focus-visible, .marketing-nav-active { color: var(--marketing-cobalt-deep) !important; }
 .marketing-nav a:hover::after, .marketing-nav a:focus-visible::after, .marketing-nav-active::after { opacity: 1; transform: scaleX(1); }
 .marketing-header-actions { display: flex; align-items: center; gap: 14px; }
-.marketing-signin-link { color: var(--marketing-muted); font-size: 11px; font-weight: 750; text-decoration: none; }
-.marketing-signin-link:hover { color: var(--marketing-cobalt-deep); }
 .marketing-button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: 9px; padding: 0 17px; font-size: 11px; font-weight: 800; text-decoration: none; transition: transform .15s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease; }
 .marketing-button:hover { transform: translateY(-1px); }
 .marketing-button-primary { background: var(--marketing-cobalt); color: white !important; box-shadow: 0 9px 20px rgba(23, 92, 230, .2); }
@@ -125,10 +123,10 @@
 .marketing-demo-heading h3 { max-width: 450px; margin: 9px 0 0; color: var(--marketing-ink); font: 600 22px/1.12 Georgia, 'Times New Roman', serif; letter-spacing: -.045em; }
 .marketing-demo-badge { display: inline-flex; align-items: center; gap: 7px; flex: none; border: 1px solid #cde3d4; border-radius: 99px; padding: 6px 8px; background: #f2fbf4; color: var(--marketing-seafoam-deep); font-size: 9px; font-weight: 800; }
 .marketing-demo-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; border-bottom: 1px solid var(--marketing-line); background: var(--marketing-line); }
-.marketing-demo-tab { display: flex; min-height: 52px; align-items: center; gap: 8px; border: 0; padding: 0 13px; background: #f6f8fc; color: var(--marketing-muted); cursor: pointer; font-size: 10px; font-weight: 800; text-align: left; transition: background .15s ease, color .15s ease; }
+.marketing-demo-tab { display: flex; min-height: 52px; align-items: center; gap: 8px; border: 0; padding: 0 13px; background: #f6f8fc; color: #5d6d86; cursor: pointer; font-size: 10px; font-weight: 800; text-align: left; transition: background .15s ease, color .15s ease; }
 .marketing-demo-tab:hover, .marketing-demo-tab-active { background: white; color: var(--marketing-cobalt-deep); }
 .marketing-demo-tab-active { box-shadow: inset 0 -3px 0 var(--marketing-cobalt); }
-.marketing-demo-tab-number { color: #9aa8be; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.marketing-demo-tab-number { color: #60718c; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .marketing-demo-tab-active .marketing-demo-tab-number { color: var(--marketing-cobalt); }
 .marketing-demo-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .85fr); gap: 28px; align-items: center; padding: 29px 25px 31px; }
 .marketing-demo-panel:focus-visible { outline: 3px solid rgba(23, 92, 230, .25); outline-offset: -3px; }
@@ -148,7 +146,7 @@
 .marketing-text-link:hover { text-decoration: underline; }
 .marketing-install-card { overflow: hidden; border: 1px solid #1c3159; border-radius: 13px; background: var(--marketing-navy); box-shadow: 0 18px 30px rgba(9, 23, 51, .14); }
 .marketing-install-tabs { display: flex; gap: 3px; padding: 8px 9px 0; border-bottom: 1px solid rgba(200, 218, 250, .13); }
-.marketing-install-tab { border: 0; border-radius: 6px 6px 0 0; padding: 9px 11px; background: transparent; color: #849ac0; cursor: pointer; font-size: 9px; font-weight: 800; }
+.marketing-install-tab { min-height: 40px; border: 0; border-radius: 6px 6px 0 0; padding: 9px 11px; background: transparent; color: #849ac0; cursor: pointer; font-size: 9px; font-weight: 800; }
 .marketing-install-tab:hover, .marketing-install-tab-active { background: #12264d; color: white; }
 .marketing-install-panel { min-width: 0; }
 .marketing-install-card-heading { display: flex; align-items: center; gap: 11px; padding: 22px 19px 15px; }
@@ -172,7 +170,7 @@
 
 .marketing-faq { display: grid; max-width: 920px; gap: 0; margin: 34px auto 0; border-top: 1px solid var(--marketing-line); }
 .marketing-faq details { border-bottom: 1px solid var(--marketing-line); }
-.marketing-faq summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 3px; color: var(--marketing-ink-soft); cursor: pointer; font-size: 12px; font-weight: 800; list-style: none; }
+.marketing-faq summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 3px; color: var(--marketing-ink-soft); cursor: pointer; font-size: 12px; font-weight: 800; list-style: none; }
 .marketing-faq summary::-webkit-details-marker { display: none; }
 .marketing-faq summary::after { color: var(--marketing-cobalt); content: '+'; font-size: 19px; font-weight: 500; }
 .marketing-faq details[open] summary::after { content: '−'; }
@@ -207,6 +205,7 @@
 .marketing-pricing-wrap { max-width: 1240px; padding: 0 24px 114px; margin: 0 auto; }
 .marketing-pricing-notice { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 20px; padding: 12px 14px; border: 1px solid #e6d6ac; border-radius: 9px; background: #fffaf0; color: #7d5d1d; font-size: 10px; line-height: 1.45; }
 .marketing-pricing-notice b { color: #684b10; }
+.marketing-pricing-notice a { color: #684b10; font-weight: 800; text-decoration: underline; text-underline-offset: 2px; }
 .marketing-pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; }
 .marketing-plan-card { position: relative; display: grid; align-content: start; min-height: 446px; padding: 25px 22px 22px; border: 1px solid var(--marketing-line); border-radius: 14px; background: rgba(255,255,255,.82); box-shadow: 0 13px 28px rgba(24,55,107,.05); }
 .marketing-plan-card-featured { border-color: #8bb0f4; box-shadow: 0 15px 34px rgba(23, 92, 230, .13); }
@@ -224,6 +223,7 @@
 .marketing-plan-features li::before { color: var(--marketing-seafoam-deep); content: '✓'; font-weight: 900; }
 .marketing-plan-card .marketing-button { width: 100%; margin-top: auto; }
 .marketing-comparison { margin-top: 56px; }
+.marketing-comparison:focus-visible { outline: 3px solid rgba(23, 92, 230, .25); outline-offset: 4px; }
 .marketing-comparison h2 { margin: 0 0 16px; color: var(--marketing-ink); font: 600 27px/1 Georgia, 'Times New Roman', serif; letter-spacing: -.045em; }
 .marketing-comparison table { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--marketing-line); border-radius: 10px; background: rgba(255,255,255,.7); font-size: 10px; text-align: left; }
 .marketing-comparison th, .marketing-comparison td { padding: 13px 14px; border-bottom: 1px solid var(--marketing-line); color: var(--marketing-muted); vertical-align: top; }
@@ -278,6 +278,7 @@
 .marketing-start-checklist a:hover { color: var(--marketing-cobalt-deep); }
 .marketing-start-callout { display: grid; gap: 7px; margin-top: 8px; padding: 17px; border: 1px solid #ded5f5; border-radius: 10px; background: var(--marketing-lilac); color: #63568e; font-size: 10px; line-height: 1.55; }
 .marketing-start-callout strong { color: #4f407f; font-size: 11px; }
+.marketing-start-callout a { color: #4f407f; font-weight: 750; text-decoration: underline; text-underline-offset: 2px; }
 .marketing-start-success { margin: -3px 0 30px 60px; padding: 18px 20px; border: 1px solid #cae0d0; border-radius: 10px; background: #f2fbf4; color: #547063; font-size: 10px; line-height: 1.55; }
 .marketing-start-success strong { display: block; margin-bottom: 5px; color: var(--marketing-seafoam-deep); font-size: 11px; }
 
@@ -287,6 +288,14 @@
 .marketing-legal-card h2 { margin: 0; color: var(--marketing-ink); font: 600 23px/1.06 Georgia, 'Times New Roman', serif; letter-spacing: -.04em; }
 .marketing-legal-card p { margin: 0; color: var(--marketing-muted); font-size: 11px; line-height: 1.6; }
 .marketing-legal-card a { color: var(--marketing-cobalt-deep); font-weight: 750; text-decoration: underline; text-underline-offset: 2px; }
+.marketing-contact-layout { display: grid; max-width: 1000px; grid-template-columns: repeat(2, 1fr); gap: 13px; padding: 0 24px; margin: 0 auto 60px; }
+.marketing-contact-card { display: grid; min-height: 270px; align-content: start; gap: 13px; padding: 24px 22px 22px; border: 1px solid var(--marketing-line); border-radius: 12px; background: rgba(255,255,255,.76); box-shadow: 0 12px 24px rgba(24,55,107,.04); }
+.marketing-contact-card h2 { margin: 0; color: var(--marketing-ink); font: 600 27px/1.06 Georgia, 'Times New Roman', serif; letter-spacing: -.045em; }
+.marketing-contact-card p { max-width: 450px; margin: 0; color: var(--marketing-muted); font-size: 11px; line-height: 1.6; }
+.marketing-contact-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: auto; padding-top: 9px; }
+.marketing-contact-status { display: grid; gap: 5px; margin-top: auto; padding: 14px; border: 1px solid #ded5f5; border-radius: 10px; background: var(--marketing-lilac); color: #63568e; font-size: 10px; line-height: 1.5; }
+.marketing-contact-status strong { color: #4f407f; font-size: 11px; }
+.marketing-contact-details { margin-bottom: 114px; }
 
 @media (max-width: 980px) {
   .marketing-header { gap: 21px; padding-inline: 28px; }
@@ -301,8 +310,8 @@
 @media (max-width: 760px) {
   .marketing-header { flex-wrap: wrap; gap: 8px 18px; padding-top: 15px; padding-bottom: 15px; }
   .marketing-header-actions { margin-left: auto; }
-  .marketing-nav { order: 3; width: 100%; justify-content: space-between; padding-top: 6px; border-top: 1px solid var(--marketing-line); }
-  .marketing-nav a { font-size: 10px; }
+  .marketing-nav { order: 3; width: 100%; justify-content: space-between; gap: clamp(10px, 3vw, 17px); padding-top: 6px; border-top: 1px solid var(--marketing-line); }
+  .marketing-nav a { font-size: 10px; white-space: nowrap; }
   .marketing-hero { display: block; min-height: 0; padding: 67px 24px 64px; }
   .marketing-hero h1 { max-width: 650px; font-size: clamp(47px, 12vw, 72px); }
   .marketing-hero-art { max-width: 610px; margin: 51px auto 0; }
@@ -312,7 +321,7 @@
   .marketing-proof-items { grid-template-columns: repeat(2, 1fr); }
   .marketing-proof-item { border-top: 1px solid var(--marketing-line); border-left: 0; }
   .marketing-section { margin-bottom: 86px; }
-  .marketing-section-split, .marketing-install, .marketing-page-hero-grid, .marketing-start-hero, .marketing-start-content, .marketing-docs-layout { grid-template-columns: 1fr; }
+  .marketing-section-split, .marketing-install, .marketing-page-hero-grid, .marketing-start-hero, .marketing-start-content, .marketing-docs-layout, .marketing-contact-layout { grid-template-columns: 1fr; }
   .marketing-section-split .marketing-section-heading, .marketing-docs-sidebar, .marketing-start-checklist { position: static; }
   .marketing-section-split .marketing-section-heading { max-width: 650px; }
   .marketing-demo-panel { grid-template-columns: 1fr; }
@@ -348,7 +357,7 @@
   .marketing-product-window-rail span { flex: none; padding: 7px 8px; }
   .marketing-product-window-main { padding: 19px 16px; }
   .marketing-window-title { font-size: 22px; }
-  .marketing-proof-strip, .marketing-section, .marketing-pricing-wrap, .marketing-page-hero, .marketing-docs-layout, .marketing-start-layout, .marketing-faq-page, .marketing-legal-layout, .marketing-footer { padding-inline: 17px; }
+  .marketing-proof-strip, .marketing-section, .marketing-pricing-wrap, .marketing-page-hero, .marketing-docs-layout, .marketing-start-layout, .marketing-faq-page, .marketing-legal-layout, .marketing-contact-layout, .marketing-footer { padding-inline: 17px; }
   .marketing-proof-items, .marketing-feature-grid, .marketing-principles { grid-template-columns: 1fr; }
   .marketing-feature-card { min-height: 0; }
   .marketing-demo-heading { display: grid; padding-inline: 17px; }
