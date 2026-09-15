@@ -166,7 +166,7 @@ a hosted private beta with a credible path to paid activation:
 The following are post-launch or enterprise follow-ons unless separately
 selected and evidenced by 18 September: custom production domains and DNS
 automation, destructive organization deletion and customer data erasure
-workflows, Microsoft as a third live provider, SCIM/enterprise SSO, residency
+workflows, Microsoft as a third live provider, SCIM provisioning, residency
 or SLA commitments, broad public marketplace/source coverage, and a dedicated
 scanner fleet triggered by measured scale. They must not leak into first-launch
 pricing or marketing claims.
@@ -189,3 +189,13 @@ deployment, or provider record. A final decision must use one of these labels:
 Record the label, date/time in Brisbane, release/source/deployment identifiers,
 owner approvals, and the next external action. Never turn “test mode,” “pending
 account,” “unconfigured,” or “local fixture” into a paid or hosted claim.
+
+## Company portal, billing console and SSO — required scope
+
+User-confirmed on 15 September 2026: every company has a complete isolated portal and company administration, separate from platform administration. This is required launch work, not a post-launch enterprise-only roadmap item.
+
+- Company portal: dedicated company URL/context, branding, registry, packs, sources, scan policies, analytics and Eve; server-enforced tenant boundaries on every operation.
+- Company administration: members, invitations, roles, service/API credentials and settings; permissions verified server-side.
+- Billing console: plan and subscription status, measured usage and enforced limits, invoices, checkout and subscription management. Restrict billing operations to authorized company roles and derive customer identifiers server-side. Before Stripe setup, explicitly show unavailable/test states; never imply live billing works.
+- Company SSO: company-admin-managed identity-provider configuration and company-specific sign-in/discovery, supporting OIDC and SAML integration paths. Prove separate companies using separate configured providers, correct callback/session/membership binding, unauthorized configuration rejection and recovery access. Platform social login alone does not satisfy this requirement. Never grant company membership based solely on an unverified email domain.
+- Acceptance evidence: browser journeys for company administrator and member; denied cross-company portal, billing and SSO access; provider callback and persistence evidence. Label local SSO fixtures separately from actual customer IdP setup.
