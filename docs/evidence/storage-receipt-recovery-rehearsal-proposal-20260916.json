@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "status": "prepared-local-and-guarded-hosted-executor",
+  "status": "executed-bounded-owned-object-without-production-route-claim",
   "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
   "localExecution": {
     "script": "scripts/storage-receipt-recovery-rehearsal.ts",
@@ -40,8 +40,9 @@
     "failureHandling": "on upload, metadata, recovery, or cleanup failure, retain the generated local tables and emit mode hosted-recovery-failure with exact table names, organization, prefix, object key, provider binding, and next action; never emit credentials or raw provider/database errors",
     "acknowledgement": "I_UNDERSTAND_NEW_PREFIX_ONLY",
     "recoveryExecutionPrepared": true,
-    "recoveryExecuted": false,
-    "mutationPerformed": false,
+    "recoveryExecuted": true,
+    "mutationPerformed": true,
+    "evidence": "docs/evidence/hosted-storage-receipt-rehearsal-20260916.json",
     "productionAcceptanceClaim": false
   },
   "readOnlyHostedEvidence": "docs/evidence/hosted-storage-receipt-readonly-20260916.json",

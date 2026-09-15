@@ -51,7 +51,7 @@ The hosted target is recorded for operator review:
 | Target | Value | Current operation |
 | --- | --- | --- |
 | Vercel registry project | `prj_vw4QlLtnsPaZm8mtms1HuDqpSNti` | no mutation |
-| Vercel Blob store | `store_C0EMhnU7DH3uSMaw` | no upload or delete |
+| Vercel Blob store | `store_C0EMhnU7DH3uSMaw` | one reviewed plan object uploaded/read back/deleted; exact prefix empty afterward |
 | Rehearsal prefix | a newly generated `rehearsal/tenant-runtime/<uuid>/` prefix | must be checked with a read-only exact-prefix listing first |
 
 The read-only probe has been run against the current production store. It
@@ -60,7 +60,7 @@ reported a private `syd1` store with 27 blobs and 7.77 MB, and the fresh prefix
 matches. The sanitized readback is in
 [`docs/evidence/hosted-storage-receipt-readonly-20260916.json`](evidence/hosted-storage-receipt-readonly-20260916.json).
 
-The concrete hosted execution path is prepared in
+The concrete hosted execution path is in
 [`scripts/hosted-storage-receipt-recovery-rehearsal.ts`](../scripts/hosted-storage-receipt-recovery-rehearsal.ts).
 It first writes a local plan containing a fresh exact prefix, sealed object
 key, payload digest, provider binding, and store ID. Its guarded execute mode
@@ -70,9 +70,11 @@ receipt into the local disposable PostgreSQL state, restarts the client, and
 uses the same recovery service and PostgreSQL `BillingService` to delete and
 recheck the exact object. It separately runs no-receipt and binding-mismatch
 retention cases. The mode refuses hosted mutation unless the operator passes
-the explicit execution acknowledgement; it has not been run here. The local
-result and this prepared route do not establish a Vercel Blob deletion,
-billing, or production-route acceptance claim.
+the explicit execution acknowledgement. It was run once against the exact
+fresh plan prefix above; the sanitized result is in
+[`docs/evidence/hosted-storage-receipt-rehearsal-20260916.json`](evidence/hosted-storage-receipt-rehearsal-20260916.json).
+The local result and this bounded direct adapter run do not establish
+production registry-route acceptance.
 
 Generate a plan without contacting Vercel or PostgreSQL. Commit the resulting
 JSON for review, then run the execute command only with a fresh plan and a

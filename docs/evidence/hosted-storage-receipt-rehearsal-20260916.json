@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "mode": "hosted-execution-evidence",
+  "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+  "target": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "provider": "vercel-blob",
+    "access": "private",
+    "prefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+    "objectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+    "providerBinding": "files-sdk:vercel-blob:store_C0EMhnU7DH3uSMaw"
+  },
+  "preflight": {
+    "exactPrefixMatches": 0,
+    "exactPrefixHasMore": false,
+    "keysEmitted": false,
+    "credentialsEmitted": false
+  },
+  "local": {
+    "postgresHost": "127.0.0.1",
+    "metadataFailureProducedOrphan": true,
+    "receiptPersisted": true,
+    "freshClientRestart": true,
+    "negativeRetentionScenarios": [
+      {
+        "name": "unknown-provider-outcome-without-receipt",
+        "recoveryStatus": "retained",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesRetained": 24
+      },
+      {
+        "name": "binding-mismatch-receipt-retained",
+        "recoveryStatus": "retained",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesRetained": 25
+      }
+    ]
+  },
+  "recovery": {
+    "receipt": "verified",
+    "status": "released",
+    "inspection": "deleted",
+    "objectAbsentAfterDelete": true,
+    "exactPrefixMatchesAfterDelete": 0,
+    "billingStorageBytesAfterRelease": 0,
+    "metadataState": "released"
+  },
+  "safety": {
+    "hostedRecoveryExecuted": true,
+    "mutationLimitedToPlanObject": true,
+    "existingObjectMutation": false,
+    "defaultRegistryMutation": false,
+    "productionAcceptanceClaim": false
+  }
+}
