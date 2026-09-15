@@ -8,6 +8,7 @@ import postgres from 'postgres';
 
 import { defaultScopesForRoles } from '../../auth/src/index';
 import type { Principal, Role } from '../../contracts/src/index';
+import { captureIdentityOperationsTask } from './operations-events.js';
 import type { IdentityOperationsFailure } from './operations-events.js';
 
 /** Version of the host-neutral identity boundary shared by the API and UI. */
@@ -901,15 +902,12 @@ export function createIdentityRuntime(
     invitation: publicConfig.invitations,
     bootstrap: publicConfig.bootstrap,
   };
-  const reportOperationalFailure = (failure: IdentityOperationsFailure): void => {
-    try {
-      const result = options.onOperationalFailure?.(failure);
-      if (result && typeof (result as PromiseLike<void>).then === 'function') {
-        void Promise.resolve(result).catch(() => undefined);
-      }
-    } catch {
-      // Operational visibility must never change authentication behaviour.
-    }
+  const reportOperationalFailure = (
+    request: Request | undefined,
+    failure: IdentityOperationsFailure,
+  ): Promise<void> => {
+    if (!options.onOperationalFailure) return Promise.resolve();
+    return captureIdentityOperationsTask(request, () => Promise.resolve(options.onOperationalFailure!(failure)));
   };
   const runMigrations = async (): Promise<void> => {
     const migration = await getMigrations(auth.options);
@@ -920,14 +918,14 @@ export function createIdentityRuntime(
     try {
       await ready;
     } catch {
-      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
+      await reportOperationalFailure(request, { kind: 'authentication_failure', reasonCode: 'session_unavailable' });
       return null;
     }
     let session: SessionApiValue | null;
     try {
       session = await api.getSession({ headers: request.headers });
     } catch {
-      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
+      await reportOperationalFailure(request, { kind: 'authentication_failure', reasonCode: 'session_unavailable' });
       return null;
     }
     if (!session) return null;
@@ -935,7 +933,7 @@ export function createIdentityRuntime(
     try {
       organizations = await api.listOrganizations({ headers: request.headers });
     } catch {
-      reportOperationalFailure({ kind: 'authentication_failure', reasonCode: 'session_unavailable' });
+      await reportOperationalFailure(request, { kind: 'authentication_failure', reasonCode: 'session_unavailable' });
       return null;
     }
     const memberships: IdentityMembership[] = [];
@@ -1000,7 +998,7 @@ export function createIdentityRuntime(
         try {
           await ready;
         } catch {
-          reportOperationalFailure({
+          await reportOperationalFailure(request, {
             kind: isCallbackPath(pathname, config.basePath) ? 'callback_failure' : 'authentication_failure',
             reasonCode: isCallbackPath(pathname, config.basePath) ? 'callback_unavailable' : 'session_unavailable',
           });
@@ -1019,7 +1017,7 @@ export function createIdentityRuntime(
             : await auth.handler(request);
           if (response.status >= 400) {
             const callback = isCallbackPath(pathname, config.basePath);
-            reportOperationalFailure({
+            await reportOperationalFailure(request, {
               kind: callback ? 'callback_failure' : 'authentication_failure',
               reasonCode: callback
                 ? response.status >= 500 ? 'callback_unavailable' : 'callback_rejected'
@@ -1029,7 +1027,7 @@ export function createIdentityRuntime(
           return response;
         } catch (error) {
           const callback = isCallbackPath(pathname, config.basePath);
-          reportOperationalFailure({
+          await reportOperationalFailure(request, {
             kind: callback ? 'callback_failure' : 'authentication_failure',
             reasonCode: callback ? 'callback_unavailable' : 'session_unavailable',
           });
@@ -1077,7 +1075,10 @@ export async function getIdentityMigrations(runtime: IdentityRuntimeAdmin): Prom
 }
 
 export {
+  captureIdentityOperationsTask,
   IDENTITY_OPERATIONS_CLEANUP_BATCH_SIZE,
+  IDENTITY_OPERATIONS_CLEANUP_INTERVAL_MS,
+  IDENTITY_OPERATIONS_CAPTURE_TIMEOUT_MS,
   IDENTITY_OPERATIONS_EVENTS_SCHEMA_SQL,
   IDENTITY_OPERATIONS_EVENTS_TABLE,
   IDENTITY_OPERATIONS_RETENTION_DAYS,
@@ -1096,4 +1097,5 @@ export type {
   IdentityOperationsTenantVerifier,
   IdentityOperationsTrustedTenant,
   IdentityOperationsEventStoreOptions,
+  IdentityOperationsWaitUntilRequest,
 } from './operations-events.js';

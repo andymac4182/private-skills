@@ -13,6 +13,7 @@ import type {
   BillingStatus,
   UsageSnapshot,
 } from '../../../packages/billing/src/index.js';
+import { captureIdentityOperationsTask } from '../../../packages/identity/src/index.js';
 import type {
   IdentityOperationsCounter,
   IdentityOperationsEventSink,
@@ -423,9 +424,15 @@ async function recordMembershipDenial(
   }
 }
 
-function recordAuthenticationFailure(sink: IdentityOperationsEventSink | undefined): void {
-  if (!sink) return;
-  void sink.recordGlobal({ kind: 'authentication_failure', reasonCode: 'authentication_rejected' }).catch(() => undefined);
+function recordAuthenticationFailure(
+  sink: IdentityOperationsEventSink | undefined,
+  request: Request,
+): Promise<void> {
+  if (!sink) return Promise.resolve();
+  return captureIdentityOperationsTask(request, () => sink.recordGlobal({
+    kind: 'authentication_failure',
+    reasonCode: 'authentication_rejected',
+  }));
 }
 
 export async function buildOperationsStatus(
@@ -482,17 +489,17 @@ export function createOperationsStatusHandler(options: OperationsStatusOptions):
     try {
       principal = await options.authenticate(request);
     } catch {
-      recordAuthenticationFailure(options.operationsEvents);
+      await recordAuthenticationFailure(options.operationsEvents, request);
       return json({ code: 'OPERATIONS_AUTH_UNAVAILABLE', message: 'Operations status authorization is temporarily unavailable.', retryable: true }, 503);
     }
     if (!principal) {
-      recordAuthenticationFailure(options.operationsEvents);
+      await recordAuthenticationFailure(options.operationsEvents, request);
       return json({ code: 'UNAUTHENTICATED', message: 'Authentication is required.' }, 401);
     }
     const denial = forbidden(principal, organizationId);
     if (denial) {
       if (options.operationsEvents) {
-        void recordMembershipDenial(options.operationsEvents, principal, organizationId).catch(() => undefined);
+        await captureIdentityOperationsTask(request, () => recordMembershipDenial(options.operationsEvents!, principal, organizationId));
       }
       return json({ code: 'OPERATIONS_FORBIDDEN', message: denial }, 403);
     }

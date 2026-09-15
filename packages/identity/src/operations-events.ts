@@ -4,6 +4,10 @@ import type { PgPoolLike } from '../../database/src/postgres.js';
 export const IDENTITY_OPERATIONS_EVENTS_TABLE = 'private_skills_identity_operations_events';
 export const IDENTITY_OPERATIONS_RETENTION_DAYS = 30;
 export const IDENTITY_OPERATIONS_CLEANUP_BATCH_SIZE = 1_000;
+/** Maximum time a request without a platform waitUntil hook waits for telemetry. */
+export const IDENTITY_OPERATIONS_CAPTURE_TIMEOUT_MS = 250;
+/** Record-triggered cleanup is bounded to one database delete per interval. */
+export const IDENTITY_OPERATIONS_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 
 export type IdentityOperationsEventKind =
   | 'authentication_failure'
@@ -76,12 +80,19 @@ export interface IdentityOperationsEventSink {
   cleanup(now?: number): Promise<number>;
 }
 
+export interface IdentityOperationsWaitUntilRequest {
+  /** Shared with Fetch Request so callers can pass either shape portably. */
+  readonly headers?: unknown;
+  waitUntil?: (task: Promise<unknown>) => void;
+}
+
 export interface IdentityOperationsEventStoreOptions {
   pool: PgPoolLike;
   tableName?: string;
   schemaName?: string;
   retentionDays?: number;
   cleanupBatchSize?: number;
+  cleanupIntervalMs?: number;
   verifyTenant: IdentityOperationsTenantVerifier;
   now?: () => number;
 }
@@ -95,7 +106,9 @@ export function identityOperationsEventsSchemaSql(
     ? undefined
     : validateIdentifier(schemaName, 'identity schema');
   const table = qualifiedTable(normalizedTableName, normalizedSchemaName);
-  const indexPrefix = quoteIdentifier(`${normalizedTableName}_`);
+  const organizationTimeIndex = quoteIdentifier(indexName(normalizedTableName, 'organization_time'));
+  const kindTimeIndex = quoteIdentifier(indexName(normalizedTableName, 'kind_time'));
+  const occurredTimeIndex = quoteIdentifier(indexName(normalizedTableName, 'occurred_time'));
   return `
 CREATE TABLE IF NOT EXISTS ${table} (
   id text PRIMARY KEY,
@@ -107,8 +120,9 @@ CREATE TABLE IF NOT EXISTS ${table} (
   role text CHECK (role IS NULL OR role IN ('owner', 'admin', 'publisher', 'reader')),
   CHECK ((organization_id IS NULL AND role IS NULL) OR (organization_id IS NOT NULL AND role IS NOT NULL))
 );
-CREATE INDEX IF NOT EXISTS ${indexPrefix}organization_time ON ${table} (organization_id, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS ${indexPrefix}kind_time ON ${table} (event_kind, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS ${organizationTimeIndex} ON ${table} (organization_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS ${kindTimeIndex} ON ${table} (event_kind, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS ${occurredTimeIndex} ON ${table} (occurred_at ASC);
 `;
 }
 
@@ -126,10 +140,13 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
   private readonly schemaName?: string;
   private readonly retentionDays: number;
   private readonly cleanupBatchSize: number;
+  private readonly cleanupIntervalMs: number;
   private readonly verifyTenant: IdentityOperationsTenantVerifier;
   private readonly now: () => number;
   private readonly trustedContexts = new WeakSet<object>();
   private migrationPromise?: Promise<void>;
+  private cleanupPromise?: Promise<number>;
+  private lastCleanupAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: IdentityOperationsEventStoreOptions) {
     this.pool = options.pool;
@@ -140,6 +157,7 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
     this.table = qualifiedTable(this.tableName, this.schemaName);
     this.retentionDays = boundedInteger(options.retentionDays ?? IDENTITY_OPERATIONS_RETENTION_DAYS, 1, 365, 'identity operations retention days');
     this.cleanupBatchSize = boundedInteger(options.cleanupBatchSize ?? IDENTITY_OPERATIONS_CLEANUP_BATCH_SIZE, 1, 10_000, 'identity operations cleanup batch size');
+    this.cleanupIntervalMs = boundedInteger(options.cleanupIntervalMs ?? IDENTITY_OPERATIONS_CLEANUP_INTERVAL_MS, 1_000, 24 * 60 * 60 * 1_000, 'identity operations cleanup interval');
     if (typeof options.verifyTenant !== 'function') throw new TypeError('identity operations tenant verifier is required');
     this.verifyTenant = options.verifyTenant;
     this.now = options.now ?? Date.now;
@@ -151,6 +169,16 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
   }
 
   async cleanup(now = this.now()): Promise<number> {
+    if (this.cleanupPromise) return this.cleanupPromise;
+    const cleanup = this.runCleanup(now);
+    const pending = cleanup.finally(() => {
+      if (this.cleanupPromise === pending) this.cleanupPromise = undefined;
+    });
+    this.cleanupPromise = pending;
+    return pending;
+  }
+
+  private async runCleanup(now: number): Promise<number> {
     const boundary = retentionBoundary(now, this.retentionDays);
     const result = await this.pool.query(
       `DELETE FROM ${this.table}
@@ -167,6 +195,7 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
 
   async recordGlobal(failure: IdentityOperationsFailure): Promise<void> {
     await this.insert({ ...normalizeFailure(failure), organizationId: null, role: null });
+    await this.recordTriggeredCleanup();
   }
 
   async trustedTenant(organizationId: string, userId: string): Promise<IdentityOperationsTrustedTenant | null> {
@@ -205,6 +234,7 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
     }
     if (!membership || membership.organizationId !== organizationId || membership.userId !== userId || normalizeRole(membership.role) !== role) return false;
     await this.insert({ ...normalizeFailure(failure), organizationId, role });
+    await this.recordTriggeredCleanup();
     return true;
   }
 
@@ -212,7 +242,9 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
     const normalizedOrganizationId = boundedValue(organizationId, 'organization id');
     if (!normalizedOrganizationId) throw new TypeError('identity operations organization id is required');
     const current = Number.isFinite(now) ? now : this.now();
-    const recentBoundary = new Date((Number.isFinite(current) ? current : Date.now()) - 24 * 60 * 60 * 1_000);
+    const safeCurrent = Number.isFinite(current) ? current : Date.now();
+    const retention = retentionBoundary(safeCurrent, this.retentionDays);
+    const recentBoundary = new Date(safeCurrent - 24 * 60 * 60 * 1_000);
     const result = await this.pool.query<{
       event_kind?: unknown;
       total?: unknown;
@@ -221,14 +253,15 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
     }>(
       `SELECT event_kind,
               COUNT(*)::bigint AS total,
-              COUNT(*) FILTER (WHERE occurred_at >= $2)::bigint AS recent_count,
+              COUNT(*) FILTER (WHERE occurred_at >= $3)::bigint AS recent_count,
               MAX(occurred_at) AS latest_at
-         FROM ${this.table}
-        WHERE organization_id = $1
+        FROM ${this.table}
+       WHERE organization_id = $1
+         AND occurred_at >= $2
           AND event_kind IN ('authentication_failure', 'callback_failure', 'membership_denial')
         GROUP BY event_kind
         LIMIT 3`,
-      [normalizedOrganizationId, recentBoundary],
+      [normalizedOrganizationId, retention, recentBoundary],
     );
     const empty = (): IdentityOperationsCounter => ({ total: 0, last24h: 0 });
     const summary: IdentityOperationsSummary = {
@@ -253,11 +286,24 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
     return summary;
   }
 
+  private async recordTriggeredCleanup(): Promise<void> {
+    const current = this.now();
+    const safeCurrent = Number.isFinite(current) ? current : Date.now();
+    if (safeCurrent - this.lastCleanupAt < this.cleanupIntervalMs) return;
+    this.lastCleanupAt = safeCurrent;
+    try {
+      await this.cleanup(safeCurrent);
+    } catch {
+      // The event has already been persisted. Cleanup is best effort and will
+      // be retried after the next interval or by an explicit scheduler.
+    }
+  }
+
   private async insert(input: NormalizedIdentityOperationsEvent & { organizationId: string | null; role: IdentityOperationsRole | null }): Promise<void> {
     await this.pool.query(
       `INSERT INTO ${this.table} (id, occurred_at, event_kind, reason_code, provider_id, organization_id, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [createEventId(), input.occurredAt, input.kind, input.reasonCode, input.providerId, input.organizationId, input.role],
+      [createEventId(), input.occurredAt, input.kind, input.reasonCode, input.providerId ?? null, input.organizationId, input.role],
     );
   }
 }
@@ -266,9 +312,61 @@ export class PostgresIdentityOperationsEventStore implements IdentityOperationsE
 export function recordIdentityOperationsEvent(
   sink: IdentityOperationsEventSink | undefined,
   failure: IdentityOperationsFailure,
-): void {
-  if (!sink) return;
-  void sink.recordGlobal(failure).catch(() => undefined);
+  request?: IdentityOperationsWaitUntilRequest,
+): Promise<void> {
+  if (!sink) return Promise.resolve();
+  return captureIdentityOperationsTask(request, () => sink.recordGlobal(failure));
+}
+
+/**
+ * Keep operational writes alive on serverless hosts while still providing a
+ * bounded awaited fallback for ordinary Fetch runtimes and tests.
+ */
+export function captureIdentityOperationsTask(
+  request: IdentityOperationsWaitUntilRequest | undefined,
+  task: PromiseLike<unknown> | (() => PromiseLike<unknown>),
+  timeoutMs = IDENTITY_OPERATIONS_CAPTURE_TIMEOUT_MS,
+): Promise<void> {
+  let pending: Promise<void>;
+  try {
+    const result = typeof task === 'function' ? task() : task;
+    pending = Promise.resolve(result).then(() => undefined, () => undefined);
+  } catch {
+    pending = Promise.resolve();
+  }
+  let waitUntil: IdentityOperationsWaitUntilRequest['waitUntil'];
+  try {
+    waitUntil = request?.waitUntil;
+  } catch {
+    waitUntil = undefined;
+  }
+  if (typeof waitUntil === 'function') {
+    try {
+      waitUntil.call(request, pending);
+      return Promise.resolve();
+    } catch {
+      // Fall back to the bounded await when the host hook rejects the task.
+    }
+  }
+  const boundedTimeout = Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 && timeoutMs <= 10_000
+    ? timeoutMs
+    : IDENTITY_OPERATIONS_CAPTURE_TIMEOUT_MS;
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const timer = setTimeout(finish, boundedTimeout);
+    void pending.then(() => {
+      clearTimeout(timer);
+      finish();
+    }, () => {
+      clearTimeout(timer);
+      finish();
+    });
+  });
 }
 
 interface NormalizedIdentityOperationsEvent {
@@ -376,4 +474,21 @@ function quoteIdentifier(value: string): string {
 
 function qualifiedTable(tableName: string, schemaName?: string): string {
   return schemaName ? `${quoteIdentifier(schemaName)}.${quoteIdentifier(tableName)}` : quoteIdentifier(tableName);
+}
+
+function indexName(tableName: string, suffix: string): string {
+  const full = `${tableName}_${suffix}`;
+  if (full.length <= 63) return full;
+  const hash = stableIdentifierHash(tableName);
+  const prefixLength = Math.max(1, 63 - hash.length - suffix.length - 2);
+  return `${tableName.slice(0, prefixLength)}_${hash}_${suffix}`;
+}
+
+function stableIdentifierHash(value: string): string {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36);
 }

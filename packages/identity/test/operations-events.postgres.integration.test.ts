@@ -3,15 +3,40 @@ import { describe, expect, it } from 'vitest';
 
 import type { PgPoolLike } from '../../database/src/postgres.js';
 import {
+  createIdentityRuntime,
+  createIdentityRuntimeConfig,
   PostgresIdentityOperationsEventStore,
   type IdentityOperationsRole,
 } from '../src/index.js';
+import { loopbackDatabaseURL } from './loopback-database.js';
 
-const databaseURL = process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL ?? process.env.PSKILLS_TEST_POSTGRES_URL;
+const databaseURL = loopbackDatabaseURL(
+  ['PSKILLS_IDENTITY_TEST_DATABASE_URL', process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL],
+  ['PSKILLS_TEST_POSTGRES_URL', process.env.PSKILLS_TEST_POSTGRES_URL],
+);
 const NOW = Date.parse('2026-09-16T00:00:00.000Z');
 
 function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
+}
+
+function poolFor(direct: ReturnType<typeof postgres>): PgPoolLike {
+  return {
+    query: async <Row = Record<string, unknown>>(text: string, parameters?: readonly unknown[]) => {
+      const result = await direct.unsafe(text, [...(parameters ?? [])] as never[]);
+      return { rows: [...result] as Row[], rowCount: (result as unknown as { count?: number }).count };
+    },
+    connect: async () => {
+      const connection = await direct.reserve();
+      return {
+        query: async <Row = Record<string, unknown>>(text: string, parameters?: readonly unknown[]) => {
+          const result = await connection.unsafe(text, [...(parameters ?? [])] as never[]);
+          return { rows: [...result] as Row[], rowCount: (result as unknown as { count?: number }).count };
+        },
+        release: () => connection.release(),
+      };
+    },
+  };
 }
 
 describe.skipIf(!databaseURL)('identity operations PostgreSQL persistence', () => {
@@ -20,22 +45,7 @@ describe.skipIf(!databaseURL)('identity operations PostgreSQL persistence', () =
     const schema = `identity_ops_test_${process.pid}_${Date.now()}`;
     const table = (name: string) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
     const direct = postgres(databaseURL, { max: 6, prepare: false });
-    const pool: PgPoolLike = {
-      query: async <Row = Record<string, unknown>>(text: string, parameters?: readonly unknown[]) => {
-        const result = await direct.unsafe(text, [...(parameters ?? [])] as never[]);
-        return { rows: [...result] as Row[], rowCount: (result as unknown as { count?: number }).count };
-      },
-      connect: async () => {
-        const connection = await direct.reserve();
-        return {
-          query: async <Row = Record<string, unknown>>(text: string, parameters?: readonly unknown[]) => {
-            const result = await connection.unsafe(text, [...(parameters ?? [])] as never[]);
-            return { rows: [...result] as Row[], rowCount: (result as unknown as { count?: number }).count };
-          },
-          release: () => connection.release(),
-        };
-      },
-    };
+    const pool = poolFor(direct);
     try {
       await direct.unsafe(`CREATE SCHEMA ${quoteIdentifier(schema)}`);
       await direct.unsafe(`CREATE TABLE ${table('membership_probe')} (organization_id text NOT NULL, user_id text NOT NULL, role text NOT NULL)`);
@@ -106,6 +116,80 @@ describe.skipIf(!databaseURL)('identity operations PostgreSQL persistence', () =
       expect(Number((oldRows[0] as unknown as { count: number }).count)).toBe(1);
     } finally {
       await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.end();
+    }
+  }, 30_000);
+
+  it('awaits handler failure capture and removes expired rows on a bounded record trigger', async () => {
+    if (!databaseURL) return;
+    const schema = `identity_ops_lifecycle_${process.pid}_${Date.now()}`;
+    const table = (name: string) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
+    const direct = postgres(databaseURL, { max: 20, prepare: false });
+    const pool = poolFor(direct);
+    const store = new PostgresIdentityOperationsEventStore({
+      pool,
+      schemaName: schema,
+      now: () => NOW,
+      retentionDays: 30,
+      cleanupBatchSize: 10,
+      cleanupIntervalMs: 1_000,
+      verifyTenant: async () => null,
+    });
+    const runtime = createIdentityRuntime(createIdentityRuntimeConfig({
+      PSKILLS_BETTER_AUTH_ENABLED: 'true',
+      DATABASE_URL: databaseURL,
+      BETTER_AUTH_SECRET: '01234567890123456789012345678901',
+      BETTER_AUTH_URL: 'http://localhost:5173',
+      PSKILLS_BETTER_AUTH_SCHEMA: schema,
+      PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: 'false',
+    }), {
+      onOperationalFailure: (failure) => store.recordGlobal(failure),
+    });
+    try {
+      await direct.unsafe(`drop schema if exists ${quoteIdentifier(schema)} cascade`);
+      await direct.unsafe(`create schema ${quoteIdentifier(schema)}`);
+      await store.runMigrations();
+      await direct.unsafe(
+        `insert into ${table('private_skills_identity_operations_events')} (id, occurred_at, event_kind, reason_code, organization_id, role)
+         values ($1, $2, $3, $4, $5, $6)`,
+        ['expired-event', new Date(NOW - 31 * 24 * 60 * 60 * 1_000), 'authentication_failure', 'authentication_rejected', 'expired-org', 'reader'],
+      );
+
+      // The first record after the interval boundary schedules one bounded
+      // cleanup query. Its inserted event remains available immediately.
+      await store.recordGlobal({ kind: 'authentication_failure', reasonCode: 'authentication_rejected', occurredAt: new Date(NOW) });
+      const expiredRows = await direct.unsafe(
+        `select count(*)::int as count from ${table('private_skills_identity_operations_events')} where id = $1`,
+        ['expired-event'],
+      );
+      expect(Number((expiredRows[0] as unknown as { count: number }).count)).toBe(0);
+
+      let response: Response | undefined;
+      let threw = false;
+      try {
+        response = await runtime.handler(new Request('http://localhost:5173/api/auth/callback/not-configured'));
+      } catch {
+        threw = true;
+      }
+      expect(threw || (response?.status ?? 0) >= 400).toBe(true);
+
+      // No waitUntil hook is present, so the portable bounded fallback waits
+      // for the real INSERT before handler() resolves.
+      const failureRows = await direct.unsafe(
+        `select event_kind, reason_code, organization_id, role
+           from ${table('private_skills_identity_operations_events')}
+          where event_kind = 'callback_failure'`,
+      );
+      expect(failureRows).toHaveLength(1);
+      expect(failureRows[0]).toMatchObject({
+        event_kind: 'callback_failure',
+        organization_id: null,
+        role: null,
+      });
+      expect(['callback_rejected', 'callback_unavailable']).toContain((failureRows[0] as unknown as { reason_code: string }).reason_code);
+    } finally {
+      await runtime.close();
+      await direct.unsafe(`drop schema if exists ${quoteIdentifier(schema)} cascade`);
       await direct.end();
     }
   }, 30_000);
