@@ -25,6 +25,7 @@
     "@aws-sdk/lib-storage": "3.1079.0",
     "@aws-sdk/s3-presigned-post": "3.1079.0",
     "@aws-sdk/s3-request-presigner": "3.1079.0",
+    "@better-auth/sso": "1.7.5",
     "@computesdk/provider": "2.1.5",
     "@computesdk/vercel": "1.7.33",
     "@tanstack/react-router": "1.170.33",
