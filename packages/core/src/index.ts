@@ -8391,7 +8391,7 @@ async function markStorageAttemptOrphaned(
       attempt.state = 'orphaned';
       attempt.updatedAt = nowIso();
       if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
-      if (writeReceipt && isVerifiedStorageWriteReceipt(writeReceipt, {
+      if (writeReceipt && attempt.providerBinding !== undefined && isVerifiedStorageWriteReceipt(writeReceipt, {
         providerBinding: attempt.providerBinding,
         key: attempt.objectKey,
         digest: attempt.digest,
