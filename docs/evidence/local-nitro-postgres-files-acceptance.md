@@ -18,6 +18,7 @@ The test builds `apps/web` with the Node Nitro preset, starts the generated
 Better Auth, and the `files-sdk@2.4.0` filesystem provider. Better Auth users,
 organizations, memberships, sessions, and the current `ssoProvider` mirror
 table are seeded through the Better Auth adapter in a unique disposable
+schema. The private company SSO table is created in that same Better Auth
 schema. The registry creates each company state row through its normal HTTP
 route; no registry data is inserted directly by the fixture.
 
@@ -28,10 +29,16 @@ The verified journey is:
 2. Company A and Company B publish different canonical bundles. Before a scan,
    each resolve request remains pending, proving that the required-scan gate is
    active.
-3. The tenant worker credential claims each matching job. A deterministic local
-   `skillsguard` result supplies complete two-file coverage, no findings, the
-   job digest, and the current policy revision. This is a scanner result
-   fixture; it does not run a scanner image or contact a scanner service.
+3. The tenant worker credential claims each matching job through the actual
+   `WorkerRunner`. The runner downloads the artifact through the internal
+   route, verifies its digest, materializes the canonical bundle, and invokes a
+   deterministic local `skillsguard` adapter that reads and hashes every
+   materialized file before submitting completion. The adapter supplies
+   complete two-file coverage, no findings, the job digest, and the current
+   policy revision. It is a local scanner adapter fixture; it does not run a
+   scanner image or contact a scanner service. The other configured advisory
+   engines remain unsupported and do not weaken the required `skillsguard`
+   gate.
 4. Each company resolves its approved release, creates an install
    authorization, obtains a gateway transfer descriptor, and downloads through
    the running Nitro process. The downloaded bytes and SHA-256 digest exactly
@@ -44,10 +51,32 @@ The verified journey is:
 The proof is intentionally bounded. It does not cover hosted Eve, an external
 AI Gateway/model, a real scanner provider, S3/R2/GCS/Azure/Vercel Blob, a
 deployed origin, or production credentials. Better Auth and worker identities
-are local seeded/bootstrap fixtures. Native CLI and browser installation still
-need their own run against an approved fixture. The existing API-token,
-identity, billing, and registry-only PostgreSQL tests remain separate evidence;
-this test adds the composed Nitro HTTP path and does not replace those scopes.
+are local seeded/bootstrap fixtures. The retained fixture path below creates a
+real API-token bearer credential for Company B so a native client can exercise
+the same tenant-bound route. The existing API-token, identity, billing, and
+registry-only PostgreSQL tests remain separate evidence; this test adds the
+composed Nitro HTTP path and does not replace those scopes.
+
+For a native CLI/browser handoff, set both the opt-in flag and (optionally) a
+new absolute metadata path:
+
+```sh
+PSKILLS_NITRO_POSTGRES_ACCEPTANCE=true \
+PSKILLS_NITRO_POSTGRES_RETAIN_FIXTURE=true \
+PSKILLS_NITRO_POSTGRES_RETAIN_FIXTURE_PATH=/private/tmp/nitro-fixture.json \
+PSKILLS_NITRO_POSTGRES_URL="$LOOPBACK_POSTGRES_URL" \
+node_modules/.bin/vitest run tests/e2e/nitro-postgres-files-acceptance.test.ts
+```
+
+The test writes a mode-0600 JSON file containing the loopback origin, Company B
+organization and approved skill digest, session cookie, bearer API token, and
+local cleanup identifiers. The child Nitro process is detached and the
+disposable PostgreSQL rows and Files SDK root remain available for the handoff.
+Read the file programmatically; its credential fields must never be printed or
+committed. Stop the listed local PID and remove the metadata/storage/database
+rows after the native proof. The default mode remains unchanged: it stops the
+runtime, removes the Files SDK root, deletes the rehearsal token rows, and
+drops the unique Better Auth schema after each test.
 
 When the opt-in variables are absent, the test must report skipped. A skipped
 run is missing evidence, not a successful tenant or provider acceptance.
