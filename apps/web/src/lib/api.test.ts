@@ -87,6 +87,8 @@ describe('identity API', () => {
     expect(path).toBe('/identity/auth/sign-out')
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('include')
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json')
+    expect(JSON.parse(String(init.body))).toEqual({})
   })
 
   it('uses the sanitized identity routes and normalizes Better Auth organization payloads', async () => {

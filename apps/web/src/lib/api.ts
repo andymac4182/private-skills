@@ -112,7 +112,7 @@ export const api = {
     }).then(unwrap)
   },
   authSignOut(basePath: string = identityRoutes.betterAuthBase) {
-    return request<void>(`${identityBasePath(basePath)}/sign-out`, { method: 'POST' })
+    return request<void>(`${identityBasePath(basePath)}/sign-out`, { method: 'POST', body: {} })
   },
   listOrganizations() {
     return request<OrganizationSummary[] | OrganizationListResponse>(identityRoutes.listOrganizations).then((value) => {
