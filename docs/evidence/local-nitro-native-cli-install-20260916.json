@@ -21,7 +21,8 @@
   "credentialTransport": {
     "method": "PSKILLS_TOKEN environment variable supplied to the native binary",
     "rawTokenLogged": false,
-    "rawTokenPersisted": false,
+    "rawTokenPersistedByProofRunner": false,
+    "fixtureCredentialHandling": "The existing restricted fixture credential was read programmatically; the proof runner did not persist a second copy.",
     "browserCookiesLogged": false
   },
   "approvedRelease": {
@@ -98,7 +99,7 @@
   },
   "tenantBoundary": {
     "status": "not_attempted",
-    "reason": "The approved Nitro fixture provisions one company; no foreign-company release was available for a meaningful cross-tenant CLI assertion."
+    "reason": "The runtime provisions Company A and Company B, but the retained credential and metadata handed off for this proof covered Company B only. No Company A credential or foreign release was used, so no cross-company CLI assertion is claimed; the separate core HTTP A/B boundary proof remains authoritative."
   },
   "installAcceptance": {
     "attempted": true,
