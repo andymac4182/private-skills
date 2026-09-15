@@ -28,6 +28,7 @@ export function RegistryShell() {
   const location = useLocation()
   const [routeIsEntering, setRouteIsEntering] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileExpandedGroupId, setMobileExpandedGroupId] = useState<string | null>(null)
   const mobileNavRef = useRef<HTMLElement>(null)
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null)
 
@@ -69,6 +70,10 @@ export function RegistryShell() {
   const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
   const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), [])
+
+  useEffect(() => {
+    setMobileExpandedGroupId(activeGroup.id)
+  }, [activeGroup.id])
 
   useEffect(() => {
     if (!returnTo || status === 'loading') return
@@ -197,25 +202,40 @@ export function RegistryShell() {
               const isReadonlyCompanyGroup = group.id === 'company-admin' && readonlyCompanyNavigation
               const groupLabel = isReadonlyCompanyGroup ? 'Company' : group.label
               const groupHint = isReadonlyCompanyGroup ? 'Team and access' : group.hint
+              const groupSubnavId = `registry-nav-${group.id}-sections`
+              const mobileGroupExpanded = mobileNavOpen && mobileExpandedGroupId === group.id
+              const showSubnav = group.sections.length > 1 && (mobileNavOpen ? mobileGroupExpanded : isActiveGroup)
               return (
                 <div className={`nav-group${isActiveGroup ? ' nav-group-active' : ''}${group.admin && !isReadonlyCompanyGroup ? ' nav-group-admin' : ''}`} key={group.id}>
-                  <Link
-                    className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
-                    params={{ section: defaultSection.id }}
-                    to="/app/$section"
-                    ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
-                    onClick={closeMobileNav}
-                  >
-                    <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
-                    <span className="nav-group-copy">
-                      <strong>{groupLabel}</strong>
-                      <small>{groupHint}</small>
-                    </span>
-                    {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
-                  </Link>
+                  <div className="nav-group-heading">
+                    <Link
+                      className={`nav-group-link${isActiveGroup ? ' nav-group-link-active' : ''}`}
+                      params={{ section: defaultSection.id }}
+                      to="/app/$section"
+                      ref={isActiveGroup && group.sections.length === 1 ? activeNavItemRef : undefined}
+                      onClick={closeMobileNav}
+                    >
+                      <span aria-hidden="true" className="nav-glyph">{group.glyph}</span>
+                      <span className="nav-group-copy">
+                        <strong>{groupLabel}</strong>
+                        <small>{groupHint}</small>
+                      </span>
+                      {group.sections.length > 1 && <span aria-hidden="true" className="nav-group-chevron">{isActiveGroup ? '⌄' : '›'}</span>}
+                    </Link>
+                    {group.sections.length > 1 && <button
+                      aria-controls={groupSubnavId}
+                      aria-expanded={mobileGroupExpanded}
+                      aria-label={`${mobileGroupExpanded ? 'Collapse' : 'Expand'} ${groupLabel} sections`}
+                      className="nav-group-toggle"
+                      type="button"
+                      onClick={() => setMobileExpandedGroupId((current) => current === group.id ? null : group.id)}
+                    >
+                      <span aria-hidden="true">{mobileGroupExpanded ? '⌄' : '›'}</span>
+                    </button>}
+                  </div>
 
-                  {group.sections.length > 1 && (isActiveGroup || mobileNavOpen) && (
-                    <div aria-label={`${groupLabel} sections`} className="nav-subnav" role="group">
+                  {group.sections.length > 1 && (
+                    <div aria-label={`${groupLabel} sections`} className="nav-subnav" hidden={!showSubnav} id={groupSubnavId} role="group">
                       {group.sections.map((section) => (
                         <Link
                           activeProps={{ className: 'nav-subitem nav-subitem-active' }}
@@ -266,7 +286,10 @@ export function RegistryShell() {
                 aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
                 className="mobile-nav-trigger"
                 type="button"
-                onClick={() => setMobileNavOpen(true)}
+                onClick={() => {
+                  setMobileExpandedGroupId(activeGroup.id)
+                  setMobileNavOpen(true)
+                }}
               >
                 <span aria-hidden="true" className="mobile-nav-trigger-icon">☰</span>
                 <span className="mobile-nav-trigger-label">Menu</span>
