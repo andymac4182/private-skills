@@ -4,7 +4,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 ## Required follow-ups
 
-- [ ] B01 — L09: restart the local fixture gracefully from dc836e7 or later, preserve the disposable database, verify sign-out clears both session types and then complete Globex browser login.
+- [x] B01 — L09: restart the local fixture gracefully from dc836e7 or later, preserve the disposable database, verify sign-out returns to login and then complete Globex browser login. Completed on dc836e7 with local PostgreSQL fixture; simultaneous legacy-plus-identity session revocation remains separately covered by component tests, not this browser sequence.
 - [ ] B02 — L03: make Overview distinct from Discover; group directory/topics/official/audits contextually and separate company administration from daily work. Keep existing deep links and command search working.
 - [ ] B03 — L03: reduce overview hero/CTA height so useful releases and activity appear sooner; verify 712px and phone widths, keyboard focus, drawer dismissal and reduced motion.
 - [ ] B04 — L04: one-company chooser must not say the account belongs to multiple companies.

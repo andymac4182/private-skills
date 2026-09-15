@@ -12,7 +12,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Active; explicit owner proof, atomic adoption and signed worker routing |
 | L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
 | L08 | Tenant-aware Eve callbacks | tenant_eve | Active; wire service authentication and tenant bindings across all three Eve flows |
-| L09 | Login/logout browser journey | root / editor_test_stability | JSON logout fix integrated dc836e7; refresh fixture and prove sign-out then Globex sign-in |
+| L09 | Login/logout browser journey | root / editor_test_stability | dc836e7 browser proof passed: Acme sign-in, sign-out to login, Globex sign-in with only Globex membership; real customer SSO remains open |
 | L10 | Full isolation and launch acceptance | root | Open; test populated companies across every registry surface, not just empty catalogs |
 
 ## Verified evidence
@@ -27,3 +27,5 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 Brand selection; actual legal entity and support contact; real identity-provider application configuration; final commercial offer. Stripe account and live activation explicitly stay until the end. Continue independent implementation while these remain open.
 
 - Billing backend `9089e10`: 20 focused tests and integration typecheck passed. PostgreSQL coverage currently includes a simulated SQL contract; real database concurrency and full console/Stripe proofs remain open.
+
+- Browser proof on committed dc836e7 at local port 5399: Acme callback showed Alice/Acme Labs Demo; Sign out returned to provider login; Globex callback showed Globex Research Demo only. No real identity-provider accounts were used.
