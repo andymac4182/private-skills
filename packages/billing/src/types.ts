@@ -117,12 +117,18 @@ export interface BillingWebhookEvent {
   ignoredReason?: 'unsupported' | 'stale' | 'unbound';
 }
 
+export type BillingUsageOperationStatus = 'reserved' | 'committed' | 'released';
+
 export interface BillingUsageOperation {
   organizationId: string;
   operationKey: string;
   delta: Partial<Record<BillingMetric, number>>;
   usage: BillingUsage;
   createdAt: string;
+  /** Lifecycle of the reservation. Older rows are treated as reserved. */
+  status?: BillingUsageOperationStatus;
+  /** Per-metric measured usage applied by a reconciliation, including zero. */
+  reconciled?: Partial<Record<BillingMetric, number>>;
 }
 
 /**
@@ -139,8 +145,12 @@ export interface BillingSeatReservation {
    * A settled reservation is either a committed identity row or a released
    * admission. Older rows omit this field; readers treat those as committed
    * so recovery fails closed rather than undercounting seats.
-   */
+  */
   committed?: boolean;
+  /** True when the key names a Better Auth member or invitation lifecycle. */
+  subjectKey?: boolean;
+  /** Billing transaction revision that last changed this lifecycle entry. */
+  revision?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -156,6 +166,8 @@ export interface BillingOrganizationState {
   seatBaseline?: number;
   /** Durable in-flight seat admissions, including their lifecycle state. */
   seatReservations?: BillingSeatReservation[];
+  /** Monotonic billing transaction revision used for identity snapshot reconciliation. */
+  seatRevision?: number;
 }
 
 export interface BillingRepository {

@@ -277,6 +277,13 @@ function seatState(state: BillingOrganizationState): { baseline: number; reserva
   return { baseline, reservations };
 }
 
+function seatRevision(state: BillingOrganizationState): number {
+  const revision = state.seatRevision ?? 0;
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new BillingError('INVALID_USAGE', 'stored seat revision is invalid', 500);
+  state.seatRevision = revision;
+  return revision;
+}
+
 function seatReservationSnapshot(
   organizationId: string,
   operationKey: string,
@@ -860,15 +867,63 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       const reservation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedReservationKey);
       if (!reservation) throw new BillingError('USAGE_RESERVATION_NOT_FOUND', 'The usage reservation does not exist', 404);
+      const reservationStatus = reservation.status ?? 'reserved';
+      if (reservationStatus === 'released' && Object.values(normalizedActual).some((value) => value !== 0)) {
+        throw new BillingError('USAGE_RESERVATION_CLOSED', 'A released usage reservation cannot be charged again', 409);
+      }
+      const priorActual = reservation.reconciled ?? {};
       const correction: UsageDelta = {};
+      let newMeasurement = false;
       for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
         // A measured usage report may cover only one metered resource.  An
         // omitted metric keeps its reservation; an explicit zero releases it.
         if (normalizedActual[metric] === undefined) continue;
-        const difference = (normalizedActual[metric] ?? 0) - (reservation.delta[metric] ?? 0);
+        const actualValue = normalizedActual[metric] ?? 0;
+        if (priorActual[metric] !== undefined) {
+          if (priorActual[metric] !== actualValue) throw new BillingError('IDEMPOTENCY_CONFLICT', 'A usage reservation was reconciled with a different measured value', 409);
+          continue;
+        }
+        newMeasurement = true;
+        const difference = actualValue - (reservation.delta[metric] ?? 0);
         if (difference !== 0) correction[metric] = difference;
       }
-      return this.reserveUsageInState(state, normalized, correction, normalizedKey, nowMs);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const result = Object.keys(correction).length === 0
+        ? {
+          operationKey: normalizedKey,
+          idempotent: !newMeasurement,
+          delta: {},
+          snapshot: { organizationId: normalized, limits: { ...entitlement.limits }, usage: { ...state.usage }, entitlement },
+        }
+        : this.reserveUsageInState(state, normalized, correction, normalizedKey, nowMs);
+      if (newMeasurement) {
+        const nextActual = { ...priorActual };
+        for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
+          if (normalizedActual[metric] !== undefined) nextActual[metric] = normalizedActual[metric];
+        }
+        reservation.reconciled = nextActual;
+        const covered = Object.keys(reservation.delta).every((metric) => nextActual[metric as BillingMetric] !== undefined);
+        reservation.status = covered
+          ? Object.values(nextActual).every((value) => value === 0) ? 'released' : 'committed'
+          : 'reserved';
+        // Keep the operation's replay snapshot aligned with the resulting
+        // committed usage. This is the value returned for a later idempotent
+        // retry of the reservation key.
+        reservation.usage = { ...state.usage };
+      }
+      // A release correction is itself a durable lifecycle operation. Marking
+      // it released lets a later re-admission with the same reservation key
+      // reopen and apply the same correction exactly once, while retries in
+      // the current lifecycle remain idempotent.
+      const correctionOperation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (correctionOperation && correctionOperation !== reservation) {
+        correctionOperation.status = reservation.status === 'released'
+          ? 'released'
+          : reservation.status === 'committed'
+            ? 'committed'
+            : 'reserved';
+      }
+      return result;
     });
   }
 
@@ -898,6 +953,24 @@ export class BillingService {
     const existing = state.usageOperations.find((candidate) => candidate.operationKey === operationKey);
     if (existing) {
       if (!sameDelta(existing.delta, delta)) throw new BillingError('IDEMPOTENCY_CONFLICT', 'Usage operation key was already used with another delta', 409);
+      // A definite no-write reconciliation closes a reservation without
+      // consuming its operation key forever. Reopening the same key is a new
+      // admission and must perform the limit check again before work starts.
+      if (existing.status === 'released') {
+        const next = applyDelta(state.usage, delta, nowMs);
+        const exceeded = firstExceeded(entitlement.limits, next, delta);
+        if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
+        state.usage = next;
+        existing.status = 'reserved';
+        delete existing.reconciled;
+        existing.usage = { ...next };
+        return {
+          operationKey,
+          idempotent: false,
+          delta: { ...delta },
+          snapshot: { organizationId, limits: { ...entitlement.limits }, usage: { ...next }, entitlement },
+        };
+      }
       return {
         operationKey,
         idempotent: true,
@@ -915,6 +988,7 @@ export class BillingService {
       delta: { ...delta },
       usage: { ...next },
       createdAt: new Date(nowMs).toISOString(),
+      status: 'reserved',
     };
     state.usageOperations.push(operation);
     if (state.usageOperations.length > 20_000) state.usageOperations.splice(0, state.usageOperations.length - 20_000);
@@ -935,6 +1009,13 @@ export class BillingService {
     return this.reserveUsage(organizationId, delta, operationKey);
   }
 
+  /** Return the durable revision used to fence an identity count snapshot. */
+  async seatRevision(organizationId: string): Promise<number> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const state = await this.repository.read(normalized);
+    return seatRevision(state);
+  }
+
   /** Compatibility alias for callers that provide an authoritative seat count. */
   async setSeatCount(organizationId: string, seats: number, operationKey: string): Promise<UsageReservation> {
     return this.syncSeatCount(organizationId, seats, operationKey);
@@ -946,16 +1027,22 @@ export class BillingService {
    * organization usage row, so another process cannot reset an in-flight
    * admission while it is reading the authoritative identity rows.
    */
-  async reserveSeat(organizationId: string, operationKey: string): Promise<UsageReservation> {
+  async reserveSeat(organizationId: string, operationKey: string, options: { subjectKey?: boolean } = {}): Promise<UsageReservation> {
     const normalized = validateBillingOrganizationId(organizationId);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const { reservations } = seatState(state);
+      const revision = seatRevision(state);
+      const subjectKey = options.subjectKey === true;
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (existing?.status === 'active') {
+        if (subjectKey && existing.subjectKey !== true) {
+          existing.subjectKey = true;
+          existing.revision = revision;
+        }
         const exceeded = firstExceeded(entitlement.limits, state.usage, {});
         if (exceeded) throw new BillingError('USAGE_LIMIT_EXCEEDED', `The ${exceeded.metric} limit has been reached`, 429, { retryable: false, details: { ...exceeded } });
         return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, state.usage, entitlement, true);
@@ -967,9 +1054,11 @@ export class BillingService {
       if (existing) {
         existing.status = 'active';
         existing.committed = false;
+        existing.subjectKey = subjectKey || existing.subjectKey === true;
+        existing.revision = revision;
         existing.updatedAt = timestamp;
       } else {
-        reservations.push({ operationKey: normalizedKey, status: 'active', committed: false, createdAt: timestamp, updatedAt: timestamp });
+        reservations.push({ operationKey: normalizedKey, status: 'active', committed: false, subjectKey, revision, createdAt: timestamp, updatedAt: timestamp });
       }
       state.usage = next;
       return seatReservationSnapshot(normalized, normalizedKey, { seats: 1 }, next, entitlement, false);
@@ -990,6 +1079,7 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const { baseline, reservations } = seatState(state);
+      const revision = seatRevision(state);
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (!existing || (existing.status === 'settled' && existing.committed === false)) {
@@ -999,6 +1089,7 @@ export class BillingService {
       state.usage = applyDelta(state.usage, { seats: -1 }, nowMs);
       existing.status = 'settled';
       existing.committed = false;
+      existing.revision = revision;
       existing.updatedAt = new Date(nowMs).toISOString();
       if (wasCommitted) state.seatBaseline = Math.max(0, baseline - 1);
       return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, false);
@@ -1017,6 +1108,7 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const { baseline, reservations } = seatState(state);
+      const revision = seatRevision(state);
       const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (!existing || existing.status === 'settled') {
@@ -1026,6 +1118,7 @@ export class BillingService {
       }
       existing.status = 'settled';
       existing.committed = true;
+      existing.revision = revision;
       existing.updatedAt = new Date(nowMs).toISOString();
       state.seatBaseline = baseline + 1;
       const exceeded = firstExceeded(entitlement.limits, state.usage, {});
@@ -1050,6 +1143,7 @@ export class BillingService {
     return this.repository.transaction(normalized, (state) => {
       state.usage = periodUsage(state.usage, nowMs);
       const seat = seatState(state);
+      seatRevision(state);
       const activeCount = seat.reservations.filter((reservation) => reservation.status === 'active').length;
       // Identity counts are read outside this billing transaction. A lower
       // observation can therefore be stale (for example, it may have been
@@ -1070,6 +1164,95 @@ export class BillingService {
       state.seatBaseline = nextBaseline;
       state.usage = next;
       return seatReservationSnapshot(normalized, normalizedKey, normalizedDeltaValue, next, entitlement, delta === 0);
+    });
+  }
+
+  /**
+   * Reconcile the server-owned Better Auth member and pending-invitation
+   * lifecycle keys against one identity snapshot. The caller captures the
+   * billing revision before reading identity rows; entries changed after that
+   * revision are preserved so a stale snapshot cannot undo a concurrent
+   * commit or release. Missing committed subject entries are released,
+   * present active entries are settled (recovering a missed after-hook), and
+   * previously untracked members receive durable ledger rows.
+   */
+  async syncSeatSubjects(
+    organizationId: string,
+    subjectOperationKeys: readonly string[],
+    operationKey: string,
+    observedRevision: number,
+  ): Promise<UsageReservation> {
+    const normalized = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    if (!Array.isArray(subjectOperationKeys) || subjectOperationKeys.length > 20_000) throw new BillingError('INVALID_USAGE', 'identity seat snapshot is invalid', 400);
+    const subjects = new Set(subjectOperationKeys.map((value) => validateBillingIdentifier(value, 'subjectOperationKey', MAX_OPERATION_KEY_BYTES)));
+    if (!Number.isSafeInteger(observedRevision) || observedRevision < 0) throw new BillingError('INVALID_USAGE', 'identity seat snapshot revision is invalid', 400);
+    const nowMs = this.now();
+    return this.repository.transaction(normalized, (state) => {
+      state.usage = periodUsage(state.usage, nowMs);
+      const seat = seatState(state);
+      const revision = seatRevision(state);
+      let baseline = seat.baseline;
+      let seatDelta = 0;
+      const timestamp = new Date(nowMs).toISOString();
+
+      for (const reservation of seat.reservations) {
+        if (reservation.subjectKey !== true || (reservation.revision ?? 0) > observedRevision) continue;
+        if (reservation.status === 'active') {
+          // A present row proves that the Better Auth write committed even if
+          // its after-hook did not. Missing active rows remain held because a
+          // count cannot prove that a slow write has stopped.
+          if (!subjects.has(reservation.operationKey)) continue;
+          reservation.status = 'settled';
+          reservation.committed = true;
+          reservation.revision = revision;
+          reservation.updatedAt = timestamp;
+          baseline += 1;
+          continue;
+        }
+        if (reservation.committed === false || subjects.has(reservation.operationKey)) continue;
+        baseline = Math.max(0, baseline - 1);
+        seatDelta -= 1;
+        reservation.committed = false;
+        reservation.revision = revision;
+        reservation.updatedAt = timestamp;
+      }
+
+      // A legacy organization may have a baseline count but no subject
+      // ledger. Consume those already-counted slots before increasing usage
+      // for newly discovered identity rows.
+      const committedLedgerCount = seat.reservations.filter((reservation) => reservation.status === 'settled' && reservation.committed !== false).length;
+      let legacySlots = Math.max(0, baseline - committedLedgerCount);
+      for (const subject of subjects) {
+        const existing = seat.reservations.find((reservation) => reservation.operationKey === subject);
+        if (existing) {
+          if ((existing.revision ?? 0) > observedRevision) continue;
+          if (existing.status === 'active') continue;
+          if (existing.committed !== false) continue;
+          existing.committed = true;
+          existing.subjectKey = true;
+          existing.revision = revision;
+          existing.updatedAt = timestamp;
+          baseline += 1;
+          seatDelta += 1;
+          continue;
+        }
+        const countedByLegacyBaseline = legacySlots > 0;
+        if (countedByLegacyBaseline) legacySlots -= 1;
+        else {
+          baseline += 1;
+          seatDelta += 1;
+        }
+        seat.reservations.push({ operationKey: subject, status: 'settled', committed: true, subjectKey: true, revision, createdAt: timestamp, updatedAt: timestamp });
+      }
+
+      state.seatBaseline = baseline;
+      state.usage = applyDelta(state.usage, seatDelta === 0 ? {} : { seats: seatDelta }, nowMs);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      // Reconciliation records the identity truth even when it reveals that
+      // the current organization is already over its plan. The next admission
+      // then fails before doing any new work.
+      return seatReservationSnapshot(normalized, normalizedKey, seatDelta === 0 ? {} : { seats: seatDelta }, state.usage, entitlement, seatDelta === 0);
     });
   }
 
@@ -1227,6 +1410,12 @@ function nonnegativeDeltaInput(delta: UsageDelta): UsageDelta {
   const normalized = normalizedDeltaInput(delta);
   for (const [metric, value] of Object.entries(normalized)) {
     if ((value as number) < 0) throw new BillingError('INVALID_USAGE', `${metric} actual usage must be non-negative`, 400);
+  }
+  // Reserve input may drop zero-valued fields, but reconciliation must retain
+  // an explicit zero so callers can release a reservation they definitely did
+  // not write or execute.
+  for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
+    if (delta[metric] === 0) normalized[metric] = 0;
   }
   return normalized;
 }

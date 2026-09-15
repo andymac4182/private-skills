@@ -486,6 +486,18 @@ describe('transactional usage enforcement', () => {
     await service.reconcileUsage('org-partial-reconcile', 'estimate', { eveCostCents: 25 }, 'actual');
     await expect(service.usageSnapshot('org-partial-reconcile')).resolves.toMatchObject({ usage: { scans: 2, eveCostCents: 25 } });
   });
+
+  it('keeps explicit zero reconciliation and reopens the same released key', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import');
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
+    await expect(service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import')).resolves.toMatchObject({ idempotent: false, snapshot: { usage: { storageBytes: 40 } } });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: true });
+  });
 });
 
 describe('PostgreSQL repository contract', () => {
@@ -510,11 +522,11 @@ describe('PostgreSQL repository contract', () => {
         const current = this.usage.get(String(parameters[0]));
         if (text.includes('VALUES ($1, $2::timestamptz, $3::timestamptz, 0, 0, 0, 0')) {
           const [organizationId, periodStart, periodEnd, updatedAt] = parameters;
-          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, seat_baseline: 0, seat_reservations: '[]', updated_at: updatedAt });
+          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, seat_baseline: 0, seat_reservations: '[]', seat_revision: 0, updated_at: updatedAt });
           return { rows: [] as Row[], rowCount: current ? 0 : 1 };
         }
-        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt, seatBaseline, seatReservations] = parameters;
-        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, seat_baseline: seatBaseline ?? seats, seat_reservations: seatReservations ?? '[]', updated_at: updatedAt });
+        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt, seatBaseline, seatReservations, seatRevision] = parameters;
+        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, seat_baseline: seatBaseline ?? seats, seat_reservations: seatReservations ?? '[]', seat_revision: seatRevision ?? 0, updated_at: updatedAt });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id, provider, customer_id') && text.includes('FROM "billing_contract_customers"')) {
@@ -568,10 +580,9 @@ describe('PostgreSQL repository contract', () => {
         return { rows: [row] as Row[], rowCount: 1 };
       }
       if (text.includes('INSERT INTO "billing_contract_usage_operations"')) {
-        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt] = parameters;
+        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled] = parameters;
         const key = `${organizationId}:${operationKey}`;
-        if (this.operations.has(key)) return { rows: [] as Row[], rowCount: 0 };
-        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt });
+        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id FROM "billing_contract_customers"')) {

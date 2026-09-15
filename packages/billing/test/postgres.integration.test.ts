@@ -1,6 +1,7 @@
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PostgresIdentityBillingAdmission } from '../../../apps/web/server/identity-infrastructure.js'
+import { seatOperationKey } from '../../../packages/identity/src/index.js'
 import {
   BillingService,
   PostgresBillingRepository,
@@ -137,6 +138,13 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     const rows = await sql!.unsafe<Record<string, unknown>[]>(`SELECT operation_key FROM "${prefix}_usage_operations" WHERE organization_id = $1`, ['org-pg-concurrent'])
     expect(rows).toHaveLength(1)
     expect(rows[0]?.operation_key).toBe('pg-scan-a')
+
+    await expect(first.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')).resolves.toMatchObject({ idempotent: false })
+    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release')).resolves.toMatchObject({ idempotent: false })
+    await expect(second.reserveUsage('org-pg-reopen', { storageBytes: 40 }, 'pg-import-stable')).resolves.toMatchObject({ idempotent: false })
+    await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } })
+    await expect(first.reconcileUsage('org-pg-reopen', 'pg-import-stable', { storageBytes: 0 }, 'pg-import-release')).resolves.toMatchObject({ idempotent: false })
+    await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } })
   })
 
   it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {
@@ -226,7 +234,7 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     let delayed = false
     const delayedIdentityPool: BillingPgPoolLike = {
       query: async <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => {
-        if (!delayed && statement.includes(`FROM ${memberTable}`) && statement.includes('pendingInvitationCount')) {
+        if (!delayed && statement.includes(`FROM ${memberTable}`) && statement.includes('UNION ALL')) {
           delayed = true
           const result = await identityPool.query<Row>(statement, parameters)
           countReadObserved()
@@ -240,7 +248,7 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     const secondAdmission = new PostgresIdentityBillingAdmission(second, delayedIdentityPool, schema)
     let staleSync: Promise<void> | undefined
     try {
-      // Capture the identity count (one member) and hold before its billing
+      // Capture the identity snapshot (one member) and hold before its billing
       // transaction. A concurrent member then commits both identity and
       // billing state while this sync still owns the stale count.
       staleSync = secondAdmission.syncSeats(organizationId, 'pg-stale-count')
@@ -260,6 +268,109 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     } finally {
       releaseCountRead()
       await staleSync?.catch(() => undefined)
+      await sql!.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`)
+    }
+  })
+
+  it('reconciles subject lifecycle truth across expiry, missed hooks, removals, and stale high snapshots', async () => {
+    const catalog = planCatalog()
+    const first = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const second = new BillingService({
+      repository: new PostgresBillingRepository(pool, { tablePrefix: prefix, now: () => NOW }),
+      catalog,
+      enabled: false,
+      now: () => NOW,
+    })
+    const schema = `billing_identity_lifecycle_${process.pid}_${Math.floor(Math.random() * 10_000)}`
+    const quotedSchema = `"${schema}"`
+    const memberTable = `${quotedSchema}."member"`
+    const invitationTable = `${quotedSchema}."invitation"`
+    const identityPool = pool
+    await sql!.unsafe(`CREATE SCHEMA ${quotedSchema}`)
+    await sql!.unsafe(`CREATE TABLE ${memberTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "userId" text NOT NULL, "role" text NOT NULL)`)
+    await sql!.unsafe(`CREATE TABLE ${invitationTable} ("id" text PRIMARY KEY, "organizationId" text NOT NULL, "status" text NOT NULL, "expiresAt" timestamptz NOT NULL)`)
+    const firstAdmission = new PostgresIdentityBillingAdmission(first, identityPool, schema)
+
+    try {
+      // A member that predates billing has no reservation key. Reconciliation
+      // creates a durable subject row, and a later removal releases it.
+      const baselineOrganization = 'org-pg-lifecycle-baseline'
+      await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, ['member-baseline', baselineOrganization, 'user-baseline', 'owner'])
+      await firstAdmission.syncSeats(baselineOrganization, 'lifecycle-baseline-add')
+      await expect(first.usageSnapshot(baselineOrganization)).resolves.toMatchObject({ usage: { seats: 1 } })
+      await sql!.unsafe(`DELETE FROM ${memberTable} WHERE "organizationId" = $1 AND "id" = $2`, [baselineOrganization, 'member-baseline'])
+      await firstAdmission.syncSeats(baselineOrganization, 'lifecycle-baseline-remove')
+      await expect(first.usageSnapshot(baselineOrganization)).resolves.toMatchObject({ usage: { seats: 0 } })
+
+      // An expired pending invitation is excluded from the identity snapshot.
+      // Its committed billing row is therefore released during reconciliation.
+      const expiryOrganization = 'org-pg-lifecycle-expiry'
+      const invitationId = 'inv-expired'
+      const expiryKey = await seatOperationKey('invitation', expiryOrganization, invitationId)
+      await sql!.unsafe(`INSERT INTO ${invitationTable} ("id", "organizationId", "status", "expiresAt") VALUES ($1, $2, $3, $4)`, [invitationId, expiryOrganization, 'pending', new Date(NOW - 60_000)])
+      await first.reserveSeat(expiryOrganization, expiryKey, { subjectKey: true })
+      await first.commitSeat(expiryOrganization, expiryKey)
+      await firstAdmission.syncSeats(expiryOrganization, 'lifecycle-expired')
+      await expect(first.usageSnapshot(expiryOrganization)).resolves.toMatchObject({ usage: { seats: 0 } })
+
+      // If an after-hook is lost after Better Auth commits, the next snapshot
+      // settles the active hold without charging a second seat.
+      const hookOrganization = 'org-pg-lifecycle-hook'
+      const hookMemberId = 'member-hook'
+      const hookKey = await seatOperationKey('member', hookOrganization, hookMemberId)
+      await first.reserveSeat(hookOrganization, hookKey, { subjectKey: true })
+      await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, [hookMemberId, hookOrganization, 'user-hook', 'reader'])
+      await firstAdmission.syncSeats(hookOrganization, 'lifecycle-missed-hook')
+      await expect(first.usageSnapshot(hookOrganization)).resolves.toMatchObject({ usage: { seats: 1 } })
+
+      // Start from two committed subjects. A stale snapshot still contains B,
+      // while a concurrent remove lifecycle has already released B. Revision
+      // fencing must keep the stale read from re-adding the removed seat.
+      const staleOrganization = 'org-pg-lifecycle-stale-high'
+      const memberA = 'member-stale-a'
+      const memberB = 'member-stale-b'
+      await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4), ($5, $2, $6, $4)`, [memberA, staleOrganization, 'user-stale-a', 'reader', memberB, 'user-stale-b'])
+      await firstAdmission.syncSeats(staleOrganization, 'lifecycle-stale-seed')
+      const keyB = await seatOperationKey('member', staleOrganization, memberB)
+      let releaseSnapshot!: () => void
+      const snapshotBarrier = new Promise<void>((resolve) => { releaseSnapshot = resolve })
+      let snapshotRead!: () => void
+      const snapshotReady = new Promise<void>((resolve) => { snapshotRead = resolve })
+      let delayed = false
+      const delayedIdentityPool: BillingPgPoolLike = {
+        query: async <Row = Record<string, unknown>>(statement: string, parameters?: readonly unknown[]) => {
+          if (!delayed && statement.includes(`FROM ${memberTable}`) && statement.includes('UNION ALL')) {
+            delayed = true
+            const result = await identityPool.query<Row>(statement, parameters)
+            snapshotRead()
+            await snapshotBarrier
+            return result
+          }
+          return identityPool.query<Row>(statement, parameters)
+        },
+        connect: identityPool.connect.bind(identityPool),
+      }
+      const secondAdmission = new PostgresIdentityBillingAdmission(second, delayedIdentityPool, schema)
+      let staleSync: Promise<void> | undefined
+      try {
+        staleSync = secondAdmission.syncSeats(staleOrganization, 'lifecycle-stale-high')
+        await snapshotReady
+        await sql!.unsafe(`DELETE FROM ${memberTable} WHERE "organizationId" = $1 AND "id" = $2`, [staleOrganization, memberB])
+        await first.releaseSeat(staleOrganization, keyB)
+        releaseSnapshot()
+        await staleSync
+      } finally {
+        releaseSnapshot()
+        await staleSync?.catch(() => undefined)
+      }
+      await expect(second.reserveSeat(staleOrganization, 'lifecycle-stale-third')).resolves.toMatchObject({ idempotent: false })
+      await expect(second.usageSnapshot(staleOrganization)).resolves.toMatchObject({ usage: { seats: 2 } })
+    } finally {
       await sql!.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`)
     }
   })

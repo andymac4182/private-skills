@@ -113,6 +113,7 @@ export function defaultBillingState(organizationId: string, nowMs = Date.now()):
     usageOperations: [],
     seatBaseline: 0,
     seatReservations: [],
+    seatRevision: 0,
   };
 }
 
@@ -156,6 +157,7 @@ export function assertBillingState(state: BillingOrganizationState): void {
   if (!Array.isArray(state.webhookEvents) || !Array.isArray(state.usageOperations)) {
     throw new BillingRepositoryError('INVALID_STATE', 'billing collections are invalid');
   }
+  if (state.seatRevision !== undefined) nonnegativeInteger(state.seatRevision, 'seatRevision');
   if (state.seatBaseline !== undefined) nonnegativeInteger(state.seatBaseline, 'seatBaseline');
   if (state.seatReservations !== undefined) {
     if (!Array.isArray(state.seatReservations)) throw new BillingRepositoryError('INVALID_STATE', 'seat reservations are invalid');
@@ -167,6 +169,8 @@ export function assertBillingState(state: BillingOrganizationState): void {
       reservationKeys.add(reservation.operationKey);
       if (reservation.status !== 'active' && reservation.status !== 'settled') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation status is invalid');
       if (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation committed flag is invalid');
+      if (reservation.subjectKey !== undefined && typeof reservation.subjectKey !== 'boolean') throw new BillingRepositoryError('INVALID_STATE', 'seat reservation subject flag is invalid');
+      if (reservation.revision !== undefined) nonnegativeInteger(reservation.revision, 'seatReservation.revision');
       if (!Number.isFinite(Date.parse(reservation.createdAt)) || !Number.isFinite(Date.parse(reservation.updatedAt))) throw new BillingRepositoryError('INVALID_STATE', 'seat reservation timestamp is invalid');
     }
   }
@@ -214,11 +218,18 @@ export function assertBillingState(state: BillingOrganizationState): void {
     if (operationKeys.has(operation.operationKey)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation is duplicated');
     operationKeys.add(operation.operationKey);
     if (!Number.isFinite(Date.parse(operation.createdAt))) throw new BillingRepositoryError('INVALID_STATE', 'usage operation createdAt is invalid');
+    if (operation.status !== undefined && operation.status !== 'reserved' && operation.status !== 'committed' && operation.status !== 'released') throw new BillingRepositoryError('INVALID_STATE', 'usage operation status is invalid');
     validateUsage(operation.usage, organizationId);
     if (!operation.delta || typeof operation.delta !== 'object' || Array.isArray(operation.delta)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation delta is invalid');
     for (const [metric, value] of Object.entries(operation.delta)) {
       if (!['seats', 'storageBytes', 'scans', 'eveCostCents'].includes(metric)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation metric is invalid');
       if (!Number.isSafeInteger(value) || (value as number) === 0) throw new BillingRepositoryError('INVALID_STATE', 'usage operation delta is invalid');
+    }
+    if (operation.reconciled !== undefined) {
+      if (!operation.reconciled || typeof operation.reconciled !== 'object' || Array.isArray(operation.reconciled)) throw new BillingRepositoryError('INVALID_STATE', 'usage operation reconciliation is invalid');
+      for (const [metric, value] of Object.entries(operation.reconciled)) {
+        if (!['seats', 'storageBytes', 'scans', 'eveCostCents'].includes(metric) || !Number.isSafeInteger(value) || (value as number) < 0) throw new BillingRepositoryError('INVALID_STATE', 'usage operation reconciliation is invalid');
+      }
     }
   }
 }
@@ -326,6 +337,7 @@ export class MemoryBillingRepository implements BillingRepository {
       const working = cloneBillingState(current ?? this.stateFactory(normalized));
       if (working.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
       assertBillingState(working);
+      working.seatRevision = (working.seatRevision ?? 0) + 1;
       const result = updater(working);
       syncResult(result);
       assertBillingState(working);
@@ -454,6 +466,7 @@ CREATE TABLE IF NOT EXISTS ${tables.usage} (
   eve_cost_cents bigint NOT NULL DEFAULT 0,
   seat_baseline bigint NOT NULL DEFAULT 0,
   seat_reservations jsonb NOT NULL DEFAULT '[]'::jsonb,
+  seat_revision bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (period_end > period_start),
   CHECK (seats >= 0),
@@ -461,6 +474,7 @@ CREATE TABLE IF NOT EXISTS ${tables.usage} (
   CHECK (scans >= 0),
   CHECK (eve_cost_cents >= 0),
   CHECK (seat_baseline >= 0),
+  CHECK (seat_revision >= 0),
   CHECK (jsonb_typeof(seat_reservations) = 'array')
 );
 
@@ -468,6 +482,8 @@ ALTER TABLE ${tables.usage}
   ADD COLUMN IF NOT EXISTS seat_baseline bigint NOT NULL DEFAULT 0;
 ALTER TABLE ${tables.usage}
   ADD COLUMN IF NOT EXISTS seat_reservations jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE ${tables.usage}
+  ADD COLUMN IF NOT EXISTS seat_revision bigint NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS ${tables.events} (
   provider text NOT NULL,
@@ -492,8 +508,26 @@ CREATE TABLE IF NOT EXISTS ${tables.operations} (
   eve_cost_cents_delta bigint,
   usage_snapshot jsonb NOT NULL,
   created_at timestamptz NOT NULL,
+  status text NOT NULL DEFAULT 'reserved',
+  reconciled jsonb,
   PRIMARY KEY (organization_id, operation_key)
 );
+
+ALTER TABLE ${tables.operations}
+  ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'reserved';
+ALTER TABLE ${tables.operations}
+  ADD COLUMN IF NOT EXISTS reconciled jsonb;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = '${normalizedPrefix}_operations_status_check'
+  ) THEN
+    ALTER TABLE ${tables.operations}
+      ADD CONSTRAINT ${quoteIdentifier(`${normalizedPrefix}_operations_status_check`)}
+      CHECK (status IN ('reserved', 'committed', 'released'));
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`${normalizedPrefix}_events_org_idx`)}
   ON ${tables.events} (organization_id, received_at DESC);
@@ -575,13 +609,15 @@ function rowSeatReservations(row: Record<string, unknown>): BillingSeatReservati
   return value.map((candidate) => {
     if (!candidate || typeof candidate !== 'object') throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
     const reservation = candidate as Partial<BillingSeatReservation>;
-    if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
+    if (typeof reservation.operationKey !== 'string' || (reservation.status !== 'active' && reservation.status !== 'settled') || (reservation.committed !== undefined && typeof reservation.committed !== 'boolean') || (reservation.subjectKey !== undefined && typeof reservation.subjectKey !== 'boolean') || (reservation.revision !== undefined && (!Number.isSafeInteger(reservation.revision) || reservation.revision < 0)) || typeof reservation.createdAt !== 'string' || typeof reservation.updatedAt !== 'string') {
       throw new BillingRepositoryError('CORRUPT_STATE', 'seat reservation is invalid');
     }
     return {
       operationKey: reservation.operationKey,
       status: reservation.status,
       ...(reservation.committed === undefined ? {} : { committed: reservation.committed }),
+      ...(reservation.subjectKey === undefined ? {} : { subjectKey: reservation.subjectKey }),
+      ...(reservation.revision === undefined ? {} : { revision: reservation.revision }),
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
     };
@@ -633,12 +669,30 @@ function rowOperation(row: Record<string, unknown>, organizationId: string): Bil
   ] as const) {
     if (row[column] !== null && row[column] !== undefined) delta[metric] = asNumber(row[column], `operation.${column}`, true);
   }
+  let reconciled: BillingUsageOperation['reconciled'];
+  if (row.reconciled !== undefined && row.reconciled !== null) {
+    try {
+      const value = typeof row.reconciled === 'string' ? JSON.parse(row.reconciled) : row.reconciled;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid reconciliation');
+      reconciled = {};
+      for (const [metric, raw] of Object.entries(value)) {
+        if (!['seats', 'storageBytes', 'scans', 'eveCostCents'].includes(metric) || !Number.isSafeInteger(raw) || (raw as number) < 0) throw new Error('invalid reconciliation');
+        reconciled[metric as keyof BillingUsageOperation['reconciled']] = raw as never;
+      }
+    } catch {
+      throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation reconciliation is invalid JSON');
+    }
+  }
+  const status = row.status === null || row.status === undefined ? undefined : row.status;
+  if (status !== undefined && status !== 'reserved' && status !== 'committed' && status !== 'released') throw new BillingRepositoryError('CORRUPT_STATE', 'usage operation status is invalid');
   return {
     organizationId,
     operationKey: asText(row.operation_key, 'operation.operation_key'),
     delta,
     usage: snapshot,
     createdAt: asIso(row.created_at, 'operation.created_at'),
+    ...(status === undefined ? {} : { status }),
+    ...(reconciled === undefined ? {} : { reconciled }),
   };
 }
 
@@ -659,6 +713,7 @@ function usageRowParameters(usage: BillingUsage, state: BillingOrganizationState
     // seat admission. Pass the structured value through so the driver sends
     // an actual JSON array.
     state.seatReservations ?? [],
+    state.seatRevision ?? 0,
   ];
 }
 
@@ -714,9 +769,9 @@ export class PostgresBillingRepository implements BillingRepository {
     // protocol races on transaction-scoped clients.
     const customerResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, customer_id, created_at, updated_at FROM ${this.tables.customers} WHERE organization_id = $1${suffix}`, [normalized]);
     const subscriptionResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, subscription_id, customer_id, price_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end, event_created_at, last_event_id, source, updated_at FROM ${this.tables.subscriptions} WHERE organization_id = $1${suffix}`, [normalized]);
-    const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, seat_baseline, seat_reservations, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
+    const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, seat_baseline, seat_reservations, seat_revision, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
     const eventsResult = await executor.query<Record<string, unknown>>(`SELECT provider, event_id, event_type, organization_id, created_at, received_at, payload_digest, handled, ignored_reason FROM ${this.tables.events} WHERE organization_id = $1 ORDER BY received_at DESC LIMIT ${this.maxWebhookEvents}${suffix}`, [normalized]);
-    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
+    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
     const base = cloneBillingState(this.stateFactory(normalized));
     if (base.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
     const usageRow = usageResult.rows[0];
@@ -732,6 +787,9 @@ export class PostgresBillingRepository implements BillingRepository {
         ? usage.seats
         : asNumber(usageRow.seat_baseline, 'usage.seat_baseline'),
       seatReservations: usageRow ? rowSeatReservations(usageRow) : [],
+      seatRevision: usageRow?.seat_revision === undefined || usageRow.seat_revision === null
+        ? base.seatRevision ?? 0
+        : asNumber(usageRow.seat_revision, 'usage.seat_revision'),
     };
     assertBillingState(state);
     return state;
@@ -781,9 +839,9 @@ export class PostgresBillingRepository implements BillingRepository {
       await executor.query(`DELETE FROM ${this.tables.subscriptions} WHERE organization_id = $1`, [state.organizationId]);
     }
     await executor.query(
-      `INSERT INTO ${this.tables.usage} (organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, updated_at, seat_baseline, seat_reservations)
-       VALUES ($1, $2::timestamptz, $3::timestamptz, $4, $5, $6, $7, $8::timestamptz, $9, $10::jsonb)
-       ON CONFLICT (organization_id) DO UPDATE SET period_start = EXCLUDED.period_start, period_end = EXCLUDED.period_end, seats = EXCLUDED.seats, storage_bytes = EXCLUDED.storage_bytes, scans = EXCLUDED.scans, eve_cost_cents = EXCLUDED.eve_cost_cents, updated_at = EXCLUDED.updated_at, seat_baseline = EXCLUDED.seat_baseline, seat_reservations = EXCLUDED.seat_reservations`,
+      `INSERT INTO ${this.tables.usage} (organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, updated_at, seat_baseline, seat_reservations, seat_revision)
+       VALUES ($1, $2::timestamptz, $3::timestamptz, $4, $5, $6, $7, $8::timestamptz, $9, $10::jsonb, $11)
+       ON CONFLICT (organization_id) DO UPDATE SET period_start = EXCLUDED.period_start, period_end = EXCLUDED.period_end, seats = EXCLUDED.seats, storage_bytes = EXCLUDED.storage_bytes, scans = EXCLUDED.scans, eve_cost_cents = EXCLUDED.eve_cost_cents, updated_at = EXCLUDED.updated_at, seat_baseline = EXCLUDED.seat_baseline, seat_reservations = EXCLUDED.seat_reservations, seat_revision = EXCLUDED.seat_revision`,
       usageRowParameters(state.usage, state),
     );
     for (const event of state.webhookEvents) {
@@ -800,12 +858,15 @@ export class PostgresBillingRepository implements BillingRepository {
       );
       if (!insertSucceeded(inserted)) throw new BillingRepositoryError('DUPLICATE_WEBHOOK', 'billing webhook event was already recorded');
     }
+    // Usage operations also carry their small lifecycle ledger. Upsert the
+    // row so explicit-zero reconciliation and same-key re-admission survive
+    // across PostgreSQL transactions.
     for (const operation of state.usageOperations) {
       await executor.query(
-        `INSERT INTO ${this.tables.operations} (organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)
-         ON CONFLICT (organization_id, operation_key) DO NOTHING`,
-        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, operation.usage, operation.createdAt],
+        `INSERT INTO ${this.tables.operations} (organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz, $9, $10::jsonb)
+         ON CONFLICT (organization_id, operation_key) DO UPDATE SET seats_delta = EXCLUDED.seats_delta, storage_bytes_delta = EXCLUDED.storage_bytes_delta, scans_delta = EXCLUDED.scans_delta, eve_cost_cents_delta = EXCLUDED.eve_cost_cents_delta, usage_snapshot = EXCLUDED.usage_snapshot, created_at = EXCLUDED.created_at, status = EXCLUDED.status, reconciled = EXCLUDED.reconciled`,
+        [operation.organizationId, operation.operationKey, operation.delta.seats ?? null, operation.delta.storageBytes ?? null, operation.delta.scans ?? null, operation.delta.eveCostCents ?? null, operation.usage, operation.createdAt, operation.status ?? 'reserved', operation.reconciled ?? null],
       );
     }
   }
@@ -820,6 +881,7 @@ export class PostgresBillingRepository implements BillingRepository {
       began = true;
       await this.ensureUsageRow(client, normalized);
       const state = await this.load(client, normalized, true);
+      state.seatRevision = (state.seatRevision ?? 0) + 1;
       const initialEventKeys = new Set(state.webhookEvents.map(eventKey));
       const result = updater(state);
       syncResult(result);

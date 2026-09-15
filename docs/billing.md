@@ -86,10 +86,12 @@ reported as a duplicate after the durable row is re-read.
 `packages/billing/test/postgres.integration.test.ts` is skipped unless
 `PSKILLS_BILLING_POSTGRES_URL` is supplied. With a disposable PostgreSQL
 instance it runs two independent repository/service instances concurrently to
-prove one usage reservation wins a finite limit, retries are idempotent, one
-signed webhook delivery is durably claimed, and an older out-of-order event
-cannot replace newer subscription state. The normal unit suite uses the
-provider-neutral fake repository and is not presented as this database proof.
+prove one usage reservation wins a finite limit, retries and released-key
+re-admission are idempotent, seat admission survives stale identity snapshots
+and lifecycle expiry/removal/missed hooks, one signed webhook delivery is
+durably claimed, and an older out-of-order event cannot replace newer
+subscription state. The normal unit suite uses the provider-neutral fake
+repository and is not presented as this database proof.
 
 ## Webhooks
 
@@ -118,8 +120,9 @@ monthly scans, and monthly Eve cents limits against the current entitlement.
 Operation keys make retries idempotent and reject a reused key with a
 different delta. `reconcileUsage()` supports measured post-operation
 corrections; omitted metrics retain their reservation, while an explicit zero
-releases it. UTC month rollover resets scans and Eve spend while retaining
-current seats and storage.
+releases it. A fully released reservation can be admitted again with the same
+operation key after the ledger reopens its lifecycle. UTC month rollover resets
+scans and Eve spend while retaining current seats and storage.
 
 The core registry reserves scan work before native publish, rescan, source
 import, and OpenClaw queue admission. It reserves retained bytes before a
@@ -128,8 +131,10 @@ Authoring reserves draft bytes before create/upload/revision writes and scan
 units before draft publication. The worker repeats the scan reservation with
 the same job key before source acquisition, download, materialization, or
 scanner execution, so queue admission and retries charge one operation. A
-failed repository/storage step releases its reservation; successful import
-storage remains charged for reconciliation. Better Auth organization hooks
+definite no-write or pre-scanner failure may release its reservation with an
+explicit-zero reconciliation; after a provider or blob write may have
+succeeded, the charged reservation remains held for durable object
+reconciliation. Better Auth organization hooks
 sync active members plus unexpired pending invitations and reserve a new seat
 before direct member or invitation writes. Seat holds are stored beside the
 locked usage row, and reconciliation preserves other requests' in-flight
