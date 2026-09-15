@@ -193,10 +193,14 @@ The one-shot hosted worker factory in
 [`workers/runner/src/hosted.ts`](../workers/runner/src/hosted.ts) is a Node
 runtime route for Vercel Cron or an explicitly authenticated operator pump. It
 accepts `GET` only and requires `Authorization: Bearer $CRON_SECRET`; the
-Vercel cron user-agent is not authentication. Each invocation claims at most
-one job through the existing worker API, runs the configured scanners in
-Vercel Sandbox, and returns queue metadata only. Reports, artifact bytes,
-worker tokens, and scanner errors are not returned to the caller.
+Vercel cron user-agent is not authentication. With the Better Auth/PostgreSQL
+tenant dispatcher enabled, each invocation visits at most 32 server-listed
+organizations and invokes at most 2 jobs per organization (64 worker attempts
+under the shipped defaults) within a 240-second dispatch budget and a
+300-second fenced lease. The dispatcher persists its cursor and retry backoff
+in PostgreSQL. Without that dispatcher, the route keeps the legacy
+single-default-company worker path. Reports, artifact bytes, worker tokens,
+and scanner errors are not returned to the caller.
 
 The route configuration uses these Vercel environment variables:
 
@@ -223,15 +227,13 @@ the sealed bundle under bounded input/output limits, and stops the ephemeral
 sandbox after each scanner. The route must run on Vercel's Node runtime; the
 Cloudflare edge target cannot launch the Node Sandbox SDK or native scanners.
 
-The repository-root Vercel fallback cron invokes the route at `0 21 * * *`
-UTC. Successful publish, import, and skill-rescan requests also schedule a
-bounded drain of at most two jobs with Nitro's platform `waitUntil` hook when
+The repository-root Vercel fallback cron invokes the route every five minutes
+(`*/5 * * * *` UTC), allowing the bounded cursor to continue across the day.
+Successful publish, import, and skill-rescan requests also schedule a bounded
+drain of at most two jobs with Nitro's platform `waitUntil` hook when
 available. The route's scheduler is a liveness fallback rather than the queue
-itself.
-Cron invocations do not provide durable retries, so the existing worker lease
-expiry and fencing behavior remains authoritative. Configure the function
-duration and lease longer than the worst-case sequential scanner policy, and
-keep at least one configured required scanner. Do not set
+itself; PostgreSQL lease, fencing, cursor, and retry rows provide durable
+recovery. Keep at least one configured required scanner. Do not set
 `PSKILLS_ALLOW_UNSCANNED=true` to fit a function limit.
 
 For the source-built SkillsGuard snapshot, run the source-pinned provisioning

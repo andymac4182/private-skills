@@ -276,9 +276,11 @@ Vercel `VERCEL_OIDC_TOKEN`). Keep these values in each project's runtime secret
 store; never expose them to the browser or put them in candidate text.
 
 The authored schedule is `0 22 * * *` UTC (08:00 Australia/Brisbane). The root
-Vercel fallback worker cron is separate at `0 21 * * *` UTC. Manual runs use
-the authenticated admin review action or the Eve server-side Client SDK; do
-not put the Eve token in a browser request. The deployed reviewer health probe
+Vercel hosted-worker cron is separate at `*/5 * * * *` UTC and dispatches up to
+32 organizations and 2 jobs per organization per invocation under its shipped
+240-second budget and 300-second lease. Manual runs use the authenticated admin
+review action or the Eve server-side Client SDK; do not put the Eve token in a
+browser request. The deployed reviewer health probe
 at `https://private-skills-reviewer.vercel.app/eve/v1/health` returned `200`,
 while an unauthenticated session request returned `401`. This verifies the
 reviewer service boundary only; the main registry project has not been claimed
