@@ -106,6 +106,8 @@ const WORKER_JOB_A = 'operations-worker-job-a';
 const WORKER_JOB_B = 'operations-worker-job-b';
 const STORAGE_ATTEMPT_A = 'operations-storage-attempt-a';
 const STORAGE_ATTEMPT_B = 'operations-storage-attempt-b';
+const RESERVATION_A = 'private-skills:scan:operations-reservation-a';
+const RESERVATION_B = 'private-skills:scan:operations-reservation-b';
 const DISPATCH_CURSOR_ORGANIZATION_ID = '__private_skills_tenant_review_dispatch__';
 const DISPATCH_DAY = new Date(NOW).toISOString().slice(0, 10);
 const DISPATCH_OPERATION_A = `common-skill-review:${DISPATCH_DAY}`;
@@ -693,9 +695,9 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       const event = await signedSubscriptionEvent(organizationId, customerId, subscriptionId, eventId);
       await sourceBillingService.handleWebhook(event.body, event.signature);
     }
-    await sourceBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, 'ops-reservation-a');
-    await sourceBillingService.reconcileUsage(ORG_A, 'ops-reservation-a', { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a');
-    await sourceBillingService.reserveUsage(ORG_B, { scans: 1, eveCostCents: 11 }, 'ops-reservation-b');
+    await sourceBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, RESERVATION_A);
+    await sourceBillingService.reconcileUsage(ORG_A, RESERVATION_A, { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a');
+    await sourceBillingService.reserveUsage(ORG_B, { scans: 1, eveCostCents: 11 }, RESERVATION_B);
     await sourceBillingService.reserveSeat(ORG_A, 'ops-seat-a', { subjectKey: true });
     await sourceBillingService.commitSeat(ORG_A, 'ops-seat-a');
     await sourceBillingService.reserveSeat(ORG_B, 'ops-seat-b', { subjectKey: true });
@@ -731,13 +733,13 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
         createdAt: recoveryCreatedAt,
         updatedAt: recoveryUpdatedAt,
         attempts: 1,
-        meteredReservationKey: 'ops-reservation-a',
+        meteredReservationKey: RESERVATION_A,
       });
       mutable.storageAttempts ??= [];
       mutable.storageAttempts.push({
         id: STORAGE_ATTEMPT_A,
         organizationId: ORG_A,
-        reservationKey: 'ops-reservation-a',
+        reservationKey: RESERVATION_A,
         digest: artifactA.digest,
         size: artifactBytesA.byteLength,
         state: 'committed',
@@ -761,14 +763,14 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
         createdAt: recoveryCreatedAt,
         updatedAt: recoveryUpdatedAt,
         attempts: 3,
-        meteredReservationKey: 'ops-reservation-b',
+        meteredReservationKey: RESERVATION_B,
         error: 'operations scanner retry exhausted',
       });
       mutable.storageAttempts ??= [];
       mutable.storageAttempts.push({
         id: STORAGE_ATTEMPT_B,
         organizationId: ORG_B,
-        reservationKey: 'ops-reservation-b',
+        reservationKey: RESERVATION_B,
         digest: artifactB.digest,
         size: artifactBytesB.byteLength,
         state: 'orphaned',
@@ -916,14 +918,14 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
         organizationId: ORG_A,
         state: 'queued',
         attempts: 1,
-        meteredReservationKey: 'ops-reservation-a',
+        meteredReservationKey: RESERVATION_A,
       }),
     ]);
     expect(restoredRegistryA.storageAttempts).toEqual([
       {
         id: STORAGE_ATTEMPT_A,
         organizationId: ORG_A,
-        reservationKey: 'ops-reservation-a',
+        reservationKey: RESERVATION_A,
         digest: artifactA.digest,
         size: artifactBytesA.byteLength,
         state: 'committed',
@@ -950,7 +952,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
         organizationId: ORG_B,
         state: 'failed',
         attempts: 3,
-        meteredReservationKey: 'ops-reservation-b',
+        meteredReservationKey: RESERVATION_B,
         error: 'operations scanner retry exhausted',
       }),
     ]);
@@ -958,7 +960,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       {
         id: STORAGE_ATTEMPT_B,
         organizationId: ORG_B,
-        reservationKey: 'ops-reservation-b',
+        reservationKey: RESERVATION_B,
         digest: artifactB.digest,
         size: artifactBytesB.byteLength,
         state: 'orphaned',
@@ -1024,7 +1026,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       id: WORKER_JOB_A,
       state: 'running',
       attempts: 2,
-      meteredReservationKey: 'ops-reservation-a',
+      meteredReservationKey: RESERVATION_A,
     });
     expect(claimedWorkerJob.job?.fencingToken).toEqual(expect.any(String));
     const staleWorkerCompletion = await restoredWorkerHandler(new Request(`${ORIGIN}/internal/jobs/${WORKER_JOB_A}/complete`, {
@@ -1141,7 +1143,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     );
     expect(restoredUsageOperations).toEqual([
       { organization_id: ORG_A, operation_key: 'ops-reconcile-a', scans_delta: -1, eve_cost_cents_delta: -8, status: 'committed', reconciled: null },
-      { organization_id: ORG_A, operation_key: 'ops-reservation-a', scans_delta: 2, eve_cost_cents_delta: 17, status: 'committed', reconciled: { scans: 1, eveCostCents: 9 } },
+      { organization_id: ORG_A, operation_key: RESERVATION_A, scans_delta: 2, eve_cost_cents_delta: 17, status: 'committed', reconciled: { scans: 1, eveCostCents: 9 } },
     ]);
     const restoredAUsage = await targetBillingService.usageSnapshot(ORG_A);
     expect(restoredAUsage).toMatchObject({ organizationId: ORG_A, usage: { seats: 1, scans: 1, eveCostCents: 9 } });
@@ -1160,8 +1162,8 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       expect.objectContaining({ operationKey: 'ops-seat-b', status: 'active', committed: false, subjectKey: true }),
     ]);
     const usageBeforeReplay = await targetBillingService.usageSnapshot(ORG_A);
-    await expect(targetBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, 'ops-reservation-a')).resolves.toMatchObject({ idempotent: true });
-    await expect(targetBillingService.reconcileUsage(ORG_A, 'ops-reservation-a', { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a')).resolves.toMatchObject({ idempotent: true });
+    await expect(targetBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, RESERVATION_A)).resolves.toMatchObject({ idempotent: true });
+    await expect(targetBillingService.reconcileUsage(ORG_A, RESERVATION_A, { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a')).resolves.toMatchObject({ idempotent: true });
     await expect(targetBillingService.usageSnapshot(ORG_A)).resolves.toEqual(usageBeforeReplay);
 
     const targetBlobsRepository = targetRegistryRepository;
