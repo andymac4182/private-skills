@@ -51,6 +51,8 @@ import {
 } from './bootstrap-adoption.js';
 import { canonicalOriginFromEnv } from './identity-infrastructure.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
+import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
+import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -81,6 +83,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     ])],
   };
   const infrastructure = await createInfrastructure(env);
+  const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
   // Better Auth is optional and Node-owned. The infrastructure profile may
   // provide it without making the shared runtime import a database driver;
   // edge keeps this value absent and continues to serve legacy tokens.
@@ -332,9 +335,21 @@ async function createRuntime(env: RuntimeEnvironment) {
       } : {}),
       ...(isLegacyTenant ? { triggerReview: legacyReviewTrigger } : {}),
     });
+    const billing = createBillingRoutes({
+      service: infrastructure.billing.service,
+      authenticate: context.auth.authenticate,
+      ...(infrastructure.billing.invoiceHistory === undefined ? {} : {
+        invoiceHistory: async (lookup) => {
+          const records = await infrastructure.billing.invoiceHistory!(lookup);
+          return records.map((record) => ({ ...record, organizationId: lookup.organizationId }));
+        },
+      }),
+    });
     const tenantHostedWorker = infrastructure.createHostedWorkerForTenant?.(context.organizationId)
       ?? (isLegacyTenant ? infrastructure.hostedWorker : undefined);
     return async (request: Request): Promise<Response> => {
+      const billingResponse = await billing(request);
+      if (billingResponse) return billingResponse;
       const intelligenceResponse = await intelligence(request);
       if (intelligenceResponse) return intelligenceResponse;
       const response = await registry(request);
@@ -413,6 +428,7 @@ async function createRuntime(env: RuntimeEnvironment) {
       const response = await uploadReviewRuntime?.httpHandler?.(request);
       if (response) return response;
     }
+    if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return billingWebhook(request);
     if (path === '/internal/worker/run') {
       const workerHandler = infrastructure.hostedWorker
         ?? infrastructure.createHostedWorkerForTenant?.(defaultOrganizationId);

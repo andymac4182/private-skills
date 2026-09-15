@@ -3,6 +3,10 @@ declare module '#pskills-infrastructure' {
   export function createInfrastructure(env: RuntimeEnvironment): Promise<{
     repository: import('../../../packages/contracts/src/index').StateRepository;
     blobs: import('../../../packages/contracts/src/index').BlobStore;
+    billing: {
+      service: import('../../../packages/billing/src/index').BillingService;
+      invoiceHistory?: (lookup: import('../../../packages/billing/src/index').BillingInvoiceLookup) => Promise<readonly import('../../../packages/billing/src/index').BillingProviderInvoice[]>;
+    };
     hostedWorker?: (request: Request) => Promise<Response>;
     /** Optional signed worker factory bound to one server-selected tenant. */
     createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;

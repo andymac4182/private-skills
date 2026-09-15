@@ -25,15 +25,26 @@ not contain production account credentials.
 
 ## Company-admin console
 
-The bounded host seam is `createBillingRoutes()` in
+The bounded route factory is `createBillingRoutes()` in
 `apps/web/server/routes/billing.ts`. It exposes the company snapshot at
-`GET /v1/billing`, invoice history at `GET /v1/billing/invoices`, and POST
+`GET /v1/billing`, the most recent 100 invoice records at
+`GET /v1/billing/invoices`, and POST
 checkout, portal, and raw-body webhook paths. The route factory authenticates
 the request, requires an `owner` or `admin` role, derives the organization from
 the server principal, and never accepts a browser organization, customer, or
 subscription selector. Hosted actions are closed unless the service reports a
 provider, a configured recurring Price ID, trusted return URLs, and verified
 webhook signing.
+
+The Node runtime now constructs this service from the environment, using the
+separate PostgreSQL billing repository whenever a PostgreSQL pool is present.
+It mounts the tenant routes before registry dispatch and handles the webhook at
+the top-level raw-body boundary, so webhook delivery does not need browser
+authentication. An explicit non-production local-test profile may use the
+memory repository and local adapter; a live provider request without a durable
+PostgreSQL boundary is disabled. The edge runtime exposes a disabled billing
+service because it has no server-only provider adapter or durable billing
+repository.
 
 `apps/web/src/views/BillingView.tsx` renders the current plan and status,
 enforced usage and limits, invoice history, and checkout/subscription controls.
@@ -43,17 +54,19 @@ live charge. The view sends only a selected server-known plan ID for checkout
 and an empty body for portal creation.
 
 Invoice history is a server-side read-model callback supplied to
-`createBillingRoutes()`. It receives only the organization and customer
-mapping read from billing state, and the route validates provider, tenant,
-customer, amounts, timestamps, statuses, and document URLs before projecting
-rows to the browser without provider or customer IDs. If the runtime has no
-verified provider invoice adapter, the console reports invoice history as
-unavailable. This package does not make live Stripe calls or persist provider
-invoice rows.
+`createBillingRoutes()`. The Node runtime delegates to the server-only Stripe
+invoice adapter after `BillingService` has checked the durable organization to
+customer mapping. The route validates provider, tenant, customer, amounts,
+timestamps, statuses, and document URLs before projecting rows to the browser
+without provider or customer IDs. The read model is bounded to the most recent
+100 provider records. A provider response containing a different
+customer is rejected before the organization is attached to the row. If the
+runtime has no verified provider invoice adapter, the console reports invoice
+history as unavailable. This package does not persist provider invoice rows.
 
-The bounded patch leaves shared registry route composition and company nav
-selection to the host integration owner; mounting this factory and selecting
-`BillingView` are explicit handoff seams.
+The company-admin navigation still selects `BillingView` through the host UI;
+the runtime route and server-only invoice adapter are mounted in the Node
+composition described above.
 
 ## PostgreSQL state
 
@@ -111,6 +124,8 @@ storage.
 
 The service exposes `getEntitlement()`, `usageSnapshot()`, `checkUsage()`,
 `enforceUsage()`, and `recordUsage()` aliases for identity, storage, scanner,
-and Eve runtime adapters. A passing local fixture or component test does not
-prove a configured Stripe account, production database, charge, or launch
-price approval.
+and Eve runtime adapters. Those mutation callers still need to invoke the
+transactional reservation seam at their scan, storage, seat, and Eve admission
+boundaries; the console only reports the durable counters. A passing local
+fixture or component test does not prove a configured Stripe account,
+production database, charge, or launch price approval.
