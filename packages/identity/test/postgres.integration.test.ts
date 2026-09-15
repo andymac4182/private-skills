@@ -87,7 +87,7 @@ describe.skipIf(!databaseURL)('identity PostgreSQL integration', () => {
       const before = await runtime.handler(new Request('http://localhost:5173/auth/identity/session', { headers: sessionHeaders }));
       expect(before.status).toBe(200);
       const beforeBody = await before.json() as { session: { organizations: Array<{ role: string }>; activeOrganizationId: string | null } | null };
-      expect(beforeBody.session?.organizations).toEqual([{ 
+      expect(beforeBody.session?.organizations).toEqual([{
         id: 'identity-test-member-0',
         organizationId: 'identity-test-org',
         role: 'owner',
