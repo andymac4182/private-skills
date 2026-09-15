@@ -35,6 +35,8 @@ export interface IdentityInfrastructureOptions {
   /** Trusted deployment origin used for cookie-authenticated token mutations. */
   canonicalOrigin?: string;
   apiTokenTableName?: string;
+  /** Optional PostgreSQL schema for API tokens; public remains the default. */
+  apiTokenSchemaName?: string;
   apiTokenAutoMigrate?: boolean;
   companySsoTableName?: string;
   companySsoAutoMigrate?: boolean;
@@ -185,13 +187,14 @@ export function createIdentityInfrastructure(
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
+  const configuredApiTokenSchema = apiTokenSchemaName(env, options);
   const apiTokenAutoMigrate = options.apiTokenAutoMigrate ?? parseBoolean(
     env.PSKILLS_API_TOKEN_AUTO_MIGRATE ?? env.API_TOKEN_AUTO_MIGRATE,
     false,
   );
   const repository = createPostgresApiTokenRepository(options.postgresPool, {
     ...(options.apiTokenTableName === undefined ? {} : { tableName: options.apiTokenTableName }),
-    ...(schemaName === undefined ? {} : { schemaName }),
+    ...(configuredApiTokenSchema === undefined ? {} : { schemaName: configuredApiTokenSchema }),
     autoMigrate: apiTokenAutoMigrate,
   });
   const apiTokens = createApiTokenModule({
@@ -256,6 +259,17 @@ function companySsoTableName(
   const value = options.companySsoTableName
     ?? env.PSKILLS_COMPANY_SSO_TABLE_NAME
     ?? env.COMPANY_SSO_TABLE_NAME;
+  const normalized = value?.trim();
+  return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+function apiTokenSchemaName(
+  env: IdentityEnvironment,
+  options: IdentityInfrastructureOptions,
+): string | undefined {
+  const value = options.apiTokenSchemaName
+    ?? env.PSKILLS_API_TOKEN_SCHEMA
+    ?? env.API_TOKEN_SCHEMA;
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
 }

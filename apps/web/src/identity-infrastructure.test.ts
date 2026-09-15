@@ -133,6 +133,7 @@ describe('company SSO identity composition', () => {
       PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
       PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'false',
       PSKILLS_API_TOKEN_AUTO_MIGRATE: 'true',
+      PSKILLS_API_TOKEN_SCHEMA: 'identity_composition_auth',
       PSKILLS_BETTER_AUTH_SCHEMA: 'identity_composition_auth',
     }, {
       postgresPool: pool,

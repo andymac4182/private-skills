@@ -139,6 +139,7 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
       canonicalOrigin: ORIGIN,
       companySsoTableName: companyTable,
       apiTokenTableName: tokenTable,
+      apiTokenSchemaName: schema,
       companySsoAutoMigrate: false,
       apiTokenAutoMigrate: false,
     });
@@ -201,6 +202,85 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
     } finally {
       await infrastructure.identity?.close();
       await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.end({ timeout: 5 });
+    }
+  }, 45_000);
+
+  it('keeps persisted tokens in public schema when only Better Auth schema is configured', async () => {
+    if (!databaseURL) return;
+    const suffix = `${process.pid}_${Date.now().toString(36)}`;
+    const schema = `identity_compat_${suffix}`;
+    const companyTable = `company_sso_${suffix}`;
+    const tokenTable = `service_tokens_${suffix}`;
+    const direct = postgres(databaseURL, { max: 20, prepare: false });
+    const pool = createPool(direct);
+    const infrastructure = createIdentityInfrastructure({
+      PSKILLS_BETTER_AUTH_ENABLED: 'true',
+      DATABASE_URL: databaseURL,
+      BETTER_AUTH_SECRET: 'identity-public-token-compat-test-secret-0123456789',
+      BETTER_AUTH_URL: ORIGIN,
+      PSKILLS_PUBLIC_ORIGIN: ORIGIN,
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BETTER_AUTH_SCHEMA: schema,
+      PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: 'false',
+      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
+      PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'false',
+      PSKILLS_API_TOKEN_AUTO_MIGRATE: 'false',
+    }, {
+      postgresPool: pool,
+      canonicalOrigin: ORIGIN,
+      companySsoTableName: companyTable,
+      apiTokenTableName: tokenTable,
+      companySsoAutoMigrate: false,
+      apiTokenAutoMigrate: false,
+    });
+
+    try {
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.unsafe(`DROP TABLE IF EXISTS ${table('public', tokenTable)}`);
+      await infrastructure.runMigrations();
+
+      const tables = await direct.unsafe(
+        'SELECT to_regclass($1) AS better_auth_table, to_regclass($2) AS company_sso_table, to_regclass($3) AS api_token_table',
+        [`${schema}.user`, `${schema}.${companyTable}`, `public.${tokenTable}`],
+      );
+      expect(tables[0] as unknown as { better_auth_table: string | null; company_sso_table: string | null; api_token_table: string | null }).toEqual({
+        better_auth_table: `${schema}."user"`,
+        company_sso_table: `${schema}.${companyTable}`,
+        api_token_table: tokenTable,
+      });
+
+      const identity = infrastructure.identity;
+      const apiTokens = infrastructure.apiTokens;
+      if (!identity || !apiTokens) throw new Error('identity infrastructure did not initialize');
+      const now = new Date().toISOString();
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'user')} ("id","name","email","emailVerified","createdAt","updatedAt") VALUES ($1,$2,$3,true,$4,$4)`,
+        ['identity-public-user', 'Identity Public User', 'identity-public@example.test', now],
+      );
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'organization')} ("id","name","slug","createdAt") VALUES ($1,$2,$3,$4)`,
+        ['identity-public-org', 'Identity Public Org', 'identity-public-org', now],
+      );
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'member')} ("id","organizationId","userId","role","createdAt") VALUES ($1,$2,$3,'owner',$4)`,
+        ['identity-public-member', 'identity-public-org', 'identity-public-user', now],
+      );
+      const issued = await apiTokens.service.createToken(
+        { userId: 'identity-public-user', organizationId: 'identity-public-org' },
+        { name: 'Public compatibility token', roleCeiling: 'reader', scopes: ['registry:read'] },
+      );
+      expect(issued.token).toMatch(/^psk_/u);
+      await expect(apiTokens.service.authenticateBearerToken(issued.token)).resolves.toMatchObject({
+        identity: 'user',
+        organizationId: 'identity-public-org',
+        subject: 'identity-public-user',
+        tokenId: issued.id,
+      });
+    } finally {
+      await infrastructure.identity?.close();
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.unsafe(`DROP TABLE IF EXISTS ${table('public', tokenTable)}`);
       await direct.end({ timeout: 5 });
     }
   }, 45_000);

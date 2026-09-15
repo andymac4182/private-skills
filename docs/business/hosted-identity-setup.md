@@ -96,10 +96,12 @@ Call the lower-level `runtime.runMigrations()` only when the package runtime is
 being used without the web host composition.
 
 The PostgreSQL service-token table is separate from Better Auth's tables and
-uses the configured Better Auth schema when one is selected. Its reviewed
-`API_TOKEN_SCHEMA_SQL`/`postgresApiTokenSchemaSql()` plan is included in the
-web host entrypoint above; the lower-level repository also exposes
-`runMigrations()` for a deployment runner. Keep
+keeps its existing public-schema location by default, even when a Better Auth
+schema is selected. Set the explicit host `apiTokenSchemaName` option or
+`PSKILLS_API_TOKEN_SCHEMA` when a new deployment should place it in another
+schema. Its reviewed `API_TOKEN_SCHEMA_SQL`/`postgresApiTokenSchemaSql()` plan
+is included in the web host entrypoint above; the lower-level repository also
+exposes `runMigrations()` for a deployment runner. Keep
 `PSKILLS_API_TOKEN_AUTO_MIGRATE` (or its `API_TOKEN_AUTO_MIGRATE` alias) false
 unless a single controlled process is intentionally responsible for startup
 DDL. The company SSO table is likewise included through
