@@ -149,3 +149,9 @@ Integrated 4d62970 and 5bb67bd as 915d378 / 70f8a7f, preserving the CLI provider
 ### Combined CLI and identity regression checkpoint — 16 September, 01:52 AEST
 
 Root verification checkout 91eb8d4 passed the full Vitest run: 161 files passed / 16 skipped, 1,138 tests passed / 27 skipped (28.65 seconds). This default run does not activate opt-in PostgreSQL cases; identity operational events were run separately against disposable PostgreSQL in the preceding checkpoint. TypeScript and the production web Vite/Nitro build also passed. Build emitted an ineffective dynamic-import warning for scanner utilities; no build failure occurred. Source snapshot is a local verification composition, not production acceptance or a claim that skipped native/provider checks passed.
+
+### Marketing SEO integration and seat recovery review — 16 September, 01:54 AEST
+
+Integrated SEO 180b30f + 2998519 as 7a9f648 + 5e76eda. Root verification caca65c passed seven metadata/config tests, marketing TypeScript and the marketing production build with only existing APP_ORIGIN set. Missing new SEO settings now safely produce noindex and omit canonical URLs; explicit public indexing requires HTTPS marketing origin. Old verification-branch homepage/docs conflicts were resolved with current integration content. Production public indexing configuration and rendered hosted proof remain open.
+
+Root review held candidate c1fb2df seat recovery POST: company-admin supplied proof strings do not establish that an identity writer failed or terminated. Recovery must not free an in-flight hold or a committed identity row whose after-hook failed. Billing owner is implementing an authoritative operational boundary and concurrency proof; editor was told not to accept the current user-facing route.
