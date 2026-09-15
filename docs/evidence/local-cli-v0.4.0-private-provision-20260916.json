@@ -11,6 +11,7 @@
   "provider": {
     "kind": "files-sdk",
     "package": "files-sdk",
+    "version": "2.4.0",
     "adapter": "fs",
     "prefix": null,
     "storageRoot": "/private/tmp/private-skills-cli-v04-private-provision-1b2671a",
