@@ -351,20 +351,20 @@ remain labeled at their own boundaries.
   record the migration/backup/rollback fence. The [billing migration plan](../evidence/billing-hosted-migration-plan-20260916.json)
   is ready; its accepted checkpoint still records five absent relations and no
   verified hosted DDL result.
-- Reproduce and close the existing billing/storage recovery gaps before the
-  final combined run: owner fencing on generic resolve/queue paths, worker
-  pre-scan release with delayed duplicate work, `StorageAttempt` pending/orphan
-  reconciliation with stable object identity, concurrent resume marker loss,
-  concurrent draft reservations leaving committed and orphan rows, and actual
-  ledger `restoreUsage`. Rerun the focused PostgreSQL suites and the full
-  candidate validation after each fix; do not treat the bounded local counts as
-  recovery closure.
+- Classify the existing billing/storage recovery fixes as **locally
+  implemented**, backed by `900bc3e`, `777f188`, `1ab98c2`, `a223961`,
+  `17f0414`, `a2a99b3`, and the full validation source `036fb74` (1,281 passed,
+  34 direct PostgreSQL, and 2 Nitro checks). The remaining action is hosted
+  proof of those paths: provider-bound runtime execution, coordinated
+  PostgreSQL/Blob recovery, and independent usage/ledger readback. Do not
+  reimplement completed fixes or treat the bounded local evidence as hosted
+  closure.
 - Execute the coordinated PostgreSQL/Blob recovery and provider-finality proof,
   including object state, tenant scope, negative retention, worker capacity and
   monitoring, callback/device caps, and redacted provider/secret readback. The
   production snapshot and 177-byte receipt records are bounded evidence only.
-- Deploy the pending public contrast/claim follow-up, verify the nine-route
-  marketing and docs-led browser pass against PR #59, and keep public pricing
+- Verify the nine-route marketing and docs-led browser pass against the deployed
+  PR #59 record, which includes the contrast follow-up, and keep public pricing
   aligned with the server catalog before enabling any paid CTA. Run native
   platform qualification where support is claimed; Windows remains unverified
   and Linux evidence is emulated.
