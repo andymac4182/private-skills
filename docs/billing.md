@@ -17,11 +17,14 @@ catalog rejects duplicate plan IDs and duplicate Price IDs. Price IDs are
 server configuration; webhook metadata, query parameters, and checkout URLs
 cannot select an entitlement.
 
-Until a provider and at least one paid Price ID are configured, the service
-reports billing as disabled or unconfigured and refuses hosted checkout and
-customer-portal sessions. Missing Stripe credentials do not activate a local
-paid mode. This package makes no external Stripe calls during tests and does
-not contain production account credentials.
+Until a provider and at least one paid Price ID are configured, hosted
+checkout, customer-portal sessions, and webhook verification remain
+unavailable. An explicitly enabled deployment can still enforce finite limits
+from verified subscription state while provider setup is deferred; the
+`BillingStatus.providerReady` and `usageEnforcement` fields keep those two
+boundaries visible. Missing Stripe credentials do not activate a local paid
+mode. This package makes no external Stripe calls during tests and does not
+contain production account credentials.
 
 ## Company-admin console
 
@@ -142,16 +145,22 @@ holds. Successful writes settle their own key; cancellations, removals, and
 re-invites can reuse a settled lifecycle key. Active identity holds do not
 expire automatically because the billing transaction cannot prove that a
 Better Auth write has stopped; they remain fail-closed until an explicit
-success/failure lifecycle hook or operator reconciliation resolves them. These
-adapters are omitted when billing explicitly reports disabled, preserving the
-legacy deployment path.
+success/failure lifecycle hook or operator reconciliation resolves them. When
+a Better Auth write aborts before its after-hook, the host must call
+`releaseSeat()` with the exact generated subject key; that durable abort path
+is safe to retry and is covered by the disposable PostgreSQL lifecycle proof.
+These adapters are omitted when billing explicitly reports disabled, preserving
+the legacy deployment path.
 
 The service exposes `getEntitlement()`, `usageSnapshot()`, `checkUsage()`,
 `enforceUsage()`, and `recordUsage()` aliases for identity, storage, scanner,
 and Eve runtime adapters. Eve invocation cost reservation remains a separate
-runtime-owned seam. Focused route, authoring, and worker tests prove that an
+runtime-owned seam. A read snapshot may contain only the most recent configured
+operation window, but every transactional PostgreSQL reload reads the durable
+operation primary key and exact-key lookup reopens an aged released key without
+charging it twice. Focused route, authoring, and worker tests prove that an
 over-limit request performs no blob/source/scanner/member write; the
 disposable PostgreSQL suite separately proves concurrent durable reservations,
-last-seat seat admission with lifecycle reuse, webhook deduplication, and event
-ordering. These tests do not prove a
+aged-key replay, last-seat admission with lifecycle reuse and explicit abort
+release, webhook deduplication, and event ordering. These tests do not prove a
 configured Stripe account, production charge, or launch price approval.

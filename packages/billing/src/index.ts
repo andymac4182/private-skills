@@ -257,6 +257,27 @@ function sameDelta(left: UsageDelta, right: UsageDelta): boolean {
   return (left.seats ?? 0) === (right.seats ?? 0) && (left.storageBytes ?? 0) === (right.storageBytes ?? 0) && (left.scans ?? 0) === (right.scans ?? 0) && (left.eveCostCents ?? 0) === (right.eveCostCents ?? 0);
 }
 
+function appendDurableUsageOperation(
+  state: BillingOrganizationState,
+  operation: BillingUsageOperation | undefined,
+  organizationId: string,
+  operationKey: string,
+): void {
+  if (!operation || state.usageOperations.some((candidate) => candidate.operationKey === operationKey)) return;
+  if (operation.organizationId !== organizationId || operation.operationKey !== operationKey) {
+    throw new BillingError('BILLING_LEDGER_CORRUPT', 'The usage operation belongs to another organization or key', 500, { retryable: true });
+  }
+  // Repository adapters return detached rows, but clone nested values here as
+  // well so a transaction cannot mutate an adapter's exact-key cache through
+  // the working organization state.
+  state.usageOperations.push({
+    ...operation,
+    delta: { ...operation.delta },
+    usage: { ...operation.usage },
+    ...(operation.reconciled === undefined ? {} : { reconciled: { ...operation.reconciled } }),
+  });
+}
+
 function applyDelta(usage: BillingUsage, delta: UsageDelta, nowMs: number): BillingUsage {
   const result = { ...usage, updatedAt: new Date(nowMs).toISOString() };
   for (const metric of ['seats', 'storageBytes', 'scans', 'eveCostCents'] as const) {
@@ -617,7 +638,7 @@ export class BillingService {
   private readonly portalReturnUrl?: string;
 
   constructor(options: BillingServiceOptions) {
-    if (!options.repository || typeof options.repository.read !== 'function' || typeof options.repository.transaction !== 'function') throw new BillingError('INVALID_CONFIGURATION', 'billing repository is required', 500);
+    if (!options.repository || typeof options.repository.read !== 'function' || typeof options.repository.transaction !== 'function' || typeof options.repository.findUsageOperation !== 'function') throw new BillingError('INVALID_CONFIGURATION', 'billing repository is required', 500);
     this.repository = options.repository;
     this.catalog = options.catalog ?? createPlanCatalog();
     freeDefinition(this.catalog);
@@ -644,17 +665,23 @@ export class BillingService {
   }
 
   status(): BillingStatus {
-    const mode: BillingMode = !this.enabled || !this.provider ? 'disabled' : this.provider.mode;
-    const providerReady = this.enabled && this.provider !== undefined;
+    const providerReady = this.provider !== undefined;
+    const mode: BillingMode = !providerReady ? 'disabled' : this.provider!.mode;
     return {
-      enabled: providerReady,
+      // The admission boundary is independent from hosted provider calls:
+      // a deployment can enforce limits from verified subscription state
+      // while checkout, portal, and webhook delivery remain unavailable until
+      // an operator configures a provider.
+      enabled: this.enabled,
+      providerReady,
+      usageEnforcement: this.enabled,
       provider: this.provider?.id ?? null,
       mode,
-      webhookVerification: providerReady && this.webhookSecret !== undefined,
-      checkout: providerReady && Boolean(this.successUrl && this.cancelUrl) && this.hasConfiguredPaidPlan(),
+      webhookVerification: this.enabled && providerReady && this.webhookSecret !== undefined,
+      checkout: this.enabled && providerReady && Boolean(this.successUrl && this.cancelUrl) && this.hasConfiguredPaidPlan(),
       // Keep both hosted entry points closed until at least one server-owned
       // recurring price mapping is configured for the deployment.
-      portal: providerReady && Boolean(this.portalReturnUrl) && this.hasConfiguredPaidPlan(),
+      portal: this.enabled && providerReady && Boolean(this.portalReturnUrl) && this.hasConfiguredPaidPlan(),
     };
   }
 
@@ -682,7 +709,7 @@ export class BillingService {
   async entitlement(organizationId: string): Promise<BillingEntitlement> {
     const normalized = validateBillingOrganizationId(organizationId);
     const state = await this.repository.read(normalized);
-    return entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+    return entitlementFromState(this.catalog, state, this.enabled);
   }
 
   /** Alias used by runtime enforcement hooks. */
@@ -827,7 +854,7 @@ export class BillingService {
   async usageSnapshot(organizationId: string): Promise<UsageSnapshot> {
     const normalized = validateBillingOrganizationId(organizationId);
     const state = await this.repository.read(normalized);
-    const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+    const entitlement = entitlementFromState(this.catalog, state, this.enabled);
     return { organizationId: normalized, limits: { ...entitlement.limits }, usage: periodUsage(state.usage, this.now()), entitlement };
   }
 
@@ -845,7 +872,14 @@ export class BillingService {
     const normalizedDelta = normalizedDeltaInput(delta);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
-    return this.repository.transaction(normalized, (state) => this.reserveUsageInState(state, normalized, normalizedDelta, normalizedKey, nowMs));
+    // Read snapshots intentionally retain a bounded recent history. Fetch the
+    // exact durable row before locking so a retry whose key aged out of a
+    // memory/read window can be reloaded into the atomic transaction.
+    const durableOperation = await this.repository.findUsageOperation(normalized, normalizedKey);
+    return this.repository.transaction(normalized, (state) => {
+      appendDurableUsageOperation(state, durableOperation, normalized, normalizedKey);
+      return this.reserveUsageInState(state, normalized, normalizedDelta, normalizedKey, nowMs);
+    });
   }
 
   /**
@@ -864,7 +898,9 @@ export class BillingService {
     const normalizedActual = nonnegativeDeltaInput(actual);
     const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
     const nowMs = this.now();
+    const durableReservation = await this.repository.findUsageOperation(normalized, normalizedReservationKey);
     return this.repository.transaction(normalized, (state) => {
+      appendDurableUsageOperation(state, durableReservation, normalized, normalizedReservationKey);
       const reservation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedReservationKey);
       if (!reservation) throw new BillingError('USAGE_RESERVATION_NOT_FOUND', 'The usage reservation does not exist', 404);
       const reservationStatus = reservation.status ?? 'reserved';
@@ -887,7 +923,7 @@ export class BillingService {
         const difference = actualValue - (reservation.delta[metric] ?? 0);
         if (difference !== 0) correction[metric] = difference;
       }
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       const result = Object.keys(correction).length === 0
         ? {
           operationKey: normalizedKey,
@@ -949,7 +985,7 @@ export class BillingService {
     nowMs: number,
   ): UsageReservation {
     state.usage = periodUsage(state.usage, nowMs);
-    const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+    const entitlement = entitlementFromState(this.catalog, state, this.enabled);
     const existing = state.usageOperations.find((candidate) => candidate.operationKey === operationKey);
     if (existing) {
       if (!sameDelta(existing.delta, delta)) throw new BillingError('IDEMPOTENCY_CONFLICT', 'Usage operation key was already used with another delta', 409);
@@ -1036,7 +1072,7 @@ export class BillingService {
       const { reservations } = seatState(state);
       const revision = seatRevision(state);
       const subjectKey = options.subjectKey === true;
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (existing?.status === 'active') {
         if (subjectKey && existing.subjectKey !== true) {
@@ -1080,7 +1116,7 @@ export class BillingService {
       state.usage = periodUsage(state.usage, nowMs);
       const { baseline, reservations } = seatState(state);
       const revision = seatRevision(state);
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (!existing || (existing.status === 'settled' && existing.committed === false)) {
         return seatReservationSnapshot(normalized, normalizedKey, { seats: -1 }, state.usage, entitlement, true);
@@ -1109,7 +1145,7 @@ export class BillingService {
       state.usage = periodUsage(state.usage, nowMs);
       const { baseline, reservations } = seatState(state);
       const revision = seatRevision(state);
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       const existing = reservations.find((candidate) => candidate.operationKey === normalizedKey);
       if (!existing || existing.status === 'settled') {
         const exceeded = firstExceeded(entitlement.limits, state.usage, {});
@@ -1156,7 +1192,7 @@ export class BillingService {
       const nextBaseline = activeCount === 0 ? Math.max(seat.baseline, seats) : seat.baseline;
       const desiredSeats = nextBaseline + activeCount;
       const delta = desiredSeats - state.usage.seats;
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       const normalizedDeltaValue = delta === 0 ? {} : { seats: delta };
       const next = applyDelta(state.usage, normalizedDeltaValue, nowMs);
       const exceeded = firstExceeded(entitlement.limits, next, normalizedDeltaValue);
@@ -1248,7 +1284,7 @@ export class BillingService {
 
       state.seatBaseline = baseline;
       state.usage = applyDelta(state.usage, seatDelta === 0 ? {} : { seats: seatDelta }, nowMs);
-      const entitlement = entitlementFromState(this.catalog, state, this.enabled && this.provider !== undefined);
+      const entitlement = entitlementFromState(this.catalog, state, this.enabled);
       // Reconciliation records the identity truth even when it reveals that
       // the current organization is already over its plan. The next admission
       // then fails before doing any new work.
@@ -1446,8 +1482,9 @@ function envBool(value: string | undefined, fallback = false): boolean {
 
 /**
  * Compose an optional service from deployment configuration. Missing provider
- * credentials produce an explicitly disabled service; they do not activate a
- * local paid mode or infer entitlements from an environment label.
+ * credentials keep hosted checkout/portal/webhooks unavailable, while an
+ * explicitly enabled deployment can still enforce verified plan limits from
+ * its durable subscription state.
  */
 export function createBillingServiceFromEnv(options: BillingEnvironmentOptions): BillingService {
   const env = options.env ?? {};
@@ -1472,7 +1509,7 @@ export function createBillingServiceFromEnv(options: BillingEnvironmentOptions):
     repository: options.repository,
     catalog,
     provider,
-    enabled: requested && provider !== undefined,
+    enabled: requested,
     ...(env.STRIPE_WEBHOOK_SECRET ? { webhookSecret: env.STRIPE_WEBHOOK_SECRET } : env.PSKILLS_BILLING_WEBHOOK_SECRET ? { webhookSecret: env.PSKILLS_BILLING_WEBHOOK_SECRET } : {}),
     ...(options.successUrl ? { successUrl: options.successUrl } : env.PSKILLS_BILLING_SUCCESS_URL ? { successUrl: env.PSKILLS_BILLING_SUCCESS_URL } : {}),
     ...(options.cancelUrl ? { cancelUrl: options.cancelUrl } : env.PSKILLS_BILLING_CANCEL_URL ? { cancelUrl: env.PSKILLS_BILLING_CANCEL_URL } : {}),

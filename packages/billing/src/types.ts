@@ -176,6 +176,13 @@ export interface BillingRepository {
   transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T>;
   findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined>;
   findOrganizationBySubscriptionId(provider: BillingProviderId, subscriptionId: string): Promise<string | undefined>;
+  /**
+   * Look up one usage operation by its durable organization/key primary key.
+   * Reads may retain only a bounded recent history, so admission and
+   * reconciliation use this exact lookup when a key has aged out of the
+   * in-memory/read snapshot.
+   */
+  findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined>;
   findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined>;
 }
 
@@ -302,7 +309,12 @@ export interface UsageLimitDetails {
 }
 
 export interface BillingStatus {
+  /** Usage and plan enforcement is available when billing was explicitly enabled. */
   enabled: boolean;
+  /** True only when a provider adapter is configured for hosted billing calls. */
+  providerReady: boolean;
+  /** Explicit alias for host runtimes that need admission without checkout. */
+  usageEnforcement: boolean;
   provider: BillingProviderId | null;
   mode: BillingMode;
   webhookVerification: boolean;

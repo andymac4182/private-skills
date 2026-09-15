@@ -147,6 +147,35 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
     await expect(second.usageSnapshot('org-pg-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } })
   })
 
+  it('replays an aged usage key through the durable exact-key ledger', async () => {
+    let now = NOW
+    const catalog = planCatalog()
+    const repository = new PostgresBillingRepository(pool, { tablePrefix: prefix, maxUsageOperations: 1, now: () => now })
+    const service = new BillingService({ repository, catalog, enabled: false, now: () => now })
+    const organizationId = 'org-pg-aged-operation'
+
+    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: false })
+    await expect(service.reconcileUsage(organizationId, 'pg-aged-stable', { storageBytes: 0 }, 'pg-aged-release')).resolves.toMatchObject({ idempotent: false })
+    now += 1_000
+    await expect(service.reserveUsage(organizationId, { scans: 1 }, 'pg-aged-newer')).resolves.toMatchObject({ idempotent: false })
+
+    // Ordinary reads are intentionally bounded and no longer contain the old
+    // key. The repository's exact primary-key lookup still finds its durable
+    // released lifecycle row, and reserveUsage reopens it atomically while
+    // preserving its original createdAt.
+    const recent = await repository.read(organizationId)
+    expect(recent.usageOperations).toHaveLength(1)
+    expect(recent.usageOperations[0]?.operationKey).toBe('pg-aged-newer')
+    await expect(repository.findUsageOperation(organizationId, 'pg-aged-stable')).resolves.toMatchObject({
+      operationKey: 'pg-aged-stable',
+      status: 'released',
+      createdAt: new Date(NOW).toISOString(),
+    })
+    now += 1_000
+    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: false })
+    await expect(service.reserveUsage(organizationId, { storageBytes: 40 }, 'pg-aged-stable')).resolves.toMatchObject({ idempotent: true })
+  })
+
   it('keeps the last seat atomic across invite barriers and reuses cancel/remove lifecycles', async () => {
     const catalog = planCatalog()
     const first = new BillingService({
@@ -327,6 +356,26 @@ describePostgres('billing PostgreSQL durability (requires PSKILLS_BILLING_POSTGR
       await sql!.unsafe(`INSERT INTO ${memberTable} ("id", "organizationId", "userId", "role") VALUES ($1, $2, $3, $4)`, [hookMemberId, hookOrganization, 'user-hook', 'reader'])
       await firstAdmission.syncSeats(hookOrganization, 'lifecycle-missed-hook')
       await expect(first.usageSnapshot(hookOrganization)).resolves.toMatchObject({ usage: { seats: 1 } })
+      const hookUsage = await sql!.unsafe<Record<string, unknown>[]>(`SELECT seat_reservations FROM "${prefix}_usage" WHERE organization_id = $1`, [hookOrganization])
+      const hookReservations = hookUsage[0]?.seat_reservations as Array<Record<string, unknown>>
+      expect(hookReservations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ operationKey: hookKey, subjectKey: true, committed: true, status: 'settled' }),
+      ]))
+
+      // A failed/aborted Better Auth write has no identity row for a snapshot
+      // to prove. The active subject hold therefore remains fail-closed, but
+      // the exact generated key provides an explicit abort/release path so a
+      // sequence of failed writes cannot exhaust the organization forever.
+      const abortedOrganization = 'org-pg-lifecycle-aborted'
+      const abortedSubject = 'member-aborted'
+      const abortedKey = await seatOperationKey('member', abortedOrganization, abortedSubject)
+      await first.syncSeatCount(abortedOrganization, 1, 'lifecycle-aborted-seed')
+      await first.reserveSeat(abortedOrganization, abortedKey, { subjectKey: true })
+      await firstAdmission.syncSeats(abortedOrganization, 'lifecycle-aborted-missing')
+      await expect(first.usageSnapshot(abortedOrganization)).resolves.toMatchObject({ usage: { seats: 2 } })
+      await expect(second.reserveSeat(abortedOrganization, 'lifecycle-aborted-third')).rejects.toMatchObject({ code: 'USAGE_LIMIT_EXCEEDED' })
+      await expect(firstAdmission.releaseSeat(abortedOrganization, abortedKey)).resolves.toBeUndefined()
+      await expect(firstAdmission.reserveNewSeat(abortedOrganization, 'lifecycle-aborted-retry')).resolves.toBeUndefined()
 
       // Start from two committed subjects. A stale snapshot still contains B,
       // while a concurrent remove lifecycle has already released B. Revision

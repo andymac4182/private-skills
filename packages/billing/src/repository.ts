@@ -125,6 +125,18 @@ export function cloneBillingState(state: BillingOrganizationState): BillingOrgan
   }
 }
 
+function cloneBillingOperation(operation: BillingUsageOperation): BillingUsageOperation {
+  try {
+    return JSON.parse(JSON.stringify(operation)) as BillingUsageOperation;
+  } catch {
+    throw new BillingRepositoryError('INVALID_STATE', 'billing usage operation is not JSON serializable');
+  }
+}
+
+function usageOperationIndexKey(organizationId: string, operationKey: string): string {
+  return `${organizationId}\u0000${operationKey}`;
+}
+
 function nonnegativeInteger(value: unknown, field: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new BillingRepositoryError('INVALID_STATE', `${field} must be a non-negative safe integer`);
@@ -291,6 +303,13 @@ function syncResult(value: unknown): void {
 
 export class MemoryBillingRepository implements BillingRepository {
   private readonly states = new Map<string, BillingOrganizationState>();
+  /**
+   * The visible state keeps a bounded recent operation window. Keep a
+   * process-local exact-key index as well so an old reservation cannot be
+   * charged again merely because it fell out of that window. PostgreSQL has
+   * the same property through its primary-key lookup.
+   */
+  private readonly operationIndex = new Map<string, BillingUsageOperation>();
   private readonly mutex = new OrganizationMutex();
   /**
    * Mapping and event uniqueness span organizations.  A process-local
@@ -312,6 +331,9 @@ export class MemoryBillingRepository implements BillingRepository {
     }
     for (const [organizationId, state] of this.states) {
       assertCrossOrganizationUniqueness(this.states, organizationId, state);
+      for (const operation of state.usageOperations) {
+        this.operationIndex.set(usageOperationIndexKey(organizationId, operation.operationKey), cloneBillingOperation(operation));
+      }
     }
   }
 
@@ -324,6 +346,9 @@ export class MemoryBillingRepository implements BillingRepository {
         if (created.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
         assertBillingState(created);
         this.states.set(normalized, created);
+        for (const operation of created.usageOperations) {
+          this.operationIndex.set(usageOperationIndexKey(normalized, operation.operationKey), cloneBillingOperation(operation));
+        }
         return cloneBillingState(created);
       }
       return cloneBillingState(current);
@@ -346,6 +371,9 @@ export class MemoryBillingRepository implements BillingRepository {
       // the local adapter equally strict so tests and single-process mode do
       // not permit a provider identifier to be claimed by two organizations.
       assertCrossOrganizationUniqueness(this.states, normalized, working);
+      for (const operation of working.usageOperations) {
+        this.operationIndex.set(usageOperationIndexKey(normalized, operation.operationKey), cloneBillingOperation(operation));
+      }
       this.states.set(normalized, cloneBillingState(working));
       return result;
     }));
@@ -367,6 +395,27 @@ export class MemoryBillingRepository implements BillingRepository {
       if (state.subscription?.provider === normalizedProvider && state.subscription.subscriptionId === normalizedSubscription) return organizationId;
     }
     return undefined;
+  }
+
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined> {
+    const normalizedOrganization = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    const indexed = this.operationIndex.get(usageOperationIndexKey(normalizedOrganization, normalizedKey));
+    if (indexed) return cloneBillingOperation(indexed);
+    const state = this.states.get(normalizedOrganization);
+    if (state) {
+      const operation = state.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+      if (operation) {
+        this.operationIndex.set(usageOperationIndexKey(normalizedOrganization, normalizedKey), cloneBillingOperation(operation));
+        return cloneBillingOperation(operation);
+      }
+      return undefined;
+    }
+    // Initialize a state created by stateFactory before checking its
+    // operations, preserving the same behavior as read().
+    const created = await this.read(normalizedOrganization);
+    const operation = created.usageOperations.find((candidate) => candidate.operationKey === normalizedKey);
+    return operation ? cloneBillingOperation(operation) : undefined;
   }
 
   async findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined> {
@@ -771,7 +820,14 @@ export class PostgresBillingRepository implements BillingRepository {
     const subscriptionResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, provider, subscription_id, customer_id, price_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end, event_created_at, last_event_id, source, updated_at FROM ${this.tables.subscriptions} WHERE organization_id = $1${suffix}`, [normalized]);
     const usageResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, period_start, period_end, seats, storage_bytes, scans, eve_cost_cents, seat_baseline, seat_reservations, seat_revision, updated_at FROM ${this.tables.usage} WHERE organization_id = $1${suffix}`, [normalized]);
     const eventsResult = await executor.query<Record<string, unknown>>(`SELECT provider, event_id, event_type, organization_id, created_at, received_at, payload_digest, handled, ignored_reason FROM ${this.tables.events} WHERE organization_id = $1 ORDER BY received_at DESC LIMIT ${this.maxWebhookEvents}${suffix}`, [normalized]);
-    const operationsResult = await executor.query<Record<string, unknown>>(`SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}${suffix}`, [normalized]);
+    // A transaction reloads the complete durable operation ledger so an old
+    // idempotency key can be found while the organization row is locked. A
+    // bounded recent window is still used for ordinary read snapshots; it is
+    // a response-size limit, never a correctness boundary for admission.
+    const operationsQuery = lock
+      ? `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC FOR UPDATE`
+      : `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 ORDER BY created_at DESC LIMIT ${this.maxUsageOperations}`;
+    const operationsResult = await executor.query<Record<string, unknown>>(operationsQuery, [normalized]);
     const base = cloneBillingState(this.stateFactory(normalized));
     if (base.organizationId !== normalized) throw new BillingRepositoryError('INVALID_STATE', 'billing state factory returned another organization');
     const usageRow = usageResult.rows[0];
@@ -922,6 +978,17 @@ export class PostgresBillingRepository implements BillingRepository {
     );
     const value = result.rows[0]?.organization_id;
     return value === undefined ? undefined : validateBillingOrganizationId(value);
+  }
+
+  async findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined> {
+    const normalizedOrganization = validateBillingOrganizationId(organizationId);
+    const normalizedKey = validateBillingIdentifier(operationKey, 'operationKey', MAX_OPERATION_KEY_BYTES);
+    await this.ensureSchema();
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT organization_id, operation_key, seats_delta, storage_bytes_delta, scans_delta, eve_cost_cents_delta, usage_snapshot, created_at, status, reconciled FROM ${this.tables.operations} WHERE organization_id = $1 AND operation_key = $2`,
+      [normalizedOrganization, normalizedKey],
+    );
+    return result.rows[0] ? rowOperation(result.rows[0], normalizedOrganization) : undefined;
   }
 
   async findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined> {

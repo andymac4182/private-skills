@@ -7,6 +7,7 @@ import {
   STRIPE_API_VERSION,
   billingPostgresSchemaSql,
   createBillingWebhookHandler,
+  createBillingServiceFromEnv,
   createLocalBillingAdapter,
   createMemoryBillingRepository,
   createPlanCatalog,
@@ -220,6 +221,48 @@ describe('billing provider readiness', () => {
     const unconfigured = serviceWith({ provider, catalog: createPlanCatalog() });
     expect(unconfigured.status().checkout).toBe(false);
     await expect(unconfigured.checkout({ organizationId: 'org-unconfigured', subject: 'owner', planId: 'team' })).rejects.toMatchObject({ code: 'PLAN_NOT_CONFIGURED' });
+  });
+
+  it('keeps usage enforcement available when hosted provider setup is deferred', async () => {
+    const repository = createMemoryBillingRepository({ now: () => NOW });
+    const service = new BillingService({
+      repository,
+      catalog: configuredCatalog(),
+      enabled: true,
+      now: () => NOW,
+      successUrl: 'https://private-skills.example/billing/success',
+      cancelUrl: 'https://private-skills.example/billing/cancel',
+      portalReturnUrl: 'https://private-skills.example/billing',
+    });
+    const timestamp = new Date(NOW).toISOString();
+    await repository.transaction('org-provider-deferred', (state) => {
+      state.customer = { organizationId: state.organizationId, provider: 'stripe', customerId: 'cus_deferred', createdAt: timestamp, updatedAt: timestamp };
+      state.subscription = {
+        organizationId: state.organizationId,
+        provider: 'stripe',
+        subscriptionId: 'sub_deferred',
+        customerId: 'cus_deferred',
+        priceId: 'price_team_test',
+        planId: 'team',
+        status: 'active',
+        cancelAtPeriodEnd: false,
+        eventCreatedAt: NOW_SECONDS,
+        lastEventId: 'evt_deferred',
+        source: 'verified-webhook',
+        updatedAt: timestamp,
+      };
+    });
+    expect(service.status()).toMatchObject({ enabled: true, usageEnforcement: true, providerReady: false, provider: null, checkout: false, portal: false, webhookVerification: false });
+    await expect(service.entitlement('org-provider-deferred')).resolves.toMatchObject({ planId: 'team', state: 'active' });
+    await expect(service.reserveUsage('org-provider-deferred', { scans: 1 }, 'deferred-eve-scan')).resolves.toMatchObject({ idempotent: false });
+  });
+
+  it('keeps explicit environment admission enabled without inferring a provider', () => {
+    const service = createBillingServiceFromEnv({
+      repository: createMemoryBillingRepository({ now: () => NOW }),
+      env: { PSKILLS_BILLING_ENABLED: 'true' },
+    });
+    expect(service.status()).toMatchObject({ enabled: true, usageEnforcement: true, providerReady: false, provider: null, checkout: false, portal: false });
   });
 
   it('uses one server-owned customer mapping for hosted checkout and portal', async () => {
