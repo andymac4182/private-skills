@@ -47,7 +47,7 @@ function hasCompanyAdminRole(role: string | undefined): boolean {
 }
 
 function unavailableCopy(): string {
-  return 'Company SSO settings are not available on this deployment yet. Provider configuration is disabled until the company SSO runtime route is wired.'
+  return 'Company SSO is not enabled for this deployment. Contact your registry administrator to enable it.'
 }
 
 function providerStatusTone(status: CompanySsoProviderStatus): 'good' | 'muted' {
