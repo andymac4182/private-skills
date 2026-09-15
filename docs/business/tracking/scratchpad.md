@@ -115,3 +115,11 @@ it remains local fixture evidence. A later post-migration candidate run
 (`cddf73a` / `432bf5d`) passed 1,113 tests with 24 skipped and typecheck; native
 Mac CLI installation and canonical artifact digest/repeat checks passed
 against the separately retained a8ab65a fixture. Neither follow-up proves hosted identity or production PR #53 behavior.
+
+### Review follow-through before next integration
+
+B21 concurrent import review found a shared-reservation race: the first reserving request can release the shared scan charge after another request queues the job and a worker begins scanning. Caller owner is adding a durable ownership fence and barrier tests. Definite failure before blob put also needs explicit zero reconciliation.
+
+B25 identity telemetry candidate03c73bb needs request-lifetime persistence rather than fire-and-forget writes, operational retention cleanup rather than migration-only cleanup, and actual loopback PostgreSQL proof. CLI acquisition needs an in-app sign-in/download flow instead of public links landing on JSON401 responses. Neither candidate is accepted yet.
+
+Extended Nitro fixture21701b7 adds packs, draft revisions/files, search through local embedding fixture and synthetic confirmed-install receipts. Follow-up strengthens exact edited content and foreign edit denial before root runs combined scenarios. B30 tracks missing marketing metadata/sitemap discovered in root source review.
