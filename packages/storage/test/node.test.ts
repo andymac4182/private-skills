@@ -74,14 +74,14 @@ describe("Node Files SDK provider binding", () => {
     })).toBe(binding);
 
     await expect(resolveNodeStorageProviderBinding({ provider: "vercel-blob", credentials: { token: "credential" } }))
-      .rejects.toThrow(/providerBinding|storeId/u);
+      .resolves.toBeUndefined();
     await expect(resolveNodeStorageProviderBinding({ provider: "r2", bucket: "private" }))
-      .rejects.toThrow(/providerBinding|accountId|endpoint/u);
+      .resolves.toBeUndefined();
     await expect(resolveNodeStorageProviderBinding({
       provider: "azure",
       container: "private",
       credentials: { connectionString: "credential" },
-    })).rejects.toThrow(/providerBinding|accountName|endpoint/u);
+    })).resolves.toBeUndefined();
 
     await expect(resolveNodeStorageProviderBinding({
       provider: "vercel-blob",
@@ -93,6 +93,25 @@ describe("Node Files SDK provider binding", () => {
       providerBinding: "https://storage.example.test/private",
       credentials: { token: "credential" },
     })).rejects.toThrow(/providerBinding/u);
+  });
+
+  it("keeps a token-only Vercel Blob adapter usable without minting receipts", async () => {
+    const store = await createNodeFilesSdkBlobStore({
+      provider: "vercel-blob",
+      credentials: { token: "token-only-fixture" },
+    });
+    expect(store.providerBinding).toBeUndefined();
+    const bytes = new TextEncoder().encode("token-only storage fixture");
+    const stored = {
+      key: "sealed/token-only-fixture",
+      digest: await digestBytes(bytes),
+      size: bytes.byteLength,
+    };
+    expect(createVerifiedStorageWriteReceipt(store, {
+      digest: stored.digest,
+      size: stored.size,
+      objectKey: stored.key,
+    }, stored)).toBeUndefined();
   });
 
   it("uses the real filesystem adapter binding for restart cleanup and retains unknown writes", async () => {

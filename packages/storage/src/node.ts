@@ -258,7 +258,7 @@ export async function createNodeFilesSdkBlobStore(
  */
 export async function resolveNodeStorageProviderBinding(
   options: NodeFilesSdkOptions,
-): Promise<string> {
+): Promise<string | undefined> {
   if (options.providerBinding !== undefined) {
     const explicit = normalizeStorageProviderBinding(options.providerBinding);
     if (!explicit) {
@@ -275,34 +275,26 @@ export async function resolveNodeStorageProviderBinding(
  * Build a stable non-secret identity when the host did not provide one.
  * Credentials are intentionally excluded; rotation of a credential for the
  * same bucket/account must not make a completed object look like another
- * provider. Vercel Blob has no public store identity unless the host supplies
- * `storeId`, so it must receive an explicit binding in that configuration.
+ * provider. Providers without a derivable public identity remain usable, but
+ * their writes cannot mint receipts until the host supplies `providerBinding`.
  */
-async function derivedProviderBinding(options: NodeFilesSdkOptions): Promise<string> {
+async function derivedProviderBinding(options: NodeFilesSdkOptions): Promise<string | undefined> {
   const storeId = options.credentials?.storeId;
-  if (options.provider === "vercel-blob" && !storeId) {
-    throw new Error(
-      "Files SDK vercel-blob requires providerBinding or credentials.storeId for durable storage recovery",
-    );
-  }
   if (
     options.provider === "r2" &&
     !options.credentials?.accountId &&
     !options.endpoint
   ) {
-    throw new Error(
-      "Files SDK r2 requires providerBinding, credentials.accountId, or endpoint for durable storage recovery",
-    );
+    return undefined;
   }
   if (
     options.provider === "azure" &&
     !options.credentials?.accountName &&
     !options.endpoint
   ) {
-    throw new Error(
-      "Files SDK azure requires providerBinding, credentials.accountName, or endpoint for durable storage recovery",
-    );
+    return undefined;
   }
+  if (options.provider === "vercel-blob" && !storeId) return undefined;
   const identity = {
     provider: options.provider,
     prefix: options.prefix ?? "",

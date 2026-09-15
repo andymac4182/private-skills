@@ -162,11 +162,13 @@ isolated from ordinary writers for the rehearsal window; the lock prevents a
 normal concurrent insert from being silently overwritten, while a writer that
 arrives after the seed is still an operational isolation violation.
 
-Vercel Blob source capture likewise requires `PSKILLS_STORAGE_BLOB_STORE_ID` or
+Vercel Blob source capture may use `PSKILLS_STORAGE_BLOB_STORE_ID` or
 `PSKILLS_STORAGE_PROVIDER_BINDING`; target restore accepts the corresponding
 `PSKILLS_TARGET_BLOB_STORE_ID` or `PSKILLS_TARGET_STORAGE_PROVIDER_BINDING`.
-Bindings are bounded non-secret configuration identities and never contain the
-Blob token.
+These values are required when the operation must mint or recover verified
+write receipts. Token-only storage remains usable, but recovery retains writes
+without a binding. Bindings are bounded non-secret configuration identities
+and never contain the Blob token.
 
 The manifest is private and mode-`0600`, but it is unsigned. The restore
 utility therefore treats it as operator-trusted backup metadata and does not
