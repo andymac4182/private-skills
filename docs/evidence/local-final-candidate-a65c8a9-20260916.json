@@ -1,0 +1,46 @@
+{
+  "recordedAt": "2026-09-15T21:23:27Z",
+  "scope": "exact final-candidate validation before shared checkpoint merge",
+  "sourceCommit": "a65c8a95125ed008666dd12f48d605a9d4758ebb",
+  "checkout": "/private/tmp/private-skills-final-candidate-4917215",
+  "environment": "Local candidate validation used disposable loopback PostgreSQL for the database checks; credentials and connection values are omitted. No production database, deployment, external identity provider, storage provider, or worker was contacted.",
+  "checks": [
+    {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "CI=true pnpm test -- --no-file-parallelism",
+      "result": "173 test files passed, 17 skipped; 1240 tests passed, 40 skipped"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run packages/billing/test/postgres.integration.test.ts packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts packages/database/test/index.test.ts packages/database/test/hosted-worker-dispatch.test.ts packages/storage/test/recovery.test.ts --no-file-parallelism",
+      "result": "5 test files passed; 43 tests passed"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run tests/e2e/multi-tenant-postgres-acceptance.test.ts --no-file-parallelism",
+      "result": "1 test file passed; 1 test passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "git status --short --branch && git rev-parse HEAD",
+      "result": "clean detached HEAD at a65c8a95125ed008666dd12f48d605a9d4758ebb"
+    }
+  ],
+  "coveredAreas": [
+    "metered reservation generation propagation and stale-generation fencing through core, authoring, Eve, workers, and billing",
+    "PostgreSQL billing constraint scoping by the search-path-resolved operations relation",
+    "safe migration rerun when an empty schema precedes an existing target schema",
+    "populated two-company tenant isolation across skills, packs, drafts, source catalog, operations, search, Eve callbacks, and organization-header spoofing",
+    "live disposable PostgreSQL identity, API-token, billing, Eve reservation, database, worker-dispatch, and storage recovery paths"
+  ],
+  "limits": [
+    "the full suite's skipped tests are opt-in environment checks and are recorded separately from the passed tests",
+    "storage in-flight writer quiescence and recovery fencing remain under follow-up review",
+    "runtime mounting, hosted provider lifecycle, external identity providers, and production deployment acceptance are outside this local candidate record",
+    "this evidence record does not establish release readiness"
+  ]
+}
