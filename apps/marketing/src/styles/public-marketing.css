@@ -200,7 +200,7 @@
 .marketing-footer-grid a { width: fit-content; color: var(--marketing-muted); font-size: 10px; font-weight: 700; text-decoration: none; }
 .marketing-footer-grid a:hover { color: var(--marketing-cobalt-deep); text-decoration: underline; }
 .marketing-footer-note { max-width: 200px; color: var(--marketing-muted); font-size: 10px; line-height: 1.45; }
-.marketing-footer-bottom { display: flex; justify-content: space-between; gap: 14px; padding: 16px 4px 0; border-top: 1px solid var(--marketing-line); color: #8d9ab0; font-size: 9px; }
+.marketing-footer-bottom { display: flex; justify-content: space-between; gap: 14px; padding: 16px 4px 0; border-top: 1px solid var(--marketing-line); color: var(--marketing-muted); font-size: 9px; }
 
 /* Pricing and docs */
 .marketing-page-hero { max-width: 1240px; padding: 83px 24px 69px; margin: 0 auto; }
@@ -231,9 +231,10 @@
 .marketing-plan-features li::before { color: var(--marketing-seafoam-deep); content: '✓'; font-weight: 900; }
 .marketing-plan-card .marketing-button { width: 100%; margin-top: auto; }
 .marketing-comparison { margin-top: 56px; }
-.marketing-comparison:focus-visible { outline: 3px solid rgba(23, 92, 230, .25); outline-offset: 4px; }
+.marketing-comparison-scroll:focus-visible { outline: 3px solid rgba(23, 92, 230, .25); outline-offset: 4px; }
 .marketing-comparison h2 { margin: 0 0 16px; color: var(--marketing-ink); font: 600 27px/1 Georgia, 'Times New Roman', serif; letter-spacing: -.045em; }
 .marketing-comparison-hint { display: none; }
+.marketing-comparison-scroll { overflow-x: auto; }
 .marketing-comparison table { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--marketing-line); border-radius: 10px; background: rgba(255,255,255,.7); font-size: 10px; text-align: left; }
 .marketing-comparison th, .marketing-comparison td { padding: 13px 14px; border-bottom: 1px solid var(--marketing-line); color: var(--marketing-muted); vertical-align: top; }
 .marketing-comparison th { color: var(--marketing-ink-soft); background: #f5f8fd; font-size: 9px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
@@ -444,7 +445,7 @@
   .marketing-footer-cta { padding: 29px 20px; }
   .marketing-footer-grid { grid-template-columns: 1fr 1fr; gap: 25px 16px; }
   .marketing-footer-bottom { align-items: flex-start; flex-direction: column; }
-  .marketing-comparison { overflow-x: auto; }
+  .marketing-comparison-scroll { overflow-x: auto; }
   .marketing-comparison table { min-width: 570px; }
   .marketing-start-step { grid-template-columns: 35px minmax(0, 1fr); gap: 13px; }
   .marketing-start-step-number { width: 32px; height: 32px; }

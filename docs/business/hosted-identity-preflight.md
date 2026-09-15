@@ -6,8 +6,12 @@ It was reviewed against source baseline
 `bd877a5cc6733fe4dcc50577fa500ed0011d2b33` (merge parent
 `1ed4435`); that is source provenance, not a claim that this revision is
 deployed. The runbook does not change production configuration or application
-data. This task performed no production database connection, DDL, DML,
-provider call, adoption, or deployment.
+data. The fresh hosted review in
+[`hosted-identity-migration-review-20260916.json`](../evidence/hosted-identity-migration-review-20260916.json)
+used names-only Vercel inspection, the public identity configuration endpoint,
+and a bounded PostgreSQL read-only session against the current production
+deployment. It performed no production DDL, DML, provider call, adoption, or
+deployment.
 
 The supplied current production baseline is:
 
@@ -17,6 +21,25 @@ The supplied current production baseline is:
   `public.private_skills_registry_state` at revision `231`. The sanitized
   restore evidence records that historical observation and its revision in
   [`docs/evidence/hosted-postgres-restore-proof-20260916.json`](../evidence/hosted-postgres-restore-proof-20260916.json).
+
+The fresh read-only review of the current production alias observed the same
+single row at revision `231`, SQL type `jsonb`, `jsonb_typeof(state)` of
+`string`, 2,395,620 state-text bytes, and digest
+`sha256:0b5d502133e09c353a2a336dfe2ab2e6d2772d16b099335271396ffe559c6bd8`.
+It found no Better Auth, company SSO, operations-event, service-token, or
+billing target tables. The complete bounded result, including the current
+deployment source SHA and migration-plan digest, is recorded in the linked
+review artifact above.
+
+The first guarded schema-preparation attempt then stopped and rolled back
+before DDL when the fresh registry revision had advanced to `232`; its
+sanitized record is [`hosted-identity-schema-preparation-20260916.json`](../evidence/hosted-identity-schema-preparation-20260916.json).
+After review, the second attempt used that fresh row-locked revision as the
+authoritative window baseline and committed the same four additive SQL
+artifacts. All twelve new tables are empty, their columns and indexes match,
+and the registry readback remains unchanged at revision `232`; identity,
+providers, adoption, and traffic remain disabled. The bounded pre/in-transaction/post
+record is [`hosted-identity-schema-preparation-20260916-attempt-2.json`](../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json).
 
 Before a migration window, take a fresh fenced read-only capture and call its
 revision `BASELINE_REVISION`. The supplied `231` is the expected starting
@@ -294,6 +317,18 @@ digest, target schema, dynamic table names, `unsafeChanges`, and
 custom token location, or non-public token alias blocks the change. A plan
 with no operations is still evidence that the target already matches the
 reviewed Better Auth models; it is not permission to enable identity.
+
+The fresh hosted review materializes the exact statements used for review in
+the following local artifacts, with their bytes and SHA-256 values captured in
+[`hosted-identity-migration-review-20260916.sql-manifest.json`](../evidence/hosted-identity-migration-review-20260916.sql-manifest.json):
+
+- [`hosted-identity-migration-review-20260916.better-auth.sql`](../evidence/hosted-identity-migration-review-20260916.better-auth.sql) — the nine-table Better Auth plan, `sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b`.
+- [`hosted-identity-migration-review-20260916.company-sso.sql`](../evidence/hosted-identity-migration-review-20260916.company-sso.sql) — the additive public company SSO table and indexes, `sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5`.
+- [`hosted-identity-migration-review-20260916.service-tokens.sql`](../evidence/hosted-identity-migration-review-20260916.service-tokens.sql) — the compatibility-bound public service-token table and indexes, `sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492`.
+- [`hosted-identity-migration-review-20260916.identity-operations.sql`](../evidence/hosted-identity-migration-review-20260916.identity-operations.sql) — the additive identity operations-event table and indexes, `sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c`.
+
+The files are review artifacts only. Generating them ran no DDL or DML and
+does not authorize applying them.
 
 ## Explicit additive migration
 

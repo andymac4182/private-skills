@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.production-release-readonly-verification",
+  "observedAtUtc": "2026-09-15T21:27:58Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "c8709858659767850dfc35d39a925e83aace55bb",
+    "pullRequest": 57,
+    "pullRequestUrl": "https://github.com/andymac4182/private-skills/pull/57",
+    "releaseHeadSha": "89711f8e986ddc1a42397d47dc676ea0b5e002d1",
+    "mergedAtUtc": "2026-09-15T21:24:18Z",
+    "trigger": "Git"
+  },
+  "includedChanges": {
+    "pricingProjection": "564be50",
+    "identityPreflight": "fa327e1",
+    "pricingCopyCorrection": "89711f8",
+    "priorReaderEvidence": "37c3b5f",
+    "qualification": "The release includes the reviewed pricing projection, executable identity migration preflight, pricing copy correction, and prior PR56 evidence. No runtime billing candidate or identity activation is included."
+  },
+  "localGates": {
+    "frozenInstall": {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed",
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "rootTypecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed",
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "marketingTypecheck": {
+      "command": "CI=true pnpm --filter @private-skills/marketing typecheck",
+      "result": "passed",
+      "testedSnapshots": [
+        "c8876925d4d9db5bd39c68945d5741bc5384c78b",
+        "89711f8e986ddc1a42397d47dc676ea0b5e002d1"
+      ]
+    },
+    "marketingTests": {
+      "command": "CI=true pnpm --filter @private-skills/marketing test",
+      "result": "passed",
+      "files": 1,
+      "passed": 5,
+      "skipped": 0,
+      "testedSnapshots": [
+        "c8876925d4d9db5bd39c68945d5741bc5384c78b",
+        "89711f8e986ddc1a42397d47dc676ea0b5e002d1"
+      ]
+    },
+    "billingTests": {
+      "command": "CI=true pnpm exec vitest run packages/billing/test/index.test.ts tests/billing-routes.test.ts tests/runtime-billing.test.ts --reporter=dot",
+      "result": "passed",
+      "files": 3,
+      "passed": 31,
+      "skipped": 0,
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "identityPreflightTests": {
+      "command": "CI=true node --test tests/hosted-identity-preflight.test.mjs",
+      "result": "passed",
+      "passed": 16,
+      "failed": 0,
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "fullSuite": {
+      "command": "CI=true pnpm test -- --reporter=dot",
+      "result": "passed",
+      "filesPassed": 162,
+      "filesSkipped": 16,
+      "testsPassed": 1146,
+      "testsSkipped": 27,
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "webBuild": {
+      "command": "CI=true pnpm build",
+      "result": "passed",
+      "testedSnapshot": "c8876925d4d9db5bd39c68945d5741bc5384c78b"
+    },
+    "marketingBuild": {
+      "command": "APP_ORIGIN=https://private-skills-theta.vercel.app CI=true pnpm --filter @private-skills/marketing build",
+      "result": "passed",
+      "testedSnapshots": [
+        "c8876925d4d9db5bd39c68945d5741bc5384c78b",
+        "89711f8e986ddc1a42397d47dc676ea0b5e002d1"
+      ],
+      "qualification": "The local marketing build used the private safe-default mode; no deployment environment was changed."
+    },
+    "diffCheck": {
+      "command": "git diff --check origin/main...HEAD",
+      "result": "passed",
+      "testedSnapshot": "89711f8e986ddc1a42397d47dc676ea0b5e002d1"
+    }
+  },
+  "pullRequestChecks": {
+    "headSha": "89711f8e986ddc1a42397d47dc676ea0b5e002d1",
+    "vercelPreviews": {
+      "Vercel – private-skills": "success",
+      "Vercel – private-skills-builder": "success",
+      "Vercel – private-skills-marketing": "success",
+      "Vercel – private-skills-upload-reviewer": "success"
+    },
+    "nativeCiWorkflowRun": "35025223968",
+    "nativeCiAdmission": "failed_before_steps",
+    "nativeCiQualification": "All native jobs produced no runner steps and failed at account billing admission; the previously authorized native-CI billing waiver was applied."
+  },
+  "nativeCi": {
+    "workflowRun": "35025223968",
+    "status": "blocked_before_runner",
+    "jobs": {
+      "webNode24": "failure_before_steps",
+      "rustLinux": "failure_before_steps",
+      "rustMacArm64": "failure_before_steps",
+      "rustWindows": "failure_before_steps",
+      "nodeContainer": "skipped"
+    },
+    "userWaiver": true,
+    "qualification": "Native CI was unavailable before runner execution and is recorded as waived; no native Linux or Windows CI pass is claimed."
+  },
+  "deployments": [
+    {
+      "service": "app",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "deploymentId": "dpl_EpqFMbCTi1mezwzUaZ1puMd9oFuA",
+      "deploymentUrl": "https://private-skills-theta.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills/EpqFMbCTi1mezwzUaZ1puMd9oFuA",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c8709858659767850dfc35d39a925e83aace55bb",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills",
+      "githubDeploymentId": 6468784353,
+      "githubDeploymentStatusId": 18395603296,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-5379mknt9-andrewmcclenaghan-6046s-projects.vercel.app"
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "deploymentId": "dpl_3W1kpH8PqfYHaLKHguzAKhE39BJW",
+      "deploymentUrl": "https://private-skills-upload-reviewer.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-upload-reviewer/3W1kpH8PqfYHaLKHguzAKhE39BJW",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c8709858659767850dfc35d39a925e83aace55bb",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-upload-reviewer",
+      "githubDeploymentId": 6468791815,
+      "githubDeploymentStatusId": 18395617228,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-upload-reviewer-qszytn97u.vercel.app"
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "deploymentId": "dpl_8RScTtCzcZHdSgoNt4VZsoQQYpvb",
+      "deploymentUrl": "https://private-skills-builder.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-builder/8RScTtCzcZHdSgoNt4VZsoQQYpvb",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c8709858659767850dfc35d39a925e83aace55bb",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-builder",
+      "githubDeploymentId": 6468776811,
+      "githubDeploymentStatusId": 18395587128,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-builder-ka13317gw.vercel.app"
+    },
+    {
+      "service": "marketing",
+      "project": "private-skills-marketing",
+      "alias": "private-skills-marketing.vercel.app",
+      "deploymentId": "dpl_ECWjSx9R62pzKRaFfPEGZciUNNBo",
+      "deploymentUrl": "https://private-skills-marketing.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-marketing/ECWjSx9R62pzKRaFfPEGZciUNNBo",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "c8709858659767850dfc35d39a925e83aace55bb",
+      "sourceRef": "main",
+      "githubEnvironment": "Production – private-skills-marketing",
+      "githubDeploymentId": 6468770051,
+      "githubDeploymentStatusId": 18395573776,
+      "githubDeploymentStatus": "success",
+      "githubStatusTarget": "https://private-skills-marketing-zn4x9efjg.vercel.app"
+    }
+  ],
+  "publicChecks": {
+    "registry": {
+      "origin": "https://private-skills-theta.vercel.app",
+      "health": {
+        "path": "/health",
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service": "private-skills",
+          "version": "0.4.0"
+        }
+      },
+      "identityConfig": {
+        "path": "/auth/identity/config",
+        "status": 200,
+        "protocolVersion": 1,
+        "enabled": false,
+        "basePath": "/api/auth",
+        "providers": [],
+        "organization": {
+          "enabled": false,
+          "roles": [
+            "owner",
+            "admin",
+            "publisher",
+            "reader"
+          ],
+          "maxOrganizationsPerUser": 10,
+          "maxMembersPerOrganization": 100,
+          "maxInvitationsPerMember": 100
+        },
+        "bootstrap": {
+          "enabled": false,
+          "requiresExplicitOwnerClaim": true,
+          "implicitSocialTenantAdoption": false
+        },
+        "invitations": {
+          "mode": "copy-link",
+          "emailDelivery": "disabled",
+          "requiresVerifiedEmail": true,
+          "allowedRoles": [
+            "owner",
+            "admin",
+            "publisher",
+            "reader"
+          ]
+        },
+        "qualification": "Hosted Better Auth remains disabled in this production deployment; no hosted customer identity-provider acceptance is claimed."
+      }
+    },
+    "pricing": {
+      "origin": "https://private-skills-marketing.vercel.app/pricing",
+      "status": 200,
+      "heading": "Choose the right fit for your team.",
+      "comparisonHeading": "Compare plan limits",
+      "plans": [
+        {
+          "name": "Free",
+          "activeMembers": 3,
+          "retainedStorage": "1 GiB",
+          "scansPerMonth": 50,
+          "eveAllowance": "50 cents/month",
+          "recurringPrice": "Not configured"
+        },
+        {
+          "name": "Team",
+          "activeMembers": 10,
+          "retainedStorage": "10 GiB",
+          "scansPerMonth": 750,
+          "eveAllowance": "500 cents/month",
+          "recurringPrice": "Not configured"
+        },
+        {
+          "name": "Business",
+          "activeMembers": 25,
+          "retainedStorage": "50 GiB",
+          "scansPerMonth": 4000,
+          "eveAllowance": "2500 cents/month",
+          "recurringPrice": "Not configured"
+        }
+      ],
+      "internalCopyAbsent": [
+        "Server plan ID",
+        "Marketing checkout",
+        "Team Plus anchor"
+      ],
+      "previewOnly": true,
+      "noPurchasePath": true,
+      "qualification": "The public page displays browser-safe plan metadata and finite limits; the application billing console remains authoritative for live entitlements and checkout."
+    },
+    "mobilePricingBrowser": {
+      "tool": "agent-browser",
+      "url": "https://private-skills-marketing.vercel.app/pricing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "screenshotPathOutsideGit": "/private/tmp/private-skills-production-pricing-mobile-c870985.png",
+      "heading": "Choose the right fit for your team.",
+      "comparisonHeading": "Compare plan limits",
+      "scrollWidth": 390,
+      "innerWidth": 390,
+      "hasHorizontalOverflow": false,
+      "consoleErrors": 0,
+      "pageErrors": 0,
+      "result": "passed"
+    }
+  },
+  "configurationBoundary": {
+    "productionEnvironmentChanges": "none",
+    "databaseChanges": "none",
+    "identityProviderChanges": "none",
+    "manualDeployments": "none",
+    "qualification": "All four production deployments were Git-triggered from the merged main commit c8709858659767850dfc35d39a925e83aace55bb."
+  },
+  "qualifications": {
+    "releaseType": "incremental production verification",
+    "pricing": "The pricing page is a browser-safe preview with finite limits and no purchase or checkout action; final packaging, public prices, and Stripe activation remain open.",
+    "hostedIdentity": "Hosted Better Auth remains disabled with providers empty; no hosted identity-provider or customer callback acceptance is claimed.",
+    "nativeMac": "No new native archive execution claim was made by this pricing/preflight release.",
+    "nativeLinuxWindows": "Native execution and native CI remain unverified; no native Linux or Windows pass is claimed.",
+    "fullLaunch": false,
+    "businessLaunch": false
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "credentialPathsIncluded": false,
+    "rawTokensIncluded": false,
+    "storageKeysIncluded": false,
+    "privateReleaseUrlsIncluded": false,
+    "archiveBytesIncluded": false
+  }
+}

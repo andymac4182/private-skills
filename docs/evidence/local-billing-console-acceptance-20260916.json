@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-billing-console-browser-acceptance",
+  "capturedAt": "2026-09-15T21:47:08Z",
+  "source": {
+    "sourceHead": "2348002011e6c8a644362eb25e72112dbaa17a34",
+    "appVersion": "0.4.0",
+    "origin": "http://127.0.0.1:5305",
+    "identityFixture": "local-identity-demo",
+    "billingAdapter": "LocalBillingAdapter",
+    "persistence": "disposable loopback PostgreSQL",
+    "stripeAccount": false
+  },
+  "runtime": {
+    "browser": "Chrome via CUA local session",
+    "localOnly": true,
+    "productionWrites": false,
+    "liveCharges": false,
+    "hostedAcceptance": false,
+    "fixtureLeftRunning": false
+  },
+  "flows": {
+    "ownerOnboarding": {
+      "passed": true,
+      "observed": "Synthetic Alice owner signed in, created Billing Console Fixture, and opened /app/billing."
+    },
+    "ownerFreeReadback": {
+      "passed": true,
+      "observed": "The owner console displayed TEST MODE, Local · Test, Free inactive, finite usage of 2/3 seats, 0/50 scans, and USD 0.00/USD 0.50 Eve budget."
+    },
+    "checkoutApi": {
+      "passed": true,
+      "observed": "Start checkout returned a LocalBillingAdapter session URL and persisted one billing customer mapping."
+    },
+    "checkoutFixturePage": {
+      "passed": false,
+      "httpStatus": 404,
+      "observed": "The returned /billing/test-checkout URL opened in a new browser tab and rendered Not Found."
+    },
+    "portalApi": {
+      "passed": true,
+      "observed": "Manage subscription returned a LocalBillingAdapter portal session URL."
+    },
+    "portalFixturePage": {
+      "passed": false,
+      "httpStatus": 404,
+      "observed": "The returned /billing/test-portal URL opened in a new browser tab and rendered Not Found."
+    },
+    "signedWebhook": {
+      "passed": true,
+      "observed": "A signed raw local fixture POST to /v1/billing/webhook returned HTTP 200 and applied an active Team subscription; no live provider was contacted."
+    },
+    "ownerVerifiedEntitlement": {
+      "passed": true,
+      "observed": "After reload, the owner console displayed Team Active, Webhooks Verified, 3/10 seats, 0/750 scans, USD 0.00/USD 5.00 Eve budget, and 10.0 GB stored-bytes allowance."
+    },
+    "persistence": {
+      "passed": true,
+      "observed": "PostgreSQL held one billing customer, subscription, webhook event, and usage row; the webhook was handled; Better Auth held owner and reader members; seats rose from 2 to 3 after reader invitation acceptance."
+    },
+    "readerDenial": {
+      "passed": true,
+      "observed": "Ben reader accepted an invitation; the overview exposed no company-admin section, and direct /app/billing rendered server denial 'Owner or admin access is required for company billing.' with no checkout or portal controls."
+    },
+    "browserConsole": {
+      "passed": true,
+      "observed": "No browser warning or error logs were observed in the billing, checkout, or portal tabs."
+    }
+  },
+  "screenshots": [
+    {
+      "name": "owner-free",
+      "captured": true,
+      "delivery": "CUA inline screenshot; the connected browser backend did not expose a filesystem export path"
+    },
+    {
+      "name": "owner-team-after-reader",
+      "captured": true,
+      "delivery": "CUA inline screenshot; the connected browser backend did not expose a filesystem export path"
+    },
+    {
+      "name": "reader-denial",
+      "captured": true,
+      "delivery": "CUA inline screenshot; the connected browser backend did not expose a filesystem export path"
+    }
+  ],
+  "defects": [
+    {
+      "id": "billing-local-test-hosted-pages-404",
+      "severity": "acceptance-blocker",
+      "status": "open",
+      "observed": "Both URLs returned by ready local checkout and portal actions are unhandled by the composed runtime and render HTTP 404 Not Found.",
+      "scope": "local test harness/runtime route; this does not claim a live Stripe failure"
+    }
+  ],
+  "limits": [
+    "Local synthetic identity and LocalBillingAdapter only; no Stripe account, live provider, remote customer, product, price, charge, or real payment method.",
+    "The signed fixture webhook was sent programmatically with an ephemeral test secret; it proves local webhook verification and persistence only.",
+    "The 404 hosted fixture pages remain open, so this record does not establish commercial launch or paid readiness.",
+    "Screenshots were rendered by CUA, but the connected browser backend did not provide screenshot file export."
+  ]
+}

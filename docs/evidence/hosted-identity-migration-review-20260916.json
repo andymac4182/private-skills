@@ -1,0 +1,196 @@
+{
+  "evidenceVersion": 1,
+  "observedAt": "2026-09-15T21:23:49Z",
+  "status": "read-only-review-complete",
+  "scope": {
+    "project": {
+      "name": "private-skills",
+      "id": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+      "productionAlias": "private-skills-theta.vercel.app",
+      "deploymentSourceSha": "e9b8a4158cf1fd09d3f5dcc50178d10221b54aca",
+      "deploymentState": "READY",
+      "deploymentTarget": "production"
+    },
+    "sourceComparison": {
+      "reviewedImplementationSha": "e9b8a4158cf1fd09d3f5dcc50178d10221b54aca",
+      "localCheckoutSha": "fad5bb8403bbc3d053d594af3f8254201ec3aa7a",
+      "relevantRuntimePathsUnchangedSinceDeployment": true,
+      "pathsCompared": [
+        "apps/web/server/identity-infrastructure.ts",
+        "apps/web/server/runtime.ts",
+        "apps/web/server/runtime-node.ts",
+        "packages/api-tokens",
+        "packages/identity"
+      ]
+    }
+  },
+  "verification": {
+    "vercelEnvironmentInspection": "names-and-types-only via vercel env ls and in-process vercel env run",
+    "publicIdentityConfig": "GET /auth/identity/config",
+    "databaseMetadata": "single bounded PostgreSQL read-only session; no DDL or DML",
+    "secretsPrinted": false,
+    "fullEnvironmentExported": false,
+    "productionMutation": false
+  },
+  "productionConfiguration": {
+    "publicIdentityConfigHttpStatus": 200,
+    "identity": {
+      "enabled": false,
+      "basePath": "/api/auth",
+      "providers": [],
+      "organizationEnabled": false,
+      "bootstrapEnabled": false,
+      "implicitSocialTenantAdoption": false
+    },
+    "recognizedEnvironmentNames": [
+      { "name": "DATABASE_URL", "present": true, "targets": ["production", "preview", "development"], "type": "encrypted" },
+      { "name": "PSKILLS_PUBLIC_ORIGIN", "present": true, "targets": ["production"], "type": "sensitive" },
+      { "name": "PSKILLS_SESSION_SECRET", "present": true, "targets": ["production"], "type": "sensitive" },
+      { "name": "PSKILLS_STATE_PROVIDER", "present": true, "targets": ["production"], "type": "sensitive" },
+      { "name": "PSKILLS_BETTER_AUTH_ENABLED", "present": false },
+      { "name": "BETTER_AUTH_ENABLED", "present": false },
+      { "name": "PSKILLS_BETTER_AUTH_SCHEMA", "present": false },
+      { "name": "BETTER_AUTH_SCHEMA", "present": false },
+      { "name": "PSKILLS_API_TOKEN_SCHEMA", "present": false },
+      { "name": "API_TOKEN_SCHEMA", "present": false },
+      { "name": "PSKILLS_API_TOKEN_AUTO_MIGRATE", "present": false },
+      { "name": "API_TOKEN_AUTO_MIGRATE", "present": false },
+      { "name": "PSKILLS_COMPANY_SSO_AUTO_MIGRATE", "present": false },
+      { "name": "COMPANY_SSO_AUTO_MIGRATE", "present": false },
+      { "name": "PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE", "present": false },
+      { "name": "IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE", "present": false },
+      { "name": "BETTER_AUTH_SECRET", "present": false },
+      { "name": "PSKILLS_BETTER_AUTH_SECRET", "present": false }
+    ],
+    "recognizedNameInventoryDigest": "sha256:8037f8672748b23cd1e2ba9802fabe502d3bca3d299d5073387a372a9afc79ff"
+  },
+  "database": {
+    "serverVersionNum": "180006",
+    "currentSchema": "public",
+    "registry": {
+      "schema": "public",
+      "table": "private_skills_registry_state",
+      "relationKind": "table",
+      "rowCount": 1,
+      "revisionMin": "231",
+      "revisionMax": "231",
+      "stateSqlTypeSet": ["jsonb"],
+      "stateJsonbTypeSet": ["string"],
+      "stateBytesMin": 2395620,
+      "stateBytesMax": 2395620,
+      "stateSetDigest": "sha256:0b5d502133e09c353a2a336dfe2ab2e6d2772d16b099335271396ffe559c6bd8",
+      "digestAlgorithm": "sha256(organization_id,revision,state-text) with NUL/newline delimiters",
+      "columns": [
+        { "name": "organization_id", "dataType": "text", "udtName": "text", "nullable": false },
+        { "name": "revision", "dataType": "bigint", "udtName": "int8", "nullable": false },
+        { "name": "state", "dataType": "jsonb", "udtName": "jsonb", "nullable": false },
+        { "name": "updated_at", "dataType": "timestamp with time zone", "udtName": "timestamptz", "nullable": false }
+      ],
+      "indexes": ["private_skills_registry_state_pkey"]
+    },
+    "matchedRelations": [
+      { "schema": "public", "table": "private_skills_registry_state", "relationKind": "table" }
+    ],
+    "absentTargets": [
+      "public.private_skills_service_tokens",
+      "public.private_skills_billing_customers",
+      "public.private_skills_billing_subscriptions",
+      "public.private_skills_billing_usage",
+      "public.private_skills_billing_webhook_events",
+      "public.private_skills_billing_usage_operations",
+      "public.user",
+      "public.session",
+      "public.account",
+      "public.verification",
+      "public.organization",
+      "public.member",
+      "public.invitation",
+      "public.organization_role",
+      "public.ssoProvider",
+      "public.private_skills_company_sso_providers",
+      "public.private_skills_identity_operations_events"
+    ]
+  },
+  "targetInventory": {
+    "betterAuthSchema": "public (default; no schema alias configured)",
+    "betterAuthTables": [
+      "public.user",
+      "public.session",
+      "public.account",
+      "public.verification",
+      "public.organization",
+      "public.member",
+      "public.invitation",
+      "public.rateLimit",
+      "public.ssoProvider"
+    ],
+    "companySsoTable": "public.private_skills_company_sso_providers",
+    "serviceTokenTable": "public.private_skills_service_tokens",
+    "identityOperationsTable": "public.private_skills_identity_operations_events",
+    "registryTable": "public.private_skills_registry_state",
+    "tokenSchemaCompatibility": "held; existing public table is absent and must be created in public by the reviewed additive migration"
+  },
+  "migrationPlan": {
+    "status": "read-only-proposal",
+    "betterAuthPlanDigest": "sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b",
+    "betterAuthCompiledSqlBytes": 3027,
+    "betterAuthToBeCreated": [
+      { "table": "user", "order": 1 },
+      { "table": "session", "order": 2 },
+      { "table": "account", "order": 3 },
+      { "table": "verification", "order": 4 },
+      { "table": "organization", "order": null },
+      { "table": "member", "order": null },
+      { "table": "invitation", "order": null },
+      { "table": "ssoProvider", "order": null },
+      { "table": "rateLimit", "order": null }
+    ],
+    "betterAuthToBeAdded": [],
+    "betterAuthToBeAddedIndexes": [],
+    "unsafeChanges": [],
+    "schemaProblems": [],
+    "privateSql": [
+      {
+        "boundary": "company-sso",
+        "target": "public.private_skills_company_sso_providers",
+        "bytes": 1099,
+        "digest": "sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5"
+      },
+      {
+        "boundary": "service-tokens",
+        "target": "public.private_skills_service_tokens",
+        "bytes": 722,
+        "digest": "sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492"
+      },
+      {
+        "boundary": "identity-operations",
+        "target": "public.private_skills_identity_operations_events",
+        "bytes": 1210,
+        "digest": "sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c"
+      }
+    ],
+    "orderedComposition": [
+      "Better Auth compiled additive plan",
+      "company SSO table",
+      "public service-token table",
+      "identity operations-event table",
+      "pre/post readback of registry, identity, tokens, billing, and objects"
+    ],
+    "autoMigrationsApplied": false,
+    "sqlArtifacts": {
+      "manifest": "hosted-identity-migration-review-20260916.sql-manifest.json",
+      "betterAuth": "hosted-identity-migration-review-20260916.better-auth.sql",
+      "companySso": "hosted-identity-migration-review-20260916.company-sso.sql",
+      "serviceTokens": "hosted-identity-migration-review-20260916.service-tokens.sql",
+      "identityOperations": "hosted-identity-migration-review-20260916.identity-operations.sql"
+    }
+  },
+  "gates": {
+    "schemaReadiness": "blocked; target identity, SSO, operations, and service-token tables are absent",
+    "providerCredentials": "not verified; public config has no providers and no provider activation was attempted",
+    "defaultOrganizationAdoption": "not attempted",
+    "twoCompanyMatrix": "not attempted",
+    "trafficActivation": "not authorized by this review"
+  },
+  "nextExecutableAction": "Root reviews the plan and private SQL digests, then captures a fresh fenced registry baseline immediately before any separately approved additive migration; use the fresh revision/digest rather than treating historical revision 231 as permanent."
+}

@@ -11,10 +11,21 @@ Observations are not completion evidence. Turn concrete next actions into backlo
 
 ## Next coordinator actions
 
-1. Obtain completed invitation/logout handoff and refresh the fixture once, preserving live-process evidence.
-2. Review navigation and company SSO patches with explicit ownership to avoid overlapping edits.
-3. Verify separate marketing project deployment and keep its configuration independent.
-4. Merge proven increments and update status with exact evidence.
+1. Keep the `c870985` production record, `2348002` candidate merge, focused
+   recovery candidate `05136ac`, and local platform evidence separated by
+   source and environment. The author reported 52 focused tests plus typecheck
+   for `05136ac`.
+2. Have `tenant_auth_backend` and Hosting/Operations review the committed
+   hosted identity schema preparation and its 12 empty-table/registry
+   readback. Keep Better Auth disabled with `providers: []` until separately
+   approved migration, recovery, and customer IdP evidence exists.
+3. Have `billing_finish`, `business_billing`, and `runtime_finish` close the
+   restore/over-cap, known-completed-write, durable compensation, and
+   billing/finalization recovery cases before treating the candidate as a
+   billing release.
+4. Complete the hosted browser archive install and worker/scanner acceptance;
+   keep native Linux hardware/CI and Windows separate from the passing macOS
+   and emulated Linux CLI checks.
 
 ## Capture template
 
@@ -229,3 +240,80 @@ Root independently repeated the authoritative Google RDAP checks at 2026-09-15 1
 Root reproduced the B21/B28 release block at source `4917215` by exercising `releaseMeteredUsageIfUnowned` and `claimMeteredReservationOwner` with a simulated second repository transaction failure after billing correction. The reservation stayed `releasing` after both the crash and retry, recorded two corrections, and the queue returned `METERED_RESERVATION_BUSY`. A non-idempotent retry remains stuck. `runtime_finish` owns the durable fencing/recovery fix and crash-barrier test, with `billing_finish` reviewing independently; the combined billing/runtime release remains blocked, while independent mobile marketing can release separately. Do not use a blind TTL release as the recovery. See [sanitized repro evidence](../../evidence/local-metered-reservation-repro-root-20260916.json).
 
 The `40783cd` billing review found three additional B21/B28 gaps beyond that executed root wedge. These are review-derived and remain unverified until targeted tests reproduce them: generic `resolveOrQueueImport` branches lack an owner fence (`runtime_finish`); worker pre-scan release plus a delayed duplicate can reopen a reservation while retaining its charge (`business_billing` is implementing); and pending/orphaned `StorageAttempt` state retains charge without a reconciler or stable object identity for an ambiguous put (`billing_finish` is implementing). These findings also block the combined runtime candidate; independent mobile marketing and documentation release can proceed.
+
+### Current durable checkpoint — 16 September 2026
+
+The current shared documentation snapshot is `eb23f54`. Production `main`
+`c870985` is PR #57's merged source, and all four Git-triggered Vercel
+deployments are READY at that exact SHA. Its [sanitized production
+record](../../evidence/production-release-c870985-20260916.json) is the source
+for deployment, public readback, and native-CI-waiver claims. The waiver records
+jobs blocked before runner execution; it is not a native test pass.
+
+Candidate merge `2348002` incorporates candidate source `a65c8a9`; focused
+recovery candidate `05136ac` is the latest author checkpoint, with 52 focused
+tests plus typecheck reported. The [local
+candidate record](../../evidence/local-final-candidate-a65c8a9-20260916.json)
+reports 173 files passed / 17 skipped and 1,240 tests passed / 40 skipped,
+with the focused billing, database, storage, and populated-tenant checks
+passing separately. These results are local and bounded; they do not establish
+hosted or commercial readiness.
+
+The [native macOS CLI record](../../evidence/local-macos-arm64-cli-qualification-20260916.json)
+passes direct Apple Silicon version/help and isolated install → verify →
+remove. The [Linux record](../../evidence/local-linux-amd64-cli-qualification-20260916.json)
+passes the equivalent path under `linux/amd64` emulation on an arm64 Docker
+host. Native Linux hardware/CI and Windows remain open; no cross-platform claim
+is inferred from these local checks.
+
+The edge dependency cleanup `1b043cb` / `9ba903c` passes local Node, Vercel,
+and Cloudflare builds, 11 focused tests, and both local workerd compatibility
+modes. The [boundary record](../../evidence/edge-portability-boundary-cleanup-9ba903c.json)
+shows removal of executable PostgreSQL, runtime-node, and Files SDK imports;
+hosted edge acceptance remains separate.
+
+Hosted identity remains deliberately inactive. Read-only evidence `7140029`
+is the pre-preparation comparison. The later [schema-preparation evidence](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json)
+records 12 empty target tables with verified columns/indexes, unchanged registry
+revision `232` and state-set digest, and an independent config readback with
+Better Auth disabled and `providers: []`. No provider rows, token rows,
+adoption, existing-data DML, blob changes, or environment changes occurred;
+customer IdP configuration, traffic activation, and hosted restore remain open.
+The earlier [identity readback](../../evidence/hosted-identity-migration-review-20260916.json)
+and [SQL manifest](../../evidence/hosted-identity-migration-review-20260916.sql-manifest.json)
+remain historical review artifacts.
+
+Billing restore/over-cap handling, known-completed-write recovery, and durable
+billing compensation remain active. The local PostgreSQL operator/recovery
+proof passed 16 tests, while the metered crash repro leaves a reservation in
+`releasing`. The storage provider review says an aborted or lost write response
+is not terminal proof for Vercel Blob or generic S3-compatible paths, so a
+charge must remain until provider finality or a durable reconciliation result
+exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
+[storage review](../../evidence/storage-recovery-finality-review.md), and
+[provider research](../../evidence/storage-provider-finality-research.md).
+
+The local billing-console browser record at source `2348002` passes owner
+onboarding, free/Team entitlement readback, PostgreSQL persistence, signed
+webhook handling, reader denial, and browser-console cleanliness. Both local
+test checkout and portal URLs return 404 and require a fix plus rerun; this is
+not a Stripe or live-charge result. The ledger candidate `1d3ca34` reports 32
+unit tests, 14 PostgreSQL tests, and typecheck, but the executed recovery races
+above remain open. See the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json).
+
+### Additional billing recovery repros — 16 September 2026
+
+The recovery candidate at `970e0ed` independently reproduces a concurrent
+resume path that can erase the compensation marker after a zero correction;
+`billing_finish` owns the fix. A separate concurrent idempotent draft update
+can create a committed row and an orphan sharing one billing reservation, after
+which orphan cleanup can zero the referenced artifact charge;
+`editor_test_stability` owns that fix. The ledger `restoreUsage` path is still
+pending. A reviewer reported 49 focused checks, including 35 billing units,
+plus typecheck, but those unit results do not close the executed races or the
+storage/billing acceptance gates.
+
+Brand selection, legal/entity and support details, real customer IdP setup,
+final commercial offer, and Stripe activation remain external inputs. B14–B16,
+the later MCP/editor/OpenClaw/SCIM/residency/custom-domain roadmap, and the
+hosted migration/restore gates remain open.

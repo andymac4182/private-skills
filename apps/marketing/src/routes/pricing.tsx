@@ -37,16 +37,18 @@ function PricingPage() {
         </article>)}
       </div>
 
-      <div aria-labelledby="comparison-title" className="marketing-comparison" role="region" tabIndex={0}>
+      <div className="marketing-comparison">
         <h2 id="comparison-title">Compare plan limits</h2>
-        <p className="marketing-comparison-hint">Swipe to compare all plans <span aria-hidden="true">→</span></p>
-        <table><caption className="marketing-visually-hidden">Plan limits for the pricing preview</caption><thead><tr><th>Plan limits</th>{marketingPlans.map((plan) => <th key={plan.id}>{plan.name}</th>)}</tr></thead><tbody>
-          <tr><td>Active members</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.seats}</td>)}</tr>
-          <tr><td>Retained storage</td>{marketingPlans.map((plan) => <td key={plan.id}>{formatMarketingStorage(plan.limits.storageBytes)}</td>)}</tr>
-          <tr><td>Scans per month</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.scansPerMonth}</td>)}</tr>
-          <tr><td>Eve allowance</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.eveCostCentsPerMonth} cents/month</td>)}</tr>
-          <tr><td>Recurring price</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.priceConfigured ? 'Configured in app' : 'Not configured'}</td>)}</tr>
-        </tbody></table>
+        <p id="comparison-hint" className="marketing-comparison-hint">Swipe to compare all plans <span aria-hidden="true">→</span></p>
+        <div aria-describedby="comparison-hint" aria-labelledby="comparison-title" className="marketing-comparison-scroll" role="region" tabIndex={0}>
+          <table><caption className="marketing-visually-hidden">Plan limits for the pricing preview</caption><thead><tr><th>Plan limits</th>{marketingPlans.map((plan) => <th key={plan.id}>{plan.name}</th>)}</tr></thead><tbody>
+            <tr><td>Active members</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.seats}</td>)}</tr>
+            <tr><td>Retained storage</td>{marketingPlans.map((plan) => <td key={plan.id}>{formatMarketingStorage(plan.limits.storageBytes)}</td>)}</tr>
+            <tr><td>Scans per month</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.scansPerMonth}</td>)}</tr>
+            <tr><td>Eve allowance</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.limits.eveCostCentsPerMonth} cents/month</td>)}</tr>
+            <tr><td>Recurring price</td>{marketingPlans.map((plan) => <td key={plan.id}>{plan.priceConfigured ? 'Configured in app' : 'Not configured'}</td>)}</tr>
+          </tbody></table>
+        </div>
       </div>
     </section>
   </PublicLayout>

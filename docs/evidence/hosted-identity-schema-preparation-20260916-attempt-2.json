@@ -1,0 +1,449 @@
+{
+  "evidenceVersion": 1,
+  "status": "committed",
+  "operation": "bounded additive identity schema preparation",
+  "sourceSha": "e9b8a4158cf1fd09d3f5dcc50178d10221b54aca",
+  "sqlArtifacts": {
+    "betterAuth": {
+      "filename": "hosted-identity-migration-review-20260916.better-auth.sql",
+      "bytes": 3027,
+      "digest": "sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b"
+    },
+    "companySso": {
+      "filename": "hosted-identity-migration-review-20260916.company-sso.sql",
+      "bytes": 1099,
+      "digest": "sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5"
+    },
+    "serviceTokens": {
+      "filename": "hosted-identity-migration-review-20260916.service-tokens.sql",
+      "bytes": 722,
+      "digest": "sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492"
+    },
+    "identityOperations": {
+      "filename": "hosted-identity-migration-review-20260916.identity-operations.sql",
+      "bytes": 1210,
+      "digest": "sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c"
+    }
+  },
+  "transaction": {
+    "isolation": "REPEATABLE READ",
+    "searchPath": "public, pg_catalog",
+    "lockTimeout": "5s",
+    "statementTimeout": "30s",
+    "advisoryLock": "hashtextextended(private-skills.identity-schema-preparation, 0)",
+    "registryRowLock": "FOR UPDATE"
+  },
+  "baselinePolicy": "fresh row-locked registry snapshot is authoritative for this window; historical review baseline is comparison-only",
+  "mutation": {
+    "identityActivation": false,
+    "providerRowsCreated": false,
+    "tokenRowsCreated": false,
+    "adoptionPerformed": false,
+    "existingDataDml": false,
+    "blobChanges": false,
+    "environmentChanges": false
+  },
+  "recoveryPlan": {
+    "preCommitError": "rollback the single transaction and leave identity disabled",
+    "commitUncertain": "do not retry; perform a fresh relation/count/registry readback first",
+    "postCommitMismatch": "hold traffic and identity disabled; use a reviewed forward fix, never a down migration against populated tables",
+    "legacyAccess": "preserve the existing bearer/session path throughout"
+  },
+  "database": {
+    "serverVersionNum": "180006",
+    "transactionReadOnly": "off"
+  },
+  "pre": {
+    "relations": [
+      {
+        "schema": "public",
+        "table": "private_skills_registry_state",
+        "relationKind": "table"
+      }
+    ],
+    "registry": {
+      "schema": "public",
+      "table": "private_skills_registry_state",
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": [
+        "jsonb"
+      ],
+      "stateJsonbTypeSet": [
+        "string"
+      ],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c"
+    },
+    "reviewBaselineComparison": {
+      "matched": false,
+      "historicalReviewBaseline": {
+        "rowCount": 1,
+        "minRevision": "231",
+        "maxRevision": "231",
+        "stateSqlTypeSet": [
+          "jsonb"
+        ],
+        "stateJsonbTypeSet": [
+          "string"
+        ],
+        "minStateBytes": 2395620,
+        "maxStateBytes": 2395620,
+        "stateSetDigest": "sha256:0b5d502133e09c353a2a336dfe2ab2e6d2772d16b099335271396ffe559c6bd8"
+      },
+      "freshBaseline": {
+        "schema": "public",
+        "table": "private_skills_registry_state",
+        "rowCount": 1,
+        "minRevision": "232",
+        "maxRevision": "232",
+        "stateSqlTypeSet": [
+          "jsonb"
+        ],
+        "stateJsonbTypeSet": [
+          "string"
+        ],
+        "minStateBytes": 2395620,
+        "maxStateBytes": 2395620,
+        "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c"
+      },
+      "unchangedFields": [
+        "rowCount",
+        "stateSqlTypeSet",
+        "stateJsonbTypeSet",
+        "minStateBytes",
+        "maxStateBytes"
+      ],
+      "driftFields": [
+        "minRevision",
+        "maxRevision",
+        "stateSetDigest"
+      ]
+    }
+  },
+  "appliedBoundaries": [
+    "betterAuth",
+    "companySso",
+    "serviceTokens",
+    "identityOperations"
+  ],
+  "independentPostReadback": {
+    "status": "verified",
+    "source": "new bounded PostgreSQL metadata session plus GET /auth/identity/config",
+    "publicIdentityConfig": {
+      "httpStatus": 200,
+      "enabled": false,
+      "basePath": "/api/auth",
+      "providers": [],
+      "organizationEnabled": false,
+      "bootstrapEnabled": false,
+      "implicitSocialTenantAdoption": false
+    },
+    "matchedRelations": [
+      { "schema": "public", "table": "account", "relationKind": "table" },
+      { "schema": "public", "table": "invitation", "relationKind": "table" },
+      { "schema": "public", "table": "member", "relationKind": "table" },
+      { "schema": "public", "table": "organization", "relationKind": "table" },
+      { "schema": "public", "table": "private_skills_company_sso_providers", "relationKind": "table" },
+      { "schema": "public", "table": "private_skills_identity_operations_events", "relationKind": "table" },
+      { "schema": "public", "table": "private_skills_registry_state", "relationKind": "table" },
+      { "schema": "public", "table": "private_skills_service_tokens", "relationKind": "table" },
+      { "schema": "public", "table": "session", "relationKind": "table" },
+      { "schema": "public", "table": "ssoProvider", "relationKind": "table" },
+      { "schema": "public", "table": "user", "relationKind": "table" },
+      { "schema": "public", "table": "verification", "relationKind": "table" }
+    ],
+    "targetRows": 0,
+    "targetColumnsAndIndexesVerified": true,
+    "billingTargetsPresent": false,
+    "registry": {
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": ["jsonb"],
+      "stateJsonbTypeSet": ["string"],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c",
+      "stateContentDigest": "sha256:16ef9b8ffc02f2c0a7352a20249b3ac71e5f0cce4aa386598bcc47bbb762e366"
+    },
+    "serviceTokens": {
+      "schema": "public",
+      "table": "private_skills_service_tokens",
+      "rowCount": 0,
+      "activeCount": 0,
+      "revokedCount": 0,
+      "contentDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "inTransaction": {
+    "targets": {
+      "tables": [
+        {
+          "schema": "public",
+          "table": "user",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 7,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "session",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 9,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "account",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 13,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "verification",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 6,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "organization",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 6,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "member",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 5,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "invitation",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 8,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "ssoProvider",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 8,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "rateLimit",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 4,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_company_sso_providers",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 15,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_service_tokens",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 10,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_identity_operations_events",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 7,
+          "expectedIndexes": 3,
+          "indexesVerified": true
+        }
+      ],
+      "allEmpty": true,
+      "expectedColumnsAndIndexes": true
+    },
+    "registry": {
+      "schema": "public",
+      "table": "private_skills_registry_state",
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": [
+        "jsonb"
+      ],
+      "stateJsonbTypeSet": [
+        "string"
+      ],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c"
+    },
+    "registryUnchanged": true
+  },
+  "post": {
+    "targets": {
+      "tables": [
+        {
+          "schema": "public",
+          "table": "user",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 7,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "session",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 9,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "account",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 13,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "verification",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 6,
+          "expectedIndexes": 1,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "organization",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 6,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "member",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 5,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "invitation",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 8,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "ssoProvider",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 8,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "rateLimit",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 4,
+          "expectedIndexes": 0,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_company_sso_providers",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 15,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_service_tokens",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 10,
+          "expectedIndexes": 2,
+          "indexesVerified": true
+        },
+        {
+          "schema": "public",
+          "table": "private_skills_identity_operations_events",
+          "relationKind": "table",
+          "rowCount": 0,
+          "columnCount": 7,
+          "expectedIndexes": 3,
+          "indexesVerified": true
+        }
+      ],
+      "allEmpty": true,
+      "expectedColumnsAndIndexes": true
+    },
+    "registry": {
+      "schema": "public",
+      "table": "private_skills_registry_state",
+      "rowCount": 1,
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypeSet": [
+        "jsonb"
+      ],
+      "stateJsonbTypeSet": [
+        "string"
+      ],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c"
+    },
+    "registryUnchangedFromPre": true,
+    "targetContractVerified": true
+  },
+  "observedAt": "2026-09-15T21:39:18.841Z"
+}

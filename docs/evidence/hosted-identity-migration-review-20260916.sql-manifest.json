@@ -1,0 +1,77 @@
+{
+  "manifestVersion": 1,
+  "generatedAt": "2026-09-15T21:29:20.725Z",
+  "sourceSha": "e9b8a4158cf1fd09d3f5dcc50178d10221b54aca",
+  "generation": {
+    "database": "current Vercel production DATABASE_URL supplied in-process",
+    "migrationsExecuted": false,
+    "ddlExecuted": false,
+    "dmlExecuted": false,
+    "identitySecret": "ephemeral planner placeholder",
+    "canonicalOrigin": "verified production deployment URL fallback"
+  },
+  "betterAuth": {
+    "targetSchema": "public",
+    "planDigest": "sha256:d23e04702ffaa037d1e6595f85fe2be062e59b7321a4da071fe372f712fcd40b",
+    "compiledSqlBytes": 3027,
+    "toBeCreated": [
+      {
+        "table": "user",
+        "order": 1
+      },
+      {
+        "table": "session",
+        "order": 2
+      },
+      {
+        "table": "account",
+        "order": 3
+      },
+      {
+        "table": "verification",
+        "order": 4
+      },
+      {
+        "table": "organization",
+        "order": null
+      },
+      {
+        "table": "member",
+        "order": null
+      },
+      {
+        "table": "invitation",
+        "order": null
+      },
+      {
+        "table": "ssoProvider",
+        "order": null
+      },
+      {
+        "table": "rateLimit",
+        "order": null
+      }
+    ],
+    "toBeAdded": [],
+    "toBeAddedIndexes": [],
+    "unsafeChanges": [],
+    "schemaProblems": []
+  },
+  "privateSql": [
+    {
+      "filename": "hosted-identity-migration-review-20260916.company-sso.sql",
+      "bytes": 1099,
+      "digest": "sha256:ec78ab4b835b9291701713058af3f7f235b7523189e9d928635eb073ee07f0b5"
+    },
+    {
+      "filename": "hosted-identity-migration-review-20260916.service-tokens.sql",
+      "bytes": 722,
+      "digest": "sha256:7b078fafe48b09c4a232f3895389dac218304c21c6a0222470e72773bcf25492"
+    },
+    {
+      "filename": "hosted-identity-migration-review-20260916.identity-operations.sql",
+      "bytes": 1210,
+      "digest": "sha256:27ac102ce82b91b3007a44569c0d98cb5c4c6d879b98fd6969a8a461feb93f4c"
+    }
+  ]
+}
