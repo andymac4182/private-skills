@@ -244,6 +244,50 @@ class GenerationAwareBilling implements BillingUsageAdmission {
   }
 }
 
+/** Models the ledger-owned atomic G1 resolver. It distinguishes an exact
+ * committed zero from an untouched reservation while advancing both paths to
+ * a new generation under one logical lock. */
+class AtomicRecoveryBilling extends GenerationAwareBilling {
+  readonly resolutions: Array<{
+    action: "restored" | "fenced";
+    operationKey: string;
+    reservationGeneration: number;
+  }> = [];
+  #resolution?: {
+    action: "restored" | "fenced";
+    idempotent: boolean;
+    reservationGeneration: number;
+    restoredFromGeneration: number;
+  };
+
+  async resolveStorageRecovery(
+    organizationId: string,
+    _reservationKey: string,
+    delta: { storageBytes: number },
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<unknown> {
+    if (this.#resolution) {
+      if (reservationGeneration !== this.#resolution.restoredFromGeneration) throw new Error("stale recovery generation");
+      return { ...this.#resolution, idempotent: true };
+    }
+    if (reservationGeneration !== this.generation) throw new Error("stale recovery generation");
+    const zeroApplied = this.reconciliations.some((candidate) =>
+      candidate.organizationId === organizationId && candidate.actual.storageBytes === 0,
+    );
+    if (zeroApplied) this.usage += delta.storageBytes;
+    this.generation += 1;
+    this.#resolution = {
+      action: zeroApplied ? "restored" : "fenced",
+      idempotent: false,
+      reservationGeneration: this.generation,
+      restoredFromGeneration: reservationGeneration,
+    };
+    this.resolutions.push({ action: this.#resolution.action, operationKey, reservationGeneration });
+    return { ...this.#resolution };
+  }
+}
+
 function actor(organizationId = ORGANIZATION): StorageRecoveryActor {
   return {
     organizationId,
@@ -503,7 +547,7 @@ describe("durable storage-attempt recovery", () => {
   it("lets B retry the same release when A dies after the durable intent but before billing", async () => {
     const blobs = new RecoverableMemoryBlobStore();
     const inner = await repositoryWithAttempt(attempt());
-    const billing = new GenerationAwareBilling();
+    const billing = new AtomicRecoveryBilling();
     billing.lostRestoreResponse = false;
     billing.crashBeforeZero = true;
     let transactions = 0;
@@ -539,10 +583,76 @@ describe("durable storage-attempt recovery", () => {
     expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
   });
 
+  it("atomically fences G1 when a reference wins before the zero is applied", async () => {
+    const blobs = new RecoverableMemoryBlobStore();
+    const inner = await repositoryWithAttempt(attempt());
+    const billing = new AtomicRecoveryBilling();
+    billing.lostRestoreResponse = false;
+    billing.crashBeforeZero = true;
+    let transactions = 0;
+    const repository = {
+      read: (organizationId: string) => inner.read(organizationId),
+      transaction: async <T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> => {
+        transactions += 1;
+        if (transactions === 4) throw new Error("process died before billing zero");
+        return inner.transaction(organizationId, updater);
+      },
+    };
+    const verifyProof = createDurableStorageRecoveryProofVerifier(inner);
+    const proofRequest = {
+      ...request(),
+      proof: { kind: "writer-terminated" as const, reference: "runtime-storage-attempt:attempt-storage-1" },
+    };
+    const service = new StorageRecoveryService({ repository, blobs, billing, verifyProof });
+
+    await expect(service.recover(proofRequest)).rejects.toMatchObject({ code: "RECOVERY_PERSISTENCE_UNCERTAIN" });
+    await inner.transaction(ORGANIZATION, (state) => {
+      state.skills.push({
+        id: "pre-zero-reference",
+        organizationId: ORGANIZATION,
+        name: "@team/pre-zero-reference",
+        skillName: "pre-zero-reference",
+        version: "1.0.0",
+        description: "reference committed before a pending billing zero",
+        artifact: { key: KEY, digest: attempt().digest, size: BYTES.byteLength },
+        state: "approved",
+        policyRevision: state.policy.revision,
+        createdAt: "2026-09-16T00:00:00.000Z",
+        provenance: { kind: "native" },
+        fileCount: 1,
+        scanIds: [],
+      });
+    });
+
+    const fenced = await service.recover({ ...proofRequest, resume: true });
+
+    expect(fenced).toMatchObject({ status: "retained", reason: "metadata-referenced" });
+    expect(billing.reconciliations).toHaveLength(0);
+    expect(billing.resolutions).toEqual([{
+      action: "fenced",
+      operationKey: "private-skills:storage-recovery-restore:attempt-storage-1:generation:1",
+      reservationGeneration: 1,
+    }]);
+    expect(billing.usage).toBe(BYTES.byteLength);
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]).toMatchObject({
+      state: "orphaned",
+      reservationGeneration: 2,
+    });
+    expect((await inner.read(ORGANIZATION)).storageAttempts?.[0]?.billingCorrection).toBeUndefined();
+
+    await expect(billing.reconcileUsage(
+      ORGANIZATION,
+      attempt().reservationKey,
+      { storageBytes: 0 },
+      "private-skills:storage-recovery:attempt-storage-1:generation:1",
+      1,
+    )).rejects.toThrow("stale reservation generation");
+  });
+
   it("lets B restore an exact zero after A dies before its final metadata commit", async () => {
     const blobs = new RecoverableMemoryBlobStore();
     const inner = await repositoryWithAttempt(attempt());
-    const billing = new GenerationAwareBilling();
+    const billing = new AtomicRecoveryBilling();
     billing.lostRestoreResponse = false;
     billing.crashAfterZero = true;
     let transactions = 0;
@@ -594,7 +704,8 @@ describe("durable storage-attempt recovery", () => {
 
     expect(resumed).toMatchObject({ status: "retained", reason: "billing-restored" });
     expect(billing.reconciliations).toHaveLength(1);
-    expect(billing.restorations).toEqual([{
+    expect(billing.resolutions).toEqual([{
+      action: "restored",
       operationKey: "private-skills:storage-recovery-restore:attempt-storage-1:generation:1",
       reservationGeneration: 1,
     }]);

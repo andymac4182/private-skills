@@ -95,10 +95,13 @@ zero, passes the captured billing reservation generation, and finally marks
 the attempt released while clearing that marker. If a process dies after the
 marker or billing call, a resumed reconciler keeps the marker and reuses the
 same generation-bound correction key. It may settle the release only after an
-exact durable ledger row is found; if a late metadata reference exists, it
-requires that row before promoting the marker to `restore-pending` and applying
-the ledger-owned inverse. A missing or unreadable ledger row retains the
-charge and marker for a later retry. Attempts without a generation remain
+exact durable ledger row is found. When a late metadata reference exists, the
+preferred ledger resolver atomically returns either `restored` (the zero was
+committed, so the inverse advances G1 to G2) or `fenced` (the reservation was
+untouched, so G1 is advanced without changing usage); the storage attempt then
+persists G2 and clears the marker. Older adapters may promote only an exact
+settled zero to `restore-pending`; a missing or unreadable ledger row retains
+the charge and marker for a later retry. Attempts without a generation remain
 retained unless the operator explicitly enables
 `PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`; the ledger still rejects a
 reopened key.
