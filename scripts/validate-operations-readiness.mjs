@@ -14,6 +14,8 @@ const requiredFiles = [
   "packages/api-tokens/src/index.ts",
   "packages/database/src/postgres.ts",
   "packages/billing/src/repository.ts",
+  "packages/storage/src/files.ts",
+  "packages/storage/src/node.ts",
   "docs/restore-rehearsal.md",
   "docs/operations.md",
   "docs/eve-reviewer.md",
@@ -50,6 +52,8 @@ export async function validateOperationsReadiness({ root = repositoryRoot } = {}
   const apiTokens = sources.get("packages/api-tokens/src/index.ts");
   const registry = sources.get("packages/database/src/postgres.ts");
   const billing = sources.get("packages/billing/src/repository.ts");
+  const storage = sources.get("packages/storage/src/files.ts");
+  const storageNode = sources.get("packages/storage/src/node.ts");
   const restore = sources.get("docs/restore-rehearsal.md");
   const launchAcceptance = sources.get("docs/business/launch-acceptance.md");
   const eveConfig = sources.get("apps/reviewer/agent/lib/config.ts");
@@ -125,6 +129,18 @@ export async function validateOperationsReadiness({ root = repositoryRoot } = {}
       "runbook distinguishes registry/object recovery from identity and billing recovery",
     ),
     check(
+      "object-provider-proof",
+      document.includes("files-sdk/fs")
+        && document.includes("FilesSdkBlobStore.getVerified")
+        && document.includes("local filesystem provider")
+        && storage.includes("class FilesSdkBlobStore")
+        && storage.includes("getVerified")
+        && storageNode.includes('case "fs"')
+        && storageNode.includes("files-sdk/fs")
+        && storageNode.includes("createNodeFilesClient"),
+      "runbook records the real Files SDK filesystem provider and verified restored-byte readback",
+    ),
+    check(
       "authorization-restore-checks",
       document.includes("getSession") && document.includes("membership") && document.includes("tenant or service mismatch") && document.includes("sealed"),
       "runbook requires restored session, membership, tenant-binding, and object checks",
@@ -157,7 +173,7 @@ export async function validateOperationsReadiness({ root = repositoryRoot } = {}
     "read-only source/document check; no network, credentials, provider calls, database writes, or application-data mutation",
     "live Better Auth PostgreSQL migration and schema readback are not proven when the opt-in integration database environment is absent",
     "billing provider, webhook reconciliation, and Eve cost reservation integration are not proven by this validator",
-    "registry/object restore evidence remains bounded and does not prove full Better Auth, SSO, service-token, or billing restore",
+    "the local PostgreSQL/Files SDK rehearsal and its hosted/runtime counterparts are not executed by this read-only validator",
   ];
 
   return {
