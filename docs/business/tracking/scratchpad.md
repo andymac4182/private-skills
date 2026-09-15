@@ -171,3 +171,7 @@ Release owner verified clean candidate 7ab3cfc522ced9f591381967d264ee74a0f0aaf4 
 ### Explicit public marketing rendering proof — 16 September
 
 Root rebuilt the verification app with the actual marketing HTTPS origin and explicit public indexing. Through loopback Nitro, all nine routes rendered exactly one correct marketing canonical URL and no noindex metadata. Sitemap contained exactly the nine public marketing URLs; robots referenced that sitemap. This complements the earlier safe-default noindex proof. It is local rendered evidence, not production configuration, and does not waive the separate root TypeScript error being fixed by the marketing owner. Temporary server was stopped gracefully.
+
+### Billing/Eve integration handoff — 16 September, 02:02 AEST
+
+Editor delivered 85b3d68 and 9e56c40 after 11 PostgreSQL/Eve tests and TypeScript passed on its composition. Root applied the prerequisite ledger/Eve commit chain through verification 54c2f6c, preserving CLI provider and identity operational-events fields in additive runtime conflicts. Final identity seat-hook cherry-pick9e56c40 has two conflicts against newer identity telemetry; editor now owns the verification checkout to resolve them and compose the already-tested scheduler/runtime and caller lifecycle fixes. Shared integration has not received this incomplete billing batch, and customer-facing unverified seat recovery remains excluded.
