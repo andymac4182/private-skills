@@ -38,3 +38,5 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - Clean release candidate d529e42: release agent reports frozen install, typecheck, 1,001 tests passed (8 skipped), production build. Root browser confirmed corrected single-company prompt and opening grouped mobile navigation as a dialog. Full keyboard/resize and invitation acceptance proof still pending.
 
 - Root browser on d529e42: drawer Escape dismissal/focus restoration and Company admin navigation passed. Invitation creation by displayed owner failed with permission denial; B12 is an open functional blocker and must be fixed before invitee acceptance can be verified.
+
+- Market research and brand/domain shortlist requested explicitly; marketing_finish owns B14–B16. Brand remains unselected. Live availability must be rechecked at purchase time.

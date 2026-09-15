@@ -29,3 +29,9 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B12 — L04: actual browser owner invite denied on d529e42 (Alice Acme / Acme Labs Demo, reader invite for synthetic Ben). UI shows owner but Better Auth returns permission denial. Inspect role resource mapping and invitation creation contract; prove authorized owner success and reader denial against real runtime. No invitation was created by this test.
 
 - [ ] B13 — L05: bridge company provider persistence into Better Auth actual SSO provider lookup with matching persisted record IDs; prove a full configured OIDC callback. Configuration tests alone do not prove login. Also complete signed SAML protocol proof before claiming SAML works.
+
+## Market and brand research — user requested
+
+- [ ] B14 — Research current developer tools, AI agent tools and private package registries using primary sources; distinguish competitors from adjacent categories. Identify the engineering-team buyer, adoption triggers, alternatives, defensible differentiation and claims supported by actual product behavior. Owner: marketing_finish.
+- [ ] B15 — Develop a detailed brand shortlist with name rationale, pronunciation, category fit, collision risks and domain options. Check live domain registration/registrar availability with timestamps and source links; explicitly separate unregistered, purchasable, premium, reserved, taken and unverified. DNS absence is not availability. Domain checks are not trademark clearance. No purchases or registrations without a separate user decision. Owner: marketing_finish.
+- [ ] B16 — Use market findings to revise positioning, homepage messaging, launch offer and prioritized roadmap; obtain user brand selection before replacing the working name.
