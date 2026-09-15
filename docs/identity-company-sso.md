@@ -26,8 +26,9 @@ document issuer and endpoints. Loopback HTTP is available only when the
 disposable local policy explicitly enables it. SAML metadata is parsed with
 Better Auth's SAML helper, requires a signing certificate and signed-assertion
 policy, and rejects IdP-initiated callbacks. The current seam validates and
-stores SAML input; the runtime acceptance fixture covers the signed assertion
-path separately.
+stores SAML input. The runtime acceptance fixture exercises the signed
+assertion path with a loopback samlify IdP, and separately proves that a
+different signed IdP issuer and a different SP audience are rejected.
 
 `COMPANY_SSO_SCHEMA_SQL` is an explicit migration. It creates
 `private_skills_company_sso_providers` with a database-wide unique

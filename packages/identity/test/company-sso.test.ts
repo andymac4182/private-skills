@@ -176,6 +176,7 @@ describe('company-managed SSO SAML validation', () => {
       },
     }, { appOrigin: APP_ORIGIN });
     expect(result.callbackUrl).toBe(`${APP_ORIGIN}${COMPANY_SSO_SAML_CALLBACK_PATH}/acme-saml`);
+    expect(result.saml?.identityProviderIssuer).toBe('https://idp.example.test/entity');
     expect(result.saml?.wantAssertionsSigned).toBe(true);
     expect(result.saml?.idpMetadata.metadata).toContain('X509Certificate');
   });
@@ -300,6 +301,42 @@ describe('company-managed SSO Better Auth adapter seam', () => {
     await expect(options.guardProviderMutation?.({
       action: 'delete', provider: { id: record.id, providerId: record.providerId, organizationId: record.organizationId }, providerReference: { providerId: record.providerId, source: { type: 'persisted', recordId: record.id }, authenticationConfigurationFingerprint: 'test' },
     }, {} as never)).rejects.toMatchObject({ code: 'COMPANY_SSO_MUTATION_OWNERSHIP' });
+  });
+
+  it('pins SAML identities to the metadata IdP entity and keeps the SP issuer separate', async () => {
+    const metadata = '<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.test/entity"><IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>AA==</X509Certificate></X509Data></KeyInfo></KeyDescriptor><SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.test/sso"/></IDPSSODescriptor></EntityDescriptor>';
+    const repository = new MemoryCompanySsoRepository();
+    const validated = await validateCompanySsoRegistration('acme', {
+      providerId: 'acme-saml',
+      displayName: 'Acme SAML',
+      protocol: 'saml',
+      issuer: `${APP_ORIGIN}/saml/sp`,
+      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, 'acme-saml', false, 'saml'),
+      saml: { entryPoint: 'https://idp.example.test/sso', idpMetadata: { metadata } },
+    }, { appOrigin: APP_ORIGIN });
+    const record = await repository.create({
+      id: 'row-acme-saml',
+      ...validated,
+      createdBy: 'owner-1',
+      updatedBy: 'owner-1',
+      revision: 1,
+      createdAt: '2026-09-15T00:00:00.000Z',
+      updatedAt: '2026-09-15T00:00:00.000Z',
+    });
+    const resolve = companySsoPluginOptions({ repository }).resolveUser!;
+    const baseInput = {
+      protocol: 'saml' as const,
+      providerId: record.providerId,
+      accountKey: { issuer: record.saml!.identityProviderIssuer, accountId: 'alice@acme.test' },
+      providerUser: { email: 'alice@acme.test', emailVerified: false, name: 'Alice' },
+      providerClaims: {},
+      providerAttributes: {},
+      verifiedIdTokenClaims: {},
+      providerReference: { providerId: record.providerId, source: { type: 'persisted' as const, recordId: record.id }, authenticationConfigurationFingerprint: 'test' },
+    };
+    await expect(resolve(baseInput, {} as never)).resolves.toEqual({ action: 'continue' });
+    await expect(resolve({ ...baseInput, accountKey: { issuer: 'https://idp.example.test/foreign', accountId: baseInput.accountKey.accountId } }, {} as never)).resolves.toMatchObject({ code: 'COMPANY_SSO_ISSUER_MISMATCH' });
+    await expect(resolve({ ...baseInput, accountKey: { issuer: record.issuer, accountId: baseInput.accountKey.accountId } }, {} as never)).resolves.toMatchObject({ code: 'COMPANY_SSO_ISSUER_MISMATCH' });
   });
 
   it('bridges the private row into ssoProvider with an exact id and rejects collisions', async () => {

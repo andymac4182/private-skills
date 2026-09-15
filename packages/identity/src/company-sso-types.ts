@@ -49,6 +49,8 @@ export interface CompanySsoSamlIdpMetadata {
 }
 
 export interface CompanySsoSamlConfig {
+  /** Canonical IdP entityID derived from the trusted metadata XML. */
+  identityProviderIssuer: string;
   /** IdP SSO endpoint. */
   entryPoint: string;
   idpMetadata: CompanySsoSamlIdpMetadata;

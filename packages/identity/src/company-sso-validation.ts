@@ -343,10 +343,11 @@ function normalizeSaml(input: unknown, issuer: string, callbackUrl: string, poli
     ...(identifierFormat ? { identifierFormat } : {}),
     ...(signatureAlgorithm ? { signatureAlgorithm } : {}),
     ...(digestAlgorithm ? { digestAlgorithm } : {}),
-  } satisfies CompanySsoSamlConfig & { issuer: string };
+  } satisfies Omit<CompanySsoSamlConfig, 'identityProviderIssuer'> & { issuer: string };
+  let identityProviderIssuer: string;
   try {
-    const idpEntityID = deriveSAMLIdentityProviderEntityID(config as Parameters<typeof deriveSAMLIdentityProviderEntityID>[0]);
-    if (idpMetadata.entityID !== undefined && idpEntityID !== idpMetadata.entityID) {
+    identityProviderIssuer = deriveSAMLIdentityProviderEntityID(config as Parameters<typeof deriveSAMLIdentityProviderEntityID>[0]);
+    if (idpMetadata.entityID !== undefined && identityProviderIssuer !== idpMetadata.entityID) {
       throw new CompanySsoValidationError('SAML_ISSUER_MISMATCH', 'SAML metadata entityID changed during validation');
     }
     const policyResult = deriveSAMLServiceProviderPolicy(config as Parameters<typeof deriveSAMLServiceProviderPolicy>[0]);
@@ -355,7 +356,7 @@ function normalizeSaml(input: unknown, issuer: string, callbackUrl: string, poli
     if (error instanceof CompanySsoValidationError) throw error;
     throw new CompanySsoValidationError('INVALID_SAML_METADATA', 'SAML metadata could not be parsed');
   }
-  return config;
+  return { ...config, identityProviderIssuer };
 }
 
 export async function validateCompanySsoRegistration(
