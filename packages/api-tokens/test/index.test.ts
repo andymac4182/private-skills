@@ -45,7 +45,7 @@ class IdentityFixture implements MembershipAuthorizer {
   }
 }
 
-function fixture() {
+function fixture(options: { sessionSecret?: string; sessionCookieName?: string } = {}) {
   const identity = new IdentityFixture();
   identity.setSession('a-owner', { userId: 'alice', organizationId: 'tenant-a', sessionId: 'sess-a' });
   identity.setSession('a-reader', { userId: 'amanda', organizationId: 'tenant-a', sessionId: 'sess-amanda' });
@@ -67,6 +67,9 @@ function fixture() {
     defaultTtlSeconds: 3_600,
     maxTtlSeconds: 86_400,
     canonicalOrigin: 'https://registry.invalid',
+    ...(options.sessionSecret === undefined ? {} : { sessionSecret: options.sessionSecret }),
+    ...(options.sessionCookieName === undefined ? {} : { sessionCookieName: options.sessionCookieName }),
+    sessionSecureCookies: false,
   });
   return { identity, repository, audit, module };
 }
@@ -173,6 +176,79 @@ describe('company-scoped API tokens', () => {
     const revoke = await module.handler(new Request(`https://registry.invalid/v1/tokens/${reader.id}`, { method: 'DELETE', headers: bearer(owner.token) }));
     expect(revoke?.status).toBe(200);
     expect(await module.service.authenticateBearerToken(reader.token)).toBeNull();
+  });
+
+  it('allows an issued token to use the bearer API and closes that access after revoke', async () => {
+    const { module } = fixture();
+    const createdResponse = await module.handler(new Request('https://registry.invalid/v1/tokens', {
+      method: 'POST',
+      headers: { ...sessionCookie('a-owner'), 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'issued CLI token', roleCeiling: 'reader', scopes: ['skills:read'], expiresInSeconds: 3_600 }),
+    }));
+    expect(createdResponse?.status).toBe(201);
+    const created = await json(createdResponse!);
+    const token = String(created.token);
+    const tokenId = String(created.id);
+    const bearerRequest = () => module.authenticator.authenticate(new Request('https://registry.invalid/v1/skills', { headers: bearer(token) }));
+
+    expect(await bearerRequest()).toMatchObject({ organizationId: 'tenant-a', subject: 'alice', tokenId, roles: ['reader'], scopes: ['skills:read'] });
+    const revoke = await module.handler(new Request(`https://registry.invalid/v1/tokens/${tokenId}`, {
+      method: 'DELETE',
+      headers: bearer(token),
+    }));
+    expect(revoke?.status).toBe(200);
+    expect(await bearerRequest()).toBeNull();
+  });
+
+  it('exchanges an issued token for a signed browser session and rechecks its grants', async () => {
+    const { module, identity } = fixture({ sessionSecret: 'api-token-browser-session-secret-0123456789' });
+    const created = await module.service.createToken({ userId: 'alice', organizationId: 'tenant-a' }, {
+      name: 'browser exchange', roleCeiling: 'publisher', scopes: ['skills:publish'], expiresInSeconds: 3_600,
+    });
+
+    const exchanged = await module.authenticator.createSession?.(created.token);
+    expect(exchanged).not.toBeNull();
+    expect(exchanged?.cookie).toMatch(/^pskills_session=api-token-session-v1\.[^.]+\.[^.]+;/u);
+    expect(exchanged?.cookie).not.toContain(created.token);
+    expect(module.authenticator.clearSessionCookie?.()).toMatch(/^pskills_session=;.*Max-Age=0/u);
+    const cookie = exchanged!.cookie.split(';', 1)[0]!;
+    const browserRequest = () => module.authenticator.authenticate(new Request('https://registry.invalid/v1/me', {
+      headers: { cookie },
+    }));
+
+    expect(await browserRequest()).toMatchObject({
+      organizationId: 'tenant-a', subject: 'alice', tokenId: created.id, roles: ['publisher'], scopes: ['skills:publish'],
+    });
+
+    identity.setMembership({ userId: 'alice', organizationId: 'tenant-a', roles: ['reader'] });
+    expect(await browserRequest()).toMatchObject({ roles: ['reader'], scopes: [] });
+    identity.removeMembership('tenant-a', 'alice');
+    expect(await browserRequest()).toBeNull();
+
+    // Reinstating membership does not restore a revoked persisted token.
+    identity.setMembership({ userId: 'alice', organizationId: 'tenant-a', roles: ['owner'] });
+    await module.service.revokeToken({ userId: 'alice', organizationId: 'tenant-a' }, created.id);
+    expect(await browserRequest()).toBeNull();
+  });
+
+  it('rejects tampered, cross-purpose, and unsigned browser session cookies', async () => {
+    const { module } = fixture({ sessionSecret: 'api-token-browser-session-secret-0123456789' });
+    const created = await module.service.createToken({ userId: 'alice', organizationId: 'tenant-a' }, {
+      name: 'cookie validation', roleCeiling: 'reader', scopes: ['skills:read'], expiresInSeconds: 3_600,
+    });
+    const exchanged = await module.authenticator.createSession?.(created.token);
+    const cookie = exchanged!.cookie.split(';', 1)[0]!;
+    const value = cookie.slice(cookie.indexOf('=') + 1);
+    const parts = value.split('.');
+    const requestWith = (session: string) => module.authenticator.authenticate(new Request('https://registry.invalid/v1/me', {
+      headers: { cookie: `pskills_session=${session}` },
+    }));
+
+    const alteredSignature = `${parts[2]![0] === 'A' ? 'B' : 'A'}${parts[2]!.slice(1)}`;
+    expect(await requestWith(`${parts[0]}.${parts[1]}.${alteredSignature}`)).toBeNull();
+    expect(await requestWith(`legacy-session-v1.${parts[1]}.${parts[2]}`)).toBeNull();
+    expect(await requestWith(`${parts[0]}.${parts[1]}`)).toBeNull();
+    expect(await requestWith(`${parts[0]}.${parts[1]}.not-base64`)).toBeNull();
   });
 
   it('keeps a reader-ceiling bearer listing self-only under an owner membership', async () => {

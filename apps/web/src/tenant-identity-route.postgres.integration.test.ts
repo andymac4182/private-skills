@@ -31,6 +31,7 @@ import {
   type TenantIdentityRuntime,
   type TenantRuntimeContext,
 } from '../server/tenant-runtime.js';
+import { readSessionExchangeToken } from '../server/session-exchange.js';
 
 const databaseURL = process.env.PSKILLS_IDENTITY_TEST_DATABASE_URL ?? process.env.PSKILLS_TEST_POSTGRES_URL;
 const ORIGIN = 'https://tenant-route-boundary.test';
@@ -172,6 +173,8 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
           const browserPrincipal = await identity.authenticate(incoming);
           return browserPrincipal ?? await apiTokens.authenticator.authenticate(incoming);
         },
+        createSession: (token) => apiTokens.authenticator.createSession!(token),
+        clearSessionCookie: () => apiTokens.authenticator.clearSessionCookie!(),
       };
       const tenantIdentity: TenantIdentityRuntime = {
         authenticate: requestAuthenticator.authenticate,
@@ -212,6 +215,18 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
           });
         },
         defaultHandler: async () => Response.json({ code: 'UNAUTHENTICATED' }, { status: 401 }),
+        resolveSessionTenant: async (incoming) => {
+          const token = await readSessionExchangeToken(incoming);
+          if (token === undefined) return undefined;
+          const principal = await apiTokens.authenticator.authenticate(new Request(incoming.url, {
+            method: 'GET',
+            headers: { authorization: `Bearer ${token}` },
+          }));
+          const tokenId = (principal as (Principal & { tokenId?: unknown }) | null)?.tokenId;
+          return principal && typeof tokenId === 'string'
+            ? { organizationId: principal.organizationId, kind: 'scoped-api' as const, roles: principal.roles, scopes: principal.scopes, provisioned: true }
+            : undefined;
+        },
       });
 
       // This is the same outer route composition used by the Node runtime:
@@ -226,16 +241,21 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
         return tenantRouter(incoming);
       };
 
-      const createToken = async (cookie: string, name: string) => dispatch(request('/v1/tokens', {
+      const createToken = async (
+        cookie: string,
+        name: string,
+        roleCeiling: 'reader' | 'publisher' = 'reader',
+        scopes: readonly string[] = ['registry:read'],
+      ) => dispatch(request('/v1/tokens', {
         method: 'POST',
         headers: {
           cookie,
           origin: ORIGIN,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ name, roleCeiling: 'reader', scopes: ['registry:read'], expiresInSeconds: 3_600 }),
+        body: JSON.stringify({ name, roleCeiling, scopes, expiresInSeconds: 3_600 }),
       }));
-      const tokenResponseA = await createToken(cookieA, 'tenant-a cli');
+      const tokenResponseA = await createToken(cookieA, 'tenant-a cli', 'publisher', ['skills:publish']);
       const tokenResponseB = await createToken(cookieB, 'tenant-b cli');
       expect(tokenResponseA.status).toBe(201);
       expect(tokenResponseB.status).toBe(201);
@@ -247,6 +267,29 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
       const tokenB = tokenBodyB.token;
       expect(typeof tokenA).toBe('string');
       expect(typeof tokenB).toBe('string');
+
+      const exchange = async (token: string): Promise<string> => {
+        const response = await dispatch(request('/auth/session', {
+          method: 'POST',
+          headers: { origin: ORIGIN, 'content-type': 'application/json' },
+          body: JSON.stringify({ token }),
+        }));
+        expect(response.status).toBe(200);
+        const cookie = response.headers.get('set-cookie');
+        expect(cookie).toMatch(/^pskills_session=api-token-session-v1\./u);
+        return cookie!.split(';', 1)[0]!;
+      };
+      const apiSessionA = await exchange(String(tokenA));
+      const apiSessionB = await exchange(String(tokenB));
+      const exchangedA = await dispatch(request('/v1/me', { headers: { cookie: apiSessionA, 'x-organization-id': 'tenant-b' } }));
+      const exchangedB = await dispatch(request('/v1/me', { headers: { cookie: apiSessionB, 'x-organization-id': 'tenant-a' } }));
+      expect(await json(exchangedA)).toMatchObject({ organizationId: 'tenant-a', subject: 'route-user-a', roles: ['publisher'], scopes: ['skills:publish'] });
+      expect(await json(exchangedB)).toMatchObject({ organizationId: 'tenant-b', subject: 'route-user-b' });
+
+      await direct.unsafe(`update ${table(schema, 'member')} set "role" = 'reader' where "id" = $1`, ['route-member-a']);
+      const downgradedA = await dispatch(request('/v1/me', { headers: { cookie: apiSessionA } }));
+      expect(downgradedA.status).toBe(200);
+      expect(await json(downgradedA)).toMatchObject({ organizationId: 'tenant-a', subject: 'route-user-a', roles: ['reader'], scopes: [] });
 
       const sessionA = await dispatch(request('/v1/me', {
         headers: { cookie: cookieA, 'x-organization-id': 'tenant-b' },
@@ -279,6 +322,13 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
       expect(crossCompanyCreate.status).toBe(403);
       expect(await json(crossCompanyCreate)).toMatchObject({ code: 'FORBIDDEN' });
 
+      const revokeA = await dispatch(request(`/v1/tokens/${String(tokenBodyA.id)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${String(tokenA)}` },
+      }));
+      expect(revokeA.status).toBe(200);
+      expect((await dispatch(request('/v1/me', { headers: { cookie: apiSessionA } }))).status).toBe(401);
+
       await direct.unsafe(`delete from ${table(schema, 'member')} where "id" = $1`, ['route-member-a']);
       const revokedSession = await dispatch(request('/v1/me', { headers: { cookie: cookieA } }));
       const revokedBearer = await dispatch(request('/v1/me', { headers: { authorization: `Bearer ${String(tokenA)}` } }));
@@ -287,6 +337,11 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed Better Auth and API-
       expect(revokedBearer.status).toBe(401);
       expect(await json(revokedBearer)).toMatchObject({ code: 'UNAUTHENTICATED' });
       expect(await json(await dispatch(request('/v1/me', { headers: { cookie: cookieB } })))).toMatchObject({ organizationId: 'tenant-b' });
+      expect((await dispatch(request('/v1/me', { headers: { cookie: apiSessionA } }))).status).toBe(401);
+      expect((await dispatch(request('/v1/me', { headers: { cookie: apiSessionB } }))).status).toBe(200);
+
+      await direct.unsafe(`delete from ${table(schema, 'member')} where "id" = $1`, ['route-member-b']);
+      expect((await dispatch(request('/v1/me', { headers: { cookie: apiSessionB } }))).status).toBe(401);
     } finally {
       await identity.close();
       await direct.unsafe(`drop schema if exists ${quoteIdentifier(schema)} cascade`);

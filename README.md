@@ -105,7 +105,7 @@ cargo run -p pskills -- --help     # same CLI, package name is pskills
 
 ## Authentication and API
 
-The browser sign-in form exchanges a configured user token with `POST /auth/session`. The server hashes configured token material at startup, signs a short-lived session, and returns it as an `HttpOnly` cookie. Cookie mutations require the configured origin. `DELETE /auth/session` clears the session. The CLI uses a scoped bearer token; `pskills login` currently accepts it through `--token-stdin`, so credentials do not appear in shell history.
+The browser sign-in form exchanges a configured legacy user token or a persisted company API token with `POST /auth/session`. Legacy token material is hashed at startup; API-token sessions contain a signed reference and recheck the persisted token and live membership on every request, so revocation, expiry, removal, and role or scope changes take effect immediately. The raw API secret is never placed in the `HttpOnly` cookie. Cookie mutations require the configured origin. `DELETE /auth/session` clears the session. The CLI uses a scoped bearer token; `pskills login` currently accepts it through `--token-stdin`, so credentials do not appear in shell history.
 
 The web surface calls the same-origin API and exposes the implemented registry areas:
 

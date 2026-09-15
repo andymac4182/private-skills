@@ -15,6 +15,7 @@ import {
 import {
   createApiTokenModule,
   createPostgresApiTokenRepository,
+  DEFAULT_API_TOKEN_SESSION_COOKIE,
   type ApiTokenModule,
   type ApiTokenPgPool,
   type IdentityRole as ApiTokenIdentityRole,
@@ -42,6 +43,13 @@ export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
+}
+
+/** Keep the API-token browser exchange on the same durable secret boundary as identity. */
+function sessionSecretFromEnv(env: IdentityEnvironment): string | undefined {
+  return env.BETTER_AUTH_SECRET?.trim()
+    || env.PSKILLS_BETTER_AUTH_SECRET?.trim()
+    || env.PSKILLS_SESSION_SECRET?.trim();
 }
 
 /**
@@ -145,6 +153,10 @@ export function createIdentityInfrastructure(
     membershipAuthorizer,
     canonicalOrigin: appOrigin,
     missingOrigin: 'deny',
+    sessionSecret: sessionSecretFromEnv(env),
+    sessionCookieName: env.PSKILLS_SESSION_COOKIE?.trim() || DEFAULT_API_TOKEN_SESSION_COOKIE,
+    sessionSecureCookies: env.PSKILLS_ENVIRONMENT?.trim().toLowerCase() !== 'development'
+      && env.PSKILLS_ENVIRONMENT?.trim().toLowerCase() !== 'test',
   });
   const companySso = createCompanySsoModule({
     repository: companySsoRepository,

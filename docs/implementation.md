@@ -161,7 +161,7 @@ are producer metadata and do not represent registry approval.
 
 ## Authentication boundary
 
-`TokenAuthenticator` accepts startup token configuration through `PSKILLS_BOOTSTRAP_TOKEN`, `PSKILLS_BOOTSTRAP_TOKEN_HASH`, JSON token lists, and separate worker token settings. It hashes plaintext token material at startup and compares presented credentials in constant time. User tokens can be exchanged at `/auth/session` for an HMAC-signed browser session. Worker identities are bearer-only and cannot become browser sessions or use user routes.
+`TokenAuthenticator` accepts startup token configuration through `PSKILLS_BOOTSTRAP_TOKEN`, `PSKILLS_BOOTSTRAP_TOKEN_HASH`, JSON token lists, and separate worker token settings. It hashes plaintext token material at startup and compares presented credentials in constant time. Legacy user tokens can be exchanged at `/auth/session` for an HMAC-signed browser session. A persisted company API token can use the same route when the API-token module has a durable session secret: the returned v1 reference cookie contains no raw secret, and every request rechecks the token record and live membership so expiry, revocation, removal, and role or scope changes apply immediately. Worker identities are bearer-only and cannot become browser sessions or use user routes.
 
 Production requires a configured `PSKILLS_SESSION_SECRET` with at least 32 bytes. Cookie mutations require an allowed `Origin` matching `PSKILLS_PUBLIC_ORIGIN`; session cookies are `HttpOnly`, `SameSite=Lax` by default, and `Secure` in production. The Rust CLI currently uses `pskills login --token-stdin`; OIDC and device authorization are tracked as future work rather than implied by the sign-in form.
 
