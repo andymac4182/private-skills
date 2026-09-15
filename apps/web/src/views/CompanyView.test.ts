@@ -96,6 +96,7 @@ describe('CompanyView', () => {
     const input = document.querySelector<HTMLInputElement>('input[name="companyName"]')
     const slug = document.querySelector<HTMLInputElement>('input[name="companySlug"]')
     expect(document.body.textContent).toContain('Create your company')
+    expect(document.body.textContent).toContain('Access is checked for each request')
     expect(input).not.toBeNull()
 
     await act(async () => {
@@ -163,8 +164,33 @@ describe('CompanyView', () => {
 
     expect(document.body.textContent).toContain('publisher@acme.test')
     expect(document.body.textContent).toContain('new@acme.test')
+    expect(document.body.textContent).toContain('Create a link for a teammate. Share it with them; no email is sent automatically.')
+    expect(document.body.textContent).toContain('Choose a new role and save it. The change takes effect after it is checked.')
+    expect(document.body.textContent).toContain('Current')
+    expect(document.body.textContent).not.toContain('server remains the authority')
+    expect(document.body.textContent).not.toContain('identity service creates a bounded invitation')
+    expect(document.body.textContent).not.toContain('Server managed')
     expect(document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')?.disabled).toBe(false)
     expect(document.querySelector('select[aria-label="Role for Publisher"]')).not.toBeNull()
+  })
+
+  it('keeps accepted invitations in history and counts only pending links', async () => {
+    harness.auth.session = makeSession()
+    const accepted: OrganizationInvitation = { id: 'invite-accepted', email: 'ben@acme.test', role: 'reader', status: 'accepted' }
+    const pending: OrganizationInvitation = { id: 'invite-pending', email: 'new@acme.test', role: 'publisher', status: 'pending' }
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [accepted, pending] })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const pendingSection = document.querySelector<HTMLElement>('[data-testid="pending-invitations"]')
+    const historySection = document.querySelector<HTMLElement>('[data-testid="invitation-history"]')
+    expect(pendingSection?.querySelector('[data-testid="pending-invitations-count"]')?.textContent).toBe('1')
+    expect(pendingSection?.textContent).toContain('new@acme.test')
+    expect(pendingSection?.textContent).not.toContain('ben@acme.test')
+    expect(historySection?.querySelector('[data-testid="invitation-history-count"]')?.textContent).toBe('1')
+    expect(historySection?.textContent).toContain('ben@acme.test')
+    expect(historySection?.textContent).toContain('Accepted')
   })
 
   it('derives a same-origin copy link from the Better Auth invitation id', async () => {
@@ -240,7 +266,7 @@ describe('CompanyView', () => {
     expect(members).toHaveBeenCalledOnce()
     expect(invitations).not.toHaveBeenCalled()
     expect(document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')?.disabled).toBe(true)
-    expect(document.body.textContent).toContain('Pending invitations are visible to owners and admins.')
+    expect(document.body.textContent).toContain('Owners and admins can see pending invitations.')
     expect(document.querySelector('select[aria-label="Role for Reader"]')).toBeNull()
   })
 })
