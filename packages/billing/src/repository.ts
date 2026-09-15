@@ -654,11 +654,8 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
       FROM pg_constraint AS existing_constraint
-      JOIN pg_class AS target_table ON target_table.oid = existing_constraint.conrelid
-      JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
      WHERE existing_constraint.conname = '${normalizedPrefix}_operations_status_check'
-       AND target_table.relname = '${normalizedPrefix}_usage_operations'
-       AND target_schema.nspname = current_schema()
+       AND existing_constraint.conrelid = to_regclass('${normalizedPrefix}_usage_operations')
   ) THEN
     ALTER TABLE ${tables.operations}
       ADD CONSTRAINT ${quoteIdentifier(`${normalizedPrefix}_operations_status_check`)}
@@ -670,11 +667,8 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1
       FROM pg_constraint AS existing_constraint
-      JOIN pg_class AS target_table ON target_table.oid = existing_constraint.conrelid
-      JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
      WHERE existing_constraint.conname = '${generationConstraintName}'
-       AND target_table.relname = '${normalizedPrefix}_usage_operations'
-       AND target_schema.nspname = current_schema()
+       AND existing_constraint.conrelid = to_regclass('${normalizedPrefix}_usage_operations')
   ) THEN
     ALTER TABLE ${tables.operations}
       ADD CONSTRAINT ${quoteIdentifier(generationConstraintName)}
