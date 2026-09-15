@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMPANY_SSO_CALLBACK_PATH,
+  COMPANY_SSO_SAML_CALLBACK_PATH,
   COMPANY_SSO_SYNTHETIC_DOMAIN,
   MemoryCompanySsoRepository,
   companySsoCallbackUrl,
   companySsoPluginOptions,
+  syncCompanySsoProvider,
+  removeCompanySsoProvider,
+  type CompanySsoBetterAuthAdapter,
   createCompanySsoApi,
   discoverCompanyOidc,
   explicitCompanySsoSelection,
@@ -165,12 +169,14 @@ describe('company-managed SSO SAML validation', () => {
       providerId,
       protocol: 'saml',
       issuer: APP_ORIGIN,
-      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, providerId),
+      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, providerId, false, 'saml'),
       saml: {
         entryPoint: 'https://idp.example.test/sso',
         idpMetadata: { metadata },
       },
     }, { appOrigin: APP_ORIGIN });
+    expect(result.callbackUrl).toBe(`${APP_ORIGIN}${COMPANY_SSO_SAML_CALLBACK_PATH}/acme-saml`);
+    expect(result.saml?.identityProviderIssuer).toBe('https://idp.example.test/entity');
     expect(result.saml?.wantAssertionsSigned).toBe(true);
     expect(result.saml?.idpMetadata.metadata).toContain('X509Certificate');
   });
@@ -178,7 +184,7 @@ describe('company-managed SSO SAML validation', () => {
   it('rejects unsigned, unsolicited, oversized, or certificate-less SAML configurations', async () => {
     const base = {
       providerId: 'acme-saml', protocol: 'saml', issuer: APP_ORIGIN,
-      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, 'acme-saml'),
+      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, 'acme-saml', false, 'saml'),
       saml: { entryPoint: 'https://idp.example.test/sso', idpMetadata: { metadata } },
     };
     await expect(validateCompanySsoRegistration('acme', { ...base, saml: { ...base.saml, wantAssertionsSigned: false } }, { appOrigin: APP_ORIGIN })).rejects.toMatchObject({ code: 'SAML_SIGNED_ASSERTIONS_REQUIRED' });
@@ -265,7 +271,8 @@ describe('company-managed SSO Better Auth adapter seam', () => {
   it('uses the persisted provider record and never treats synthetic domain as discovery input', async () => {
     const repository = new MemoryCompanySsoRepository();
     const record = await createRecord(repository);
-    expect(toBetterAuthCompanySsoProvider(record)).toMatchObject({ providerId: 'acme-oidc', organizationId: 'acme', domain: COMPANY_SSO_SYNTHETIC_DOMAIN });
+    expect(toBetterAuthCompanySsoProvider(record)).toMatchObject({ id: record.id, providerId: 'acme-oidc', organizationId: 'acme', domain: COMPANY_SSO_SYNTHETIC_DOMAIN });
+    expect(toBetterAuthCompanySsoProvider(record).oidcConfig).toMatchObject({ discoveryEndpoint: record.oidc?.discoveryUrl });
     const selection = explicitCompanySsoSelection(record, 'acme', 'acme-oidc', APP_ORIGIN);
     expect(selection.callbackURL).toBe(record.callbackUrl);
     expect(() => explicitCompanySsoSelection(record, 'globex', 'acme-oidc', APP_ORIGIN)).toThrowError(expect.objectContaining({ code: 'COMPANY_PROVIDER_MISMATCH' }));
@@ -294,5 +301,111 @@ describe('company-managed SSO Better Auth adapter seam', () => {
     await expect(options.guardProviderMutation?.({
       action: 'delete', provider: { id: record.id, providerId: record.providerId, organizationId: record.organizationId }, providerReference: { providerId: record.providerId, source: { type: 'persisted', recordId: record.id }, authenticationConfigurationFingerprint: 'test' },
     }, {} as never)).rejects.toMatchObject({ code: 'COMPANY_SSO_MUTATION_OWNERSHIP' });
+  });
+
+  it('pins SAML identities to the metadata IdP entity and keeps the SP issuer separate', async () => {
+    const metadata = '<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.test/entity"><IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>AA==</X509Certificate></X509Data></KeyInfo></KeyDescriptor><SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.test/sso"/></IDPSSODescriptor></EntityDescriptor>';
+    const repository = new MemoryCompanySsoRepository();
+    const validated = await validateCompanySsoRegistration('acme', {
+      providerId: 'acme-saml',
+      displayName: 'Acme SAML',
+      protocol: 'saml',
+      issuer: `${APP_ORIGIN}/saml/sp`,
+      callbackUrl: companySsoCallbackUrl(APP_ORIGIN, 'acme-saml', false, 'saml'),
+      saml: { entryPoint: 'https://idp.example.test/sso', idpMetadata: { metadata } },
+    }, { appOrigin: APP_ORIGIN });
+    const record = await repository.create({
+      id: 'row-acme-saml',
+      ...validated,
+      createdBy: 'owner-1',
+      updatedBy: 'owner-1',
+      revision: 1,
+      createdAt: '2026-09-15T00:00:00.000Z',
+      updatedAt: '2026-09-15T00:00:00.000Z',
+    });
+    const resolve = companySsoPluginOptions({ repository }).resolveUser!;
+    const baseInput = {
+      protocol: 'saml' as const,
+      providerId: record.providerId,
+      accountKey: { issuer: record.saml!.identityProviderIssuer, accountId: 'alice@acme.test' },
+      providerUser: { email: 'alice@acme.test', emailVerified: false, name: 'Alice' },
+      providerClaims: {},
+      providerAttributes: {},
+      verifiedIdTokenClaims: {},
+      providerReference: { providerId: record.providerId, source: { type: 'persisted' as const, recordId: record.id }, authenticationConfigurationFingerprint: 'test' },
+    };
+    await expect(resolve(baseInput, {} as never)).resolves.toEqual({ action: 'continue' });
+    await expect(resolve({ ...baseInput, accountKey: { issuer: 'https://idp.example.test/foreign', accountId: baseInput.accountKey.accountId } }, {} as never)).resolves.toMatchObject({ code: 'COMPANY_SSO_ISSUER_MISMATCH' });
+    await expect(resolve({ ...baseInput, accountKey: { issuer: record.issuer, accountId: baseInput.accountKey.accountId } }, {} as never)).resolves.toMatchObject({ code: 'COMPANY_SSO_ISSUER_MISMATCH' });
+  });
+
+  it('bridges the private row into ssoProvider with an exact id and rejects collisions', async () => {
+    const repository = new MemoryCompanySsoRepository();
+    const record = await createRecord(repository);
+    const rows = new Map<string, Record<string, unknown>>();
+    const adapter = {
+      findOne: async ({ where }: { where: Array<{ field: string; value: unknown }> }) => {
+        const providerId = where.find((entry) => entry.field === 'providerId')?.value;
+        return typeof providerId === 'string' ? rows.get(providerId) ?? null : null;
+      },
+      create: async ({ data, forceAllowId }: { data: Record<string, unknown>; forceAllowId?: boolean }) => {
+        expect(forceAllowId).toBe(true);
+        rows.set(String(data.providerId), { ...data });
+        return data;
+      },
+      update: async ({ update }: { update: Record<string, unknown> }) => {
+        const current = rows.get(record.providerId);
+        if (!current) return null;
+        rows.set(record.providerId, { ...current, ...update });
+        return rows.get(record.providerId);
+      },
+      delete: async ({ where }: { where: Array<{ field: string; value: unknown }> }) => {
+        const providerId = where.find((entry) => entry.field === 'providerId')?.value;
+        if (typeof providerId === 'string') rows.delete(providerId);
+      },
+    } as unknown as CompanySsoBetterAuthAdapter;
+    const auth = { $context: Promise.resolve({ adapter }) };
+
+    await syncCompanySsoProvider(auth, record);
+    expect(rows.get(record.providerId)).toMatchObject({ id: record.id, organizationId: record.organizationId, userId: record.createdBy });
+    const storedConfig = JSON.parse(String(rows.get(record.providerId)?.oidcConfig)) as Record<string, unknown>;
+    expect(storedConfig.discoveryEndpoint).toBe(record.oidc?.discoveryUrl);
+    await syncCompanySsoProvider(auth, { ...record, status: 'disabled', revision: 2 });
+    expect(rows.get(record.providerId)).toMatchObject({ id: record.id, providerId: record.providerId });
+
+    await expect(syncCompanySsoProvider(auth, { ...record, id: 'row-foreign', organizationId: 'globex' }))
+      .rejects.toMatchObject({ code: 'COMPANY_SSO_CONFLICT' });
+    await removeCompanySsoProvider(auth, record);
+    expect(rows.has(record.providerId)).toBe(false);
+  });
+
+  it('runs the trusted mirror hook on company API mutations', async () => {
+    const repository = new MemoryCompanySsoRepository();
+    const upserts: CompanySsoProviderRecord[] = [];
+    const removals: CompanySsoProviderRecord[] = [];
+    const api = createCompanySsoApi({
+      repository,
+      authorizer: authorizerFor(),
+      appOrigin: APP_ORIGIN,
+      fetch: fetchDiscovery(),
+      idGenerator: () => 'row-api-oidc',
+      bridge: {
+        upsert: async (record) => { upserts.push(record); },
+        remove: async (record) => { removals.push(record); },
+      },
+    });
+    const created = await api.handler(request('/v1/companies/acme/sso/providers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(oidcInput()),
+    }));
+    expect(created?.status).toBe(201);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0]).toMatchObject({ id: 'row-api-oidc', organizationId: 'acme', providerId: 'acme-oidc' });
+
+    const deleted = await api.handler(request('/v1/companies/acme/sso/providers/acme-oidc', { method: 'DELETE', headers: { 'if-match': '1' } }));
+    expect(deleted?.status).toBe(200);
+    expect(removals).toHaveLength(1);
+    expect(removals[0]).toMatchObject({ id: 'row-api-oidc', organizationId: 'acme', providerId: 'acme-oidc' });
   });
 });

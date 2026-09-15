@@ -26,6 +26,9 @@ export const registrySections = [
   { id: 'upstreams', label: 'Sources', hint: 'Approved sources', glyph: '⌘' },
   { id: 'audit', label: 'Audit', hint: 'Change history', glyph: '◷' },
   { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
+  { id: 'company-sso', label: 'SSO settings', hint: 'Company sign-in', glyph: '⌁' },
+  { id: 'company-tokens', label: 'CLI tokens', hint: 'Scoped access', glyph: '⌘' },
+  { id: 'billing', label: 'Billing & usage', hint: 'Plan and invoices', glyph: '$' },
 ] as const satisfies readonly RegistrySection[]
 
 export interface RegistryNavGroup {
@@ -107,6 +110,9 @@ export const registryNavGroups = [
     admin: true,
     sections: [
       registrySectionsById.company,
+      registrySectionsById['company-sso'],
+      registrySectionsById['company-tokens'],
+      registrySectionsById.billing,
       registrySectionsById.policy,
       registrySectionsById.upstreams,
       registrySectionsById.audit,

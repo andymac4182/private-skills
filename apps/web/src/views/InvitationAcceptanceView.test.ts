@@ -117,11 +117,16 @@ describe('InvitationAcceptanceView', () => {
     [new ApiError(400, { message: 'Invitation not found!' }), 'expired or is no longer available'],
     [new ApiError(403, { code: 'INVITATION_EMAIL_UNVERIFIED', message: 'A verified session for the invited email is required' }), 'Verify the invited email address'],
   ])('explains a Better Auth invitation failure (%s)', async (cause, expected) => {
-    vi.spyOn(api, 'getOrganizationInvitation').mockRejectedValue(cause)
+    const getInvitation = vi.spyOn(api, 'getOrganizationInvitation').mockRejectedValue(cause)
     root = (await renderView('invite-1')).root
 
     await vi.waitFor(() => expect(document.body.textContent).toContain(expected))
     expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('h1')?.textContent).toBe('Invitation unavailable')
+    const retryButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Try again')
+    expect(retryButton).not.toBeUndefined()
+    await act(async () => { retryButton?.click() })
+    await vi.waitFor(() => expect(getInvitation).toHaveBeenCalledTimes(2))
   })
 
   it('does not call the identity API for an invalid invitation link', async () => {

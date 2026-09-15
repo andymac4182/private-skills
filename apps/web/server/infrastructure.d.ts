@@ -3,6 +3,10 @@ declare module '#pskills-infrastructure' {
   export function createInfrastructure(env: RuntimeEnvironment): Promise<{
     repository: import('../../../packages/contracts/src/index').StateRepository;
     blobs: import('../../../packages/contracts/src/index').BlobStore;
+    billing: {
+      service: import('../../../packages/billing/src/index').BillingService;
+      invoiceHistory?: (lookup: import('../../../packages/billing/src/index').BillingInvoiceLookup) => Promise<readonly import('../../../packages/billing/src/index').BillingProviderInvoice[]>;
+    };
     hostedWorker?: (request: Request) => Promise<Response>;
     /** Optional signed worker factory bound to one server-selected tenant. */
     createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
@@ -26,6 +30,27 @@ declare module '#pskills-infrastructure' {
     apiTokens?: {
       handler: import('../../../packages/api-tokens/src/index').ApiTokenHandler;
       authenticator: import('../../../packages/contracts/src/index').Authenticator;
+    };
+    /** Optional Node-owned company SSO registry and Better Auth bridge. */
+    companySso?: {
+      handler: (request: Request) => Promise<Response | undefined>;
+      listPublicProviders?: (organizationId: string) => Promise<readonly {
+        providerId: string;
+        displayName: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      }[]>;
+      getProviderForOrganization?: (organizationId: string, providerId: string) => Promise<{
+        providerId: string;
+        organizationId: string;
+        protocol: 'oidc' | 'saml';
+        status: 'active' | 'disabled';
+      } | null>;
+      selectProvider?: (organizationId: string, providerId: string, appOrigin: string, allowLoopbackHttp?: boolean) => Promise<{
+        organizationId: string;
+        providerId: string;
+        callbackURL: string;
+      } | null>;
     };
     /** Explicit Better Auth user + bootstrap-owner adoption transaction. */
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;

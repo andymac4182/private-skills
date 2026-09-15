@@ -33,7 +33,10 @@ export function RegistryShell() {
   const activeSection = routeSection === 'topic' ? 'topics' : routeSection
   const activeLabel = registrySections.find((section) => section.id === activeSection)?.label ?? 'Registry'
   const activeGroup = registryNavGroups.find((group) => group.sections.some((section) => section.id === activeSection)) ?? registryNavGroups[0]
-  const accountName = principal?.subject ?? session?.user.name ?? session?.user.email ?? session?.user.id ?? 'Private Skills'
+  // Identity sessions carry the human-facing account label. The legacy
+  // principal subject is often an opaque id, so only use it after the
+  // sanitized identity name/email fields and retain it for token sessions.
+  const accountName = session?.user.name?.trim() || session?.user.email?.trim() || principal?.subject?.trim() || session?.user.id?.trim() || 'Private Skills'
   const accountInitial = accountName.trim().slice(0, 1).toUpperCase() || 'P'
   const accountRoles = principal?.roles.join(' · ') ?? (session?.activeMembership?.role ?? 'company setup')
   const tenantKey = session?.activeOrganizationId ?? principal?.organizationId ?? 'identity'

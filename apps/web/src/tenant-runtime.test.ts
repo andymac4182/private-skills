@@ -146,6 +146,46 @@ describe('tenant runtime routing', () => {
     expect(factoryCalls).toBe(0);
   });
 
+  it('routes a persisted-token session exchange from its verified body token without consuming the core body', async () => {
+    const issued = principal('org-b', 'api-user');
+    const auth: Authenticator = {
+      authenticate: async (incoming) => incoming.headers.get('authorization') === 'Bearer issued-api-token' ? issued : null,
+      createSession: async (token) => token === 'issued-api-token'
+        ? { cookie: 'pskills_session=signed-reference', principal: issued }
+        : null,
+    };
+    const identity: TenantIdentityRuntime = { authenticate: auth.authenticate };
+    const router = createTenantHandlerRouter({
+      defaultOrganizationId: 'org-a',
+      identity,
+      authenticator: auth,
+      resolveSessionTenant: async (incoming) => {
+        const body = await incoming.clone().json() as { token?: unknown };
+        if (body.token !== 'issued-api-token') return undefined;
+        const verified = await auth.authenticate(new Request(incoming.url, {
+          headers: { authorization: `Bearer ${body.token}` },
+        }));
+        return verified ? { organizationId: verified.organizationId, kind: 'scoped-api' } : undefined;
+      },
+      createHandler: (context) => async (incoming) => {
+        const body = await incoming.json() as { token?: unknown };
+        const session = await context.auth.createSession?.(String(body.token));
+        return session
+          ? Response.json({ organizationId: context.organizationId, subject: session.principal.subject })
+          : Response.json({ code: 'UNAUTHORIZED' }, { status: 401 });
+      },
+      defaultHandler: async () => Response.json({ code: 'UNAUTHENTICATED' }, { status: 401 }),
+    });
+
+    const response = await router(new Request('https://registry.example.test/auth/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'issued-api-token' }),
+    }));
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ organizationId: 'org-b', subject: 'api-user' });
+  });
+
   it('sends unauthenticated requests to the default handler without fabricating a principal', async () => {
     const auth: Authenticator = { authenticate: async () => null };
     const identity: TenantIdentityRuntime = { authenticate: auth.authenticate };

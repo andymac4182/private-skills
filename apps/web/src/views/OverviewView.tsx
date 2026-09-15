@@ -48,12 +48,12 @@ export function OverviewView() {
   }, [])
 
   if (error) return <div className="view-heading overview-view overview-state-view">
-    <OverviewIntro principal={principal} session={session} showActions={false} />
+    <OverviewIntro canPublish={canPublishFromSession(principal, session)} principal={principal} session={session} showActions={false} />
     <ErrorState message={error} onRetry={() => void load()} />
   </div>
 
   if (!skills || !packs || !operations || !policy) return <div className="view-heading overview-view overview-state-view">
-    <OverviewIntro principal={principal} session={session} showActions={false} />
+    <OverviewIntro canPublish={canPublishFromSession(principal, session)} principal={principal} session={session} showActions={false} />
     <Panel className="overview-loading-panel"><LoadingState label="Loading your releases, collections, and review settings." /></Panel>
   </div>
 
@@ -65,9 +65,10 @@ export function OverviewView() {
   const visibleOperations = activityView === 'active' ? activeOperations : operations
   const isFirstRun = skills.length === 0 && packs.length === 0 && operations.length === 0
   const companyName = session?.activeOrganization?.name ?? 'this company'
+  const canPublish = canPublishFromSession(principal, session)
 
   return <div className="view-heading overview-view">
-    <OverviewIntro firstRun={isFirstRun} principal={principal} session={session} />
+    <OverviewIntro canPublish={canPublish} firstRun={isFirstRun} principal={principal} session={session} />
 
     <section className="overview-stats" aria-label="Registry metrics">
       <Panel className="overview-stat-card">
@@ -94,7 +95,7 @@ export function OverviewView() {
 
     <div className="overview-content-grid">
       <Panel className="overview-table-panel" title="Recent releases" description={`Newest versions in ${companyName}.`} action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Release table view"><button aria-pressed={releaseView === 'all'} className={releaseView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('all')}>All <span>{skills.length}</span></button><button aria-pressed={releaseView === 'attention'} className={releaseView === 'attention' ? 'overview-filter-active' : ''} type="button" onClick={() => setReleaseView('attention')}>Attention <span>{needsAttention.length}</span></button></div><Link className="button button-quiet" params={{ section: 'catalog' }} to="/app/$section">View catalog ↗</Link></div>}>
-        {visibleReleases.length === 0 ? releaseView === 'attention' ? <EmptyState title="Nothing needs attention" description="Every release matches the current scanner policy." /> : <EmptyState title={isFirstRun ? 'Add your first skill' : 'Catalog is empty'} description={isFirstRun ? `Start ${companyName} with a private release or find one from a configured source.` : 'Publish or import a skill to start building your private registry.'} action={isFirstRun ? <div className="overview-empty-actions"><Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link><Link className="button button-secondary" params={{ section: 'source-discovery' }} to="/app/$section">Find skills</Link></div> : <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link>} /> : <div className="table-wrap"><table><thead><tr><th>Skill</th><th>State</th><th>Files</th><th>Created</th></tr></thead><tbody>{visibleReleases.slice(0, 5).map((skill) => {
+        {visibleReleases.length === 0 ? releaseView === 'attention' ? <EmptyState title="Nothing needs attention" description="Every release matches the current scanner policy." /> : <EmptyState title={isFirstRun ? canPublish ? 'Add your first skill' : 'Find a skill for this company' : 'Catalog is empty'} description={isFirstRun ? canPublish ? `Start ${companyName} with a private release or find one from a configured source.` : `Browse the private catalog or find a skill from a configured source for ${companyName}.` : canPublish ? 'Publish or import a skill to start building your private registry.' : 'Browse the catalog or find a skill from a configured source.'} action={isFirstRun ? <div className="overview-empty-actions">{canPublish ? <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link> : <Link className="button button-primary" params={{ section: 'catalog' }} to="/app/$section">Browse catalog</Link>}<Link className="button button-secondary" params={{ section: 'source-discovery' }} to="/app/$section">Find skills</Link></div> : canPublish ? <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link> : <Link className="button button-primary" params={{ section: 'catalog' }} to="/app/$section">Browse catalog</Link>} /> : <div className="table-wrap"><table><thead><tr><th>Skill</th><th>State</th><th>Files</th><th>Created</th></tr></thead><tbody>{visibleReleases.slice(0, 5).map((skill) => {
           const stale = skill.state === 'approved' && skill.policyRevision !== policy.revision
           return <tr key={skill.id}>
             <td><Link className="overview-table-link" params={{ section: 'catalog' }} search={{ skill: skill.id }} to="/app/$section"><strong>{skill.name}</strong><span className="cell-sub">{skill.version}</span></Link></td>
@@ -106,7 +107,7 @@ export function OverviewView() {
       </Panel>
 
       <Panel className="overview-table-panel" title="Recent activity" description={`Publishing, imports, and checks for ${companyName}.`} action={<div className="overview-panel-actions"><div className="overview-filter" role="group" aria-label="Activity table view"><button aria-pressed={activityView === 'all'} className={activityView === 'all' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('all')}>All <span>{operations.length}</span></button><button aria-pressed={activityView === 'active'} className={activityView === 'active' ? 'overview-filter-active' : ''} type="button" onClick={() => setActivityView('active')}>Active <span>{activeOperations.length}</span></button></div><Link className="button button-quiet" params={{ section: 'operations' }} to="/app/$section">View activity ↗</Link></div>}>
-        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : isFirstRun ? 'Activity starts here' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : isFirstRun ? 'Publish or import a skill to see its review and scan progress.' : 'Work will appear here when you publish or import a skill.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
+        {visibleOperations.length === 0 ? <EmptyState title={activityView === 'active' ? 'No active tasks' : isFirstRun ? 'Activity starts here' : 'No activity yet'} description={activityView === 'active' ? 'The registry has no queued or running work right now.' : 'Activity appears as your team publishes or imports skills.'} /> : <div className="table-wrap"><table><thead><tr><th>Activity</th><th>State</th><th>Updated</th></tr></thead><tbody>{visibleOperations.slice(0, 5).map((operation) => <tr key={operation.id}><td><strong>{operation.kind}</strong><span className="cell-sub"><code>{operation.id}</code></span></td><td><Badge value={operation.state} /></td><td>{formatDate(operation.updatedAt)}</td></tr>)}</tbody></table>{visibleOperations.length > 5 && <div className="overview-table-footnote">Showing 5 of {visibleOperations.length} activities. Open activity for the full queue.</div>}</div>}
       </Panel>
     </div>
 
@@ -117,7 +118,13 @@ export function OverviewView() {
   </div>
 }
 
-function OverviewIntro({ firstRun = false, principal, session, showActions = true }: { firstRun?: boolean; principal: Principal | null; session: AuthSession | null; showActions?: boolean }) {
+function canPublishFromSession(principal: Principal | null, session: AuthSession | null): boolean {
+  const activeRole = session?.activeMembership?.role
+  if (activeRole) return activeRole === 'owner' || activeRole === 'admin' || activeRole === 'publisher'
+  return principal?.roles.some((candidate) => candidate === 'owner' || candidate === 'admin' || candidate === 'publisher') ?? false
+}
+
+function OverviewIntro({ canPublish, firstRun = false, principal, session, showActions = true }: { canPublish: boolean; firstRun?: boolean; principal: Principal | null; session: AuthSession | null; showActions?: boolean }) {
   const organization = session?.activeOrganization
   const companyName = organization?.name ?? 'Private registry'
   const companyIdentifier = organization?.slug ?? principal?.organizationId
@@ -137,7 +144,7 @@ function OverviewIntro({ firstRun = false, principal, session, showActions = tru
       <p className="overview-header-lede">{description}</p>
     </div>
     {showActions && <div className="overview-header-actions" aria-label="Workspace actions">
-      <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link>
+      {canPublish ? <Link className="button button-primary" params={{ section: 'publish' }} to="/app/$section">Add skill</Link> : <Link className="button button-primary" params={{ section: 'catalog' }} to="/app/$section">Browse catalog</Link>}
       <Link className="button button-secondary" params={{ section: 'source-discovery' }} to="/app/$section">Find skills</Link>
     </div>}
   </header>

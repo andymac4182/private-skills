@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { appLoginHref } from '../lib/appHref'
 import { brand } from '../lib/brand'
 import '../styles/public-marketing.css'
 
 interface PublicLayoutProps {
   children: ReactNode
-  current?: 'home' | 'product' | 'pricing' | 'docs' | 'faq' | 'legal' | 'contact'
+  current?: 'home' | 'product' | 'demo' | 'pricing' | 'docs' | 'faq' | 'legal' | 'contact'
 }
 
 export function PublicLogo({ compact = false }: { compact?: boolean }) {
@@ -24,6 +24,7 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
       <nav className="marketing-nav" aria-label="Public navigation">
         <a aria-current={current === 'product' ? 'page' : undefined} className={current === 'product' ? 'marketing-nav-active' : ''} href="/product">Product</a>
         <a href="/product#how-it-works">How it works</a>
+        <a aria-current={current === 'demo' ? 'page' : undefined} className={current === 'demo' ? 'marketing-nav-active' : ''} href="/demo">Demo</a>
         <a aria-current={current === 'pricing' ? 'page' : undefined} className={current === 'pricing' ? 'marketing-nav-active' : ''} href="/pricing">Pricing</a>
         <a aria-current={current === 'docs' ? 'page' : undefined} className={current === 'docs' ? 'marketing-nav-active' : ''} href="/docs">Docs</a>
         <a aria-current={current === 'faq' ? 'page' : undefined} className={current === 'faq' ? 'marketing-nav-active' : ''} href="/faq">FAQ</a>
@@ -36,6 +37,25 @@ export function PublicLayout({ children, current }: PublicLayoutProps) {
     <main id="main-content">{children}</main>
     <MarketingFooter />
   </div>
+}
+
+function handleTabKeyDown(
+  event: KeyboardEvent<HTMLButtonElement>,
+  index: number,
+  count: number,
+  tabIdPrefix: string,
+  select: (nextIndex: number) => void,
+) {
+  let nextIndex: number | undefined
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % count
+  if (event.key === 'ArrowLeft') nextIndex = (index - 1 + count) % count
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = count - 1
+  if (nextIndex === undefined) return
+
+  event.preventDefault()
+  select(nextIndex)
+  document.getElementById(`${tabIdPrefix}-${nextIndex}`)?.focus()
 }
 
 export function ProductFlowDemo() {
@@ -53,7 +73,7 @@ export function ProductFlowDemo() {
       number: '02',
       label: 'Scan',
       title: 'Check the candidate',
-      description: 'The registry validates the bundle and records scanner evidence. A required failure keeps the release unavailable.',
+      description: 'The registry validates the bundle and records scanner evidence. Configured policy can admit a release after required checks, or route it through a separate review gate. A required failure keeps it unavailable.',
       code: 'pskills scan status sha256:<release-digest>',
       status: 'Policy gate',
     },
@@ -92,7 +112,9 @@ export function ProductFlowDemo() {
         id={`marketing-demo-tab-${index}`}
         key={item.number}
         onClick={() => setActiveStep(index)}
+        onKeyDown={event => handleTabKeyDown(event, index, steps.length, 'marketing-demo-tab', nextIndex => setActiveStep(nextIndex))}
         role="tab"
+        tabIndex={activeStep === index ? 0 : -1}
         type="button"
       >
         <span className="marketing-demo-tab-number">{item.number}</span>
@@ -163,7 +185,9 @@ export function InstallWalkthrough() {
           id={`marketing-install-tab-${index}`}
           key={item.label}
           onClick={() => { setActiveStep(index); setCopied(false) }}
+          onKeyDown={event => handleTabKeyDown(event, index, steps.length, 'marketing-install-tab', nextIndex => { setActiveStep(nextIndex); setCopied(false) })}
           role="tab"
+          tabIndex={activeStep === index ? 0 : -1}
           type="button"
         >{item.label}</button>)}
       </div>
@@ -191,7 +215,7 @@ function MarketingFooter() {
     </div>
     <div className="marketing-footer-grid">
       <div className="marketing-footer-brand"><a className="marketing-brand-link" href="/"><PublicLogo /></a><p>Private registry, pull-through, and packs for engineering teams.</p></div>
-      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
+      <div><span className="marketing-footer-label">Explore</span><a href="/product">Product</a><a href="/demo">Demo walkthrough</a><a href="/pricing">Pricing</a><a href="/docs">Docs</a><a href="/faq">FAQ</a><a href="/contact">Contact</a></div>
       <div><span className="marketing-footer-label">Get started</span><a href="/docs/getting-started">Pilot guide</a><a href={appLoginHref()}>Sign in to registry</a><a href="/docs/getting-started#rollout">Plan a rollout</a></div>
       <div><span className="marketing-footer-label">Boundaries</span><span className="marketing-footer-note">Scans and source adapters depend on deployment configuration.</span><span className="marketing-footer-note">Eve suggests review and draft changes; a human controls publishing.</span><a href="/legal">Legal and product notes</a></div>
     </div>

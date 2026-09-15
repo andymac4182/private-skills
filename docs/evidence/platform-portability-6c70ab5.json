@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "platform-portability-v1",
+  "verifiedAgainst": {
+    "baseSha": "6c70ab500b4af39b25306826e96d2eac1ec10d42",
+    "worktree": "isolated detached worktree",
+    "productionData": false,
+    "productionCredentials": false
+  },
+  "toolchain": {
+    "node": "24.20.0",
+    "pnpm": "11.19.0",
+    "nitro": "3.0.260903-beta",
+    "wrangler": "4.130.0",
+    "dockerServer": "20.10.16 linux/arm64"
+  },
+  "builds": [
+    {
+      "target": "node",
+      "command": "pnpm exec tsx scripts/platform-build.ts node",
+      "status": "passed",
+      "kind": "production artifact build"
+    },
+    {
+      "target": "vercel",
+      "command": "pnpm exec tsx scripts/platform-build.ts vercel",
+      "status": "passed",
+      "kind": "build only",
+      "runtime": "nodejs24.x"
+    },
+    {
+      "target": "cloudflare",
+      "command": "pnpm exec tsx scripts/platform-build.ts cloudflare",
+      "status": "passed",
+      "kind": "local edge artifact build",
+      "preset": "cloudflare-module",
+      "wrangler": {
+        "name": "private-skills",
+        "compatibilityDate": "2026-09-09",
+        "compatibilityFlags": ["nodejs_compat"]
+      },
+      "staticBoundary": {
+        "postgresModules": 0,
+        "nodeIdentityModules": 0,
+        "filesSdkModules": 0,
+        "optionalAiGatewayNodeFsModules": 1
+      }
+    }
+  ],
+  "checks": {
+    "typecheck": "passed",
+    "focusedTests": {
+      "filesPassed": 7,
+      "filesSkipped": 1,
+      "testsPassed": 57,
+      "testsSkipped": 1
+    },
+    "diffCheck": "passed"
+  },
+  "runtime": [
+    {
+      "target": "node",
+      "kind": "real local Node runtime",
+      "identityProfile": "legacy bearer tokens; Better Auth disabled",
+      "status": "passed",
+      "assertions": [
+        "health returned 200",
+        "identity config reported disabled",
+        "identity session returned null",
+        "authenticated /v1/me returned the configured legacy organization",
+        "authenticated /v1/capabilities returned 200"
+      ]
+    },
+    {
+      "target": "container",
+      "kind": "real local Docker runtime",
+      "image": "private-skills-portability:6c70ab5",
+      "securityProfile": "read-only root with bounded tmpfs state and artifact mounts",
+      "identityProfile": "legacy bearer tokens; Better Auth disabled",
+      "status": "passed",
+      "assertions": [
+        "health returned 200",
+        "identity config reported disabled",
+        "identity session returned null",
+        "authenticated /v1/me returned the configured legacy organization",
+        "authenticated /v1/capabilities returned 200"
+      ]
+    },
+    {
+      "target": "cloudflare",
+      "kind": "real local Wrangler/workerd runtime",
+      "transport": "disposable local HTTP state and blob gateways",
+      "identityProfile": "legacy bearer tokens; Better Auth disabled",
+      "status": "passed",
+      "assertions": [
+        "workerd started with the generated Wrangler configuration",
+        "health returned 200",
+        "identity config reported disabled",
+        "identity session returned null",
+        "authenticated /v1/me returned the configured edge organization",
+        "authenticated /v1/capabilities returned 200",
+        "authenticated /v1/skills returned 200"
+      ]
+    }
+  ],
+  "limitations": [
+    "The Vercel result is a build-only check; no Vercel deployment was attempted.",
+    "The Cloudflare result is local workerd with fixture gateways; it is not a hosted Worker or TLS validation proof.",
+    "Better Auth company sessions, live membership removal, API-token membership, and bootstrap adoption were not exercised in this portability run because no disposable identity PostgreSQL fixture was provisioned.",
+    "The local edge state had no approved skills, so the full publish, required-scan, resolve, grant, and transfer journey was not claimed.",
+    "The edge artifact retains one guarded optional AI Gateway node:fs module under nodejs_compat; storage, identity, and PostgreSQL modules are absent."
+  ]
+}

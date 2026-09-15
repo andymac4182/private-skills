@@ -1,0 +1,49 @@
+.company-sso-view { display: grid; gap: 18px; max-width: 1040px; }
+.company-sso-header { align-items: start; }
+.company-sso-header h1 { margin-bottom: 8px; }
+.company-sso-header p { max-width: 640px; margin-bottom: 0; }
+.company-sso-company { display: grid; min-width: 190px; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--surface) 82%, transparent); }
+.company-sso-company span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.company-sso-company strong { color: var(--ink-soft); font-size: 13px; }
+.company-sso-company code { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+.company-sso-provider-panel, .company-sso-form-panel { overflow: hidden; }
+.company-sso-provider-list { display: grid; gap: 12px; padding: 18px 22px 22px; }
+.company-sso-provider { display: grid; gap: 16px; padding: 17px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.company-sso-provider-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.company-sso-provider-heading h3 { margin: 5px 0 7px; color: var(--ink); font-size: 17px; letter-spacing: -.03em; }
+.company-sso-provider-heading p { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 0; color: var(--muted); font-size: 10px; }
+.company-sso-provider-heading code { color: var(--ink-soft); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.company-sso-provider-heading .button { flex: none; }
+.company-sso-provider-meta { display: grid; gap: 9px; margin: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.company-sso-provider-meta > div { display: grid; grid-template-columns: 126px minmax(0, 1fr); gap: 12px; align-items: start; }
+.company-sso-provider-meta dt { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.company-sso-provider-meta dd { min-width: 0; margin: 0; color: var(--ink-soft); font-size: 11px; }
+.company-sso-provider-meta code { overflow-wrap: anywhere; color: var(--ink-soft); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.company-sso-callback { max-width: 100%; }
+.company-sso-secret-state { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 10px; }
+.company-sso-secret-state li { display: inline-flex; align-items: center; gap: 6px; }
+.company-sso-secret-state li span { display: inline-grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: var(--sage-soft); color: var(--sage-dark); font-size: 10px; font-weight: 850; }
+.company-sso-secret-state li:last-child span { background: var(--accent-soft); color: var(--accent); }
+.company-sso-form { padding: 19px 22px 22px; }
+.company-sso-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.company-sso-form fieldset:disabled { opacity: .68; }
+.company-sso-legend { margin-bottom: 16px; color: var(--ink-soft); font-size: 12px; font-weight: 800; }
+.company-sso-protocol-fields { margin-top: 19px; padding-top: 19px; border-top: 1px solid var(--line); }
+.company-sso-help { align-self: end; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.company-sso-form .form-actions { margin-top: 20px; }
+.company-sso-form textarea { min-height: 130px; resize: vertical; }
+.company-sso-view > .notice { margin: 0; }
+.company-sso-view .state-block { margin: 0; }
+
+@media (max-width: 680px) {
+  .company-sso-header { gap: 14px; }
+  .company-sso-company { width: 100%; }
+  .company-sso-provider-list, .company-sso-form { padding-inline: 17px; }
+  .company-sso-provider-heading { align-items: stretch; flex-direction: column; }
+  .company-sso-provider-heading .button { width: 100%; }
+  .company-sso-provider-meta > div { grid-template-columns: 1fr; gap: 4px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .company-sso-provider, .company-sso-form * { transition-duration: .01ms !important; }
+}

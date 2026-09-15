@@ -96,6 +96,7 @@ describe('CompanyView', () => {
     const input = document.querySelector<HTMLInputElement>('input[name="companyName"]')
     const slug = document.querySelector<HTMLInputElement>('input[name="companySlug"]')
     expect(document.body.textContent).toContain('Create your company')
+    expect(document.body.textContent).toContain('Access is checked for each request')
     expect(input).not.toBeNull()
 
     await act(async () => {
@@ -163,8 +164,75 @@ describe('CompanyView', () => {
 
     expect(document.body.textContent).toContain('publisher@acme.test')
     expect(document.body.textContent).toContain('new@acme.test')
+    expect(document.body.textContent).toContain('Create a link for a teammate. Share it with them; no email is sent automatically.')
+    expect(document.body.textContent).toContain('Choose a new role and save it. The change takes effect after it is checked.')
+    expect(document.body.textContent).toContain('Current')
+    expect(document.body.textContent).not.toContain('server remains the authority')
+    expect(document.body.textContent).not.toContain('identity service creates a bounded invitation')
+    expect(document.body.textContent).not.toContain('Server managed')
     expect(document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')?.disabled).toBe(false)
     expect(document.querySelector('select[aria-label="Role for Publisher"]')).not.toBeNull()
+  })
+
+  it('keeps accepted invitations in history and counts only pending links', async () => {
+    harness.auth.session = makeSession()
+    const accepted: OrganizationInvitation = { id: 'invite-accepted', email: 'ben@acme.test', role: 'reader', status: 'accepted' }
+    const pending: OrganizationInvitation = { id: 'invite-pending', email: 'new@acme.test', role: 'publisher', status: 'pending' }
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [accepted, pending] })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const pendingSection = document.querySelector<HTMLElement>('[data-testid="pending-invitations"]')
+    const historySection = document.querySelector<HTMLElement>('[data-testid="invitation-history"]')
+    expect(pendingSection?.querySelector('[data-testid="pending-invitations-count"]')?.textContent).toBe('1')
+    expect(pendingSection?.textContent).toContain('new@acme.test')
+    expect(pendingSection?.textContent).not.toContain('ben@acme.test')
+    expect(historySection?.querySelector('[data-testid="invitation-history-count"]')?.textContent).toBe('1')
+    expect(historySection?.textContent).toContain('ben@acme.test')
+    expect(historySection?.textContent).toContain('Accepted')
+  })
+
+  it('moves expired pending links to history while preserving accepted status', async () => {
+    harness.auth.session = makeSession()
+    const now = Date.now()
+    const expiredPending: OrganizationInvitation = {
+      id: 'invite-expired',
+      email: 'expired@acme.test',
+      role: 'reader',
+      status: 'pending',
+      expiresAt: new Date(now - 60_000).toISOString(),
+    }
+    const futurePending: OrganizationInvitation = {
+      id: 'invite-future',
+      email: 'future@acme.test',
+      role: 'reader',
+      status: 'pending',
+      expiresAt: new Date(now + 60_000).toISOString(),
+    }
+    const acceptedExpired: OrganizationInvitation = {
+      id: 'invite-accepted-expired',
+      email: 'ben@acme.test',
+      role: 'publisher',
+      status: 'accepted',
+      expiresAt: new Date(now - 60_000).toISOString(),
+    }
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [expiredPending, futurePending, acceptedExpired] })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const pendingSection = document.querySelector<HTMLElement>('[data-testid="pending-invitations"]')
+    const historySection = document.querySelector<HTMLElement>('[data-testid="invitation-history"]')
+    expect(pendingSection?.querySelector('[data-testid="pending-invitations-count"]')?.textContent).toBe('1')
+    expect(pendingSection?.textContent).toContain('future@acme.test')
+    expect(pendingSection?.textContent).not.toContain('expired@acme.test')
+    expect(pendingSection?.textContent).not.toContain('ben@acme.test')
+    expect(historySection?.querySelector('[data-testid="invitation-history-count"]')?.textContent).toBe('2')
+    expect(historySection?.textContent).toContain('expired@acme.test')
+    expect(historySection?.textContent).toContain('Expired')
+    expect(historySection?.textContent).toContain('ben@acme.test')
+    expect(historySection?.textContent).toContain('Accepted')
   })
 
   it('derives a same-origin copy link from the Better Auth invitation id', async () => {
@@ -173,7 +241,7 @@ describe('CompanyView', () => {
     vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
     const createInvitation = vi.spyOn(api, 'inviteOrganizationMember').mockResolvedValue({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending' })
     const writeText = vi.fn(async () => {})
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
     root = (await renderView()).root
     await flushEffects()
 
@@ -188,12 +256,44 @@ describe('CompanyView', () => {
     await vi.waitFor(() => expect(createInvitation).toHaveBeenCalledWith({ email: 'new@acme.test', role: 'reader' }))
 
     const expectedLink = new URL('/organization/accept-invitation?id=invite%2F1', window.location.origin).toString()
-    await vi.waitFor(() => expect(document.body.textContent).toContain(expectedLink))
+    const linkInput = document.querySelector<HTMLInputElement>('input[aria-label="Invitation link"]')
+    await vi.waitFor(() => expect(linkInput?.value).toBe(expectedLink))
     const copyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy invitation link')
     await act(async () => { copyButton?.click() })
 
     expect(writeText).toHaveBeenCalledWith(expectedLink)
     expect(document.body.textContent).toContain('Copied')
+  })
+
+  it('leaves a selectable link and explains clipboard failures', async () => {
+    harness.auth.session = makeSession()
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
+    const createInvitation = vi.spyOn(api, 'inviteOrganizationMember').mockResolvedValue({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending' })
+    const writeText = vi.fn(async () => { throw new Error('clipboard permission denied') })
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const input = document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')
+    const form = document.querySelector('form')
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setValue?.call(input, 'new@acme.test')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await vi.waitFor(() => expect(createInvitation).toHaveBeenCalledOnce())
+
+    const expectedLink = new URL('/organization/accept-invitation?id=invite%2F1', window.location.origin).toString()
+    const linkInput = document.querySelector<HTMLInputElement>('input[aria-label="Invitation link"]')
+    await vi.waitFor(() => expect(linkInput?.value).toBe(expectedLink))
+    const copyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy invitation link')
+    await act(async () => { copyButton?.click() })
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Copy is unavailable here. Select the invitation link below and copy it manually.'))
+    expect(writeText).toHaveBeenCalledWith(expectedLink)
+    expect(copyButton?.textContent).toBe('Copy invitation link')
   })
 
   it('keeps member access read-only and does not request restricted invitations for readers', async () => {
@@ -208,7 +308,7 @@ describe('CompanyView', () => {
     expect(members).toHaveBeenCalledOnce()
     expect(invitations).not.toHaveBeenCalled()
     expect(document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')?.disabled).toBe(true)
-    expect(document.body.textContent).toContain('Pending invitations are visible to owners and admins.')
+    expect(document.body.textContent).toContain('Owners and admins can see pending invitations.')
     expect(document.querySelector('select[aria-label="Role for Reader"]')).toBeNull()
   })
 })

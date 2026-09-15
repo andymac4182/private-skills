@@ -51,6 +51,8 @@ export default defineConfig(({ mode }) => {
         alias: { '#pskills-infrastructure': infrastructure },
         noExternals: provider ? ['files-sdk', `files-sdk/${provider}`] : false,
         traceDeps,
+        ...(edge ? { cloudflare: { wrangler: { name: 'private-skills' } } } : {}),
+        ...(edge ? { compatibilityDate: { default: '2026-09-09', cloudflare: '2026-09-09' } } : {}),
       }),
       viteReact(),
     ],

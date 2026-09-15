@@ -65,6 +65,9 @@ describe('CommandPalette', () => {
     const paletteIds = registrySections.map((section) => section.id).sort()
     expect(groupedIds).toEqual(paletteIds)
     expect(registrySections.find((section) => section.id === 'overview')?.label).toBe('Overview')
+    expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('company-sso')
+    expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('company-tokens')
+    expect(registryNavGroups.at(-1)?.sections.map((section) => section.id)).toContain('billing')
   })
 
   it('traps Tab within the modal and restores the element that opened it after Escape', async () => {

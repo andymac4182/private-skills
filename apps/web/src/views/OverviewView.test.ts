@@ -160,4 +160,35 @@ describe('OverviewView', () => {
     expect(container.textContent).toContain('1 security check enabled')
     expect(container.textContent).not.toContain('Add your first skill')
   })
+
+  it('gives readers browse and discovery actions instead of publish prompts', async () => {
+    harness.auth.session = makeSession({ activeMembership: { ...membership, role: 'reader' } })
+    vi.spyOn(api, 'skills').mockResolvedValue({ skills: [] })
+    vi.spyOn(api, 'packs').mockResolvedValue({ packs: [] })
+    vi.spyOn(api, 'operations').mockResolvedValue({ operations: [] })
+    vi.spyOn(api, 'policy').mockResolvedValue({ policy })
+
+    const container = await renderView()
+
+    expect(container.textContent).toContain('Browse catalog')
+    expect(container.textContent).toContain('Find skills')
+    expect(container.textContent).toContain('Find a skill for this company')
+    expect(container.textContent).not.toContain('Add skill')
+    expect(container.textContent).not.toContain('Publish or import a skill')
+  })
+
+  it('keeps publish access when a legacy principal has publisher after reader', async () => {
+    harness.auth.session = makeSession({ activeMembership: null })
+    harness.auth.principal = { organizationId: organization.id, subject: 'legacy-owner', roles: ['reader', 'publisher'] }
+    vi.spyOn(api, 'skills').mockResolvedValue({ skills: [] })
+    vi.spyOn(api, 'packs').mockResolvedValue({ packs: [] })
+    vi.spyOn(api, 'operations').mockResolvedValue({ operations: [] })
+    vi.spyOn(api, 'policy').mockResolvedValue({ policy })
+
+    const container = await renderView()
+
+    expect(container.textContent).toContain('Add skill')
+    expect(container.textContent).not.toContain('Browse catalog')
+    expect(container.textContent).toContain('Activity appears as your team publishes or imports skills.')
+  })
 })

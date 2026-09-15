@@ -18,6 +18,12 @@ export const API_TOKEN_ID_MAX_LENGTH = 128;
 export const API_TOKEN_NAME_MAX_LENGTH = 128;
 export const API_TOKEN_SCOPE_MAX_LENGTH = 128;
 export const API_TOKEN_MAX_SCOPES = 64;
+export const API_TOKEN_SESSION_PROTOCOL_VERSION = 1 as const;
+export const DEFAULT_API_TOKEN_SESSION_COOKIE = 'pskills_session';
+
+const API_TOKEN_SESSION_AUDIENCE = 'private-skills-api-token';
+const API_TOKEN_SESSION_COOKIE_PREFIX = 'api-token-session-v1';
+const API_TOKEN_SESSION_COOKIE_MAX_LENGTH = 8_192;
 
 const VALID_ROLES: readonly Role[] = ['owner', 'admin', 'publisher', 'reader'];
 const ROLE_NAMES: readonly Role[] = [...VALID_ROLES, 'worker'];
@@ -115,6 +121,13 @@ export interface CreateApiTokenResult extends ApiTokenMetadata {
   token: string;
 }
 
+/** Browser session material returned after a verified API-token exchange. */
+export interface ApiTokenSessionResult {
+  /** Signed cookie value; the raw API-token secret is never included. */
+  cookie: string;
+  principal: Principal;
+}
+
 export interface ApiTokenListOptions {
   includeRevoked?: boolean;
   subject?: string;
@@ -199,6 +212,12 @@ export interface ApiTokenServiceOptions {
   defaultTtlSeconds?: number;
   maxTtlSeconds?: number;
   maxList?: number;
+  /** Durable secret used to sign the optional browser session reference. */
+  sessionSecret?: string | Uint8Array;
+  /** Cookie name shared with the legacy registry session. */
+  sessionCookieName?: string;
+  /** Secure flag for the browser session cookie. Defaults to true. */
+  sessionSecureCookies?: boolean;
 }
 
 export interface ApiTokenService {
@@ -207,6 +226,9 @@ export interface ApiTokenService {
   revokeToken(context: OrganizationSession, tokenId: string): Promise<ApiTokenMetadata>;
   authenticateBearerToken(rawToken: string): Promise<Principal | null>;
   authenticate(request: Request): Promise<Principal | null>;
+  /** Exchange a verified persisted token for a revocation-aware browser session. */
+  createSession(rawToken: string): Promise<ApiTokenSessionResult | null>;
+  clearSessionCookie(): string;
   resolveManagementContext(request: Request, options?: { requireCookie?: boolean }): Promise<ApiTokenManagementContext>;
 }
 
@@ -273,6 +295,101 @@ function base64UrlEncode(bytes: Uint8Array): string {
     if (third !== undefined) result += BASE64URL[third & 63]!;
   }
   return result;
+}
+
+function base64UrlDecode(value: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9_-]*$/u.test(value) || value.length % 4 === 1) return undefined;
+  const output: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const character of value) {
+    const digit = BASE64URL.indexOf(character);
+    if (digit < 0) return undefined;
+    buffer = (buffer << 6) | digit;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output.push((buffer >> bits) & 0xff);
+    }
+  }
+  return new Uint8Array(output);
+}
+
+/** Constant-time comparison that remains safe when an attacker controls length. */
+function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {
+  let difference = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+}
+
+function hmacKey(secret: Uint8Array): Promise<CryptoKey> {
+  return cryptoProvider().subtle.importKey(
+    'raw',
+    secret as BufferSource,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+}
+
+function parseCookieHeader(header: string | null): Map<string, string> {
+  const result = new Map<string, string>();
+  if (!header) return result;
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0) continue;
+    const name = part.slice(0, separator).trim();
+    if (!name) continue;
+    result.set(name, part.slice(separator + 1).trim());
+  }
+  return result;
+}
+
+function normalizeCookieName(value: string): string {
+  if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/u.test(value)) {
+    throw new ApiTokenConfigurationError('API token session cookie name is invalid');
+  }
+  return value;
+}
+
+interface ApiTokenSessionClaims {
+  readonly v: typeof API_TOKEN_SESSION_PROTOCOL_VERSION;
+  readonly aud: typeof API_TOKEN_SESSION_AUDIENCE;
+  readonly tokenId: string;
+  readonly organizationId: string;
+  readonly userId: string;
+  /** Epoch seconds. It is always no later than the persisted token expiry. */
+  readonly exp: number;
+}
+
+function sessionClaimString(value: unknown, maxLength = 256): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) return undefined;
+  if ([...value].some((character) => character < ' ' || character === '\u007f')) return undefined;
+  return value;
+}
+
+function parseApiTokenSessionClaims(value: unknown): ApiTokenSessionClaims | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const claims = value as Partial<ApiTokenSessionClaims>;
+  const tokenId = sessionClaimString(claims.tokenId, API_TOKEN_ID_MAX_LENGTH);
+  const organizationId = sessionClaimString(claims.organizationId);
+  const userId = sessionClaimString(claims.userId);
+  const exp = claims.exp;
+  if (
+    claims.v !== API_TOKEN_SESSION_PROTOCOL_VERSION ||
+    claims.aud !== API_TOKEN_SESSION_AUDIENCE ||
+    tokenId === undefined ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(tokenId) ||
+    organizationId === undefined ||
+    userId === undefined ||
+    typeof exp !== 'number' ||
+    !Number.isSafeInteger(exp) ||
+    exp <= 0
+  ) return undefined;
+  return { v: API_TOKEN_SESSION_PROTOCOL_VERSION, aud: API_TOKEN_SESSION_AUDIENCE, tokenId, organizationId, userId, exp };
 }
 
 function defaultTokenGenerator(prefix: string): string {
@@ -570,6 +687,9 @@ export class DefaultApiTokenService implements ApiTokenService {
   private readonly defaultTtlSeconds: number;
   private readonly maxTtlSeconds: number;
   private readonly maxList: number;
+  private readonly sessionCookieName: string;
+  private readonly sessionSecureCookies: boolean;
+  private readonly sessionKeyPromise?: Promise<CryptoKey>;
 
   constructor(options: ApiTokenServiceOptions) {
     this.repository = options.repository;
@@ -582,6 +702,14 @@ export class DefaultApiTokenService implements ApiTokenService {
     this.defaultTtlSeconds = options.defaultTtlSeconds ?? DEFAULT_API_TOKEN_TTL_SECONDS;
     this.maxTtlSeconds = options.maxTtlSeconds ?? DEFAULT_API_TOKEN_MAX_TTL_SECONDS;
     this.maxList = options.maxList ?? DEFAULT_API_TOKEN_MAX_LIST;
+    this.sessionCookieName = normalizeCookieName(options.sessionCookieName ?? DEFAULT_API_TOKEN_SESSION_COOKIE);
+    this.sessionSecureCookies = options.sessionSecureCookies ?? true;
+    if (typeof this.sessionSecureCookies !== 'boolean') throw new ApiTokenConfigurationError('API token session secure-cookie setting is invalid');
+    if (options.sessionSecret !== undefined) {
+      const secret = typeof options.sessionSecret === 'string' ? utf8(options.sessionSecret) : new Uint8Array(options.sessionSecret);
+      if (secret.byteLength < 32) throw new ApiTokenConfigurationError('API token session secret must contain at least 32 bytes');
+      this.sessionKeyPromise = hmacKey(secret);
+    }
     if (!Number.isFinite(this.defaultTtlSeconds) || this.defaultTtlSeconds <= 0 || !Number.isFinite(this.maxTtlSeconds) || this.maxTtlSeconds <= 0 || this.defaultTtlSeconds > this.maxTtlSeconds || !Number.isSafeInteger(this.maxList) || this.maxList <= 0 || this.maxList > 1_000) throw new ApiTokenConfigurationError('API token lifetime or list limits are invalid');
   }
 
@@ -666,11 +794,14 @@ export class DefaultApiTokenService implements ApiTokenService {
     return metadata(revoked);
   }
 
-  async authenticateBearerToken(rawToken: string): Promise<ApiTokenPrincipal | null> {
-    if (typeof rawToken !== 'string' || rawToken.length < 20 || rawToken.length > 512) return null;
-    let record: ApiTokenRecord | null;
-    try { record = await this.repository.findByHash(hashString(await sha256(rawToken))); } catch { return null; }
-    if (!record || record.revokedAt !== undefined) return null;
+  private async recordForRawToken(rawToken: string): Promise<ApiTokenRecord | null> {
+    const token = rawToken.replace(/^Bearer[ \t]+/iu, '');
+    if (token.length < 20 || token.length > 512 || /[\r\n\t ]/u.test(token)) return null;
+    try { return await this.repository.findByHash(hashString(await sha256(token))); } catch { return null; }
+  }
+
+  private async principalForRecord(record: ApiTokenRecord): Promise<ApiTokenPrincipal | null> {
+    if (record.revokedAt !== undefined) return null;
     const expiry = Date.parse(record.expiresAt);
     if (!Number.isFinite(expiry) || this.now() >= expiry) return null;
     const membership = await this.membershipFor(record.organizationId, record.userId);
@@ -680,9 +811,100 @@ export class DefaultApiTokenService implements ApiTokenService {
     return clonePrincipal({ organizationId: record.organizationId, subject: record.userId, roles: [role], scopes: scopesForToken(record, membership), identity: 'user', tokenId: record.id });
   }
 
+  async authenticateBearerToken(rawToken: string): Promise<ApiTokenPrincipal | null> {
+    const record = await this.recordForRawToken(rawToken);
+    return record ? this.principalForRecord(record) : null;
+  }
+
+  private async signSession(value: string): Promise<string> {
+    if (!this.sessionKeyPromise) return '';
+    const signature = await cryptoProvider().subtle.sign('HMAC', await this.sessionKeyPromise, utf8(value) as BufferSource);
+    return base64UrlEncode(new Uint8Array(signature));
+  }
+
+  private async verifySession(value: string, suppliedSignature: string): Promise<boolean> {
+    if (!this.sessionKeyPromise) return false;
+    const supplied = base64UrlDecode(suppliedSignature);
+    if (!supplied || supplied.byteLength !== 32) return false;
+    const expected = new Uint8Array(await cryptoProvider().subtle.sign('HMAC', await this.sessionKeyPromise, utf8(value) as BufferSource));
+    return timingSafeEqual(supplied, expected);
+  }
+
+  private async browserSessionPrincipal(request: Request): Promise<ApiTokenPrincipal | null> {
+    if (!this.sessionKeyPromise) return null;
+    const raw = parseCookieHeader(request.headers.get('cookie')).get(this.sessionCookieName);
+    if (!raw || raw.length > API_TOKEN_SESSION_COOKIE_MAX_LENGTH) return null;
+    const parts = raw.split('.');
+    if (parts.length !== 3 || parts[0] !== API_TOKEN_SESSION_COOKIE_PREFIX || !parts[1] || !parts[2]) return null;
+    const signedValue = `${parts[0]}.${parts[1]}`;
+    try {
+      if (!(await this.verifySession(signedValue, parts[2]!))) return null;
+      const encodedClaims = base64UrlDecode(parts[1]!);
+      if (!encodedClaims) return null;
+      const claimsValue = JSON.parse(new TextDecoder().decode(encodedClaims)) as unknown;
+      const claims = parseApiTokenSessionClaims(claimsValue);
+      if (!claims || Math.floor(this.now() / 1000) >= claims.exp) return null;
+      const record = await this.repository.findById(claims.organizationId, claims.tokenId);
+      if (!record || record.organizationId !== claims.organizationId || record.userId !== claims.userId) return null;
+      return await this.principalForRecord(record);
+    } catch {
+      return null;
+    }
+  }
+
+  async createSession(rawToken: string): Promise<ApiTokenSessionResult | null> {
+    if (!this.sessionKeyPromise) return null;
+    const record = await this.recordForRawToken(rawToken);
+    if (!record) return null;
+    const principal = await this.principalForRecord(record);
+    if (!principal) return null;
+    const expiresAtMs = Date.parse(record.expiresAt);
+    const nowMs = this.now();
+    const exp = Math.floor(expiresAtMs / 1000);
+    if (!Number.isFinite(expiresAtMs) || exp <= Math.floor(nowMs / 1000)) return null;
+    const claims: ApiTokenSessionClaims = {
+      v: API_TOKEN_SESSION_PROTOCOL_VERSION,
+      aud: API_TOKEN_SESSION_AUDIENCE,
+      tokenId: record.id,
+      organizationId: record.organizationId,
+      userId: record.userId,
+      exp,
+    };
+    const encodedClaims = base64UrlEncode(utf8(JSON.stringify(claims)));
+    const signedValue = `${API_TOKEN_SESSION_COOKIE_PREFIX}.${encodedClaims}`;
+    const signature = await this.signSession(signedValue);
+    const maxAge = Math.max(1, Math.floor((expiresAtMs - nowMs) / 1000));
+    const cookieParts = [
+      `${this.sessionCookieName}=${signedValue}.${signature}`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Lax',
+      `Max-Age=${maxAge}`,
+      `Expires=${new Date(expiresAtMs).toUTCString()}`,
+    ];
+    if (this.sessionSecureCookies) cookieParts.push('Secure');
+    return { cookie: cookieParts.join('; '), principal: clonePrincipal(principal) };
+  }
+
+  clearSessionCookie(): string {
+    const cookieParts = [
+      `${this.sessionCookieName}=`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Lax',
+      'Max-Age=0',
+      'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    ];
+    if (this.sessionSecureCookies) cookieParts.push('Secure');
+    return cookieParts.join('; ');
+  }
+
   async authenticate(request: Request): Promise<ApiTokenPrincipal | null> {
-    const token = bearerToken(request);
-    return token === undefined ? null : this.authenticateBearerToken(token);
+    if (request.headers.has('authorization')) {
+      const token = bearerToken(request);
+      return token === undefined ? null : this.authenticateBearerToken(token);
+    }
+    return this.browserSessionPrincipal(request);
   }
 
   private async emitAudit(event: ApiTokenAuditEvent): Promise<void> {
@@ -694,6 +916,8 @@ export class DefaultApiTokenService implements ApiTokenService {
 export class ApiTokenAuthenticator implements Authenticator {
   constructor(private readonly service: ApiTokenService) {}
   authenticate(request: Request): Promise<Principal | null> { return this.service.authenticate(request); }
+  createSession(token: string): Promise<ApiTokenSessionResult | null> { return this.service.createSession(token); }
+  clearSessionCookie(): string { return this.service.clearSessionCookie(); }
 }
 
 function principalTokenId(principal: Principal | null): string | undefined {

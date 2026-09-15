@@ -1,6 +1,24 @@
 # Launch status
 
+Billing runtime integrated `7860d16`: company-bound routes, raw webhook dispatch, durable PostgreSQL service and customer-validated invoice adapter. Root isolated rerun: 33 focused runtime/billing/UI tests passed. Navigation mount assigned tenant_ui; billing_finish now owns actual scan/storage/seat quota callers, coordinating Eve cost reservations with runtime_finish. This is not live Stripe activation or completed usage enforcement.
+
+CLI token console integrated `d30fcc8`: create scoped expiring tokens, reveal once with copy fallback, list lifecycle metadata, revoke and clear secret on company switch. Root isolated focused rerun: 20 tests passed. foundation_release preparing PostgreSQL fixture for actual browser-to-token-use/revocation proof; that journey remains open.
+
+Root independent clean verification at `91023f6` passed frozen offline install, typecheck and full suite (1,052 tests passed, 17 skipped). A prior shared-checkout run failed to load samlify because another worktree replaced dependency links; isolate dependency installs per worktree. Do not reuse that failed run as release evidence.
+
+Latest SSO protocol snapshot `fea919d`: signed local OIDC and SAML callbacks plus SAML wrong-issuer/wrong-audience rejection checks pass against disposable PostgreSQL. Root independently ran 16 tests across protocol integration and module suites. Runtime mounting remains separate work.
+
+Corrected 5402 fixture uses PostgreSQL (initial test adapter intentionally disabled identity). Root browser passed Acme login/company selection, compact overview rendering and company SSO unavailable state. Root created a synthetic reader invitation and clicked Copy; UI reported copied and retained the visible manual-selection link. Browser clipboard contents were not independently read back. Pending-invitation list currently includes accepted entries; label/filter polish remains open.
+
 Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency through 20 September. Overall: implementation in progress, not launched.
+
+Latest published increment: origin/main `668f53e6420419eda6aef0d0d73385da3af280cc`, independently confirmed by root with git ls-remote. Release agent reports Git-triggered app `dpl_BvgT5TSCPRUM5zXfzXkthniKzWyA` and marketing `dpl_ArrxaeUqYmABC8uWDWtCGRLKU1SX` READY for this SHA; frozen install, typecheck, 1,031 tests passed / 11 skipped, app/marketing/all Eve builds passed. Root independently observed anonymous marketing homepage and app `/health` HTTP 200. Identity remains opt-in and unconfigured in production; no authenticated hosted tenant acceptance is implied. Native CI remains explicitly waived.
+
+Market research and eight-name RDAP shortlist integrated as `1a7edfe`. Registrar purchase-availability/price checks remain active; no brand selection or domain purchase made.
+
+Company SSO settings UI integrated `cba7f63`; invitation clipboard/manual-selection fallback integrated `c7e4671`. Root verification: 16 SSO/client/command-palette/company tests plus 6 invitation acceptance tests passed, and typecheck passed. Runtime SSO mounting and actual browser verification of these latest screens remain open. These are local integration changes after the published foundation.
+
+Public marketing browser check on published 668f53e: root clicked release-path Install tab and CLI Install tab and observed both corresponding panels; Pilot guide navigation rendered getting-started content. Hosted-user onboarding currently leads with repository/local-demo instructions; marketing_finish is separating hosted customer onboarding from operator setup and checking CLI command examples. This is interaction evidence, not full responsive/accessibility acceptance.
 
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
@@ -8,9 +26,9 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Navigation integrated d529e42, four focused tests pass; browser proof pending; compact overview integrated 491ddc7 (11 related tests pass); visual proof pending |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
-| L05 | Company-managed SSO | oauth_demo_finish | Configuration module integrated 825c6a3; 15 focused tests pass and agent PG proof passes; real plugin provider lookup/callback bridge and UI remain open |
+| L05 | Company-managed SSO | editor_test_stability / oauth_demo_finish | Bridge committed 01a3650, UI cba7f63. Root signed local OIDC/PostgreSQL rerun: 14 tests passed. editor_test_stability owns runtime/plugin/admin API and login discovery mounting; oauth_demo_finish owns signed SAML fixture and protocol modules. Authenticated full browser flow remains open; no customer IdP claim |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Integrated e13600d; focused checks pass, live PostgreSQL adoption and hosted worker proof remain open |
-| L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
+| L07 | Company billing console and enforced usage | billing_finish | Backend 9089e10 and console/route factory 9c92c68 integrated; actual PostgreSQL concurrency/deduplication/order tests pass. Runtime/navigation/invoice wiring and browser payment fixture journey active; Stripe account deferred |
 | L08 | Tenant-aware Eve callbacks | tenant_eve | Eve entrypoints integrated f486ee6, 26 tests pass; registry provider/client wiring and end-to-end tenant flows remain open |
 | L09 | Login/logout browser journey | root / editor_test_stability | dc836e7 browser proof passed: Acme sign-in, sign-out to login, Globex sign-in with only Globex membership; real customer SSO remains open |
 | L10 | Full isolation and launch acceptance | root | Open; test populated companies across every registry surface, not just empty catalogs |
@@ -44,3 +62,19 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - Clean integration e13600d: typecheck passed; full suite 1,031 passed, 9 skipped (139 passing files, 7 skipped). Adoption/worker modules integrated, but live database adoption remains unproven.
 
 - Root ran multi-tenant-postgres-acceptance.test.ts against disposable loopback PostgreSQL after integration b5d48b8: 1 broad scenario passed with populated tenant records. Covers fixed-handler core registry isolation; it does not prove Better Auth live membership or the outer tenant router. Those remain L10 work.
+
+- Root browser on fixed 65c5637 fixture: owner successfully created a reader invitation and UI showed copyable link plus one pending invite. Owner denial B12 fixed in integrated668f53e; invitee browser acceptance remains pending.
+
+## Integration evidence — 15 September, recovery and hosting
+
+- `da2606b`: PostgreSQL recovery rehearsal integrated. Root independently ran `tests/operations-postgres-rehearsal.test.ts` against disposable loopback PostgreSQL: 1 passed. Covers restored identity/session/membership, SSO records, revoked tokens, billing mappings/reservations, and cross-company route denial. Blob copying still uses a provider double; real Files SDK object restore is assigned separately.
+- `b15ed1b`: current hosting review and executable cost scenarios integrated. Root checked JavaScript syntax and regenerated CSV equality. Pro Sandbox allocation and shared-credit assumptions corrected; scenario totals remain planning estimates, not capacity acceptance.
+- Release remains held for persisted token browser exchange and live use/revocation verification. Copy-only explanation does not close that requirement. Company SSO admin runtime is under integration review; company login discovery remains in implementation.
+
+## 16 September — combined verification and browser findings
+
+- SSO server commits `784f39a` and `4e4ce2d` integrated. Root verified 13 focused tests, one real PostgreSQL discovery/sign-in scenario, and typecheck. Picker commits `d2fe825` and `7b6935f` integrated with seven focused tests passing; LoginForm mounting remains with the token-session work.
+- Files SDK fs provider restore `3950816` integrated and root independently passed the PostgreSQL rehearsal including authorized object transfer. Hosted provider restore remains open.
+- Combined verification checkout at `1b849db`: 1079 passed, 20 skipped, one DraftEditor fallback test failed (Edit remained disabled). The suite is not green; business_billing owns the narrow test coordination diagnosis.
+- Root browser fixture `205a28e` on loopback5403: synthetic Acme login, explicit Acme Labs Demo selection and overview navigation passed. Accepted invitations appeared under Pending invitations; tenant_auth_backend owns grouping/count and plain-language copy. This older fixture does not prove newly integrated SSO or token exchange.
+- Marketing keyboard/narrow-screen fix `f27e274` integrated. Agent browser review covered nine routes at 320px, desktop/mobile and keyboard tabs; root marketing typecheck passed. Deployment remains pending.

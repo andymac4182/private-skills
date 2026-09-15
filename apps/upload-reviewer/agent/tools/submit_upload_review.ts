@@ -33,6 +33,10 @@ export default defineTool({
       },
       (value) => submitOutputSchema.parse(value),
       ctx.abortSignal,
+      {
+        session: ctx.session,
+        binding: { sessionId: ctx.session.id, jobId: current.jobId },
+      },
     );
     uploadReviewState.update((state) => ({
       ...state,

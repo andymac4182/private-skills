@@ -53,6 +53,7 @@
     "@types/react-dom": "19.2.3",
     "@types/semver": "7.8.0",
     "@vitejs/plugin-react": "6.1.1",
+    "samlify": "2.13.1",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
     "vite": "8.2.2",

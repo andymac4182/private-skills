@@ -1,10 +1,24 @@
 import { registryEndpoint, reviewerToken } from "./config.js";
+import {
+  createEveTenantServiceFromEnv,
+  requireEveTenantCaller,
+  type EveSessionAuthShape,
+  type EveTenantDelegationBinding,
+} from "../../../../packages/eve-tenant/src/index.js";
 
 const REQUEST_TIMEOUT_MS = 45_000;
 const MAX_RESPONSE_BYTES = 1_500_000;
 const MAX_REQUEST_BYTES = 256_000;
 
 type JsonParser<T> = (value: unknown) => T;
+
+export interface ReviewerCallbackOptions {
+  readonly session?: {
+    readonly id: string;
+    readonly auth: EveSessionAuthShape;
+  };
+  readonly binding?: EveTenantDelegationBinding;
+}
 
 function joinBytes(chunks: readonly Uint8Array[], total: number): Uint8Array {
   const result = new Uint8Array(total);
@@ -57,6 +71,7 @@ export async function postReviewerJson<T>(
   body: Record<string, unknown>,
   parse: JsonParser<T>,
   signal: AbortSignal,
+  options: ReviewerCallbackOptions = {},
 ): Promise<T> {
   const encoded = JSON.stringify(body);
   if (new TextEncoder().encode(encoded).byteLength > MAX_REQUEST_BYTES) {
@@ -70,13 +85,10 @@ export async function postReviewerJson<T>(
   else signal.addEventListener("abort", abort, { once: true });
 
   try {
+    const headers = await callbackHeaders(options);
     const response = await fetch(registryEndpoint(path), {
       method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${reviewerToken()}`,
-        "content-type": "application/json",
-      },
+      headers,
       body: encoded,
       redirect: "error",
       signal: controller.signal,
@@ -96,4 +108,30 @@ export async function postReviewerJson<T>(
     clearTimeout(timer);
     signal.removeEventListener("abort", abort);
   }
+}
+
+async function callbackHeaders(options: ReviewerCallbackOptions): Promise<Headers> {
+  const base = { accept: "application/json", "content-type": "application/json" };
+  const active = options.session?.auth.current;
+  const tenantId = active?.attributes?.tenantId;
+  if (typeof tenantId !== "string") {
+    if (active?.authenticator === "pskills-eve-tenant-delegation") {
+      throw new Error("active tenant Eve caller has no tenant id");
+    }
+    return new Headers({ ...base, authorization: `Bearer ${reviewerToken()}` });
+  }
+  const caller = requireEveTenantCaller({ session: options.session! }, "consolidation-reviewer");
+  const configured = process.env.PSKILLS_EVE_TENANT_DELEGATION_ISSUER?.trim();
+  const registry = process.env.PSKILLS_REGISTRY_API_URL?.trim();
+  const issuer = configured || (registry ? new URL(registry).origin : "");
+  if (!issuer) throw new Error("tenant Eve delegation issuer is not configured");
+  const service = createEveTenantServiceFromEnv(process.env, {
+    issuer,
+    tenantId: caller.tenantId,
+    service: "consolidation-reviewer",
+  });
+  if (!service) throw new Error("tenant Eve delegation is not configured");
+  const binding = { ...caller.binding, ...options.binding };
+  if (!binding.sessionId) throw new Error("reviewer callback is missing its session binding");
+  return service.headers(base, binding);
 }

@@ -21,10 +21,16 @@ function companySsoOptions(options: CompanySsoPluginOptions): SSOOptions {
       const provider = await options.repository.getByProviderId(input.providerId);
       const source = input.providerReference.source;
       const exactPersistedRecord = source.type === 'persisted' && source.recordId === provider?.id;
-      if (!provider || provider.status !== 'active' || input.providerReference.providerId !== provider.providerId || !exactPersistedRecord) {
+      if (!provider || provider.status !== 'active' || provider.protocol !== input.protocol || input.providerReference.providerId !== provider.providerId || !exactPersistedRecord) {
         return { action: 'reject', code: 'COMPANY_SSO_PROVIDER_BINDING_INVALID', message: 'Company SSO provider binding is invalid' };
       }
-      if (provider.issuer !== input.accountKey.issuer) {
+      // OIDC account keys use the discovered token issuer. SAML account keys
+      // use the IdP entityID from the signed assertion, while the registry's
+      // `issuer` remains the SP entityID used for audience validation. The
+      // validator stores the metadata-derived trust anchor separately so a
+      // company admin cannot make these two authorities interchangeable.
+      const expectedIssuer = input.protocol === 'saml' ? provider.saml?.identityProviderIssuer : provider.issuer;
+      if (!expectedIssuer || expectedIssuer !== input.accountKey.issuer) {
         return { action: 'reject', code: 'COMPANY_SSO_ISSUER_MISMATCH', message: 'Company SSO issuer is not authorized for this provider' };
       }
       return { action: 'continue' };

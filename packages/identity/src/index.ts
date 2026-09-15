@@ -563,6 +563,18 @@ export interface IdentityInvitationEmailData {
 export interface IdentityRuntimeOptions {
   /** Optional existing transport. No email is sent when this is absent. */
   sendInvitationEmail?: (data: IdentityInvitationEmailData, request?: Request) => Promise<void>;
+  /**
+   * Additional Better Auth plugins owned by the host composition. The
+   * identity package still owns its built-in organization and generic OAuth
+   * plugins; host plugins are appended after those defaults.
+  */
+  plugins?: NonNullable<BetterAuthOptions['plugins']>;
+  /**
+   * Additional trusted origins resolved by the host composition. A function
+   * is evaluated for each Better Auth request, which lets a company-owned SSO
+   * registry trust only the configured provider endpoints used by that request.
+   */
+  trustedOrigins?: BetterAuthOptions['trustedOrigins'];
 }
 
 export interface IdentityRuntimeAdmin extends IdentityRuntime {
@@ -652,6 +664,8 @@ function buildAuthOptions(
   config: IdentityRuntimeConfig,
   emailSender?: IdentityRuntimeOptions['sendInvitationEmail'],
   dialect?: PostgresJSDialect,
+  additionalPlugins: IdentityRuntimeOptions['plugins'] = [],
+  additionalTrustedOrigins?: IdentityRuntimeOptions['trustedOrigins'],
 ): BetterAuthOptions {
   if (!config.enabled) throw new IdentityConfigurationError('Better Auth identity runtime is disabled');
   if (config.invitations.emailDelivery === 'configured' && !emailSender) {
@@ -727,11 +741,18 @@ function buildAuthOptions(
     }),
   ];
   if (genericProviders.length > 0) plugins.push(genericOAuth({ config: genericProviders }));
-  const trustedOrigins = [config.baseURL];
+  plugins.push(...additionalPlugins);
+  const staticTrustedOrigins = [config.baseURL];
   for (const provider of config.providers) {
     if (!provider.redirectURI) continue;
-    trustedOrigins.push(new URL(provider.redirectURI).origin);
+    staticTrustedOrigins.push(new URL(provider.redirectURI).origin);
   }
+  const trustedOrigins: BetterAuthOptions['trustedOrigins'] = typeof additionalTrustedOrigins === 'function'
+    ? async (request) => [
+        ...staticTrustedOrigins,
+        ...(await additionalTrustedOrigins(request)),
+      ]
+    : [...staticTrustedOrigins, ...(additionalTrustedOrigins ?? [])];
   const database = {
     dialect,
     type: 'postgres' as const,
@@ -860,7 +881,7 @@ export function createIdentityRuntime(
     connect_timeout: 10,
   });
   const dialect = new PostgresJSDialect({ postgres: sql });
-  const auth = betterAuth(buildAuthOptions(config, options.sendInvitationEmail, dialect));
+  const auth = betterAuth(buildAuthOptions(config, options.sendInvitationEmail, dialect, options.plugins, options.trustedOrigins));
   const api = identityApi(auth);
   const publicConfig = createIdentityPublicConfig(config);
   const onboarding: IdentityOnboardingContract = {

@@ -18,12 +18,12 @@ function HomePage() {
       <div className="marketing-hero-copy">
         <span className="marketing-eyebrow">Private registry for engineering teams</span>
         <h1 id="marketing-hero-title">Give your team control of <em>private AI agent skills.</em></h1>
-        <p className="marketing-hero-lede">Private Skills brings your team’s AI agent skills into one deliberate workflow: discover a source, review the release, pin the pack, and install with confidence.</p>
+        <p className="marketing-hero-lede">Private Skills brings your team’s AI agent skills into one deliberate workflow: discover a source, review the release, pin the pack, and install a known release.</p>
         <div className="marketing-hero-actions">
           <a className="marketing-button marketing-button-primary" href="/docs/getting-started">Read the pilot guide <span aria-hidden="true">↗</span></a>
           <a className="marketing-hero-link" href={appLoginHref()}>Sign in to registry <span aria-hidden="true">→</span></a>
         </div>
-        <p className="marketing-hero-note"><span aria-hidden="true" className="marketing-status-dot" />Private by default <span aria-hidden="true">·</span> policy stays visible <span aria-hidden="true">·</span> human review stays in the loop</p>
+        <p className="marketing-hero-note"><span aria-hidden="true" className="marketing-status-dot" />Private by default <span aria-hidden="true">·</span> policy stays visible <span aria-hidden="true">·</span> review gates are configurable</p>
       </div>
       <div className="marketing-hero-art" role="img" aria-label="Illustrated example release moving through source, scan, pack, and install stages">
         <div className="marketing-product-window">
@@ -70,7 +70,7 @@ function HomePage() {
     <section className="marketing-section marketing-section-split" id="how-it-works" aria-labelledby="how-title">
       <div className="marketing-section-heading">
         <span className="marketing-eyebrow">How it works</span>
-        <h2 id="how-title">Make the safe path the easy path.</h2>
+        <h2 id="how-title">Make the approved path easy to explain.</h2>
         <p>Each handoff has a visible boundary. Teams can move quickly while keeping the source, the checks, and the next decision easy to see.</p>
         <a className="marketing-text-link" href="/docs/getting-started#rollout">Plan your first workflow <span aria-hidden="true">↗</span></a>
       </div>

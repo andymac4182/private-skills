@@ -10,6 +10,8 @@
 export const COMPANY_SSO_PROTOCOL_VERSION = 1 as const;
 export const DEFAULT_COMPANY_SSO_TABLE = 'private_skills_company_sso_providers';
 export const COMPANY_SSO_CALLBACK_PATH = '/api/auth/sso/callback';
+/** Better Auth's SAML service-provider ACS is a protocol-specific route. */
+export const COMPANY_SSO_SAML_CALLBACK_PATH = '/api/auth/sso/saml2/sp/acs';
 export const COMPANY_SSO_MAX_PROVIDER_ID_LENGTH = 64;
 export const COMPANY_SSO_MAX_ORGANIZATION_ID_LENGTH = 128;
 export const COMPANY_SSO_MAX_DISPLAY_NAME_LENGTH = 160;
@@ -47,6 +49,8 @@ export interface CompanySsoSamlIdpMetadata {
 }
 
 export interface CompanySsoSamlConfig {
+  /** Canonical IdP entityID derived from the trusted metadata XML. */
+  identityProviderIssuer: string;
   /** IdP SSO endpoint. */
   entryPoint: string;
   idpMetadata: CompanySsoSamlIdpMetadata;
@@ -196,13 +200,29 @@ export interface CompanySsoModuleOptions extends CompanySsoValidationPolicy {
 }
 
 export interface CompanySsoRuntimeProvider {
+  /** Better Auth's persisted provider row id, shared with the company registry. */
+  id: string;
   providerId: string;
   organizationId: string;
   issuer: string;
   /** Synthetic value required by Better Auth's provider schema; never used for lookup. */
   domain: string;
-  oidcConfig?: CompanySsoOidcConfig;
+  /** Better Auth's OIDC config shape (not the registry's discoveryUrl alias). */
+  oidcConfig?: {
+    issuer: string;
+    pkce: true;
+    clientId: string;
+    clientSecret: string;
+    authorizationEndpoint: string;
+    discoveryEndpoint: string;
+    tokenEndpoint: string;
+    jwksEndpoint: string;
+    userInfoEndpoint?: string;
+    scopes: readonly string[];
+    tokenEndpointAuthentication: 'client_secret_basic';
+  };
   samlConfig?: CompanySsoSamlConfig;
+  userId: string;
 }
 
 export interface CompanySsoSignInSelection {

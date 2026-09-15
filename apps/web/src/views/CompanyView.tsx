@@ -15,6 +15,39 @@ function displayRole(role: string | null | undefined): string {
   return role.slice(0, 1).toUpperCase() + role.slice(1)
 }
 
+function invitationStatus(invitation: OrganizationInvitation): string {
+  const status = invitation.status?.trim().toLowerCase()
+  return status || 'pending'
+}
+
+function effectiveInvitationStatus(invitation: OrganizationInvitation, now: number): string {
+  const status = invitationStatus(invitation)
+  if (status !== 'pending' || !invitation.expiresAt) return status
+  const expiresAt = Date.parse(invitation.expiresAt)
+  return Number.isFinite(expiresAt) && expiresAt <= now ? 'expired' : status
+}
+
+function displayInvitationStatus(invitation: OrganizationInvitation, now: number): string {
+  return displayRole(effectiveInvitationStatus(invitation, now))
+}
+
+function isPendingInvitation(invitation: OrganizationInvitation, now: number): boolean {
+  return effectiveInvitationStatus(invitation, now) === 'pending'
+}
+
+function groupInvitations(invitations: readonly OrganizationInvitation[], now: number): {
+  pending: OrganizationInvitation[]
+  history: OrganizationInvitation[]
+} {
+  const pending: OrganizationInvitation[] = []
+  const history: OrganizationInvitation[] = []
+  for (const invitation of invitations) {
+    if (isPendingInvitation(invitation, now)) pending.push(invitation)
+    else history.push(invitation)
+  }
+  return { pending, history }
+}
+
 function memberName(member: TeamMember): string {
   return member.name || member.user?.name || member.email || member.user?.email || member.userId || 'Team member'
 }
@@ -25,6 +58,33 @@ function memberEmail(member: TeamMember): string | undefined {
 
 function safeSlug(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 64)
+}
+
+async function copyToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      // Fall through to the selection-based copy for browsers that expose the
+      // Clipboard API but deny the write in the current context.
+    }
+  }
+  if (typeof document === 'undefined') return false
+  const fallback = document.createElement('textarea')
+  fallback.value = value
+  fallback.setAttribute('readonly', '')
+  fallback.style.position = 'fixed'
+  fallback.style.opacity = '0'
+  document.body.append(fallback)
+  fallback.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    fallback.remove()
+  }
 }
 
 export function CompanyView() {
@@ -54,7 +114,7 @@ export function CompanyView() {
 }
 
 function LegacyCompanyState({ organizationId }: { organizationId: string }) {
-  return <div className="view-heading"><div><span className="eyebrow">Company</span><h1>{organizationId}</h1><p className="muted">This registry is using the existing token sign-in. Company switching and team controls appear after an identity session is configured.</p></div><Notice kind="info">Your current registry role is enforced by the server. Ask an owner to configure company identity access before inviting teammates.</Notice></div>
+  return <div className="view-heading"><div><span className="eyebrow">Company</span><h1>{organizationId}</h1><p className="muted">This registry is using the existing token sign-in. Company switching and team controls appear after company identity is configured.</p></div><Notice kind="info">Your access is checked before each change. Ask an owner to configure company identity access before inviting teammates.</Notice></div>
 }
 
 function OnboardingPanel({ onCreated }: { onCreated: (organizationId?: string) => Promise<void> }) {
@@ -74,7 +134,7 @@ function OnboardingPanel({ onCreated }: { onCreated: (organizationId?: string) =
       await onCreated(result.organization.id)
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'Could not create your company.') } finally { setBusy(false) }
   }
-  return <div className="company-onboarding"><div className="company-onboarding-copy"><span className="eyebrow">First step</span><h1>Create your company</h1><p className="muted">Your identity is signed in. Create a company to keep releases, policy, and team access in one private workspace.</p><div className="company-onboarding-steps"><span><strong>01</strong> Name the company</span><span><strong>02</strong> Invite teammates when ready</span><span><strong>03</strong> Keep access server-managed</span></div></div><Panel title="Set up a company" description="You become the owner. This does not import or alter any existing token registry data."><form className="form-grid" onSubmit={submit}><Field label="Company name" hint="Use the name your team will recognize."><input autoFocus maxLength={120} name="companyName" onChange={(event) => setName(event.target.value)} placeholder="Acme Skills" value={name} /></Field><Field label="Company slug" hint="Optional. Letters, numbers, and hyphens are accepted."><input maxLength={64} name="companySlug" onChange={(event) => setSlug(event.target.value)} placeholder="acme-skills" value={slug} /></Field>{error && <div className="form-grid-message"><Notice kind="error">{error}</Notice></div>}<div className="form-actions"><Button busy={busy} type="submit">Create company</Button></div></form></Panel></div>
+  return <div className="company-onboarding"><div className="company-onboarding-copy"><span className="eyebrow">First step</span><h1>Create your company</h1><p className="muted">Your identity is signed in. Create a company to keep releases, policy, and team access in one private workspace.</p><div className="company-onboarding-steps"><span><strong>01</strong> Name the company</span><span><strong>02</strong> Invite teammates when ready</span><span><strong>03</strong> Access is checked for each request</span></div></div><Panel title="Set up a company" description="You become the owner. Existing token registry data stays unchanged."><form className="form-grid" onSubmit={submit}><Field label="Company name" hint="Use the name your team will recognize."><input autoFocus maxLength={120} name="companyName" onChange={(event) => setName(event.target.value)} placeholder="Acme Skills" value={name} /></Field><Field label="Company slug" hint="Optional. Letters, numbers, and hyphens are accepted."><input maxLength={64} name="companySlug" onChange={(event) => setSlug(event.target.value)} placeholder="acme-skills" value={slug} /></Field>{error && <div className="form-grid-message"><Notice kind="error">{error}</Notice></div>}<div className="form-actions"><Button busy={busy} type="submit">Create company</Button></div></form></Panel></div>
 }
 
 function CompanySelection({ memberships, onSelect }: { memberships: readonly IdentityMembership[]; onSelect: (organizationId: string) => Promise<void> }) {
@@ -113,7 +173,7 @@ function CompanyManagement({ activeMembership, organization }: { activeMembershi
     void reload()
     return () => { requestGeneration.current += 1 }
   }, [reload, reloadKey])
-  return <div className="company-management"><div className="page-intro"><div><span className="eyebrow">Company</span><h1>{organization.name}</h1><p className="muted">Manage membership and access for this company. The server remains the authority for every role and invitation.</p></div><div className="company-heading-meta"><span className="badge badge-good">Active</span><code>{organization.slug}</code></div></div>{error && <Notice kind="error">{error}</Notice>}<div className="company-management-grid"><InvitePanel disabled={!canManage} onInvited={() => setReloadKey((current) => current + 1)} /><TeamPanel canManage={canManage} invitations={invitations} members={members} onChanged={() => setReloadKey((current) => current + 1)} /></div></div>
+  return <div className="company-management"><div className="page-intro"><div><span className="eyebrow">Company</span><h1>{organization.name}</h1><p className="muted">Manage who can use this company. Role changes and invitations are checked before they take effect.</p></div><div className="company-heading-meta"><span className="badge badge-good">Active</span><code>{organization.slug}</code></div></div>{error && <Notice kind="error">{error}</Notice>}<div className="company-management-grid"><InvitePanel disabled={!canManage} onInvited={() => setReloadKey((current) => current + 1)} /><TeamPanel canManage={canManage} invitations={invitations} members={members} onChanged={() => setReloadKey((current) => current + 1)} /></div></div>
 }
 
 function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: () => void }) {
@@ -142,14 +202,24 @@ function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: ()
     finally { setBusy(false) }
   }
   async function copyInviteLink() {
-    if (!inviteLink || !navigator.clipboard) return
-    try { await navigator.clipboard.writeText(inviteLink); setCopied(true) } catch { setCopied(false) }
+    if (!inviteLink) return
+    const copiedToClipboard = await copyToClipboard(inviteLink)
+    setCopied(copiedToClipboard)
+    setMessage(copiedToClipboard
+      ? { kind: 'success', text: 'Invitation link copied to clipboard.' }
+      : { kind: 'error', text: 'Copy is unavailable here. Select the invitation link below and copy it manually.' })
   }
-  return <Panel className="company-invite-panel" title="Invite a teammate" description={disabled ? 'Owner or admin access is required to invite teammates.' : 'The identity service creates a bounded invitation. Email delivery may be disabled.'}><form className="stack-form company-invite-form" onSubmit={submit}><Field label="Email address"><input disabled={disabled} name="inviteEmail" onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" type="email" value={email} /></Field><Field label="Role"><select disabled={disabled} name="inviteRole" onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{INVITABLE_ROLES.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select></Field>{message && <Notice kind={message.kind}>{message.text}</Notice>}{inviteLink && <div className="invite-link-block"><code>{inviteLink}</code><Button kind="secondary" type="button" onClick={() => void copyInviteLink()}>{copied ? 'Copied' : 'Copy invitation link'}</Button></div>}<Button busy={busy} disabled={disabled} type="submit">Create invitation</Button></form></Panel>
+  return <Panel className="company-invite-panel" title="Invite a teammate" description={disabled ? 'Only an owner or admin can invite teammates.' : 'Create a link for a teammate. Share it with them; no email is sent automatically.'}><form className="stack-form company-invite-form" onSubmit={submit}><Field label="Email address"><input disabled={disabled} name="inviteEmail" onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" type="email" value={email} /></Field><Field label="Role"><select disabled={disabled} name="inviteRole" onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{INVITABLE_ROLES.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select></Field>{message && <Notice kind={message.kind}>{message.text}</Notice>}{inviteLink && <div className="invite-link-block"><Field label="Invitation link"><input aria-label="Invitation link" onClick={(event) => event.currentTarget.select()} onFocus={(event) => event.currentTarget.select()} readOnly value={inviteLink} /></Field><Button kind="secondary" type="button" onClick={() => void copyInviteLink()}>{copied ? 'Copied' : 'Copy invitation link'}</Button><span className="helper">If clipboard access is blocked, select the link above and copy it manually.</span></div>}<Button busy={busy} disabled={disabled} type="submit">Create invitation</Button></form></Panel>
 }
 
 function TeamPanel({ canManage, invitations, members, onChanged }: { canManage: boolean; invitations: OrganizationInvitation[] | null; members: TeamMember[] | null; onChanged: () => void }) {
-  return <Panel className="company-team-panel" title="Team access" description={canManage ? 'Update roles only when the server confirms the membership change.' : 'You can view team access. Ask an owner or admin to change roles.'}>{members === null ? <LoadingState label="Loading team access…" /> : members.length === 0 ? <EmptyState title="No team members yet" description="The active company has no memberships in the current response." /> : <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{members.map((member) => <MemberRow canManage={canManage} key={member.id} member={member} onChanged={onChanged} />)}</tbody></table></div>}{canManage ? <div className="company-invitations"><div className="company-subheading"><div><h3>Pending invitations</h3><p className="muted">Invitations expire and are checked by the identity service.</p></div><span className="badge badge-muted">{invitations?.length ?? '…'}</span></div>{invitations === null ? <LoadingState label="Loading invitations…" /> : invitations.length === 0 ? <p className="company-empty-note">No pending invitations.</p> : <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.email}</strong><span>{displayRole(invitation.role)} · {invitation.status ?? 'pending'}</span></div><Badge tone="muted" value={invitation.status ?? 'pending'} /></div>)}</div>}</div> : <p className="company-empty-note">Pending invitations are visible to owners and admins.</p>}</Panel>
+  const now = Date.now()
+  const groups = invitations === null ? null : groupInvitations(invitations, now)
+  return <Panel className="company-team-panel" title="Team access" description={canManage ? 'Choose a new role and save it. The change takes effect after it is checked.' : 'You can view team access. Ask an owner or admin to change roles.'}>{members === null ? <LoadingState label="Loading team access…" /> : members.length === 0 ? <EmptyState title="No team members yet" description="The active company has no memberships in the current response." /> : <div className="table-wrap"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Access</th></tr></thead><tbody>{members.map((member) => <MemberRow canManage={canManage} key={member.id} member={member} onChanged={onChanged} />)}</tbody></table></div>}{canManage ? <div className="company-invitations"><section aria-labelledby="pending-invitations-heading" data-testid="pending-invitations"><div className="company-subheading"><div><h3 id="pending-invitations-heading">Pending invitations</h3><p className="muted">Links waiting to be accepted stay here. Accepted or closed links appear in history.</p></div><span className="badge badge-muted" data-testid="pending-invitations-count">{groups?.pending.length ?? '…'}</span></div>{invitations === null ? <LoadingState label="Loading invitations…" /> : groups!.pending.length === 0 ? <p className="company-empty-note">No pending invitations.</p> : <InvitationList invitations={groups!.pending} now={now} />}</section>{groups !== null && groups.history.length > 0 && <section aria-labelledby="invitation-history-heading" className="company-invitation-history" data-testid="invitation-history"><div className="company-subheading"><div><h3 id="invitation-history-heading">Invitation history</h3><p className="muted">Accepted or closed invitations stay here for reference.</p></div><span className="badge badge-muted" data-testid="invitation-history-count">{groups.history.length}</span></div><InvitationList invitations={groups.history} now={now} /></section>}</div> : <p className="company-empty-note">Owners and admins can see pending invitations.</p>}</Panel>
+}
+
+function InvitationList({ invitations, now }: { invitations: readonly OrganizationInvitation[]; now: number }) {
+  return <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.email}</strong><span>{displayRole(invitation.role)} · {displayInvitationStatus(invitation, now)}</span></div><Badge tone="muted" value={effectiveInvitationStatus(invitation, now)} /></div>)}</div>
 }
 
 function MemberRow({ canManage, member, onChanged }: { canManage: boolean; member: TeamMember; onChanged: () => void }) {
@@ -164,5 +234,5 @@ function MemberRow({ canManage, member, onChanged }: { canManage: boolean; membe
     catch (cause) { setRole(member.role); setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : 'The server rejected this role change.') }
     finally { setBusy(false) }
   }
-  return <tr><td><strong>{memberName(member)}</strong>{memberEmail(member) && <span className="cell-sub">{memberEmail(member)}</span>}{error && <span className="cell-sub company-error-text">{error}</span>}</td><td>{canManage ? <select aria-label={`Role for ${memberName(member)}`} disabled={busy} onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{ROLE_OPTIONS.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select> : <Badge tone="muted" value={displayRole(member.role)} />}</td><td><Badge tone="muted" value={member.status ?? 'active'} /></td><td>{canManage && changed ? <Button busy={busy} kind="secondary" onClick={() => void save()}>Save role</Button> : <span className="muted company-server-note">Server managed</span>}</td></tr>
+  return <tr><td><strong>{memberName(member)}</strong>{memberEmail(member) && <span className="cell-sub">{memberEmail(member)}</span>}{error && <span className="cell-sub company-error-text">{error}</span>}</td><td>{canManage ? <select aria-label={`Role for ${memberName(member)}`} disabled={busy} onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{ROLE_OPTIONS.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select> : <Badge tone="muted" value={displayRole(member.role)} />}</td><td><Badge tone="muted" value={member.status ?? 'active'} /></td><td>{canManage && changed ? <Button busy={busy} kind="secondary" onClick={() => void save()}>Save role</Button> : <span className="muted company-server-note">Current</span>}</td></tr>
 }
