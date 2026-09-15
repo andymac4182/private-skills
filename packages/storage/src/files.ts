@@ -34,6 +34,11 @@ export interface FilesClientLike {
     key: string,
     options?: Record<string, unknown>
   ): Promise<unknown>;
+  /**
+   * Optional host/provider proof that an earlier upload for this key is
+   * terminal and cannot materialize later. Absence means unknown, never true.
+   */
+  confirmWriteTerminated?(key: string): boolean | Promise<boolean>;
   /** Exposed by the real Files instance for native create-only uploads. */
   capabilities?: {
     conditional?: {
@@ -276,6 +281,16 @@ export class FilesSdkBlobStore implements RecoverableBlobStore {
 
   get maxBytes(): number {
     return this.#maxBytes;
+  }
+
+  async confirmWriteTerminated(key: string): Promise<boolean> {
+    assertSealedKey(key, this.#prefix);
+    if (typeof this.#client.confirmWriteTerminated !== "function") return false;
+    try {
+      return (await this.#client.confirmWriteTerminated(key)) === true;
+    } catch {
+      return false;
+    }
   }
 
   /** Read the object and verify it against a caller-supplied digest. */

@@ -65,6 +65,17 @@ function gatewayFetch(
 }
 
 describe("private blob HTTP gateway", () => {
+  it("keeps gateway finality unknown unless the host supplies a terminal proof", async () => {
+    const defaultClient = new HttpBlobStore({ baseUrl: "https://gateway.example" });
+    await expect(defaultClient.confirmWriteTerminated("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toBe(false);
+
+    const verifiedClient = new HttpBlobStore({
+      baseUrl: "https://gateway.example",
+      confirmWriteTerminated: async () => true,
+    });
+    await expect(verifiedClient.confirmWriteTerminated("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toBe(true);
+  });
+
   it("requires the dedicated gateway token and round-trips exact bytes", async () => {
     const store = new MemoryBlobStore();
     const handler = createBlobGatewayHandler({

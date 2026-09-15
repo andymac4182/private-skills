@@ -10,6 +10,11 @@ import {
 import { HttpStateRepository } from '../../../packages/database/src/http';
 import { createNodeFilesSdkBlobStore, type FilesProvider } from '../../../packages/storage/src/node';
 import { HttpBlobStore } from '../../../packages/storage/src/http';
+import {
+  createDurableStorageRecoveryProofVerifier,
+  isRecoverableBlobStore,
+  StorageRecoveryService,
+} from '../../../packages/storage/src/index.js';
 import type { BlobStore, StateRepository } from '../../../packages/contracts/src/index';
 import { defaultRegistryState } from '../../../packages/database/src/state';
 import { PostgresSemanticIndex } from '../../../packages/search/src/postgres';
@@ -501,7 +506,7 @@ function hostedWorkerDispatchOption(value: string | undefined, minimum: number, 
   return parsed;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; billingRecovery?: IdentityInfrastructure['billingRecovery']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; storageRecovery?: StorageRecoveryService; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; billingRecovery?: IdentityInfrastructure['billingRecovery']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -578,6 +583,19 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
         token: env.BLOB_READ_WRITE_TOKEN,
       },
     });
+  // The recoverer is available only for adapters that persist a stable sealed
+  // object key. The route is separately gated by the platform recovery
+  // credential in the shared runtime, so merely constructing the service does
+  // not expose provider deletion or billing reconciliation.
+  const storageRecovery = isRecoverableBlobStore(blobs)
+    ? new StorageRecoveryService({
+      repository,
+      blobs,
+      billing: billing.service,
+      verifyProof: createDurableStorageRecoveryProofVerifier(repository),
+      allowLegacyReservationGeneration: billingEnvironmentBool(env.PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION),
+    })
+    : undefined;
   // Hosted deployments read registered release archives from the same private
   // BlobStore used by the registry. A local fixture is available only in the
   // explicit disposable profiles; production cannot depend on local disk.
@@ -674,6 +692,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     repository,
     blobs,
     billing,
+    ...(storageRecovery === undefined ? {} : { storageRecovery }),
     hostedWorker,
     ...(hostedWorkerDispatcher === undefined ? {} : { hostedWorkerDispatcher: hostedWorkerDispatcher.handler }),
     ...(createHostedWorkerForTenant === undefined ? {} : { createHostedWorkerForTenant }),

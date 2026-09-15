@@ -171,6 +171,70 @@ The worker defaults to `DockerExecutor`. Its scanner containers have no network,
 
 If a required scanner image or executable is unavailable, the resulting evidence is unsupported/error and the core policy remains closed. Install and test scanner images on the dedicated worker boundary before selecting `required` for production traffic.
 
+## Recover an ambiguous storage write
+
+The platform storage reconciler is mounted at `POST
+/internal/storage/recovery`. It is disabled unless the Node runtime has a
+recoverable sealed-object adapter and a separately provisioned operator
+credential. Configure exactly one of `PSKILLS_STORAGE_RECOVERY_TOKEN` or
+`PSKILLS_STORAGE_RECOVERY_TOKEN_HASH`, together with
+`PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID`; keep this credential separate from
+`PSKILLS_WORKER_TOKEN`. The credential is a bearer-only worker identity with
+the fixed `storage:recovery` scope. Tenant owner/admin sessions, API tokens,
+scanner workers, and hosted queue workers are rejected.
+
+The request body contains only the durable `attemptId`, plus optional
+`cleanupConfirmed` and `resume` flags:
+
+```sh
+curl -X POST "$PSKILLS_PUBLIC_ORIGIN/internal/storage/recovery" \
+  -H "Authorization: Bearer $PSKILLS_STORAGE_RECOVERY_TOKEN" \
+  -H 'content-type: application/json' \
+  --data '{"attemptId":"storage-attempt-id","cleanupConfirmed":true}'
+```
+
+The route derives the organization from the dedicated credential and creates
+the proof reference itself. Recovery is allowed only after the durable writer
+transition records an orphaned attempt (or a pending attempt is attached to a
+failed, lease-free job); queued or running jobs and still-pending provider
+writes retain their reservation. The configured adapter must also provide a
+provider-authoritative `confirmWriteTerminated(key)` result. A local timeout,
+rejected promise, failed lease, or one absent read cannot establish that a
+remote write will not materialize later, so false/unknown termination retains
+the charge. Once termination is confirmed, the reconciler persists a
+`releasing` metadata fence, verifies the exact object digest and size, requires
+explicit cleanup for a present object, confirms absence, then applies the
+exact billing-zero correction for the captured reservation generation.
+Provider-unknown inspection, persistence uncertainty, digest mismatch, and
+failed cleanup keep the attempt and charge held. A `recovering` or `releasing`
+fence can be retried with `{"resume":true}`; there is no age-based automatic
+deletion or release. Legacy attempts without a generation stay retained unless
+the operator explicitly enables `PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`;
+the ledger still rejects a reopened key.
+
+If a metadata reference appears after the exact zero correction, the attempt is
+durably marked `billingCorrection: "restore-pending"`. Retry the same route
+until the stable inverse reservation succeeds; the marker is cleared only
+after that transaction, so a lost billing response is safe to retry and the
+original charge is not silently lost.
+
+Finality support is intentionally explicit. The Node factory's built-in
+filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters currently
+have no authoritative provider termination proof, so the mounted endpoint will
+retain their attempts and charges. The HTTP adapter also retains by default;
+only a gateway supplied with a `confirmWriteTerminated` implementation that
+fences the original writer and receives a provider-terminal acknowledgement
+can release a charge. Local and custom adapters may provide that callback. Do
+not treat a timeout, rejected request, failed lease, missing object, elapsed
+time, or tenant/operator assertion as provider finality; until the callback is
+backed by provider evidence, hosted recovery remains intentionally open.
+
+Provisioning this credential does not authorize production deletion by itself:
+the operator must choose `cleanupConfirmed` for the exact object, and the
+provider adapter remains the final deletion boundary. Exercise this route
+against a disposable repository and storage root before enabling it on a
+hosted deployment.
+
 Build and exercise the pinned engines with `./scripts/scanner-acceptance.sh all`. Use `PSKILLS_DOCKER_CONTEXT=desktop-linux` for a Docker Desktop controller, or the default daemon on a dedicated Linux worker. SkillsGuard can provide complete static evidence for supported files. Cisco's current JSON coverage and NVIDIA's offline OSV fallback are reported as degraded; they are useful in advisory mode, while required mode correctly blocks incomplete evidence. No scanner proves a skill harmless.
 
 Deployment code may inject local `ingest.validate` and `artifact.evaluate` hooks into `WorkerRunner`. Required hook rejection, timeout, or error denies approval. Automatic outbound webhook delivery is disabled; no remote URL receives skill content or job metadata automatically.

@@ -106,7 +106,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 const SEVERITIES = new Set(['info', 'low', 'medium', 'high', 'critical']);
-const STORAGE_ATTEMPT_STATES = new Set(['pending', 'committed', 'orphaned', 'recovering', 'released']);
+const STORAGE_ATTEMPT_STATES = new Set(['pending', 'committed', 'orphaned', 'recovering', 'releasing', 'released']);
 const METERED_RESERVATION_OWNER_STATES = new Set(['owned', 'releasing', 'released']);
 
 function validScannerPolicy(value: unknown): value is ScannerPolicy {
@@ -147,6 +147,8 @@ function validStorageAttempt(value: unknown): value is Record<string, unknown> {
     typeof value.digest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value.digest) &&
     Number.isSafeInteger(value.size) && (value.size as number) >= 0 &&
     typeof value.state === 'string' && STORAGE_ATTEMPT_STATES.has(value.state) &&
+    (value.reservationGeneration === undefined || (Number.isSafeInteger(value.reservationGeneration) && (value.reservationGeneration as number) >= 1)) &&
+    (value.billingCorrection === undefined || value.billingCorrection === 'restore-pending') &&
     typeof value.createdAt === 'string' && value.createdAt.length > 0 &&
     typeof value.updatedAt === 'string' && value.updatedAt.length > 0 &&
     (value.objectKey === undefined || (typeof value.objectKey === 'string' && value.objectKey.length > 0)) &&
@@ -155,7 +157,8 @@ function validStorageAttempt(value: unknown): value is Record<string, unknown> {
     (value.recoveryStartedAt === undefined || (typeof value.recoveryStartedAt === 'string' && value.recoveryStartedAt.length > 0 && value.recoveryStartedAt.length <= 64))
   );
   if (!valid) return false;
-  if (value.state === 'recovering') {
+  if (value.billingCorrection === 'restore-pending' && value.state !== 'orphaned') return false;
+  if (value.state === 'recovering' || value.state === 'releasing') {
     return value.recoveryToken !== undefined && value.recoveryStartedAt !== undefined;
   }
   return value.recoveryToken === undefined && value.recoveryStartedAt === undefined;

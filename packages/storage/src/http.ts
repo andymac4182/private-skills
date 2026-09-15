@@ -39,6 +39,11 @@ export interface HttpBlobStoreOptions {
   prefix?: string;
   maxBytes?: number;
   timeoutMs?: number;
+  /**
+   * Provider/gateway proof that an earlier stable-key write is terminal and
+   * cannot materialize later. Missing proof remains unknown and fail-closed.
+   */
+  confirmWriteTerminated?: (key: string) => boolean | Promise<boolean>;
 }
 
 export interface BlobGatewayHandlerOptions {
@@ -334,6 +339,7 @@ export class HttpBlobStore implements RecoverableBlobStore {
   readonly #prefix: string;
   readonly #maxBytes: number;
   readonly #timeoutMs: number;
+  readonly #confirmWriteTerminated?: (key: string) => boolean | Promise<boolean>;
   readonly #records = new Map<string, LocalBlobRecord>();
 
   constructor(options: HttpBlobStoreOptions) {
@@ -358,6 +364,17 @@ export class HttpBlobStore implements RecoverableBlobStore {
     this.#prefix = normalizePrefix(options.prefix);
     this.#maxBytes = positiveLimit(options.maxBytes, DEFAULT_GATEWAY_MAX_BODY_BYTES);
     this.#timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_GATEWAY_TIMEOUT_MS);
+    this.#confirmWriteTerminated = options.confirmWriteTerminated;
+  }
+
+  async confirmWriteTerminated(key: string): Promise<boolean> {
+    assertStableKey(key, this.#prefix);
+    if (!this.#confirmWriteTerminated) return false;
+    try {
+      return (await this.#confirmWriteTerminated(key)) === true;
+    } catch {
+      return false;
+    }
   }
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {

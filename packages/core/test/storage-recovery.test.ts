@@ -57,6 +57,10 @@ class AmbiguousBlobs implements RecoverableBlobStore {
     return { key, digest, size: bytes.byteLength };
   }
 
+  async confirmWriteTerminated(): Promise<boolean> {
+    return true;
+  }
+
   async get(key: string): Promise<Uint8Array> {
     const bytes = this.objects.get(key);
     if (!bytes) throw new Error("not found");
@@ -151,6 +155,7 @@ describe("runtime stable storage-attempt integration", () => {
     expect(attempt).toMatchObject({
       state: "orphaned",
       objectKey: expect.stringMatching(/^sealed\/runtime-/u),
+      reservationGeneration: 1,
     });
     expect(failedState.skills).toHaveLength(0);
     expect(await metering.usageSnapshot(ORGANIZATION)).toMatchObject({

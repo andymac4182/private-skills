@@ -7,6 +7,8 @@ declare module '#pskills-infrastructure' {
       service: import('../../../packages/billing/src/index').BillingService;
       invoiceHistory?: (lookup: import('../../../packages/billing/src/index').BillingInvoiceLookup) => Promise<readonly import('../../../packages/billing/src/index').BillingProviderInvoice[]>;
     };
+    /** Optional Node-owned durable storage-attempt reconciler. */
+    storageRecovery?: import('../../../packages/storage/src/index').StorageRecoveryService;
     hostedWorker?: (request: Request) => Promise<Response>;
     /** Optional durable cross-company worker dispatcher for the cron route. */
     hostedWorkerDispatcher?: (request: Request) => Promise<Response>;

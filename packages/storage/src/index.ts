@@ -29,6 +29,7 @@ export {
   StorageRecoveryError,
   StorageRecoveryService,
   allocateStorageObjectKey,
+  createDurableStorageRecoveryProofVerifier,
   isRecoverableBlobStore,
   putStorageAttemptBlob,
   type StorageRecoveryActor,
@@ -39,6 +40,7 @@ export {
   type StorageRecoveryReason,
   type StorageRecoveryRequest,
   type StorageRecoveryResult,
+  type StorageBillingCorrection,
 } from "./recovery.js";
 export {
   DEFAULT_GATEWAY_MAX_BODY_BYTES,

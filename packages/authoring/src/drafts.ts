@@ -72,7 +72,7 @@ interface DraftUsageAdmission {
   readonly reservationKey: string;
   readonly delta: { storageBytes?: number; scans?: number };
   readonly idempotent: boolean;
-  /** Exact billing reservation lifecycle to carry through cleanup. */
+  /** Exact billing lifecycle captured for storage-attempt recovery and cleanup. */
   readonly reservationGeneration?: number;
 }
 
@@ -301,6 +301,7 @@ function draftStorageAttemptRecord(input: {
   digest: Digest;
   size: number;
   objectKey?: string;
+  reservationGeneration?: number;
 }): StorageAttempt {
   const timestamp = new Date().toISOString();
   return {
@@ -313,12 +314,13 @@ function draftStorageAttemptRecord(input: {
     createdAt: timestamp,
     updatedAt: timestamp,
     ...(input.objectKey ? { objectKey: input.objectKey } : {}),
+    ...(input.reservationGeneration === undefined ? {} : { reservationGeneration: input.reservationGeneration }),
   };
 }
 
 async function beginDraftStorageAttempt(
   deps: AuthoringHandlerDependencies,
-  input: { reservationKey: string; digest: Digest; size: number },
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
 ): Promise<StorageAttempt> {
   // Persist the provider object identity before the draft write so a lost
   // upload response can be reconciled without guessing a provider key.
@@ -343,7 +345,7 @@ async function markDraftStorageAttemptOrphaned(
     await deps.repository.transaction(deps.config.organizationId, (state) => {
       state.storageAttempts ??= [];
       const attempt = state.storageAttempts.find((candidate) => candidate.id === attemptId);
-      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'released') return;
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released') return;
       attempt.state = 'orphaned';
       attempt.updatedAt = new Date().toISOString();
       if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
@@ -362,7 +364,7 @@ function commitDraftStorageAttempt(state: RegistryState, attemptId: string, stor
     if (attempt.objectKey !== stored.key) throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
     return;
   }
-  if (attempt.state === 'released' || attempt.state === 'recovering') throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  if (attempt.state === 'released' || attempt.state === 'recovering' || attempt.state === 'releasing') throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
   if (attempt.objectKey !== undefined && attempt.objectKey !== stored.key) throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
   attempt.state = 'committed';
   attempt.objectKey = stored.key;
@@ -1196,6 +1198,7 @@ async function createDraft(
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
       digest: snapshot.release.artifact.digest,
       size: snapshot.bytes.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
     });
     stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt);
   } catch (error) {
@@ -1346,6 +1349,7 @@ async function createUploadDraft(
       reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
       digest,
       size: encoded.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
     });
     stored = await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt);
   } catch (error) {
@@ -1642,6 +1646,7 @@ export async function writeDraftRevision(
       reservationKey: await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
       digest: digest!,
       size: encoded!.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
     });
     stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt);
   } catch (error) {

@@ -2907,6 +2907,7 @@ async function publishSkill(
   const storageReservationKey = meteredOperationKey('publish-storage', jobId);
   const storageReservationDelta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
   const storageReservation = await reserveMeteredUsage(deps, config.organizationId, storageReservationDelta, storageReservationKey);
+
   const scanReservationKey = meteredOperationKey('scan', jobId);
   let scanReservation: MeteredUsageReservation | undefined;
   try {
@@ -2921,6 +2922,7 @@ async function publishSkill(
     );
   } catch (error) {
     await releaseMeteredUsage(storageReservation?.billing, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`, storageReservation?.reservationGeneration);
+
     throw error;
   }
   let storageAttempt: StorageAttempt | undefined;
@@ -2934,6 +2936,7 @@ async function publishSkill(
       digest,
       size: bytes.byteLength,
       jobId,
+      reservationGeneration: storageReservation?.reservationGeneration,
     });
     stored = await putVerifiedBlob(deps, bytes, digest, storageAttempt);
     const skill: SkillVersion = {
@@ -2991,6 +2994,7 @@ async function publishSkill(
       // failed after an uncertain metadata write, the external object is still
       // known absent, so reconcile the admission back to zero safely.
       await releaseMeteredUsage(storageReservation?.billing, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`, storageReservation?.reservationGeneration);
+
     }
     await releaseMeteredUsageIfUnowned(deps.repository, scanReservation?.billing, config.organizationId, scanReservationKey, { scans: 1 }, false, undefined, scanReservation?.reservationGeneration);
     throw error;
@@ -6543,12 +6547,14 @@ async function completeJob(
         delta,
         ...(reservation.reservationGeneration === undefined ? {} : { reservationGeneration: reservation.reservationGeneration }),
       };
+
       importedStorageAttempt = await beginStorageAttempt(deps, {
         organizationId: config.organizationId,
         reservationKey,
         digest,
         size: bytes.byteLength,
         jobId: job.id,
+        reservationGeneration: reservation?.reservationGeneration,
       });
       importedStored = await putVerifiedBlob(deps, bytes, digest, importedStorageAttempt);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
@@ -7463,8 +7469,17 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (!attempt.id || storageAttemptIds.has(attempt.id) || !attempt.reservationKey || !attempt.createdAt || !attempt.updatedAt) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt state is invalid', 500);
     }
-    if (!['pending', 'committed', 'orphaned', 'recovering', 'released'].includes(attempt.state) || !/^sha256:[0-9a-f]{64}$/u.test(attempt.digest) || !Number.isSafeInteger(attempt.size) || attempt.size < 0) {
+    if (!['pending', 'committed', 'orphaned', 'recovering', 'releasing', 'released'].includes(attempt.state) || !/^sha256:[0-9a-f]{64}$/u.test(attempt.digest) || !Number.isSafeInteger(attempt.size) || attempt.size < 0) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt metadata is invalid', 500);
+    }
+    if (attempt.reservationGeneration !== undefined && (!Number.isSafeInteger(attempt.reservationGeneration) || attempt.reservationGeneration < 1)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt reservation generation is invalid', 500);
+    }
+    if (attempt.billingCorrection !== undefined && attempt.billingCorrection !== 'restore-pending') {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt billing correction is invalid', 500);
+    }
+    if (attempt.billingCorrection === 'restore-pending' && attempt.state !== 'orphaned') {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt billing correction state is invalid', 500);
     }
     if (attempt.objectKey !== undefined && (typeof attempt.objectKey !== 'string' || attempt.objectKey.length === 0)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt object key is invalid', 500);
@@ -7472,7 +7487,7 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     if (attempt.jobId !== undefined && (typeof attempt.jobId !== 'string' || attempt.jobId.length === 0)) {
       throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt job id is invalid', 500);
     }
-    if (attempt.state === 'recovering') {
+    if (attempt.state === 'recovering' || attempt.state === 'releasing') {
       if (typeof attempt.recoveryToken !== 'string' || attempt.recoveryToken.length === 0 || attempt.recoveryToken.length > 256 || typeof attempt.recoveryStartedAt !== 'string' || attempt.recoveryStartedAt.length === 0 || attempt.recoveryStartedAt.length > 64) {
         throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt recovery fence is invalid', 500);
       }
@@ -7920,6 +7935,7 @@ async function releaseMeteredUsage(
     } else {
       await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey, reservationGeneration);
     }
+
     return true;
   } catch {
     // The caller's durable transaction error is more useful than a cleanup
@@ -8306,6 +8322,7 @@ function storageAttemptRecord(input: {
   size: number;
   jobId?: string;
   objectKey?: string;
+  reservationGeneration?: number;
 }): StorageAttempt {
   const timestamp = nowIso();
   return {
@@ -8319,6 +8336,7 @@ function storageAttemptRecord(input: {
     updatedAt: timestamp,
     ...(input.objectKey ? { objectKey: input.objectKey } : {}),
     ...(input.jobId ? { jobId: input.jobId } : {}),
+    ...(input.reservationGeneration === undefined ? {} : { reservationGeneration: input.reservationGeneration }),
   };
 }
 
@@ -8330,6 +8348,7 @@ async function beginStorageAttempt(
     digest: Digest;
     size: number;
     jobId?: string;
+    reservationGeneration?: number;
   },
 ): Promise<StorageAttempt> {
   // Persist the provider object identity before any write. Legacy BlobStores
@@ -8353,7 +8372,7 @@ async function markStorageAttemptOrphaned(
     await deps.repository.transaction(organizationId, (state) => {
       const mutable = ensureState(state, defaultPolicy());
       const attempt = mutable.storageAttempts!.find((candidate) => candidate.id === attemptId);
-      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'released') return;
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released') return;
       attempt.state = 'orphaned';
       attempt.updatedAt = nowIso();
       if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
@@ -8377,7 +8396,7 @@ function commitStorageAttempt(
     if (attempt.objectKey !== stored.key) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership record conflicts with the stored object', 409);
     return;
   }
-  if (attempt.state === 'released' || attempt.state === 'recovering') throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  if (attempt.state === 'released' || attempt.state === 'recovering' || attempt.state === 'releasing') throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
   if (attempt.objectKey !== undefined && attempt.objectKey !== stored.key) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
   attempt.state = 'committed';
   attempt.objectKey = stored.key;

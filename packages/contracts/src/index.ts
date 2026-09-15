@@ -77,6 +77,12 @@ export interface RecoverableBlobStore extends BlobStore {
   allocateObjectKey(): string;
   putAtKey(key: string, bytes: Uint8Array, metadata?: Record<string, string>): Promise<StoredBlob>;
   inspectObject(key: string): Promise<StorageObjectInspection>;
+  /**
+   * Provider-specific proof that the original write for this stable key has
+   * reached a terminal outcome and can no longer create the object later.
+   * An adapter must return false when it cannot establish that fact.
+   */
+  confirmWriteTerminated?(key: string): Promise<boolean>;
 }
 export type DistributionState = 'pending' | 'approved' | 'quarantined' | 'scan-error' | 'revoked';
 export type ScannerId = 'cisco-skill-scanner' | 'nvidia-skillspector' | 'skillsguard';
@@ -442,7 +448,9 @@ export interface Job { id: string; organizationId: string; kind: 'scan' | 'impor
  * completed).  This is intentionally separate from a Job because publication
  * and draft writes can fail before a job exists.
  */
-export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'recovering' | 'released';
+export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'recovering' | 'releasing' | 'released';
+/** Durable marker for a metered correction whose inverse still needs retrying. */
+export type StorageBillingCorrection = 'restore-pending';
 export interface StorageAttempt {
   id: string;
   organizationId: string;
@@ -450,6 +458,10 @@ export interface StorageAttempt {
   digest: Digest;
   size: number;
   state: StorageAttemptState;
+  /** Exact metered reservation lifecycle captured at admission. */
+  reservationGeneration?: number;
+  /** Set atomically when a late metadata reference requires billing restoration. */
+  billingCorrection?: StorageBillingCorrection;
   createdAt: string;
   updatedAt: string;
   objectKey?: string;

@@ -10,6 +10,8 @@ import type {
   StoredBlob,
 } from "../../contracts/src/index.js";
 
+export type { StorageBillingCorrection } from "../../contracts/src/index.js";
+
 /** Capability minted for the storage reconciler; tenant roles do not satisfy it. */
 export const STORAGE_RECOVERY_CAPABILITY = "private-skills:storage-recovery-operator";
 /** Scope carried by the dedicated operator credential used by this workflow. */
@@ -52,7 +54,10 @@ export type StorageRecoveryReason =
   | "cleanup-required"
   | "cleanup-failed"
   | "billing-unavailable"
+  | "billing-generation-unknown"
   | "billing-failed"
+  | "billing-restored"
+  | "writer-unconfirmed"
   | "stale-recovery";
 
 export type StorageRecoveryResult =
@@ -110,6 +115,19 @@ export interface StorageRecoveryOptions {
    * authoring, and queued-job references.
    */
   isObjectReferenced?: (state: RegistryState, attempt: StorageAttempt) => boolean;
+  /**
+   * Provider-specific quiescence proof. Returning true must mean the
+   * original write has reached a terminal outcome and cannot create the
+   * stable object later. The default delegates to the recoverable adapter;
+   * adapters that cannot establish this fact must return false.
+   */
+  verifyWriteTermination?: (context: StorageRecoveryProofContext) => boolean | Promise<boolean>;
+  /**
+   * Explicit migration switch for attempts written before generation fencing.
+   * Billing still rejects this compatibility call if the operation key was
+   * reopened, so omission remains fail-closed by default.
+   */
+  allowLegacyReservationGeneration?: boolean;
   now?: () => Date;
 }
 
@@ -122,6 +140,17 @@ interface FinalizeResult {
   applied: boolean;
   attempt?: StorageAttempt;
   referenced?: boolean;
+}
+
+interface BillingUsageRestoration extends BillingUsageAdmission {
+  /** Exact inverse of a previously released reservation; ledger-owned. */
+  restoreUsage(
+    organizationId: string,
+    reservationKey: string,
+    delta: { storageBytes: number },
+    operationKey: string,
+    reservationGeneration?: number,
+  ): Promise<unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -236,6 +265,65 @@ export function putStorageAttemptBlob(
 }
 
 /**
+ * Build the default runtime proof verifier for an operator route.
+ *
+ * A caller supplied proof string is never evidence. The durable attempt and
+ * job state fences the registry writer; the adapter's write-termination proof
+ * separately establishes that the provider call itself cannot create the
+ * object later. A pending attempt is recoverable only when its associated
+ * durable job is already failed and no active lease remains. A recovering or
+ * releasing attempt can be resumed only as a prior recovery operation, after
+ * the same durable reference check. Any queued or running job keeps the
+ * charge held so an operator cannot release an object while its original
+ * writer can still create it.
+ */
+export function createDurableStorageRecoveryProofVerifier(
+  repository: StateRepository,
+): StorageRecoveryOptions["verifyProof"] {
+  return async ({ request, attempt }) => {
+    if (
+      request.organizationId !== attempt.organizationId ||
+      request.proof.kind !== "writer-terminated" ||
+      request.proof.reference !== `runtime-storage-attempt:${attempt.id}`
+    ) return false;
+
+    let state: RegistryState;
+    try {
+      state = await repository.read(attempt.organizationId);
+    } catch {
+      return false;
+    }
+    const current = (state.storageAttempts ?? []).find((candidate) => candidate.id === attempt.id);
+    if (!current || current.organizationId !== attempt.organizationId) return false;
+
+    // A recovering marker is a durable record that the writer proof already
+    // passed and the prior reconciler may have crashed. It is never inferred
+    // from age; the operator must explicitly request resume.
+    if (current.state === "recovering" || current.state === "releasing") {
+      return request.resume === true &&
+        current.recoveryToken !== undefined &&
+        current.recoveryStartedAt !== undefined &&
+        !defaultObjectReferenceCheck(state, current);
+    }
+    if (current.state !== "orphaned" && current.state !== "pending") return false;
+
+    if (current.jobId) {
+      const job = state.jobs.find((candidate) => candidate.id === current.jobId && candidate.organizationId === current.organizationId);
+      // Missing jobs are valid for a publish/draft writer that failed before
+      // queue metadata was committed. A present queued/running job proves a
+      // writer can still act, so retain the reservation until it is fenced.
+      if (job && (job.state === "queued" || job.state === "running")) return false;
+      if (current.state === "pending") return !!job && job.state === "failed" && job.leaseToken === undefined;
+    } else if (current.state === "pending") {
+      // A pending attempt without a durable failed job has no trusted failure
+      // record. It may still be inside its provider write and must be held.
+      return false;
+    }
+    return current.state === "orphaned";
+  };
+}
+
+/**
  * Reconcile a provider write only after a trusted writer proof and a verified
  * object absence. Unknown provider outcomes retain the attempt and its charge.
  */
@@ -244,6 +332,8 @@ export class StorageRecoveryService {
   readonly #blobs: RecoverableBlobStore;
   readonly #billing?: BillingUsageAdmission;
   readonly #verifyProof: StorageRecoveryOptions["verifyProof"];
+  readonly #verifyWriteTermination: NonNullable<StorageRecoveryOptions["verifyWriteTermination"]>;
+  readonly #allowLegacyReservationGeneration: boolean;
   readonly #isObjectReferenced: (state: RegistryState, attempt: StorageAttempt) => boolean;
   readonly #now: () => Date;
 
@@ -261,6 +351,11 @@ export class StorageRecoveryService {
     this.#blobs = options.blobs;
     this.#billing = options.billing;
     this.#verifyProof = options.verifyProof;
+    this.#verifyWriteTermination = options.verifyWriteTermination ?? (async ({ attempt }) => {
+      const verifier = this.#blobs.confirmWriteTerminated;
+      return typeof verifier === "function" && await verifier.call(this.#blobs, attempt.objectKey!);
+    });
+    this.#allowLegacyReservationGeneration = options.allowLegacyReservationGeneration === true;
     this.#isObjectReferenced = options.isObjectReferenced ?? defaultObjectReferenceCheck;
     this.#now = options.now ?? (() => new Date());
   }
@@ -276,11 +371,19 @@ export class StorageRecoveryService {
     if (initialAttempt.state === "committed" || initialAttempt.state === "released") {
       return { status: "already-terminal", state: initialAttempt.state, attempt: cloneAttempt(initialAttempt) };
     }
-    if (initialAttempt.state === "recovering" && request.resume !== true) {
+    if ((initialAttempt.state === "recovering" || initialAttempt.state === "releasing") && request.resume !== true) {
       return { status: "busy", attempt: cloneAttempt(initialAttempt) };
     }
     if (!initialAttempt.objectKey) {
       return this.#retain(request.organizationId, request.attemptId, undefined, "missing-object-key");
+    }
+
+    // A late metadata reference can be discovered after the exact zero has
+    // succeeded. Retry its inverse from the durable marker before the normal
+    // metadata-reference guard; otherwise every retry would stop before the
+    // compensation and leave the tenant permanently under-metered.
+    if (this.#billing && initialAttempt.billingCorrection === "restore-pending") {
+      return this.#retryBillingRestoration(request.organizationId, initialAttempt);
     }
 
     let proofAccepted: boolean;
@@ -293,11 +396,40 @@ export class StorageRecoveryService {
       return this.#retain(request.organizationId, request.attemptId, undefined, "proof-rejected");
     }
 
+    // A pre-generation attempt is never guessed to be the current lifecycle.
+    // An operator must explicitly enable the compatibility path; the billing
+    // ledger still rejects this call if the key has since been reopened.
+    if (this.#billing && initialAttempt.reservationGeneration === undefined && !this.#allowLegacyReservationGeneration) {
+      return this.#retain(request.organizationId, request.attemptId, undefined, "billing-generation-unknown");
+    }
+
     const claimed = await this.#claim(request, initialAttempt);
     if (claimed.status !== "claimed") return claimed.result;
     const claimedAttempt = claimed.attempt;
     const attempt = claimedAttempt;
     const key = attempt.objectKey!;
+
+    let writerTerminated = false;
+    try {
+      writerTerminated = await this.#verifyWriteTermination({ request, attempt: cloneAttempt(attempt) });
+    } catch {
+      writerTerminated = false;
+    }
+    if (!writerTerminated) {
+      return this.#retainClaimed(request.organizationId, request.attemptId, claimed.token, { state: "unknown", key, reason: "provider-error" }, "writer-unconfirmed");
+    }
+
+    // Persist a second, durable fence before any provider cleanup or billing
+    // correction. Every metadata writer rejects both recovering and releasing
+    // attempts, so a late commit cannot turn a successful zero into an
+    // untracked object.
+    const prepared = await this.#prepareRelease(request.organizationId, request.attemptId, claimed.token);
+    if (!prepared.applied || !prepared.attempt) {
+      if (prepared.referenced) {
+        return { status: "retained", reason: "metadata-referenced", attempt: prepared.attempt ?? attempt };
+      }
+      return { status: "retained", reason: "stale-recovery", attempt: prepared.attempt ?? attempt };
+    }
 
     let inspection = await this.#inspect(key);
     let cleanupPerformed = false;
@@ -346,6 +478,7 @@ export class StorageRecoveryService {
           attempt.reservationKey,
           { storageBytes: 0 },
           `private-skills:storage-recovery:${attempt.id}`,
+          attempt.reservationGeneration,
         );
       } catch {
         return this.#retainClaimed(request.organizationId, request.attemptId, claimed.token, inspection, "billing-failed");
@@ -357,13 +490,28 @@ export class StorageRecoveryService {
       request.attemptId,
       claimed.token,
       "released",
+      billing !== undefined,
     );
     if (!finalized.applied || !finalized.attempt) {
       if (finalized.referenced) {
+        // A metadata writer that bypassed the durable recovery fence may have
+        // appeared after the pre-release check. Restore the retained bytes
+        // with a separate durable operation before reporting the reference;
+        // never leave the original zero unpaired.
+        const restored = billing ? await this.#restoreBilling(attempt) : true;
+        if (!restored) {
+          return {
+            status: "retained",
+            reason: "billing-failed",
+            attempt: finalized.attempt ?? claimedAttempt,
+            inspection,
+          };
+        }
+        const settled = await this.#clearBillingCorrection(request.organizationId, request.attemptId);
         return {
           status: "retained",
           reason: "metadata-referenced",
-          attempt: finalized.attempt ?? claimedAttempt,
+          attempt: settled,
           inspection,
         };
       }
@@ -375,6 +523,65 @@ export class StorageRecoveryService {
       inspection: cleanupPerformed ? "deleted" : "absent",
       billing: billing ? "reconciled" : "unmetered",
     };
+  }
+
+  async #restoreBilling(attempt: StorageAttempt): Promise<boolean> {
+    const billing = this.#billing;
+    if (!billing) return true;
+    try {
+      if (billing.status().enabled !== true) return false;
+      const restoreUsage = (billing as Partial<BillingUsageRestoration>).restoreUsage;
+      // A positive reserveUsage would re-run the normal quota check and can
+      // fail after another admission fills the cap. Restoration is a ledger
+      // owned inverse of this exact released lifecycle; without that seam,
+      // fail closed and keep the durable marker/charge for operator retry.
+      if (typeof restoreUsage !== "function") return false;
+      await restoreUsage.call(
+        billing,
+        attempt.organizationId,
+        attempt.reservationKey,
+        { storageBytes: attempt.size },
+        `private-skills:storage-recovery-restore:${attempt.id}`,
+        attempt.reservationGeneration,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #retryBillingRestoration(
+    organizationId: string,
+    attempt: StorageAttempt,
+  ): Promise<StorageRecoveryResult> {
+    if (!this.#billing) {
+      return { status: "retained", reason: "billing-unavailable", attempt: cloneAttempt(attempt) };
+    }
+    if (!(await this.#restoreBilling(attempt))) {
+      return { status: "retained", reason: "billing-failed", attempt: cloneAttempt(attempt) };
+    }
+    const settled = await this.#clearBillingCorrection(organizationId, attempt.id);
+    return { status: "retained", reason: "billing-restored", attempt: settled };
+  }
+
+  async #clearBillingCorrection(
+    organizationId: string,
+    attemptId: string,
+  ): Promise<StorageAttempt> {
+    try {
+      return await this.#repository.transaction(organizationId, (state) => {
+        const current = (state.storageAttempts ?? []).find((candidate) => candidate.id === attemptId);
+        if (!current || current.organizationId !== organizationId) {
+          throw new StorageRecoveryError("STORAGE_ATTEMPT_NOT_FOUND", "storage attempt was not found");
+        }
+        if (current.billingCorrection === "restore-pending") delete current.billingCorrection;
+        current.updatedAt = nowIso(this.#now);
+        return cloneAttempt(current);
+      });
+    } catch (error) {
+      if (error instanceof StorageRecoveryError) throw error;
+      throw new StorageRecoveryError("RECOVERY_PERSISTENCE_UNCERTAIN", "storage recovery billing restoration state is uncertain");
+    }
   }
 
   async #inspect(key: string): Promise<StorageObjectInspection> {
@@ -405,14 +612,14 @@ export class StorageRecoveryService {
       if (attempt.state === "committed" || attempt.state === "released") {
         return { kind: "terminal" as const, state: attempt.state, attempt: cloneAttempt(attempt) };
       }
-      if (attempt.state === "recovering" && request.resume !== true) {
+      if ((attempt.state === "recovering" || attempt.state === "releasing") && request.resume !== true) {
         return { kind: "busy" as const, attempt: cloneAttempt(attempt) };
       }
       if (!attempt.objectKey) {
         return { kind: "retained" as const, reason: "missing-object-key" as const, attempt: cloneAttempt(attempt) };
       }
       if (this.#isObjectReferenced(state, attempt)) {
-        if (attempt.state === "recovering" && request.resume === true) {
+        if ((attempt.state === "recovering" || attempt.state === "releasing") && request.resume === true) {
           attempt.state = "orphaned";
           delete attempt.recoveryToken;
           delete attempt.recoveryStartedAt;
@@ -440,17 +647,61 @@ export class StorageRecoveryService {
     };
   }
 
+  /**
+   * Seal the metadata side of a release before touching the provider or
+   * billing. The `releasing` state is durable and is rejected by every
+   * registry/authoring metadata commit path. This prevents a reference from
+   * appearing between a provider absence check and the billing correction.
+   */
+  async #prepareRelease(
+    organizationId: string,
+    attemptId: string,
+    token: string,
+  ): Promise<FinalizeResult> {
+    try {
+      return await this.#repository.transaction(organizationId, (current) => {
+        current.storageAttempts ??= [];
+        const attempt = current.storageAttempts.find((candidate) => candidate.id === attemptId);
+        if (!attempt || attempt.organizationId !== organizationId) return { applied: false };
+        if (attempt.recoveryToken !== token || (attempt.state !== "recovering" && attempt.state !== "releasing")) {
+          return { applied: false, attempt: cloneAttempt(attempt) };
+        }
+        if (this.#isObjectReferenced(current, attempt)) {
+          attempt.state = "orphaned";
+          delete attempt.recoveryToken;
+          delete attempt.recoveryStartedAt;
+          attempt.updatedAt = nowIso(this.#now);
+          return { applied: false, referenced: true, attempt: cloneAttempt(attempt) };
+        }
+        attempt.state = "releasing";
+        attempt.updatedAt = nowIso(this.#now);
+        return { applied: true, attempt: cloneAttempt(attempt) };
+      });
+    } catch (error) {
+      throw new StorageRecoveryError(
+        "RECOVERY_PERSISTENCE_UNCERTAIN",
+        error instanceof Error ? "storage recovery release fence is uncertain" : "storage recovery release fence failed",
+      );
+    }
+  }
+
   async #retain(
     organizationId: string,
     attemptId: string,
     inspection: StorageObjectInspection | undefined,
     reason: StorageRecoveryReason,
   ): Promise<StorageRecoveryResult> {
-    const finalized = await this.#finalize(organizationId, attemptId, undefined, "orphaned");
+    // A failed or unavailable proof is not a writer-termination event. In
+    // particular, do not turn a still-pending attempt into `orphaned` merely
+    // because an operator asked for recovery: the original provider call may
+    // still be able to create the stable object. The caller must persist the
+    // writer's settled failure first; only the claimed path below may mark a
+    // recovery as retained/orphaned after that proof has passed.
+    const current = await this.#readAttempt(organizationId, attemptId);
     return {
       status: "retained",
-      reason: finalized.referenced ? "metadata-referenced" : reason,
-      attempt: finalized.attempt ?? (await this.#readAttempt(organizationId, attemptId)),
+      reason,
+      attempt: current,
       ...(inspection ? { inspection } : {}),
     };
   }
@@ -483,6 +734,7 @@ export class StorageRecoveryService {
     attemptId: string,
     token: string | undefined,
     state: "orphaned" | "released",
+    billingCorrectionApplied = false,
   ): Promise<FinalizeResult> {
     try {
       return await this.#repository.transaction(organizationId, (current) => {
@@ -498,6 +750,7 @@ export class StorageRecoveryService {
         }
         if (state === "released" && this.#isObjectReferenced(current, attempt)) {
           attempt.state = "orphaned";
+          if (billingCorrectionApplied) attempt.billingCorrection = "restore-pending";
           delete attempt.recoveryToken;
           delete attempt.recoveryStartedAt;
           attempt.updatedAt = nowIso(this.#now);

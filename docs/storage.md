@@ -73,6 +73,42 @@ Track object references and retention holds transactionally. Collect abandoned a
 
 ## Ambiguous write recovery
 
-`RecoverableBlobStore` adds a stable prewrite key, same-key idempotent upload, and bounded object inspection. An upload that may have reached the provider remains an `orphaned` storage attempt with its metered reservation charged. The reconciler treats only a verified `absent` result as safe to release; provider errors, timeouts, oversized reads, and digest mismatches remain `unknown` and retain the charge.
+`RecoverableBlobStore` adds a stable prewrite key, same-key idempotent upload, and bounded object inspection. An upload that may have reached the provider remains an `orphaned` storage attempt with its metered reservation charged. The reconciler treats only a verified `absent` result after provider write termination is confirmed as safe to release; provider errors, timeouts, oversized reads, and digest mismatches remain `unknown` and retain the charge.
 
 Recovery requires a dedicated operator capability (`private-skills:storage-recovery-operator`) and `storage:recovery` scope. Tenant owner/admin, scanner worker, and ordinary service credentials do not authorize it. A trusted platform proof that the writer failed or was terminated is required for every attempt. If the exact object is present, an operator must explicitly authorize cleanup and the reconciler reads it again to confirm absence before issuing the exact `{ storageBytes: 0 }` billing correction. A durable `recovering` fence makes the workflow resumable after a process crash; there is no age-based automatic deletion or billing release. Metadata references are checked under the organization transaction before claim and before release.
+
+The Node/Nitro mount is `POST /internal/storage/recovery`. It accepts only
+`attemptId`, `cleanupConfirmed`, and `resume`; the organization and proof are
+server-derived. Configure the separate
+`PSKILLS_STORAGE_RECOVERY_TOKEN` (or its SHA-256 hash) and
+`PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID` to enable it. The runtime's proof
+verifier requires the durable orphaned writer transition, or a failed
+lease-free job for a pending attempt, and will not convert a still-pending
+attempt to orphaned when a proof is rejected. Recovery also calls the
+adapter's provider-specific `confirmWriteTerminated(key)` proof; an absent or
+false result retains the attempt and charge because a rejected or timed-out
+remote write may still materialize later. The adapter must return true only
+after its provider can no longer create that key. A successful recovery first
+persists a `releasing` metadata fence, then verifies/cleans the exact object,
+passes the captured billing reservation generation, and finally marks the
+attempt released. Attempts without a generation remain retained unless the
+operator explicitly enables `PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`;
+the ledger still rejects a reopened key.
+
+If a metadata reference appears after the exact zero correction, the attempt is
+marked `billingCorrection: "restore-pending"` in the same durable transition
+that retains it. Retries settle the inverse reservation under a stable
+operation key before clearing that marker; a failed inverse leaves the marker
+and the original reservation charged.
+
+The current Node factory does not claim this finality for any built-in provider.
+The filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters expose
+no provider-authoritative termination callback, so their recovery route remains
+fail-closed and keeps the reservation charged. The HTTP adapter has the same
+default: it can be enabled only when its gateway is constructed with a
+`confirmWriteTerminated` callback backed by a provider-specific terminal
+acknowledgement and writer fence. A host that cannot produce that evidence must
+leave hosted recovery open; a local or custom adapter may implement the
+callback after it has fenced the writer and received a provider-terminal
+result. A missing, timeout, rejection, absent read, or operator assertion is
+never a substitute for that result.

@@ -443,4 +443,17 @@ describe("Files SDK BlobStore boundary", () => {
       key: "sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     });
   });
+
+  it("keeps Files SDK finality unknown unless the provider supplies a terminal proof", async () => {
+    const defaultStore = new FilesSdkBlobStore({ client: new InMemoryFilesClient() });
+    await expect(defaultStore.confirmWriteTerminated("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toBe(false);
+
+    class TerminatingFilesClient extends InMemoryFilesClient {
+      async confirmWriteTerminated(): Promise<boolean> {
+        return true;
+      }
+    }
+    const verifiedStore = new FilesSdkBlobStore({ client: new TerminatingFilesClient() });
+    await expect(verifiedStore.confirmWriteTerminated("sealed/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).resolves.toBe(true);
+  });
 });
