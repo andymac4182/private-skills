@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { defineChannel, GET, POST } from "eve/channels";
+import { extractBearerToken } from "eve/channels/auth";
 import {
   validateBuilderOpaqueId,
   validateBuilderSessionStartRequest,
@@ -9,8 +10,22 @@ import {
   validateDraftBinding,
 } from "../../../../packages/skill-builder/src/index.js";
 import { builderServiceToken, builderStatus } from "../lib/config.js";
+import {
+  authenticateEveTenantRequest,
+  eveTenantDelegationIssuerOptionsFromEnv,
+  looksLikeEveTenantDelegation,
+  sessionAuthFromEveTenantPrincipal,
+  EVE_TENANT_DELEGATION_SECRET_ENV,
+  EVE_TENANT_ID_HEADER,
+  EVE_TENANT_SERVICE_HEADER,
+  type EveTenantDelegationVerifierOptions,
+  type EveTenantPrincipal,
+} from "../../../../packages/eve-tenant/src/index.js";
 
 const MAX_REQUEST_BYTES = 96 * 1024;
+const TENANT_SERVICE = "skill-builder" as const;
+const TENANT_ISSUER_ENV = "PSKILLS_EVE_TENANT_DELEGATION_ISSUER";
+const TENANT_SERVICE_IDENTITY_ENV = "PSKILLS_EVE_TENANT_SERVICE_IDENTITY";
 
 export interface BuilderChannelState {
   readonly sessionKey: string | null;
@@ -51,7 +66,7 @@ function unauthorized(): Response {
   });
 }
 
-function isAuthorized(request: Request): boolean {
+function staticAuthorization(request: Request): boolean {
   const supplied = request.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/iu)?.[1];
   if (!supplied || supplied.length > 512 || /\s/u.test(supplied)) return false;
   let expected: string;
@@ -61,6 +76,74 @@ function isAuthorized(request: Request): boolean {
     return false;
   }
   return constantTimeEqual(expected, supplied);
+}
+
+export interface TenantAuthorization {
+  readonly kind: "tenant";
+  readonly principal: EveTenantPrincipal;
+  readonly auth: ReturnType<typeof sessionAuthFromEveTenantPrincipal>;
+}
+
+export type BuilderAuthorization =
+  | { readonly kind: "tenant"; readonly tenant: TenantAuthorization }
+  | { readonly kind: "legacy" };
+
+function tenantVerifier(): EveTenantDelegationVerifierOptions | undefined {
+  const issuer = process.env[TENANT_ISSUER_ENV]?.trim();
+  const serviceIdentity = process.env[TENANT_SERVICE_IDENTITY_ENV]?.trim();
+  if (!process.env[EVE_TENANT_DELEGATION_SECRET_ENV] || !issuer || !serviceIdentity) return undefined;
+  try {
+    const issuerOptions = eveTenantDelegationIssuerOptionsFromEnv(process.env, {
+      issuer,
+      serviceIdentity,
+    });
+    return issuerOptions === undefined ? undefined : {
+      ...issuerOptions,
+      expectedServiceIdentity: serviceIdentity,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function tenantDelegationConfigured(): boolean {
+  return Boolean(process.env[EVE_TENANT_DELEGATION_SECRET_ENV]);
+}
+
+function tenantMetadataMatches(request: Request, tenantId: string): boolean {
+  const suppliedTenant = request.headers.get(EVE_TENANT_ID_HEADER);
+  const suppliedService = request.headers.get(EVE_TENANT_SERVICE_HEADER);
+  return (suppliedTenant === null || suppliedTenant === tenantId) &&
+    (suppliedService === null || suppliedService === TENANT_SERVICE);
+}
+
+async function tenantAuthorization(request: Request): Promise<TenantAuthorization | null> {
+  const supplied = extractBearerToken(request.headers.get("authorization"));
+  const verifier = tenantVerifier();
+  if (!supplied || verifier === undefined) return null;
+  const principal = await authenticateEveTenantRequest(request, verifier, { service: TENANT_SERVICE });
+  if (!principal || !tenantMetadataMatches(request, principal.claims.tenantId)) return null;
+  return {
+    kind: "tenant",
+    principal,
+    auth: sessionAuthFromEveTenantPrincipal(principal),
+  };
+}
+
+export async function authorizeBuilderRequest(request: Request): Promise<BuilderAuthorization | null> {
+  const tenant = await tenantAuthorization(request);
+  if (tenant) return { kind: "tenant", tenant };
+  const supplied = extractBearerToken(request.headers.get("authorization"));
+  if (tenantDelegationConfigured() && looksLikeEveTenantDelegation(supplied ?? undefined)) return null;
+  return staticAuthorization(request) ? { kind: "legacy" } : null;
+}
+
+export function builderBindingMatches(input: BuilderSessionRequest, principal: EveTenantPrincipal): boolean {
+  const binding = principal.claims.binding;
+  return binding?.registrySessionId === input.registrySessionId &&
+    binding.draftId === input.draftId &&
+    binding.draftRevision === input.revision &&
+    binding.draftDigest === input.digest;
 }
 
 function invalid(message: string, status = 400): Response {
@@ -144,13 +227,14 @@ export default defineChannel<BuilderChannelState>({
   metadata: channelMetadata,
   routes: [
     GET("/internal/builder/status", async (request) => {
-      if (!isAuthorized(request)) return unauthorized();
+      if (!await authorizeBuilderRequest(request)) return unauthorized();
       return Response.json(builderStatus(), {
         headers: { "cache-control": "no-store" },
       });
     }),
     POST("/internal/builder/sessions", async (request, { from }) => {
-      if (!isAuthorized(request)) return unauthorized();
+      const authorization = await authorizeBuilderRequest(request);
+      if (!authorization) return unauthorized();
       let body: Record<string, unknown>;
       try {
         body = await readJson(request);
@@ -163,11 +247,14 @@ export default defineChannel<BuilderChannelState>({
       } catch (error) {
         return invalid(error instanceof Error ? error.message : "invalid request");
       }
+      if (authorization.kind === "tenant" && !builderBindingMatches(input, authorization.tenant.principal)) {
+        return invalid("builder request does not match its tenant draft delegation", 403);
+      }
       const status = builderStatus();
       if (!status.enabled) return invalid("skill builder is disabled", 503);
       try {
         const session = await from(input.sessionKey).send(input.message, {
-          auth: servicePrincipal,
+          auth: authorization.kind === "tenant" ? authorization.tenant.auth : servicePrincipal,
           state: {
             sessionKey: input.sessionKey,
             registrySessionId: input.registrySessionId,
