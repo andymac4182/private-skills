@@ -473,11 +473,14 @@ tr.row-selected td { background: var(--accent-soft); }
 .company-heading-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .company-heading-meta code { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .company-management-grid { display: grid; grid-template-columns: minmax(270px, .72fr) minmax(0, 1.65fr); gap: 18px; align-items: start; }
+.company-management-grid > .company-team-panel:only-child { grid-column: 1 / -1; }
 .company-invite-form { padding: 21px 23px 23px; }
 .company-team-panel { min-width: 0; }
 .company-team-panel td select { min-width: 106px; height: 31px; padding: 0 8px; font-size: 10px; }
 .company-server-note { font-size: 10px; }
 .company-error-text { color: var(--red); }
+.company-readonly-guidance { display: grid; gap: 4px; margin: 0 22px 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.company-readonly-guidance strong { color: var(--ink-soft); font-size: 11px; }
 .company-invitations { margin: 2px 22px 22px; border-top: 1px solid var(--line); }
 .company-subheading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 0 11px; }
 .company-subheading h3 { margin: 0 0 4px; color: var(--ink-soft); font-size: 12px; }
