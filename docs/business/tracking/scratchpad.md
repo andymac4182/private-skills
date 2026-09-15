@@ -80,3 +80,5 @@ Explicit token migration candidate 5ca2365 is held because inheriting the Better
 Reviewed billing635d112. Seat subject/revision reconciliation is implemented, but root identified two remaining acceptance questions: active holds with no committed identity row require safe failed-write recovery, and newest-N usage-operation loading cannot be the authority for old-key idempotency. B28 records the exact durable-lookup/replay proof needed. Billing and Eve owners are coordinating; no billing candidate is integrated on this evidence alone.
 
 The token-display browser owner reports CUA host locked with automatic unlock paused. User unlock requested asynchronously. This pauses the browser-dependent proof only; no fixture session or production configuration was changed.
+
+Root independently passed the composed Nitro/PostgreSQL/Files SDK worker acceptance at verification d11f6cb (1 test, 11.41 seconds). Integrated c17d113/0cf5440; sanitized evidence is `docs/evidence/local-composed-nitro-root-20260916.json`. Native CLI follow-through remains assigned to tenant_ui against the separately retained approved fixture.

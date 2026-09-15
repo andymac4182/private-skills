@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-09-15T15:15:32.786975+00:00",
+  "scope": "local composed Node Nitro + PostgreSQL + Files SDK filesystem + actual WorkerRunner deterministic adapter",
+  "integrationCommit": "0cf5440",
+  "verificationCommit": "d11f6cb",
+  "command": "PSKILLS_NITRO_POSTGRES_ACCEPTANCE=true PSKILLS_NITRO_POSTGRES_URL=<loopback disposable database> node node_modules/vitest/vitest.mjs run tests/e2e/nitro-postgres-files-acceptance.test.ts",
+  "result": {
+    "testFilesPassed": 1,
+    "testsPassed": 1,
+    "durationSeconds": 11.41
+  },
+  "verified": [
+    "two isolated company sessions",
+    "publish pending required scanner approval",
+    "worker claim, artifact download, digest verification, materialization and file-reading adapter",
+    "approved exact-byte transfer",
+    "cross-company denial",
+    "revoked authorization and transfer denial"
+  ],
+  "limits": [
+    "synthetic local Better Auth identities",
+    "deterministic file-reading scanner adapter, not external SkillsGuard service",
+    "filesystem blob provider, not hosted blob restore",
+    "native CLI proof separate and pending",
+    "production identity remains disabled"
+  ]
+}
