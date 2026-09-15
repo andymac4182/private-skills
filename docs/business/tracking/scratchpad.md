@@ -96,3 +96,9 @@ Release owner is authorized to publish prepared37ddf6f while explicitly retainin
 Root full suite at verification cddf73a after the explicit token migration fixes: 154 files passed / 15 skipped; 1,113 tests passed / 24 skipped; 26.45 seconds. TypeScript passed separately. Opt-in PostgreSQL scenarios were run separately as recorded above; skipped suites are not counted as accepted.
 
 Native Mac CLI proof is integrated from 5d7a645 plus correction e6465ab. Against the retained local Nitro Company B fixture: approved install into an isolated directory, frozen-lockfile repeat with changed=false, tree verification and reconstructed canonical artifact digest all passed. Retained metadata covered B only; no cross-company native CLI assertion is claimed. Market research/domain recheck d252f03 is also integrated; no brand or domain purchase decision has been made.
+
+### Existing token survival and worker recovery
+
+Integrated dff442f (0669c9e) and independently passed four PostgreSQL tests at root cc50c62. The regression issues a public-table token before composed migration, reruns migration, creates fresh infrastructure, and authenticates the same unchanged token without a custom-schema token table. B27 is closed for local implementation/regression; production migration remains unperformed.
+
+PR53 is merged at92d2f0b (GitHub mergedAt2026-09-15T15:21:07Z), verified by root. Integration merged origin/main successfully. Production deployment verification remains with foundation_release. Root found B29 by tracing hosted-worker.ts/runtime.ts: new companies get only best-effort two-job POST drains, while /internal/worker/run cron selects default tenant. Durable cross-company retry scheduling assigned to tenant_ui with Eve owner coordination.
