@@ -159,3 +159,7 @@ Root review held candidate c1fb2df seat recovery POST: company-admin supplied pr
 ### Rendered marketing default-indexing proof — 16 September
 
 Root served the built caca65c marketing app on loopback port 5488 and fetched all nine public routes. Every route returned HTTP 200, rendered noindex metadata and omitted canonical URLs when new SEO configuration was absent. robots.txt returned disallow-all and sitemap.xml contained no locations. This verifies safe defaults in rendered Nitro responses, not just helper output. The temporary server was gracefully stopped. Explicit public-mode checks were reported by the marketing owner; production indexing configuration remains to be applied and verified during release.
+
+### Worker scheduler component acceptance — 16 September, 01:56 AEST
+
+Root independently tested c759d6e as verification commit f64c7ea: all 11 dispatcher tests passed with disposable PostgreSQL enabled (2.72 seconds). Runtime 57a26e6 depends on the pending Eve tenant-review module; the attempted verification cherry-pick was skipped rather than inventing missing interfaces. Scheduler/runtime integration remains held for that dependency and the combined billing review. Release preparation was delegated from integration 7ab3cfc for the independently finished CLI, identity telemetry and SEO increment; no merge/deployment is yet claimed.
