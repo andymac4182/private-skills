@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.production-release-readonly-verification",
+  "observedAtUtc": "2026-09-15T16:23:39Z",
+  "source": {
+    "provider": "Vercel Git",
+    "repository": "andymac4182/private-skills",
+    "ref": "main",
+    "mainSha": "11b5e1d7888d28e65e37143fc7d3da940c37a318",
+    "pullRequest": 54,
+    "releaseHeadSha": "0fcc803d89aaece0184921e339d84dfbd1cfadd0",
+    "mergedAtUtc": "2026-09-15T16:10:36Z",
+    "trigger": "Git"
+  },
+  "localGates": {
+    "frozenInstall": {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed",
+      "testedSnapshot": "0fcc803d89aaece0184921e339d84dfbd1cfadd0"
+    },
+    "typecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed",
+      "testedSnapshot": "0fcc803d89aaece0184921e339d84dfbd1cfadd0"
+    },
+    "tests": {
+      "command": "CI=true pnpm test -- --reporter=dot",
+      "result": "passed",
+      "files": 162,
+      "passed": 1145,
+      "skipped": 27,
+      "testedSnapshot": "0fcc803d89aaece0184921e339d84dfbd1cfadd0"
+    },
+    "webBuild": {
+      "command": "CI=true pnpm --filter @private-skills/web build",
+      "result": "passed",
+      "testedSnapshot": "0fcc803d89aaece0184921e339d84dfbd1cfadd0"
+    },
+    "marketingBuild": {
+      "command": "APP_ORIGIN=https://app.example.test CI=true pnpm --filter @private-skills/marketing build",
+      "result": "passed",
+      "testedSnapshot": "0fcc803d89aaece0184921e339d84dfbd1cfadd0",
+      "qualification": "MARKETING_ORIGIN and MARKETING_INDEXING were omitted for the private noindex build; no deployment environment was changed by this local check."
+    }
+  },
+  "nativeCi": {
+    "workflowRun": "34992754676",
+    "status": "blocked_before_runner",
+    "annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased.",
+    "userWaiver": true,
+    "qualification": "Native CI was unavailable before runner execution and is recorded as waived; no native Linux or Windows CI pass is claimed."
+  },
+  "deployments": [
+    {
+      "service": "app",
+      "project": "private-skills",
+      "alias": "private-skills-theta.vercel.app",
+      "deploymentId": "dpl_DG8KaU5JXwhX4Fizpjz7YU5a5W8y",
+      "deploymentUrl": "https://private-skills-theta.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills/DG8KaU5JXwhX4Fizpjz7YU5a5W8y",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "11b5e1d7888d28e65e37143fc7d3da940c37a318",
+      "sourceRef": "main",
+      "githubCheckRun": 6463233135
+    },
+    {
+      "service": "upload-reviewer",
+      "project": "private-skills-upload-reviewer",
+      "alias": "private-skills-upload-reviewer.vercel.app",
+      "deploymentId": "dpl_9R5HmFr6KA1foXRpVakeWd46PM1w",
+      "deploymentUrl": "https://private-skills-upload-reviewer.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-upload-reviewer/9R5HmFr6KA1foXRpVakeWd46PM1w",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "11b5e1d7888d28e65e37143fc7d3da940c37a318",
+      "sourceRef": "main",
+      "githubCheckRun": 6463223979
+    },
+    {
+      "service": "builder",
+      "project": "private-skills-builder",
+      "alias": "private-skills-builder.vercel.app",
+      "deploymentId": "dpl_3FkW2kc1ZrGWDR3u2rHX2YxQfhbh",
+      "deploymentUrl": "https://private-skills-builder.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-builder/3FkW2kc1ZrGWDR3u2rHX2YxQfhbh",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "11b5e1d7888d28e65e37143fc7d3da940c37a318",
+      "sourceRef": "main",
+      "githubCheckRun": 6463217072
+    },
+    {
+      "service": "marketing",
+      "project": "private-skills-marketing",
+      "alias": "private-skills-marketing.vercel.app",
+      "deploymentId": "dpl_78XgsK9ByfKEnAerMXAi1coNUcsy",
+      "deploymentUrl": "https://private-skills-marketing.vercel.app",
+      "dashboardUrl": "https://vercel.com/andrewmcclenaghan-6046s-projects/private-skills-marketing/78XgsK9ByfKEnAerMXAi1coNUcsy",
+      "target": "production",
+      "state": "READY",
+      "sourceSha": "11b5e1d7888d28e65e37143fc7d3da940c37a318",
+      "sourceRef": "main",
+      "githubCheckRun": 6463210089
+    }
+  ],
+  "manifestConfiguration": {
+    "project": "private-skills",
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "environmentKey": "PSKILLS_CLI_RELEASE_MANIFEST",
+    "target": "production",
+    "type": "sensitive",
+    "valueRedacted": true,
+    "updatedAtUtc": "2026-09-15T16:10:06.107Z",
+    "manifestVersion": "0.4.0",
+    "releaseTag": "v0.4.0",
+    "releaseTagCommit": "84f712720dba74508d56f0bcb532393dad24324d",
+    "provisionEvidenceCommit": "23fec4cc3ff34385165287c2a29a901e016ec12b",
+    "assetCount": 3,
+    "totalAssetBytes": 8075189,
+    "manifestSha256": "sha256:046220c5adf1e4c56af1620e681a9309490ce51ae7cd665e5f50d9432b44965f",
+    "durableManifest": "hosted-cli-v0.4.0-private-manifest-20260916.json",
+    "storage": {
+      "provider": "Vercel Blob via Files SDK",
+      "storeId": "store_C0EMhnU7DH3uSMaw",
+      "region": "syd1",
+      "access": "private",
+      "objectKeys": "omitted from this evidence"
+    },
+    "configurationBoundary": "The manifest was applied only to the registry project's production environment; no other project, database, or identity setting was changed."
+  },
+  "registryChecks": {
+    "origin": "https://private-skills-theta.vercel.app",
+    "health": {
+      "path": "/health",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "service": "private-skills",
+        "version": "0.4.0"
+      }
+    },
+    "identityConfig": {
+      "path": "/auth/identity/config",
+      "status": 200,
+      "protocolVersion": 1,
+      "enabled": false,
+      "basePath": "/api/auth",
+      "providers": [],
+      "organizationEnabled": false,
+      "bootstrapEnabled": false,
+      "invitationMode": "copy-link",
+      "emailDelivery": "disabled",
+      "qualification": "Better Auth remains deliberately disabled in this production deployment; no hosted customer identity-provider acceptance is claimed."
+    },
+    "anonymousDownload": {
+      "path": "/v1/cli/releases/0.4.0/aarch64-apple-darwin/download",
+      "status": 401,
+      "location": null,
+      "cacheControl": "no-store",
+      "qualification": "Unauthenticated archive access is denied."
+    },
+    "authenticatedCatalog": {
+      "path": "/v1/cli/releases",
+      "status": 200,
+      "version": "0.4.0",
+      "assetCount": 3,
+      "allAssetsReady": true,
+      "storageKeysReturned": false,
+      "cacheControl": "no-store",
+      "redirect": "none"
+    },
+    "authenticatedDownloads": [
+      {
+        "target": "aarch64-apple-darwin",
+        "status": 200,
+        "bytes": 2673030,
+        "manifestBytes": 2673030,
+        "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "manifestDigest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "contentLength": "2673030",
+        "digestHeader": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "cacheControl": "no-store",
+        "redirect": "none",
+        "byteMatch": true,
+        "digestMatch": true
+      },
+      {
+        "target": "x86_64-unknown-linux-gnu",
+        "status": 200,
+        "bytes": 2922162,
+        "manifestBytes": 2922162,
+        "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "manifestDigest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "contentLength": "2922162",
+        "digestHeader": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "cacheControl": "no-store",
+        "redirect": "none",
+        "byteMatch": true,
+        "digestMatch": true
+      },
+      {
+        "target": "x86_64-pc-windows-msvc",
+        "status": 200,
+        "bytes": 2479997,
+        "manifestBytes": 2479997,
+        "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "manifestDigest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "contentLength": "2479997",
+        "digestHeader": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "cacheControl": "no-store",
+        "redirect": "none",
+        "byteMatch": true,
+        "digestMatch": true
+      }
+    ],
+    "credentialHandling": {
+      "authentication": "The bootstrap bearer credential was transmitted only to the authorized registry origin for these authenticated checks.",
+      "rawTokenIncluded": false,
+      "credentialPathIncluded": false
+    }
+  },
+  "marketingChecks": {
+    "origin": "https://private-skills-marketing.vercel.app",
+    "anonymousRoutes": {
+      "/": 200,
+      "/product": 200,
+      "/demo": 200,
+      "/pricing": 200,
+      "/docs": 200,
+      "/docs/getting-started": 200,
+      "/faq": 200,
+      "/contact": 200,
+      "/legal": 200
+    },
+    "allNineRoutesReturned": 200,
+    "renderedMetadata": "All nine pages were noindex/no-follow with no canonical URL in the private production check.",
+    "robots": {
+      "path": "/robots.txt",
+      "status": 200,
+      "body": "User-agent: *\nDisallow: /"
+    },
+    "sitemap": {
+      "path": "/sitemap.xml",
+      "status": 200,
+      "locCount": 0
+    }
+  },
+  "qualifications": {
+    "releaseType": "incremental production verification",
+    "browser": "Authenticated browser sign-in, platform chooser, and archive install have not been verified on the hosted deployment; this record proves the HTTP authorization and exact-byte route only.",
+    "nativeMac": "The aarch64-apple-darwin v0.4.0 archive passed the local Mac arm64 smoke check.",
+    "nativeLinuxWindows": "Linux and Windows archive members and checksums are verified, but native execution and native CI remain unverified; no native Linux or Windows pass is claimed.",
+    "identity": "Production identity configuration is intentionally disabled with no providers or organization/bootstrap runtime enabled.",
+    "fullLaunch": false,
+    "businessLaunch": false
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "credentialPathsIncluded": false,
+    "rawTokensIncluded": false,
+    "storageKeysIncluded": false,
+    "privateReleaseUrlsIncluded": false,
+    "archiveBytesIncluded": false
+  }
+}

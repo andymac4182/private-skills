@@ -6,6 +6,8 @@
 
 **Purpose:** internal working research for the launch decision. This note separates what a competitor says about its own product, what this repository currently demonstrates, and what remains a positioning hypothesis. It contains no customer, revenue, market-size, or traction claim.
 
+See the concise [market and launch decision brief](market-decision-brief.md) for the ranked positioning hypothesis, initial buyer and offer, launch-week tests, and current brand/domain screen.
+
 ## Reading guide
 
 | Label | Meaning |

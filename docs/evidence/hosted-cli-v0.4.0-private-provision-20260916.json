@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.hosted-cli-release-files-sdk-provision",
+  "observedAt": "2026-09-15T16:04:24.286Z",
+  "source": {
+    "commit": "1b2671a294637ba928f6b0e6062c1e6853ca1259",
+    "releaseTag": "v0.4.0",
+    "tagCommit": "84f712720dba74508d56f0bcb532393dad24324d",
+    "localVerifiedAssetDirectory": "/private/tmp/private-skills-cli-release-v04-download"
+  },
+  "hostedStore": {
+    "platform": "Vercel Blob",
+    "storeId": "store_C0EMhnU7DH3uSMaw",
+    "region": "syd1",
+    "access": "private",
+    "adapter": "files-sdk/vercel-blob",
+    "filesSdkVersion": "2.4.0",
+    "prefix": null,
+    "tokenReference": "BLOB_READ_WRITE_TOKEN (targeted linked production env reference; value omitted)",
+    "credentialMode": "read-write token supplied in-process by vercel env run; no env file or value export"
+  },
+  "linkedProjectMetadata": {
+    "name": "private-skills",
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "teamId": "team_74K7woAfF1e48ypNcBTJ8NSC",
+    "rootDirectory": ".",
+    "blobStoreName": "private-skills-artifacts",
+    "blobStoreStatus": "active",
+    "blobStoreProjects": ["private-skills"]
+  },
+  "credentialDiscovery": {
+    "targetedEnvironment": "production",
+    "targetedReference": "BLOB_READ_WRITE_TOKEN",
+    "targetedReferencePresent": true,
+    "targetedReferenceUsedInProcess": true,
+    "storageProviderConfig": "PSKILLS_STORAGE_PROVIDER was empty in the linked environment; the selected existing private Vercel Blob store was used explicitly for this provision.",
+    "storageBuildProfileConfig": "PSKILLS_STORAGE_BUILD_PROFILE was empty",
+    "storagePrefixConfig": "PSKILLS_STORAGE_PREFIX was absent; empty prefix preserved",
+    "oidcProbe": "VERCEL_OIDC_TOKEN plus the selected store id was rejected by the provider; no OIDC upload was attempted",
+    "fullEnvironmentExported": false,
+    "environmentFileWritten": false
+  },
+  "manifest": {
+    "path": "/private/tmp/private-skills-cli-v04-hosted-manifest-1b2671a.json",
+    "environmentKey": "PSKILLS_CLI_RELEASE_MANIFEST",
+    "parse": "passed",
+    "storageKeysRecorded": true,
+    "readyForReleaseAgent": true,
+    "durableCopy": "docs/evidence/hosted-cli-v0.4.0-private-manifest-20260916.json"
+  },
+  "assets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "filename": "pskills-aarch64-apple-darwin.tar.gz",
+      "storedBlob": {
+        "key": "sealed/e6a6e8c5502f3970ef9a438b971e314fd8fe0affbb8da188",
+        "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+        "size": 2673030
+      },
+      "access": "private",
+      "exactByteGetVerified": true,
+      "exactByteCliProviderReadback": true
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "filename": "pskills-x86_64-unknown-linux-gnu.tar.gz",
+      "storedBlob": {
+        "key": "sealed/f0eca3d726db404d88eecbe4a6f57d139258b2c71b7f992d",
+        "digest": "sha256:4c78a26eeb7025dd7293e9e219560624726be359f16f155ac469f38a16ae4bd9",
+        "size": 2922162
+      },
+      "access": "private",
+      "exactByteGetVerified": true,
+      "exactByteCliProviderReadback": true
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "filename": "pskills-x86_64-pc-windows-msvc.zip",
+      "storedBlob": {
+        "key": "sealed/bf57a095b6ad5abd91d141a7fda7051a99f2c616924f68c6",
+        "digest": "sha256:7212c5d05337286bb3b092a96897d6c6ed626120bde58b42de3ac8e248257d4b",
+        "size": 2479997
+      },
+      "access": "private",
+      "exactByteGetVerified": true,
+      "exactByteCliProviderReadback": true
+    }
+  ],
+  "result": {
+    "assetsProvisioned": 3,
+    "objectAllocation": "fresh random sealed key per BlobStore.put; no overwrite",
+    "privateStoreReadback": "exact-byte-and-digest for all three assets",
+    "cliProviderReadback": "exact-byte-and-digest for all three assets"
+  },
+  "postProvisionInventory": {
+    "adapter": "files-sdk/vercel-blob",
+    "prefix": "sealed",
+    "itemCount": 14,
+    "hasMore": false,
+    "expectedKeysPresent": 3,
+    "expectedSizeSum": 8075189
+  },
+  "deployment": {
+    "manifestEnvMutation": "not-run",
+    "deployment": "not-run",
+    "reason": "Manifest is prepared for the release agent; code and production environment were not changed by this scoped storage provision."
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "privateReleaseUrlsIncluded": false,
+    "publicBlobUrlsIncluded": false,
+    "assetBytesIncluded": false,
+    "fullEnvironmentExported": false
+  },
+  "boundary": [
+    "Production Vercel Blob private store only; no public blob access was configured.",
+    "The manifest was prepared locally for the release agent and was not written to Vercel project env or deployed by this command.",
+    "Better Auth and unrelated production configuration were not changed."
+  ]
+}

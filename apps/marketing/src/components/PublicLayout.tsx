@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { appLoginHref } from '../lib/appHref'
 import { brand } from '../lib/brand'
@@ -17,24 +17,58 @@ export function PublicLogo({ compact = false }: { compact?: boolean }) {
 }
 
 export function PublicLayout({ children, current }: PublicLayoutProps) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuToggleRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [current])
+
+  useEffect(() => {
+    if (!menuOpen) return
+
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      setMenuOpen(false)
+      menuToggleRef.current?.focus()
+    }
+
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [menuOpen])
+
+  const closeMenu = () => setMenuOpen(false)
+
   return <div className="marketing-shell">
     <a className="marketing-skip-link" href="#main-content">Skip to content</a>
     <header className="marketing-header">
       <a className="marketing-brand-link" href="/" aria-label={`${brand.name} home`}><PublicLogo /></a>
-      <nav className="marketing-nav" aria-label="Public navigation">
-        <a aria-current={current === 'product' ? 'page' : undefined} className={current === 'product' ? 'marketing-nav-active' : ''} href="/product">Product</a>
-        <a href="/product#how-it-works">How it works</a>
-        <a aria-current={current === 'demo' ? 'page' : undefined} className={current === 'demo' ? 'marketing-nav-active' : ''} href="/demo">Demo</a>
-        <a aria-current={current === 'pricing' ? 'page' : undefined} className={current === 'pricing' ? 'marketing-nav-active' : ''} href="/pricing">Pricing</a>
-        <a aria-current={current === 'docs' ? 'page' : undefined} className={current === 'docs' ? 'marketing-nav-active' : ''} href="/docs">Docs</a>
-        <a aria-current={current === 'faq' ? 'page' : undefined} className={current === 'faq' ? 'marketing-nav-active' : ''} href="/faq">FAQ</a>
-        <a aria-current={current === 'contact' ? 'page' : undefined} className={current === 'contact' ? 'marketing-nav-active' : ''} href="/contact">Contact</a>
+      <button
+        aria-controls="marketing-mobile-nav"
+        aria-expanded={menuOpen}
+        aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        className="marketing-menu-toggle"
+        onClick={() => setMenuOpen(open => !open)}
+        ref={menuToggleRef}
+        type="button"
+      >
+        <span aria-hidden="true" className={menuOpen ? 'marketing-menu-icon marketing-menu-icon-close' : 'marketing-menu-icon'}><i /><i /><i /></span>
+        <span className="marketing-menu-label">{menuOpen ? 'Close' : 'Menu'}</span>
+      </button>
+      <nav className={menuOpen ? 'marketing-nav marketing-nav-open' : 'marketing-nav'} id="marketing-mobile-nav" aria-label="Public navigation">
+        <a aria-current={current === 'product' ? 'page' : undefined} className={current === 'product' ? 'marketing-nav-active' : ''} href="/product" onClick={closeMenu}>Product</a>
+        <a href="/product#how-it-works" onClick={closeMenu}>How it works</a>
+        <a aria-current={current === 'demo' ? 'page' : undefined} className={current === 'demo' ? 'marketing-nav-active' : ''} href="/demo" onClick={closeMenu}>Demo</a>
+        <a aria-current={current === 'pricing' ? 'page' : undefined} className={current === 'pricing' ? 'marketing-nav-active' : ''} href="/pricing" onClick={closeMenu}>Pricing</a>
+        <a aria-current={current === 'docs' ? 'page' : undefined} className={current === 'docs' ? 'marketing-nav-active' : ''} href="/docs" onClick={closeMenu}>Docs</a>
+        <a aria-current={current === 'faq' ? 'page' : undefined} className={current === 'faq' ? 'marketing-nav-active' : ''} href="/faq" onClick={closeMenu}>FAQ</a>
+        <a aria-current={current === 'contact' ? 'page' : undefined} className={current === 'contact' ? 'marketing-nav-active' : ''} href="/contact" onClick={closeMenu}>Contact</a>
       </nav>
       <div className="marketing-header-actions">
-        <a className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}>Open app sign-in <span aria-hidden="true">↗</span></a>
+        <a aria-label="Open app sign-in" className="marketing-button marketing-button-primary marketing-button-small" href={appLoginHref()}><span className="marketing-header-action-full">Open app sign-in</span><span className="marketing-header-action-compact">Sign in</span> <span aria-hidden="true">↗</span></a>
       </div>
     </header>
-    <main id="main-content">{children}</main>
+    <main id="main-content" tabIndex={-1}>{children}</main>
     <MarketingFooter />
   </div>
 }

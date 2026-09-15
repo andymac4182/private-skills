@@ -1,0 +1,22 @@
+{
+  "scope": "local-postgresql-deterministic-worker",
+  "sourceCommit": "e0613617c40e93416ff93a351e625a3d74724cb3",
+  "catalogEntries": 100,
+  "jobsPerCompany": 2,
+  "dispatchInvocations": 5,
+  "workerInvocations": 201,
+  "totalClaims": 200,
+  "duplicateClaims": 0,
+  "forcedTransientFailures": 1,
+  "recoveredTransientFailures": 1,
+  "completedJobs": 200,
+  "firstTraversal": [
+    32,
+    32,
+    32,
+    4
+  ],
+  "dispatchDurationMs": 5152.97,
+  "totalDurationMs": 6129.13,
+  "boundary": "Root executed against disposable loopback PostgreSQL with deterministic workers. This does not measure real scanner latency, hosted capacity or AI costs."
+}
