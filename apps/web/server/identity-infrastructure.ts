@@ -3,6 +3,8 @@ import {
   normalizeIdentityRole,
   type IdentityEnvironment,
   type IdentityRuntimeAdmin,
+  PostgresIdentityOperationsEventStore,
+  type IdentityOperationsEventSink,
 } from '../../../packages/identity/src/index.js';
 import {
   createCompanySsoBetterAuthBridge,
@@ -40,13 +42,18 @@ export interface IdentityInfrastructureOptions {
   apiTokenAutoMigrate?: boolean;
   companySsoTableName?: string;
   companySsoAutoMigrate?: boolean;
+  operationsEventsTableName?: string;
+  operationsEventsAutoMigrate?: boolean;
+  operationsEventsRetentionDays?: number;
+  operationsEventsCleanupBatchSize?: number;
 }
 
 export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
-  /** Resolves only after opted-in identity, company SSO, and API-token migrations finish. */
+  operationsEvents: IdentityOperationsEventSink | null;
+  /** Resolves only after opted-in identity, company SSO, API-token, and operations-event migrations finish. */
   ready: Promise<void>;
   /** Runs all reviewed identity and API-token migrations explicitly for a controlled deployment job. */
   runMigrations: () => Promise<void>;
@@ -163,7 +170,7 @@ export function createIdentityInfrastructure(
 ): IdentityInfrastructure {
   if (!options.postgresPool) {
     const identity = createIdentityRuntimeFromEnv(env);
-    if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
+    if (!identity) return { identity: null, apiTokens: null, companySso: null, operationsEvents: null, ready: Promise.resolve(), runMigrations: async () => undefined };
     throw new Error('Better Auth API tokens require a shared PostgreSQL pool');
   }
 
@@ -179,11 +186,13 @@ export function createIdentityInfrastructure(
     ...(identitySchemaName === undefined ? {} : { schemaName: identitySchemaName }),
     autoMigrate: companySsoAutoMigrate,
   });
+  let operationsEvents: IdentityOperationsEventSink | undefined;
   const identity = createIdentityRuntimeFromEnv(env, {
     plugins: [createCompanySsoPlugin({ repository: companySsoRepository })],
     trustedOrigins: (request) => companySsoTrustedOrigins(request, companySsoRepository),
+    onOperationalFailure: (failure) => operationsEvents?.recordGlobal(failure),
   });
-  if (!identity) return { identity: null, apiTokens: null, companySso: null, ready: Promise.resolve(), runMigrations: async () => undefined };
+  if (!identity) return { identity: null, apiTokens: null, companySso: null, operationsEvents: null, ready: Promise.resolve(), runMigrations: async () => undefined };
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
@@ -192,6 +201,35 @@ export function createIdentityInfrastructure(
     env.PSKILLS_API_TOKEN_AUTO_MIGRATE ?? env.API_TOKEN_AUTO_MIGRATE,
     false,
   );
+  const configuredOperationsEventsTable = operationsEventsTableName(env, options);
+  const operationsEventsStore = new PostgresIdentityOperationsEventStore({
+    pool: options.postgresPool,
+    ...(configuredOperationsEventsTable === undefined ? {} : { tableName: configuredOperationsEventsTable }),
+    ...(identitySchemaName === undefined ? {} : { schemaName: identitySchemaName }),
+    retentionDays: options.operationsEventsRetentionDays ?? parseBoundedInteger(
+      env.PSKILLS_IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS ?? env.IDENTITY_OPERATIONS_EVENTS_RETENTION_DAYS,
+      30,
+      1,
+      365,
+      'identity operations retention days',
+    ),
+    cleanupBatchSize: options.operationsEventsCleanupBatchSize ?? parseBoundedInteger(
+      env.PSKILLS_IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE ?? env.IDENTITY_OPERATIONS_EVENTS_CLEANUP_BATCH_SIZE,
+      1_000,
+      1,
+      10_000,
+      'identity operations cleanup batch size',
+    ),
+    verifyTenant: async (organizationId, userId) => {
+      const membership = await membershipAuthorizer.getMembership(organizationId, userId);
+      if (!membership || typeof membership.role !== 'string') return null;
+      const role = membership.role;
+      return role === 'owner' || role === 'admin' || role === 'publisher' || role === 'reader'
+        ? { organizationId, userId, role }
+        : null;
+    },
+  });
+  operationsEvents = operationsEventsStore;
   const repository = createPostgresApiTokenRepository(options.postgresPool, {
     ...(options.apiTokenTableName === undefined ? {} : { tableName: options.apiTokenTableName }),
     ...(configuredApiTokenSchema === undefined ? {} : { schemaName: configuredApiTokenSchema }),
@@ -222,13 +260,26 @@ export function createIdentityInfrastructure(
     await identity.runMigrations();
     await companySsoRepository.runMigrations();
     await repository.runMigrations();
+    await operationsEventsStore.runMigrations();
+    await operationsEventsStore.cleanup();
   };
   const ready = identity.ready.then(async () => {
     if (companySsoAutoMigrate) await companySsoRepository.runMigrations();
     if (apiTokenAutoMigrate) await repository.runMigrations();
+    if (operationsEventsAutoMigrate(options, env)) {
+      await operationsEventsStore.runMigrations();
+      await operationsEventsStore.cleanup();
+    }
   });
   void ready.catch(() => undefined);
-  return { identity, apiTokens, companySso, ready, runMigrations };
+  return { identity, apiTokens, companySso, operationsEvents: operationsEventsStore, ready, runMigrations };
+}
+
+function operationsEventsAutoMigrate(options: IdentityInfrastructureOptions, env: IdentityEnvironment): boolean {
+  return options.operationsEventsAutoMigrate ?? parseBoolean(
+    env.PSKILLS_IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE ?? env.IDENTITY_OPERATIONS_EVENTS_AUTO_MIGRATE,
+    false,
+  );
 }
 
 function createCompanySsoAuthorizer(identity: IdentityRuntimeAdmin): CompanySsoAuthorizer {
@@ -270,6 +321,17 @@ function apiTokenSchemaName(
   const value = options.apiTokenSchemaName
     ?? env.PSKILLS_API_TOKEN_SCHEMA
     ?? env.API_TOKEN_SCHEMA;
+  const normalized = value?.trim();
+  return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+function operationsEventsTableName(
+  env: IdentityEnvironment,
+  options: IdentityInfrastructureOptions,
+): string | undefined {
+  const value = options.operationsEventsTableName
+    ?? env.PSKILLS_IDENTITY_OPERATIONS_EVENTS_TABLE_NAME
+    ?? env.IDENTITY_OPERATIONS_EVENTS_TABLE_NAME;
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
 }
@@ -352,5 +414,19 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   const normalized = value.trim().toLowerCase();
   if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
   if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
-  throw new Error('API token auto-migration setting is invalid');
+  throw new Error('Identity infrastructure boolean setting is invalid');
+}
+
+function parseBoundedInteger(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  field: string,
+): number {
+  if (value === undefined || value.trim() === '') return fallback;
+  if (!/^\d+$/u.test(value.trim())) throw new Error(`${field} must be an integer between ${minimum} and ${maximum}`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error(`${field} must be an integer between ${minimum} and ${maximum}`);
+  return parsed;
 }

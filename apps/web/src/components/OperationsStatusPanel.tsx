@@ -38,6 +38,31 @@ function billingLabel(status: OperationsStatusResponse['billing']): string {
   return 'Unavailable'
 }
 
+function authFailureCount(status: OperationsStatusResponse['auth']): number {
+  return (status.authenticationFailures?.last24h ?? 0)
+    + (status.callbackFailures?.last24h ?? 0)
+    + (status.membershipDenials?.last24h ?? 0)
+}
+
+function authBadgeState(status: OperationsStatusResponse['auth']): string {
+  if (status.state === 'unavailable') return 'unavailable'
+  return authFailureCount(status) > 0 ? 'attention' : 'current'
+}
+
+function authHistoryValue(status: OperationsStatusResponse['auth']): string {
+  if (status.state === 'unavailable') return 'Unavailable'
+  const failures = authFailureCount(status)
+  return failures === 0 ? 'No recent failures' : `${failures} recent failures`
+}
+
+function authHistoryNote(status: OperationsStatusResponse['auth']): string {
+  if (status.state === 'unavailable') return 'Identity failure history is temporarily unavailable.'
+  const signIn = status.authenticationFailures?.last24h ?? 0
+  const callback = status.callbackFailures?.last24h ?? 0
+  const membership = status.membershipDenials?.last24h ?? 0
+  return `${signIn} sign-in · ${callback} callback · ${membership} membership denials in the last 24 hours`
+}
+
 function StatusCard({ label, value, state, note }: { label: string; value: string; state: string; note: string }) {
   return <Panel className="stat operations-status-card">
     <span className="stat-label">{label}</span>
@@ -86,13 +111,13 @@ export function OperationsStatusPanel() {
     ? `${billing.usage.seats} seats · ${billing.usage.scans} scans this period`
     : billing.state === 'unavailable' ? 'Billing is temporarily unavailable.' : 'Billing failure history is not available yet.'
 
-  return <Panel title="Company operations status" description="Queue, scans, reviews and usage for this company. Some failure history is not available yet." action={<Button kind="quiet" onClick={() => void reload()}>Refresh</Button>}>
+  return <Panel title="Company operations status" description="Queue, scans, reviews, usage, and identity access events for this company." action={<Button kind="quiet" onClick={() => void reload()}>Refresh</Button>}>
     <div className="grid-4 operations-status-grid" aria-label="Company operations status">
       <StatusCard label="Queue" value={`${active} active`} state={queue.state} note={`${queue.queued} queued · ${queue.running} running · ${queue.failed} failed · ${activeAge(queue.oldestActiveAgeSeconds)}`} />
       <StatusCard label="Scan freshness" value={scans.state === 'empty' ? 'No releases' : `${scans.skills.current}/${scans.skills.total} current`} state={scans.state} note={`${scanAttention} needing attention · ${scans.enabledScannerCount} enabled scanner${scans.enabledScannerCount === 1 ? '' : 's'}`} />
       <StatusCard label="Eve reviews" value={eve.state === 'unavailable' ? 'Unavailable' : eve.state === 'empty' ? 'No runs' : `${eveAttention} attention`} state={eve.state} note={`${eveTotal} retained run${eveTotal === 1 ? '' : 's'} · ${eve.uploadReviews.pending + eve.uploadReviews.running} upload reviews active`} />
       <StatusCard label="Billing" value={billingLabel(billing)} state={billing.state} note={billingNote} />
-      <StatusCard label="Sign-in and callback history" value="Not available" state={status.auth.state} note="Sign-in and callback history is not available yet." />
+      <StatusCard label="Sign-in and access history" value={authHistoryValue(status.auth)} state={authBadgeState(status.auth)} note={authHistoryNote(status.auth)} />
     </div>
     {queue.oldestActiveAt && <p className="muted operations-status-footnote">Oldest active work started {formatDate(queue.oldestActiveAt)}. Latest completed scan: {formatDate(scans.latestCompletedAt)}.</p>}
   </Panel>

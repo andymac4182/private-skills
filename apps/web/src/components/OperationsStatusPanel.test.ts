@@ -36,6 +36,7 @@ const status: OperationsStatusResponse = {
     state: 'unavailable',
     authenticationFailures: null,
     callbackFailures: null,
+    membershipDenials: null,
     reason: 'No auth history',
   },
   billing: {
@@ -102,8 +103,8 @@ describe('OperationsStatusPanel', () => {
     expect(container.textContent).toContain('Company operations status')
     expect(container.textContent).toContain('1 active')
     expect(container.textContent).toContain('1/2 current')
-    expect(container.textContent).toContain('Sign-in and callback history')
-    expect(container.textContent).toContain('Not available')
+    expect(container.textContent).toContain('Sign-in and access history')
+    expect(container.textContent).toContain('Unavailable')
     expect(container.textContent).not.toContain('No auth history')
   })
 
@@ -116,5 +117,24 @@ describe('OperationsStatusPanel', () => {
 
     expect(harness.operationsStatus).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Owner or admin access is required')
+  })
+
+  it('shows bounded identity counters with a clear last-day window', async () => {
+    harness.operationsStatus.mockResolvedValueOnce({
+      ...status,
+      auth: {
+        state: 'available',
+        authenticationFailures: { total: 4, last24h: 2 },
+        callbackFailures: { total: 1, last24h: 1 },
+        membershipDenials: { total: 3, last24h: 0 },
+      },
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => { root!.render(createElement(OperationsStatusPanel)); await flushEffects() })
+
+    expect(container.textContent).toContain('3 recent failures')
+    expect(container.textContent).toContain('2 sign-in · 1 callback · 0 membership denials in the last 24 hours')
   })
 })
