@@ -199,3 +199,7 @@ Root applied recovery testf3ab981 asd4f8640 atop coherent8cff18f and ran the rea
 ### Combined runtime full regression — 16 September, 02:18 AEST
 
 Root full Vitest run on verification d4f8640 passed168files/1,197tests, with17files/36tests skipped, in23.54seconds. Opt-in PostgreSQL tests were separately activated in the22-test ledger/Eve/worker checkpoint and expandedrestore proof. The snapshot still excludes pending atomic caller ownership, operatorrecovery and deploymentbudget fixes; fullregressionpassing doesnotremove those releaseholds. Release owner reported production11b5e1d authenticatedCLIcatalog/allthreeexactarchive downloads passed, anonymousdownload401; durable production record is beingprepared.
+
+### Function duration source refresh — 16 September
+
+Root opened [Vercel’s 15 June 2026 duration announcement](https://vercel.com/changelog/vercel-functions-can-now-run-up-to-30-minutes): Node/Python on Pro/Enterprise can opt into up to1,800seconds, while durations above800seconds are beta and require Fluid compute. Older search snippets still show800as the maximum. Budget owner was notified to use live primarydocs and distinguish a conservative launch setting from platform maximum. The product still needs explicit emitted duration plus bounded runtime work and response headroom; increased platform capability does not resolve missing deployment configuration by itself.
