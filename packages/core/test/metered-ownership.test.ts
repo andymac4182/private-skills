@@ -13,6 +13,7 @@ import type {
   BillingUsageAdmission,
   Job,
   MeteredUsageDelta,
+  MeteredUsageReservation,
   RegistryState,
   StateRepository,
 } from '../../contracts/src/index.js';
@@ -109,7 +110,7 @@ class RecordingBilling implements BillingUsageAdmission {
     return { enabled: true };
   }
 
-  async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, key: string): Promise<unknown> {
+  async reserveUsage(_organizationId: string, _delta: MeteredUsageDelta, key: string): Promise<MeteredUsageReservation> {
     const idempotent = this.reservations.has(key);
     this.reservations.add(key);
     return { idempotent, reservationGeneration: 7 };

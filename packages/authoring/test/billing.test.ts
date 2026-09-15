@@ -13,6 +13,7 @@ import type {
   BillingUsageAdmission,
   BlobStore,
   MeteredUsageDelta,
+  MeteredUsageReservation,
   Principal,
   RegistryState,
   StateRepository,
@@ -107,7 +108,7 @@ class RecordingGenerationBilling implements BillingUsageAdmission {
     return { enabled: this.inner.status().enabled };
   }
 
-  reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<unknown> {
+  reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation> {
     return this.inner.reserveUsage(organizationId, delta, operationKey);
   }
 

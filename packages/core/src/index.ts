@@ -6505,6 +6505,18 @@ async function completeJob(
   if (requestedScanInvocationStarted !== undefined && typeof requestedScanInvocationStarted !== 'boolean') {
     throw new RegistryApiError('INVALID_JOB_RESULT', 'scanInvocationStarted must be a boolean', 400);
   }
+  const requestedMeteredReservationGeneration = body.meteredReservationGeneration;
+  if (requestedMeteredReservationGeneration !== undefined && !isMeteredReservationGeneration(requestedMeteredReservationGeneration)) {
+    throw new RegistryApiError('INVALID_JOB_RESULT', 'meteredReservationGeneration must be a positive safe integer', 400);
+  }
+  const meteredReservationGeneration = requestedMeteredReservationGeneration as number | undefined;
+  if (
+    meteredReservationGeneration !== undefined &&
+    job.meteredReservationGeneration !== undefined &&
+    job.meteredReservationGeneration !== meteredReservationGeneration
+  ) {
+    throw new RegistryApiError('INVALID_JOB_RESULT', 'meteredReservationGeneration does not match the queued job', 409);
+  }
   const scanInvocationStarted = typeof requestedScanInvocationStarted === 'boolean'
     ? requestedScanInvocationStarted
     : undefined;
@@ -6621,6 +6633,16 @@ async function completeJob(
       appendAudit(mutable, audit(principal, 'job.requeue.policy-changed', id, { requestId }, config.organizationId));
       return currentJob;
     }
+    if (
+      meteredReservationGeneration !== undefined &&
+      currentJob.meteredReservationGeneration !== undefined &&
+      currentJob.meteredReservationGeneration !== meteredReservationGeneration
+    ) {
+      throw new RegistryApiError('LEASE_FENCED', 'The metered reservation lifecycle is no longer current', 409);
+    }
+    if (meteredReservationGeneration !== undefined) {
+      currentJob.meteredReservationGeneration = meteredReservationGeneration;
+    }
     if (currentJob.kind === 'import' && !body.error) {
       validateOpenClawJobFeed(currentJob, Date.now());
     }
@@ -6628,7 +6650,7 @@ async function completeJob(
       currentJob.state = 'failed';
       currentJob.error = redactJobError(body.error);
       currentJob.updatedAt = nowIso();
-      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
+      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0, meteredReservationGeneration);
       if (currentJob.resourceId) {
         const skill = mutable.skills.find((candidate) => candidate.id === currentJob.resourceId);
         if (skill && skill.state !== 'revoked') skill.state = 'scan-error';
@@ -6653,7 +6675,7 @@ async function completeJob(
       currentJob.updatedAt = nowIso();
       currentJob.leaseToken = undefined;
       currentJob.leaseExpiresAt = undefined;
-      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
+      recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0, meteredReservationGeneration);
       if (evaluation.error) currentJob.error = evaluation.error;
       appendAudit(mutable, audit(principal, `job.complete.${evaluation.state}`, id, {
         resourceId: skill.id,
@@ -6695,7 +6717,7 @@ async function completeJob(
     currentJob.updatedAt = nowIso();
     currentJob.leaseToken = undefined;
     currentJob.leaseExpiresAt = undefined;
-    recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0);
+    recordMeteredScanSettlement(currentJob, scanInvocationStarted, scanResults.length > 0, meteredReservationGeneration);
     if (evaluation.error) currentJob.error = evaluation.error;
     appendAudit(mutable, audit(principal, `job.complete.${evaluation.state}`, id, {
       resourceId: skill.id,
@@ -7791,6 +7813,10 @@ function isMeteredReservationKey(value: unknown): value is string {
   return typeof value === 'string' && /^private-skills:scan:[^\s]{1,512}$/u.test(value);
 }
 
+function isMeteredReservationGeneration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
 async function reserveMeteredUsage(
   deps: RegistryDependencies,
   organizationId: string,
@@ -7865,9 +7891,11 @@ function recordMeteredScanSettlement(
   job: Job,
   scanInvocationStarted: boolean | undefined,
   hasScanEvidence: boolean,
+  reservationGeneration?: number,
 ): void {
   if (!job.meteredReservationKey || scanInvocationStarted === undefined) return;
   if (job.meteredScanSettlement === 'released') return;
+  if (reservationGeneration !== undefined) job.meteredReservationGeneration = reservationGeneration;
   if (scanInvocationStarted || hasScanEvidence || job.attempts > 1) {
     job.meteredScanSettlement = 'executed';
     return;
@@ -7887,7 +7915,11 @@ async function releaseMeteredUsage(
   const actual = releaseDelta(delta);
   if (Object.keys(actual).length === 0) return true;
   try {
-    await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey, reservationGeneration);
+    if (reservationGeneration === undefined) {
+      await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+    } else {
+      await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey, reservationGeneration);
+    }
     return true;
   } catch {
     // The caller's durable transaction error is more useful than a cleanup
@@ -7923,7 +7955,8 @@ async function settleUnusedMeteredScanReservation(
     !job ||
     (job.state !== 'completed' && job.state !== 'failed') ||
     job.meteredScanSettlement !== 'unused' ||
-    !isMeteredReservationKey(reservationKey)
+    !isMeteredReservationKey(reservationKey) ||
+    !isMeteredReservationGeneration(job.meteredReservationGeneration)
   ) return false;
 
   await releaseMeteredUsageIfUnowned(
@@ -7945,7 +7978,8 @@ async function settleUnusedMeteredScanReservation(
         !currentJob ||
         (currentJob.state !== 'completed' && currentJob.state !== 'failed') ||
         currentJob.meteredReservationKey !== reservationKey ||
-        currentJob.meteredScanSettlement !== 'unused'
+        currentJob.meteredScanSettlement !== 'unused' ||
+        currentJob.meteredReservationGeneration !== job.meteredReservationGeneration
       ) return false;
       const newerActiveJob = mutable.jobs.find((candidate) =>
         candidate.organizationId === config.organizationId &&
@@ -7956,11 +7990,11 @@ async function settleUnusedMeteredScanReservation(
       if (newerActiveJob) return false;
       const owner = findMeteredReservationOwner(mutable, reservationKey);
       if (
-        job.meteredReservationGeneration !== undefined &&
-        owner &&
+        !owner ||
+        owner.state !== 'released' ||
+        owner.jobId !== job.id ||
         (owner.reservationGeneration ?? 1) !== job.meteredReservationGeneration
       ) return false;
-      if (!owner || owner.state !== 'released' || owner.jobId !== job.id) return false;
       currentJob.meteredScanSettlement = 'released';
       currentJob.updatedAt = nowIso();
       return true;
@@ -8011,6 +8045,16 @@ export async function releaseMeteredUsageIfUnowned(
         // active replacement owns the reservation generation and must fence
         // that caller before it reaches billing.
         const existingOwner = findMeteredReservationOwner(mutable, reservationKey);
+        const activeGenerationMismatch = expectedReservationGeneration !== undefined &&
+          (active.meteredReservationGeneration ?? 1) !== expectedReservationGeneration;
+        const ownerGenerationMismatch = expectedReservationGeneration !== undefined &&
+          existingOwner !== undefined &&
+          (existingOwner.reservationGeneration ?? 1) !== expectedReservationGeneration;
+        if (activeGenerationMismatch || ownerGenerationMismatch) {
+          // An active job or owner already carries a different lifecycle. Do
+          // not overwrite that identity while handling a stale callback.
+          return { kind: 'keep' as const };
+        }
         if (existingOwner?.state === 'releasing') return { kind: 'busy' as const };
         const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned', active.id, expectedReservationGeneration);
         owner.jobId = active.id;

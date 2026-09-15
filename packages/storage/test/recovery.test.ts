@@ -5,6 +5,7 @@ import type {
   BlobStore,
   Digest,
   MeteredUsageDelta,
+  MeteredUsageReservation,
   RecoverableBlobStore,
   RegistryState,
   StorageAttempt,
@@ -88,8 +89,8 @@ class RecordingBilling implements BillingUsageAdmission {
     return { enabled: this.enabled };
   }
 
-  async reserveUsage(): Promise<unknown> {
-    return undefined;
+  async reserveUsage(): Promise<MeteredUsageReservation> {
+    return { idempotent: false };
   }
 
   async reconcileUsage(
