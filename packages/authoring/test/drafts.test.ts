@@ -99,6 +99,25 @@ class RecoverableMemoryBlobs extends MemoryBlobs {
   }
 }
 
+/** Models a provider that materializes an object but loses the original PUT
+ * response. A retry may inspect and reuse that object, but it did not perform
+ * the write and therefore must not mint a terminal write receipt. */
+class PresentAfterLostWriteBlobs extends RecoverableMemoryBlobs {
+  private loseNext = false;
+
+  loseNextWrite(): void {
+    this.loseNext = true;
+  }
+
+  override async putAtKey(key: string, bytes: Uint8Array): Promise<StoredBlob> {
+    if (!this.loseNext) return await super.putAtKey(key, bytes);
+    this.loseNext = false;
+    this.attemptWriteKeys.push(key);
+    this.values.set(key, bytes.slice());
+    throw new Error('simulated provider response loss after object materialized');
+  }
+}
+
 class DelayedOriginalWriteBlobs extends RecoverableMemoryBlobs {
   private delayNext = false;
   private delayed?: { key: string; bytes: Uint8Array };
@@ -169,7 +188,7 @@ class ReadBarrierRepository implements StateRepository {
 class FailDraftMetadataTransactionRepository implements StateRepository {
   private transactionCount = 0;
 
-  constructor(private readonly inner: StateRepository) {}
+  constructor(private readonly inner: StateRepository, private readonly failAt = 2) {}
 
   read(organizationId: string): Promise<RegistryState> {
     return this.inner.read(organizationId);
@@ -177,7 +196,7 @@ class FailDraftMetadataTransactionRepository implements StateRepository {
 
   transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
     this.transactionCount += 1;
-    if (this.transactionCount === 2) throw new Error('simulated draft metadata CAS outage');
+    if (this.transactionCount === this.failAt) throw new Error('simulated draft metadata CAS outage');
     return this.inner.transaction(organizationId, updater);
   }
 }
@@ -272,7 +291,7 @@ interface Fixture {
   reviewTriggerCalls: number;
 }
 
-async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; recoverable?: boolean; delayedWrite?: boolean; withBilling?: boolean } = {}): Promise<Fixture> {
+async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; recoverable?: boolean; delayedWrite?: boolean; presentAfterLostWrite?: boolean; withBilling?: boolean } = {}): Promise<Fixture> {
   const state = defaultRegistryState({ production: false, allowUnscanned: true });
   const bundle: SkillBundle = {
     format: 'pskills-bundle-v1',
@@ -283,11 +302,13 @@ async function fixture(options: { withReview?: boolean; maxBodyBytes?: number; r
     ],
   };
   const bytes = encodeBundle(bundle);
-  const blobs = options.delayedWrite
-    ? new DelayedOriginalWriteBlobs()
-    : options.recoverable
-      ? new RecoverableMemoryBlobs()
-      : new MemoryBlobs();
+  const blobs = options.presentAfterLostWrite
+    ? new PresentAfterLostWriteBlobs()
+    : options.delayedWrite
+      ? new DelayedOriginalWriteBlobs()
+      : options.recoverable
+        ? new RecoverableMemoryBlobs()
+        : new MemoryBlobs();
   const stored = await blobs.put(bytes);
   const release: SkillVersion = {
     id: 'release-1',
@@ -630,6 +651,41 @@ describe('durable skill drafts', () => {
       .filter((attempt) => attempt.state === 'committed')
       .reduce((total, attempt) => total + attempt.size, 0);
     await expect(test.billing!.usageSnapshot(ORGANIZATION)).resolves.toMatchObject({ usage: { storageBytes: committedBytes } });
+    expect(blobs.attemptWriteKeys.filter((key) => key === orphan.objectKey)).toHaveLength(1);
+  });
+
+  it('does not mint a terminal receipt when an inspected orphan is reused and metadata fails', async () => {
+    const test = await fixture({ presentAfterLostWrite: true, withBilling: true });
+    const created = await create(test);
+    const blobs = test.blobs as PresentAfterLostWriteBlobs;
+    const changedFiles = [
+      { ...test.bundle.files[0]!, content: base64('---\nname: demo\ndescription: Inspected reuse\n---\n# Inspected\n') },
+      ...test.bundle.files.slice(1),
+    ];
+    blobs.loseNextWrite();
+
+    const first = await test.handler(updateRequest(created.draft.id, 'inspected-reuse', 1, changedFiles));
+    expect(first.status).toBe(503);
+    expect((await json(first)).error.code).toBe('STORAGE_UNAVAILABLE');
+
+    const afterLostWrite = await test.repository.read(ORGANIZATION);
+    const orphan = afterLostWrite.storageAttempts!.find((candidate) =>
+      candidate.state === 'orphaned' && candidate.objectKey !== undefined && candidate.reservationKey.includes('private-skills:draft-storage:'),
+    )!;
+    expect(orphan).toBeDefined();
+    expect(orphan.writeReceipt).toBeUndefined();
+
+    // The retry sees the materialized object and reuses it without writing.
+    // Fail its later draft transaction to exercise the orphan catch path.
+    test.deps.repository = new FailDraftMetadataTransactionRepository(test.repository, 3);
+    const second = await test.handler(updateRequest(created.draft.id, 'inspected-reuse', 1, changedFiles));
+    expect(second.status).toBe(500);
+    expect((await json(second)).error).toBeDefined();
+
+    const afterMetadataFailure = await test.repository.read(ORGANIZATION);
+    const retained = afterMetadataFailure.storageAttempts!.find((candidate) => candidate.id === orphan.id)!;
+    expect(retained).toMatchObject({ state: 'orphaned', objectKey: orphan.objectKey });
+    expect(retained.writeReceipt).toBeUndefined();
     expect(blobs.attemptWriteKeys.filter((key) => key === orphan.objectKey)).toHaveLength(1);
   });
 
