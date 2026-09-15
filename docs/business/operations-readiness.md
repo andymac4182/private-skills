@@ -72,8 +72,9 @@ The following evidence is available locally and is bounded as described:
 | `packages/billing/test/index.test.ts`, `tests/billing-routes.test.ts` | Passed in the targeted local run below | Exercises provider-neutral billing state, tenant-derived billing routes, idempotency and role checks. It does not connect a live billing provider or restore billing tables. |
 | `tests/restore-rehearsal.test.ts` and `tests/restore-rehearsal-postgres.test.ts` | Passed in the targeted local run below | Covers the registry/object restore adapter and PostgreSQL preflight. The hermetic fixture uses `allowUnscanned: true`; it is registry-only and does not prove Better Auth, company SSO, service tokens, or billing recovery. |
 | `docs/evidence/hosted-restore-20260910.json` | Records source revision `114`, five referenced objects, and digest/size checks | This is a sanitized isolated logical restore of registry metadata and referenced objects. It records operator quiescence, not a provider lifecycle guarantee, and did not start a restored public origin or scanner. |
+| `tests/operations-postgres-rehearsal.test.ts` | Passed with a loopback-only disposable PostgreSQL URL in the audit follow-up | Migrates unique Better Auth source/target schemas, mounts the adopted SSO schema, copies every current identity table including a `ssoProvider` mirror row, the private SSO row, service-token row, all five billing tables, registry state, and sealed-object bytes, then verifies row manifests, session and membership authorization, token revocation, billing mappings/reservations, and a restored two-company `Request` route. The audited `4016c4b` runtime does not compose the bridge, so callback/runtime wiring remains open even though the mirror persistence boundary is exercised here. This is local proof and does not establish hosted or production recovery. |
 | `packages/identity/test/postgres.integration.test.ts`, `packages/identity/test/company-sso.postgres.integration.test.ts`, and `packages/billing/test/postgres.integration.test.ts` | Not run in the local proof because their opt-in database environment variables were unset | These are the required next disposable-PostgreSQL exercises for Better Auth, SSO, token, and billing persistence. No production credentials belong in the test environment or its output. |
-| `docs/business/launch-acceptance.md` | Contains links to `docs/m3-better-auth-tenant-acceptance.md` and `tests/e2e/multi-tenant-better-auth-acceptance.test.ts` | Those paths are absent at this audit revision. The launch checklist therefore has a documentation/test reference gap in addition to its stated hosted-proof gap. |
+| `docs/business/launch-acceptance.md` | The audited launch matrix had obsolete Better Auth acceptance links; integration follow-up `2bbfe28` replaced them with `apps/web/src/tenant-identity-route.postgres.integration.test.ts` and `tests/e2e/multi-tenant-postgres-acceptance.test.ts` | The reference gap is recorded as resolved by the follow-up. The replacement PostgreSQL proofs still do not close hosted runtime, provider, or full backup/restore acceptance. |
 
 The read-only consistency check for this runbook is
 [`scripts/validate-operations-readiness.mjs`](../../scripts/validate-operations-readiness.mjs):
@@ -88,6 +89,18 @@ does not connect to a database, call a provider, send a callback, read a
 credential, mutate application data, or perform a backup. A passing validator
 shows that this document still names the current code boundaries; it is not a
 hosted acceptance result.
+
+The full PostgreSQL rehearsal was run with `PSKILLS_OPERATIONS_POSTGRES_URL`
+set by a local password-file wrapper to the disposable loopback database, and
+with the password and URL value kept out of output. The command was:
+
+```sh
+node_modules/.bin/vitest run tests/operations-postgres-rehearsal.test.ts
+```
+
+When the opt-in variable is absent, this test reports skipped. That is an
+intentional safe default and must be reported as missing evidence rather than
+as a successful restore.
 
 ## Migration procedure
 
@@ -339,13 +352,16 @@ runtime paths.
 
 The explicit remaining actions are:
 
-1. Run the Better Auth planner against a disposable PostgreSQL database and
-   attach a redacted schema/version and migration-plan readback.
-2. Rehearse a consistent backup and isolated restore containing Better Auth,
-   company SSO (including the `ssoProvider` mirror when `01a3650` is adopted),
+1. Attach a redacted schema/version and migration-plan readback from the
+   disposable PostgreSQL planner run. The audit rehearsal now exercises the
+   planner and unique source/target schemas locally, but it emits no launch
+   artifact and has no hosted migration record.
+2. Repeat the consistent backup and isolated restore with the integrated
+   runtime and actual object provider. The local rehearsal covers Better Auth,
+   private company SSO and the `ssoProvider` mirror schema from `01a3650`,
    service tokens, all billing tables (including unbound webhook events),
    registry state, and sealed objects. Decide the shared-user and global-event
-   policy for per-company restores.
+   policy for per-company restores before a hosted drill.
 3. Run the two-company restored-origin matrix through the actual `Request`
    runtime, including session, active membership, token, SSO, billing, usage,
    registry, object, scanner, and Eve callback behavior.
@@ -353,9 +369,9 @@ The explicit remaining actions are:
    adoption, then repeat the restore proof with those hooks enabled.
 5. Add named monitoring owners, alert thresholds, retention, and a live
    migration/webhook/worker/model-budget incident drill.
-6. Resolve the broken launch-acceptance references or land the referenced
-   acceptance document/tests in the integration branch; retain their explicit
-   baseline/hosted limitations until they exercise the actual runtime.
+6. Keep the resolved launch-acceptance references pointed at the actual
+   PostgreSQL tests, and retain their explicit baseline/hosted limitations until
+   they exercise the deployed runtime.
 
 Until these actions have evidence, retain the no-release decision for
 operations readiness.

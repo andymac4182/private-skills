@@ -73,6 +73,11 @@ export async function validateOperationsReadiness({ root = repositoryRoot } = {}
     "_usage_operations",
   ];
 
+  const currentAcceptanceReferences = launchAcceptance.includes("apps/web/src/tenant-identity-route.postgres.integration.test.ts")
+    && launchAcceptance.includes("tests/e2e/multi-tenant-postgres-acceptance.test.ts");
+  const historicalAcceptanceReferences = launchAcceptance.includes("m3-better-auth-tenant-acceptance.md")
+    && launchAcceptance.includes("multi-tenant-better-auth-acceptance.test.ts");
+
   const checks = [
     check(
       "audited-revision",
@@ -140,9 +145,11 @@ export async function validateOperationsReadiness({ root = repositoryRoot } = {}
       "runbook keeps scanner admission and Eve publication bounded during recovery",
     ),
     check(
-      "acceptance-reference-gap-recorded",
-      document.includes("m3-better-auth-tenant-acceptance.md") && document.includes("multi-tenant-better-auth-acceptance.test.ts") && launchAcceptance.includes("m3-better-auth-tenant-acceptance.md") && launchAcceptance.includes("multi-tenant-better-auth-acceptance.test.ts"),
-      "runbook records the launch checklist's unresolved acceptance references",
+      "acceptance-reference-status",
+      document.includes("2bbfe28") && document.includes("reference gap is recorded as resolved") && (currentAcceptanceReferences || historicalAcceptanceReferences),
+      currentAcceptanceReferences
+        ? "launch checklist points at the current PostgreSQL acceptance tests"
+        : "audited launch checklist still has historical links; the runbook records their resolved replacement",
     ),
   ];
 
