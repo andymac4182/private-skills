@@ -2,7 +2,7 @@
 .marketing-shell {
   --marketing-ink: #14213b;
   --marketing-ink-soft: #344463;
-  --marketing-muted: #6f7d98;
+  --marketing-muted: #5d6d86;
   --marketing-line: #dce4f0;
   --marketing-line-strong: #c8d4e5;
   --marketing-cobalt: #175ce6;
@@ -40,6 +40,14 @@
 .marketing-nav a:hover, .marketing-nav a:focus-visible, .marketing-nav-active { color: var(--marketing-cobalt-deep) !important; }
 .marketing-nav a:hover::after, .marketing-nav a:focus-visible::after, .marketing-nav-active::after { opacity: 1; transform: scaleX(1); }
 .marketing-header-actions { display: flex; align-items: center; gap: 14px; }
+.marketing-header-action-compact { display: none; }
+.marketing-shell .marketing-menu-toggle { display: none; align-items: center; justify-content: center; gap: 8px; min-width: 44px; min-height: 44px; border: 1px solid var(--marketing-line-strong); border-radius: 9px; padding: 0 11px; background: rgba(255, 255, 255, .7); color: var(--marketing-ink-soft); cursor: pointer; font-size: 10px; font-weight: 800; }
+.marketing-menu-toggle:hover { border-color: var(--marketing-cobalt); background: white; color: var(--marketing-cobalt-deep); }
+.marketing-menu-icon { display: grid; width: 16px; gap: 3px; }
+.marketing-menu-icon i { display: block; height: 1.5px; border-radius: 2px; background: currentColor; transition: transform .15s ease, opacity .15s ease; }
+.marketing-menu-icon-close i:first-child { transform: translateY(4.5px) rotate(45deg); }
+.marketing-menu-icon-close i:nth-child(2) { opacity: 0; }
+.marketing-menu-icon-close i:last-child { transform: translateY(-4.5px) rotate(-45deg); }
 .marketing-button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: 9px; padding: 0 17px; font-size: 11px; font-weight: 800; text-decoration: none; transition: transform .15s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease; }
 .marketing-button:hover { transform: translateY(-1px); }
 .marketing-button-primary { background: var(--marketing-cobalt); color: white !important; box-shadow: 0 9px 20px rgba(23, 92, 230, .2); }
@@ -361,10 +369,18 @@
 }
 
 @media (max-width: 760px) {
-  .marketing-header { flex-wrap: wrap; gap: 8px 18px; padding-top: 15px; padding-bottom: 15px; }
-  .marketing-header-actions { margin-left: auto; }
-  .marketing-nav { order: 3; width: 100%; justify-content: space-between; gap: clamp(10px, 3vw, 17px); padding-top: 6px; border-top: 1px solid var(--marketing-line); }
-  .marketing-nav a { font-size: 10px; white-space: nowrap; }
+  .marketing-header { flex-wrap: wrap; gap: 8px 10px; padding-top: 15px; padding-bottom: 15px; }
+  .marketing-brand-link { min-height: 44px; align-items: center; }
+  .marketing-header-actions { order: 2; margin-left: auto; }
+  .marketing-header-actions .marketing-button-small { min-height: 44px; }
+  .marketing-header-action-full { display: none; }
+  .marketing-header-action-compact { display: inline; }
+  .marketing-shell .marketing-menu-toggle { display: inline-flex; order: 3; }
+  .marketing-nav { display: none; order: 4; width: 100%; margin-right: 0; padding-top: 8px; border-top: 1px solid var(--marketing-line); }
+  .marketing-nav.marketing-nav-open { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .marketing-nav a { min-height: 44px; align-items: center; border-radius: 8px; padding: 10px 12px; background: rgba(255, 255, 255, .68); color: var(--marketing-ink-soft); font-size: 12px; white-space: normal; }
+  .marketing-nav a::after { display: none; }
+  .marketing-nav a:hover, .marketing-nav a:focus-visible, .marketing-nav-active { background: var(--marketing-cobalt-soft); color: var(--marketing-cobalt-deep) !important; }
   .marketing-hero { display: block; min-height: 0; padding: 67px 24px 64px; }
   .marketing-hero h1 { max-width: 650px; font-size: clamp(47px, 12vw, 72px); }
   .marketing-hero-art { max-width: 610px; margin: 51px auto 0; }
@@ -401,7 +417,6 @@
   .marketing-header { padding-inline: 17px; }
   .marketing-logo-copy small { display: none; }
   .marketing-signin-link { display: none; }
-  .marketing-nav { justify-content: flex-start; gap: 0 10px; flex-wrap: wrap; }
   .marketing-button-small { padding-inline: 11px; }
   .marketing-hero { padding-inline: 17px; }
   .marketing-hero h1 { font-size: clamp(43px, 12vw, 59px); }
@@ -440,6 +455,11 @@
   .marketing-start-path-actions { align-items: stretch; flex-direction: column; }
   .marketing-start-path-actions .marketing-button { width: 100%; }
   .marketing-demo-script-list { max-width: none; }
+}
+
+@media (max-width: 360px) {
+  .marketing-header { gap: 8px; }
+  .marketing-logo-copy { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
