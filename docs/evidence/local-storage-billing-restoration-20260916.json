@@ -1,7 +1,7 @@
 {
   "recordedAt": "2026-09-15T21:50:09Z",
   "scope": "durable storage billing restoration and generation fencing",
-  "sourceCommit": "39d30dc49be647b89ea9db93c6960b03d9955881",
+  "sourceCommit": "56c924b235ba38c5a5aec38e5b2ed8ccab79494e",
   "checkout": "/private/tmp/private-skills-final-candidate-4917215",
   "environment": "Local-only validation. Billing and database checks used disposable loopback PostgreSQL on 127.0.0.1:55432; credentials and connection values are omitted. No production database, storage provider, deployment, or external identity provider was contacted.",
   "checks": [
@@ -11,7 +11,11 @@
     },
     {
       "command": "CI=true node_modules/.bin/vitest run packages/storage/test/recovery.test.ts packages/storage/test/storage.test.ts packages/storage/test/http.test.ts packages/core/test/storage-recovery.test.ts apps/web/src/runtime-storage-recovery-mount.test.ts packages/authoring/test/billing.test.ts packages/billing/test/index.test.ts --no-file-parallelism",
-      "result": "7 test files passed; 85 tests passed"
+      "result": "7 test files passed; 86 tests passed"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run packages/storage/test/recovery.postgres.integration.test.ts --no-file-parallelism",
+      "result": "1 test file passed; 1 test passed"
     },
     {
       "command": "CI=true node_modules/.bin/vitest run packages/billing/test/postgres.integration.test.ts packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts packages/database/test/index.test.ts packages/database/test/hosted-worker-dispatch.test.ts packages/storage/test/recovery.test.ts --no-file-parallelism",
@@ -28,12 +32,13 @@
     "lost restoration responses replay through the durable exact operation key without a second usage write",
     "stale generation-zero callbacks are rejected after G2 restoration and after later G3 re-admission",
     "PostgreSQL exact-key lookup survives bounded operation-window eviction and a fresh BillingService instance",
-    "storage recovery persists G2 before clearing restore-pending and remains fail-closed without restoreUsage"
+    "storage recovery persists G2 before clearing restore-pending and remains fail-closed without restoreUsage",
+    "the PostgreSQL-backed StorageRecoveryService bridge exercises quota refill, late metadata reference, lost restore response, restart replay, stale G1 zero, and G2 cleanup"
   ],
   "limits": [
     "provider finality remains false for the built-in hosted adapter unless the host supplies a terminal write proof",
     "hosted storage recovery and production deployment acceptance remain open",
-    "concurrent recovery-resume and authoring ownership follow-ups remain pending separate owner patches",
+    "crash-after-zero recovery closure and authoring ownership follow-ups remain pending separate owner patches",
     "this evidence record does not establish release readiness"
   ]
 }
