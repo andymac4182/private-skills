@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "acme",
+      "label": "Acme Identity",
+      "users": [
+        {
+          "id": "alice",
+          "subject": "acme-user-alice",
+          "username": "alice",
+          "name": "Alice Acme",
+          "email": "alice@acme.test",
+          "defaultCompanyId": "acme-labs"
+        },
+        {
+          "id": "ben",
+          "subject": "acme-user-ben",
+          "username": "ben",
+          "name": "Ben Acme",
+          "email": "ben@acme.test",
+          "defaultCompanyId": "acme-retail"
+        }
+      ],
+      "companies": [
+        {
+          "id": "acme-labs",
+          "name": "Acme Labs",
+          "tenantId": "tenant-acme-labs"
+        },
+        {
+          "id": "acme-retail",
+          "name": "Acme Retail",
+          "tenantId": "tenant-acme-retail"
+        }
+      ]
+    },
+    {
+      "id": "globex",
+      "label": "Globex Identity",
+      "users": [
+        {
+          "id": "carol",
+          "subject": "globex-user-carol",
+          "username": "carol",
+          "name": "Carol Globex",
+          "email": "carol@globex.test",
+          "defaultCompanyId": "globex-research"
+        },
+        {
+          "id": "dave",
+          "subject": "globex-user-dave",
+          "username": "dave",
+          "name": "Dave Globex",
+          "email": "dave@globex.test",
+          "defaultCompanyId": "globex-retail"
+        }
+      ],
+      "companies": [
+        {
+          "id": "globex-research",
+          "name": "Globex Research",
+          "tenantId": "tenant-globex-research"
+        },
+        {
+          "id": "globex-retail",
+          "name": "Globex Retail",
+          "tenantId": "tenant-globex-retail"
+        }
+      ]
+    }
+  ]
+}
