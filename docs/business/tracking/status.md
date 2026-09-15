@@ -8,7 +8,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Navigation integrated d529e42, four focused tests pass; browser proof pending; compact overview refinement active |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
-| L05 | Company-managed SSO | oauth_demo_finish | Active; pinned Better Auth SSO integration, company-bound configuration, OIDC/SAML proofs |
+| L05 | Company-managed SSO | oauth_demo_finish | Configuration module integrated 825c6a3; 15 focused tests pass and agent PG proof passes; real plugin provider lookup/callback bridge and UI remain open |
 | L06 | Existing registry adoption and tenant workers | runtime_finish | Active; explicit owner proof, atomic adoption and signed worker routing |
 | L07 | Company billing console and enforced usage | billing_finish | Backend integrated 9089e10; console/API wiring and real PostgreSQL concurrency proof active; Stripe account deferred |
 | L08 | Tenant-aware Eve callbacks | tenant_eve | Eve entrypoints integrated f486ee6, 26 tests pass; registry provider/client wiring and end-to-end tenant flows remain open |

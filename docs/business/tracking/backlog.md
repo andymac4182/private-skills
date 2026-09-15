@@ -27,3 +27,5 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 - [ ] B11 — L04: verify copied invitation in browser through invitee login, acceptance, membership persistence, wrong-email denial and expiration. Component tests pass at 574286e; browser proof pending.
 
 - [ ] B12 — L04: actual browser owner invite denied on d529e42 (Alice Acme / Acme Labs Demo, reader invite for synthetic Ben). UI shows owner but Better Auth returns permission denial. Inspect role resource mapping and invitation creation contract; prove authorized owner success and reader denial against real runtime. No invitation was created by this test.
+
+- [ ] B13 — L05: bridge company provider persistence into Better Auth actual SSO provider lookup with matching persisted record IDs; prove a full configured OIDC callback. Configuration tests alone do not prove login. Also complete signed SAML protocol proof before claiming SAML works.

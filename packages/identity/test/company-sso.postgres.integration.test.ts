@@ -61,4 +61,3 @@ describe.skipIf(!databaseURL)('company SSO PostgreSQL persistence', () => {
     }
   }, 30_000);
 });
-
