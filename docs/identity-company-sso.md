@@ -49,13 +49,15 @@ different signed IdP issuer and a different SP audience are rejected.
 `private_skills_company_sso_providers` with a database-wide unique
 `provider_id`, an organization binding, protocol-specific JSON configuration,
 revision fencing, and no email-domain column. `autoMigrate` is opt-in on the
-Postgres repository. The Node infrastructure startup contract waits for both
-the Better Auth migration and this private migration when the deployment opts
-into their respective auto-migration settings; the private table uses the
-configured `BETTER_AUTH_SCHEMA` when one is present. Deployments that keep
-auto-migration disabled must run both reviewed migrations before accepting
-company SSO traffic. The host `IdentityInfrastructure.runMigrations()` helper
-runs both plans in order for a controlled migration job. A request never
+Postgres repository. The Node infrastructure startup contract waits for the
+Better Auth, private SSO, and persisted API-token migrations when the
+deployment opts into their respective auto-migration settings. All three
+application-owned identity tables use the configured `BETTER_AUTH_SCHEMA` when
+one is present; the service-token table keeps its default location unless the
+host supplies a configured table name. Deployments that keep auto-migration
+disabled must run the three reviewed migrations before accepting company SSO
+or token traffic. The host `IdentityInfrastructure.runMigrations()` helper
+runs all three plans in order for a controlled migration job. A request never
 performs a production migration.
 
 The Better Auth adapter uses `@better-auth/sso@1.7.5`, matching the repository's

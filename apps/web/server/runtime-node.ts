@@ -443,7 +443,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   });
   // Do not expose a partially migrated identity runtime. When the deployment
   // explicitly opts into startup migrations, this waits for Better Auth's
-  // configured schema and the company SSO table in that same schema.
+  // configured schema, the company SSO table, and the service-token table.
   try {
     await identityInfrastructure.ready;
   } catch (error) {

@@ -128,6 +128,14 @@ the same planner before any handler, session, or principal operation. It is
 intended for a controlled single process; explicit migration is preferred for
 multi-instance deployments.
 
+The web Node host composes Better Auth with the company SSO and persisted
+service-token repositories. Its `IdentityInfrastructure.runMigrations()`
+entrypoint runs those three reviewed plans in order, using the configured
+`PSKILLS_BETTER_AUTH_SCHEMA` for all application-owned identity tables and the
+configured service-token table name when supplied. The lower-level
+`runtime.runMigrations()` above remains the Better Auth-only entrypoint for
+callers that construct the package runtime directly.
+
 The implementation follows Better Auth's current
 [PostgreSQL adapter guidance](https://www.better-auth.com/docs/adapters/postgresql),
 [organization plugin](https://www.better-auth.com/docs/plugins/organization),

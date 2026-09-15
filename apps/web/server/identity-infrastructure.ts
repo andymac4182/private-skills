@@ -44,9 +44,9 @@ export interface IdentityInfrastructure {
   identity: IdentityRuntimeAdmin | null;
   apiTokens: ApiTokenModule | null;
   companySso: CompanySsoModule | null;
-  /** Resolves only after opted-in Better Auth and company SSO migrations finish. */
+  /** Resolves only after opted-in identity, company SSO, and API-token migrations finish. */
   ready: Promise<void>;
-  /** Runs both reviewed migrations explicitly for a controlled deployment job. */
+  /** Runs all reviewed identity and API-token migrations explicitly for a controlled deployment job. */
   runMigrations: () => Promise<void>;
 }
 
@@ -185,9 +185,14 @@ export function createIdentityInfrastructure(
 
   const schemaName = env.PSKILLS_BETTER_AUTH_SCHEMA?.trim() || env.BETTER_AUTH_SCHEMA?.trim();
   const membershipAuthorizer = new PostgresBetterAuthMembershipAuthorizer(identity, options.postgresPool, schemaName);
+  const apiTokenAutoMigrate = options.apiTokenAutoMigrate ?? parseBoolean(
+    env.PSKILLS_API_TOKEN_AUTO_MIGRATE ?? env.API_TOKEN_AUTO_MIGRATE,
+    false,
+  );
   const repository = createPostgresApiTokenRepository(options.postgresPool, {
     ...(options.apiTokenTableName === undefined ? {} : { tableName: options.apiTokenTableName }),
-    autoMigrate: options.apiTokenAutoMigrate ?? parseBoolean(env.PSKILLS_API_TOKEN_AUTO_MIGRATE ?? env.API_TOKEN_AUTO_MIGRATE, false),
+    ...(schemaName === undefined ? {} : { schemaName }),
+    autoMigrate: apiTokenAutoMigrate,
   });
   const apiTokens = createApiTokenModule({
     repository,
@@ -207,15 +212,17 @@ export function createIdentityInfrastructure(
     autoMigrate: companySsoAutoMigrate,
     bridge: createCompanySsoBetterAuthBridge(identity.auth),
   });
-  // Better Auth's own `ready` covers its mirrored tables. The private company
-  // table has a separate reviewed schema, so an explicitly opted-in startup
-  // waits for both migrations before the Node handler is exposed.
+  // Better Auth, the private company table, and service-token table are
+  // separate reviewed migrations. An explicitly opted-in startup waits for
+  // each enabled migration before the Node handler is exposed.
   const runMigrations = async (): Promise<void> => {
     await identity.runMigrations();
     await companySsoRepository.runMigrations();
+    await repository.runMigrations();
   };
   const ready = identity.ready.then(async () => {
     if (companySsoAutoMigrate) await companySsoRepository.runMigrations();
+    if (apiTokenAutoMigrate) await repository.runMigrations();
   });
   void ready.catch(() => undefined);
   return { identity, apiTokens, companySso, ready, runMigrations };

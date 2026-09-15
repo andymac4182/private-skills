@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createInfrastructure,
 } from '../server/runtime-node.js';
+import { createIdentityInfrastructure } from '../server/identity-infrastructure.js';
 import { handleCompanySsoRoute } from '../server/company-sso-runtime.js';
 import type { ApiTokenPgPool } from '../../../packages/api-tokens/src/index.js';
 
@@ -108,6 +109,97 @@ describe.skipIf(!isLoopbackDatabase(databaseURL))('composed company SSO runtime'
       });
     } finally {
       await infrastructure?.identity?.close();
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      await direct.end({ timeout: 5 });
+    }
+  }, 45_000);
+
+  it('runs all identity migrations explicitly in one configured schema and preserves token access', async () => {
+    if (!databaseURL) return;
+    const suffix = `${process.pid}_${Date.now().toString(36)}`;
+    const schema = `identity_explicit_${suffix}`;
+    const companyTable = `company_sso_${suffix}`;
+    const tokenTable = `service_tokens_${suffix}`;
+    const direct = postgres(databaseURL, { max: 20, prepare: false });
+    const pool = createPool(direct);
+    const infrastructure = createIdentityInfrastructure({
+      PSKILLS_BETTER_AUTH_ENABLED: 'true',
+      DATABASE_URL: databaseURL,
+      BETTER_AUTH_SECRET: 'identity-explicit-migration-test-secret-0123456789',
+      BETTER_AUTH_URL: ORIGIN,
+      PSKILLS_PUBLIC_ORIGIN: ORIGIN,
+      PSKILLS_ENVIRONMENT: 'test',
+      PSKILLS_BETTER_AUTH_SCHEMA: schema,
+      PSKILLS_BETTER_AUTH_VALIDATE_SCHEMA: 'false',
+      PSKILLS_BETTER_AUTH_AUTO_MIGRATE: 'false',
+      PSKILLS_COMPANY_SSO_AUTO_MIGRATE: 'false',
+      PSKILLS_API_TOKEN_AUTO_MIGRATE: 'false',
+    }, {
+      postgresPool: pool,
+      canonicalOrigin: ORIGIN,
+      companySsoTableName: companyTable,
+      apiTokenTableName: tokenTable,
+      companySsoAutoMigrate: false,
+      apiTokenAutoMigrate: false,
+    });
+
+    try {
+      await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
+      // The explicit helper is the only migration trigger in this test. Each
+      // repository is configured with auto-migration disabled.
+      await infrastructure.runMigrations();
+
+      const tables = await direct.unsafe(
+        'SELECT to_regclass($1) AS better_auth_table, to_regclass($2) AS company_sso_table, to_regclass($3) AS api_token_table',
+        [`${schema}.user`, `${schema}.${companyTable}`, `${schema}.${tokenTable}`],
+      );
+      expect(tables[0] as unknown as { better_auth_table: string | null; company_sso_table: string | null; api_token_table: string | null }).toEqual({
+        better_auth_table: `${schema}."user"`,
+        company_sso_table: `${schema}.${companyTable}`,
+        api_token_table: `${schema}.${tokenTable}`,
+      });
+
+      const identity = infrastructure.identity;
+      const apiTokens = infrastructure.apiTokens;
+      if (!identity || !apiTokens) throw new Error('identity infrastructure did not initialize');
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
+      const expiresAt = new Date(nowDate.getTime() + 60 * 60 * 1000).toISOString();
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'user')} ("id","name","email","emailVerified","createdAt","updatedAt") VALUES ($1,$2,$3,true,$4,$4)`,
+        ['identity-explicit-user', 'Identity Explicit User', 'identity-explicit@example.test', now],
+      );
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'organization')} ("id","name","slug","createdAt") VALUES ($1,$2,$3,$4)`,
+        ['identity-explicit-org', 'Identity Explicit Org', 'identity-explicit-org', now],
+      );
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'member')} ("id","organizationId","userId","role","createdAt") VALUES ($1,$2,$3,'owner',$4)`,
+        ['identity-explicit-member', 'identity-explicit-org', 'identity-explicit-user', now],
+      );
+      await direct.unsafe(
+        `INSERT INTO ${table(schema, 'session')} ("id","expiresAt","token","createdAt","updatedAt","userId","activeOrganizationId") VALUES ($1,$2,$3,$4,$4,$5,$6)`,
+        ['identity-explicit-session', expiresAt, 'identity-explicit-session-token', now, 'identity-explicit-user', 'identity-explicit-org'],
+      );
+
+      const issued = await apiTokens.service.createToken(
+        { userId: 'identity-explicit-user', organizationId: 'identity-explicit-org' },
+        { name: 'Explicit migration token', roleCeiling: 'reader', scopes: ['registry:read'] },
+      );
+      expect(issued.token).toMatch(/^psk_/u);
+      await expect(apiTokens.service.authenticateBearerToken(issued.token)).resolves.toMatchObject({
+        identity: 'user',
+        organizationId: 'identity-explicit-org',
+        subject: 'identity-explicit-user',
+        tokenId: issued.id,
+      });
+      const stored = await direct.unsafe(
+        `SELECT id, organization_id, user_id FROM ${table(schema, tokenTable)} WHERE id = $1`,
+        [issued.id],
+      );
+      expect(stored).toEqual([{ id: issued.id, organization_id: 'identity-explicit-org', user_id: 'identity-explicit-user' }]);
+    } finally {
+      await infrastructure.identity?.close();
       await direct.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`);
       await direct.end({ timeout: 5 });
     }
