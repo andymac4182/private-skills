@@ -2,6 +2,11 @@ import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync,
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import {
+  applyVercelFunctionBudget,
+  resolveVercelFunctionBudget,
+  verifyVercelFunctionBudget,
+} from './vercel-function-budget.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const webRoot = resolve(root, 'apps/web')
@@ -24,10 +29,16 @@ if (!existsSync(viteEntry)) {
   throw new Error(`Vite is unavailable at ${viteEntry}; run the pinned pnpm install first`)
 }
 
+// Match Vite's production-mode PSKILLS environment loading so the budget
+// checked here is the same one used to compile the runtime and Nitro config.
+const { loadEnv } = await import('vite')
+const loadedEnvironment = loadEnv('production', root, 'PSKILLS_')
+
 rmSync(webOutput, { recursive: true, force: true })
 rmSync(rootOutput, { recursive: true, force: true })
 
 const environment = {
+  ...loadedEnvironment,
   ...process.env,
   NITRO_PRESET: 'vercel',
   PSKILLS_RUNTIME_PROFILE: 'node',
@@ -35,6 +46,12 @@ const environment = {
   PSKILLS_STORAGE_BUILD_PROFILE:
     process.env.PSKILLS_STORAGE_BUILD_PROFILE ?? process.env.PSKILLS_STORAGE_PROVIDER ?? 's3',
 }
+const functionBudget = resolveVercelFunctionBudget(environment)
+console.log(
+  `Vercel function budget: maxDuration=${functionBudget.maxDurationSeconds}s `
+  + `(runtime=${functionBudget.runtimeDurationSeconds}s, headroom=${functionBudget.headroomSeconds}s, `
+  + `declared plan max=${functionBudget.planMaxDurationSeconds}s)`,
+)
 const build = spawnSync(process.execPath, [viteEntry, 'build'], {
   cwd: webRoot,
   env: environment,
@@ -48,6 +65,10 @@ const outputConfig = resolve(webOutput, 'config.json')
 if (!existsSync(outputConfig)) {
   throw new Error(`Nitro did not emit a Vercel Build Output API config: ${outputConfig}`)
 }
+
+const generatedFunctionConfigs = applyVercelFunctionBudget(webOutput, functionBudget)
+verifyVercelFunctionBudget(webOutput, functionBudget)
+console.log(`Applied maxDuration=${functionBudget.maxDurationSeconds}s to ${generatedFunctionConfigs.length} generated Vercel function config(s)`)
 
 cpSync(webOutput, rootOutput, {
   recursive: true,
@@ -170,5 +191,6 @@ function verifyNodeDependencies(functionDirectory) {
 }
 
 verifyRelocatedSymlinks(webOutput, rootOutput)
+verifyVercelFunctionBudget(rootOutput, functionBudget)
 verifyNodeDependencies(resolve(rootOutput, 'functions/__server.func'))
 console.log(`Copied Vercel Build Output API output to ${rootOutput}`)

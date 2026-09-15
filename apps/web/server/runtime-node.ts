@@ -68,6 +68,7 @@ import {
   createPostgresTenantReviewTargetLister,
   type PostgresTenantOrganizationCatalog,
 } from './tenant-review-runtime.js';
+import { assertVercelRuntimeDuration } from './vercel-function-budget.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -470,7 +471,12 @@ export function createHostedWorkerDispatcherRuntime(options: {
   const maxOrganizations = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_ORGANIZATIONS, 1, 1_024, 'max organizations');
   const pageSize = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_PAGE_SIZE, 1, 256, 'page size');
   const maxJobsPerOrganization = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_JOBS_PER_ORGANIZATION, 1, 16, 'max jobs per organization');
-  const maxDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS, 1_000, 15 * 60_000, 'max duration');
+  const configuredMaxDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS, 1_000, 15 * 60_000, 'max duration');
+  const maxDurationMs = assertVercelRuntimeDuration(
+    configuredMaxDurationMs,
+    240_000,
+    'Hosted worker dispatch max duration',
+  );
   const leaseDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_LEASE_DURATION_MS, 1_000, 30 * 60_000, 'lease duration');
   const handler = createHostedWorkerDispatcher({
     cronSecret,

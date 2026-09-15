@@ -12,6 +12,7 @@ import {
 } from './eve-cost-reservation.js';
 import type { EveTenantCostReservation } from '../../../packages/intelligence/src/eve-cost-reservation.js';
 import type { EveTenantHostRuntime } from './eve-tenant-runtime.js';
+import { assertVercelRuntimeDuration } from './vercel-function-budget.js';
 
 export interface TenantReviewRuntimeOptions {
   env: Record<string, string | undefined>;
@@ -113,7 +114,12 @@ export function createPostgresTenantReviewTargetLister(
 export function createTenantReviewRuntime(options: TenantReviewRuntimeOptions): ((request: Request) => Promise<Response | undefined>) | undefined {
   const cronSecret = options.env.CRON_SECRET?.trim();
   if (!cronSecret) return undefined;
-  const maxDurationMs = options.maxDurationMs ?? parseOptionalDuration(options.env.PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS);
+  const configuredMaxDurationMs = options.maxDurationMs ?? parseOptionalDuration(options.env.PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS);
+  const maxDurationMs = assertVercelRuntimeDuration(
+    configuredMaxDurationMs,
+    600_000,
+    'Tenant review dispatch max duration',
+  );
   const costReservation = options.costReservation ?? createTenantReviewCostReservation(options.env, options.billing);
   const ledger = new StateRepositoryTenantReviewDispatchLedger(options.repository);
   const dispatch = async (): Promise<TenantReviewDispatchResult> => dispatchTenantDailyReviews({

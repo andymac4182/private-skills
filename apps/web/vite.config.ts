@@ -3,6 +3,7 @@ import { defineConfig, loadEnv } from 'vite'
 import { nitro } from 'nitro/vite'
 import viteReact from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+import { resolveVercelFunctionBudget } from '../../scripts/vercel-function-budget.mjs'
 
 type RuntimeProfile = 'node' | 'edge'
 const filesProviders = new Set(['fs', 's3', 'r2', 'gcs', 'azure', 'vercel-blob'])
@@ -24,6 +25,7 @@ export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, fileURLToPath(new URL('../../', import.meta.url)), 'PSKILLS_')
   for (const [name, value] of Object.entries(environment)) process.env[name] ??= value
   const preset = process.env.NITRO_PRESET ?? ''
+  const vercelFunctionBudget = preset === 'vercel' ? resolveVercelFunctionBudget(process.env) : undefined
   const profile: RuntimeProfile =
     process.env.PSKILLS_RUNTIME_PROFILE === 'edge' || preset.startsWith('cloudflare')
       ? 'edge'
@@ -43,6 +45,10 @@ export default defineConfig(({ mode }) => {
     ]
   return {
     root,
+    define: {
+      __PSKILLS_BUILT_VERCEL_FUNCTION_MAX_DURATION_SECONDS__: JSON.stringify(vercelFunctionBudget?.maxDurationSeconds ?? null),
+      __PSKILLS_BUILT_VERCEL_FUNCTION_HEADROOM_SECONDS__: JSON.stringify(vercelFunctionBudget?.headroomSeconds ?? null),
+    },
     resolve: { alias: { '#pskills-infrastructure': infrastructure } },
     plugins: [
       tanstackStart(),
@@ -51,6 +57,11 @@ export default defineConfig(({ mode }) => {
         alias: { '#pskills-infrastructure': infrastructure },
         noExternals: provider ? ['files-sdk', `files-sdk/${provider}`] : false,
         traceDeps,
+        ...(vercelFunctionBudget === undefined ? {} : {
+          vercel: {
+            functions: { maxDuration: vercelFunctionBudget.maxDurationSeconds },
+          },
+        }),
         ...(edge ? { cloudflare: { wrangler: { name: 'private-skills' } } } : {}),
         ...(edge ? { compatibilityDate: { default: '2026-09-09', cloudflare: '2026-09-09' } } : {}),
       }),
