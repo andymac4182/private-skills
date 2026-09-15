@@ -20,13 +20,14 @@ contain provider metadata and secret-presence booleans only. Client secrets,
 SAML metadata, certificates, and private keys remain server-side.
 
 Registration validates an HTTPS issuer, the exact generated callback
-`/api/auth/sso/callback/:providerId`, and the OIDC discovery document issuer and
-endpoints. Loopback HTTP is available only when the disposable local policy
-explicitly enables it. SAML metadata is parsed with Better Auth's SAML helper,
-requires a signing certificate and signed-assertion policy, and rejects
-IdP-initiated callbacks. The current seam validates and stores SAML input; it
-does not claim end-to-end signed assertion authentication until the runtime
-acceptance fixture covers that path.
+`/api/auth/sso/callback/:providerId` for OIDC or
+`/api/auth/sso/saml2/sp/acs/:providerId` for SAML, and the OIDC discovery
+document issuer and endpoints. Loopback HTTP is available only when the
+disposable local policy explicitly enables it. SAML metadata is parsed with
+Better Auth's SAML helper, requires a signing certificate and signed-assertion
+policy, and rejects IdP-initiated callbacks. The current seam validates and
+stores SAML input; the runtime acceptance fixture covers the signed assertion
+path separately.
 
 `COMPANY_SSO_SCHEMA_SQL` is an explicit migration. It creates
 `private_skills_company_sso_providers` with a database-wide unique
@@ -41,6 +42,20 @@ runtime must call `selectProvider`/`explicitCompanySsoSelection` from the
 company portal before invoking the SSO sign-in endpoint. The plugin's own
 registration, update, and delete endpoints are guarded so they cannot bypass
 the company admin API.
+
+The private registry is bridged into Better Auth explicitly. Construct a
+`createCompanySsoBetterAuthBridge(auth)` with the live Better Auth instance and
+pass it as `bridge` when creating the company API. A successful company POST or
+update then calls `syncCompanySsoProvider`; deletion removes the exact mirror
+row. The bridge writes model `ssoProvider` with `forceAllowId: true`, maps the
+registry's `oidc.discoveryUrl` to Better Auth's `oidcConfig.discoveryEndpoint`,
+and uses the registry row `id` as the Better Auth row `id`. This is required
+because the SSO plugin records a persisted provider reference containing that
+row id and rejects a callback if the id or configuration fingerprint changes.
+The bridge rejects any existing provider-id row whose id, organization, or
+admin owner does not match, so a company cannot overwrite a platform or other
+company provider. `getRuntimeProvider` returns the same id-bearing Better Auth
+shape for runtime callers that need to inspect or reconcile a single row.
 
 References:
 

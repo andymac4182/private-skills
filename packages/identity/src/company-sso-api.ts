@@ -8,6 +8,7 @@ import {
   type CompanySsoProviderRecord,
   type CompanySsoProviderUpdateInput,
 } from './company-sso-types.js';
+import type { CompanySsoProviderBridge } from './company-sso-better-auth.js';
 import {
   normalizeCompanySsoDisplayName,
   normalizeCompanySsoStatus,
@@ -24,6 +25,12 @@ export interface CompanySsoApiOptions extends CompanySsoModuleOptions {
   maxBodyBytes?: number;
   idGenerator?: () => string;
   now?: () => Date;
+  /**
+   * Trusted Better Auth adapter bridge. When supplied, registry mutations
+   * mirror the exact row into `ssoProvider`; the browser registration endpoint
+   * remains disabled by the company SSO plugin.
+   */
+  bridge?: CompanySsoProviderBridge;
 }
 
 export type CompanySsoHandler = (request: Request) => Promise<Response | undefined>;
@@ -169,6 +176,16 @@ function createId(idGenerator?: () => string): string {
   return generated;
 }
 
+async function syncBridge(action: (() => Promise<void>) | undefined): Promise<void> {
+  if (!action) return;
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof CompanySsoError) throw error;
+    throw new CompanySsoRepositoryError('Better Auth provider synchronization failed');
+  }
+}
+
 export function createCompanySsoApi(options: CompanySsoApiOptions): CompanySsoApi {
   const prefix = routePrefix(options.routePrefix);
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
@@ -218,6 +235,15 @@ export function createCompanySsoApi(options: CompanySsoApiOptions): CompanySsoAp
           updatedAt: timestamp,
         };
         const created = await options.repository.create(record);
+        try {
+          await syncBridge(options.bridge ? () => options.bridge!.upsert(created) : undefined);
+        } catch (error) {
+          // Do not leave an orphaned company row when Better Auth rejected the
+          // trusted adapter write. The provider id remains available for a
+          // corrected retry after the administrator fixes the configuration.
+          await options.repository.delete(created.organizationId, created.providerId, created.revision).catch(() => false);
+          throw error;
+        }
         return jsonResponse({ provider: publicProvider(created) }, 201);
       }
       if (!route.providerId) return methodNotAllowed(['GET', 'POST']);
@@ -226,6 +252,7 @@ export function createCompanySsoApi(options: CompanySsoApiOptions): CompanySsoAp
       if (request.method === 'DELETE') {
         const deleted = await options.repository.delete(route.organizationId, route.providerId, parseExpectedRevision(request, existing.revision));
         if (!deleted) throw new CompanySsoError('REVISION_CONFLICT', 'Company SSO provider changed; reload before deleting', 409);
+        await syncBridge(options.bridge ? () => options.bridge!.remove(existing) : undefined);
         return jsonResponse({ deleted: true, providerId: route.providerId });
       }
       if (request.method !== 'PATCH' && request.method !== 'PUT') return methodNotAllowed(['GET', 'PATCH', 'PUT', 'DELETE']);
@@ -252,6 +279,10 @@ export function createCompanySsoApi(options: CompanySsoApiOptions): CompanySsoAp
       }
       const updated = await options.repository.update(route.organizationId, route.providerId, patch, parseExpectedRevision(request, existing.revision));
       if (!updated) throw new CompanySsoError('REVISION_CONFLICT', 'Company SSO provider changed; reload before updating', 409);
+      // The private row is authoritative. If the mirror write fails, the
+      // plugin resolver will fail closed on status/configuration mismatch and
+      // the next admin retry can reconcile the row.
+      await syncBridge(options.bridge ? () => options.bridge!.upsert(updated) : undefined);
       return jsonResponse({ provider: publicProvider(updated) });
     } catch (error) {
       return errorResponse(error);

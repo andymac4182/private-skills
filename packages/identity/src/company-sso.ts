@@ -14,6 +14,7 @@ export * from './company-sso-validation.js';
 export * from './company-sso-repository.js';
 export * from './company-sso-api.js';
 export * from './company-sso-plugin.js';
+export * from './company-sso-better-auth.js';
 
 export interface CompanySsoModule extends CompanySsoApi {
   repository: CompanySsoProviderRepository;

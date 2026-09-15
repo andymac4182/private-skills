@@ -5,6 +5,7 @@ import {
 
 import {
   COMPANY_SSO_CALLBACK_PATH,
+  COMPANY_SSO_SAML_CALLBACK_PATH,
   COMPANY_SSO_MAX_DISCOVERY_BYTES,
   COMPANY_SSO_MAX_DISPLAY_NAME_LENGTH,
   COMPANY_SSO_MAX_METADATA_BYTES,
@@ -122,10 +123,16 @@ export function normalizeCompanyAppOrigin(value: string, allowLoopbackHttp = fal
   return parsed.origin;
 }
 
-export function companySsoCallbackUrl(appOrigin: string, providerId: string, allowLoopbackHttp = false): string {
+export function companySsoCallbackUrl(
+  appOrigin: string,
+  providerId: string,
+  allowLoopbackHttp = false,
+  protocol: CompanySsoProtocol = 'oidc',
+): string {
   const origin = normalizeCompanyAppOrigin(appOrigin, allowLoopbackHttp);
   const normalizedProviderId = normalizeCompanyProviderId(providerId);
-  return `${origin}${COMPANY_SSO_CALLBACK_PATH}/${encodeURIComponent(normalizedProviderId)}`;
+  const callbackPath = protocol === 'saml' ? COMPANY_SSO_SAML_CALLBACK_PATH : COMPANY_SSO_CALLBACK_PATH;
+  return `${origin}${callbackPath}/${encodeURIComponent(normalizedProviderId)}`;
 }
 
 function assertExactCallback(callbackValue: unknown, expected: string, policy: CompanySsoValidationPolicy): string {
@@ -367,7 +374,7 @@ export async function validateCompanySsoRegistration(
   const protocol = input.protocol;
   if (protocol !== 'oidc' && protocol !== 'saml') throw new CompanySsoValidationError('INVALID_PROTOCOL', 'protocol must be oidc or saml');
   const issuer = normalizeCompanyIssuer(input.issuer, policy);
-  const callbackUrl = companySsoCallbackUrl(policy.appOrigin, providerId, policy.allowLoopbackHttp === true);
+  const callbackUrl = companySsoCallbackUrl(policy.appOrigin, providerId, policy.allowLoopbackHttp === true, protocol);
   assertExactCallback(input.callbackUrl, callbackUrl, policy);
   const status = normalizeCompanySsoStatus(input.status);
   if (protocol === 'oidc') {
@@ -424,12 +431,27 @@ export const COMPANY_SSO_SYNTHETIC_DOMAIN = 'company-sso.invalid';
 export function toBetterAuthCompanySsoProvider(record: CompanySsoProviderRecord) {
   validateCompanySsoRecord(record);
   return {
+    id: record.id,
     issuer: record.issuer,
     providerId: record.providerId,
     organizationId: record.organizationId,
     userId: record.createdBy,
     domain: COMPANY_SSO_SYNTHETIC_DOMAIN,
-    ...(record.oidc ? { oidcConfig: record.oidc } : {}),
+    ...(record.oidc ? {
+      oidcConfig: {
+        issuer: record.issuer,
+        pkce: true as const,
+        clientId: record.oidc.clientId,
+        clientSecret: record.oidc.clientSecret,
+        authorizationEndpoint: record.oidc.authorizationEndpoint,
+        discoveryEndpoint: record.oidc.discoveryUrl,
+        tokenEndpoint: record.oidc.tokenEndpoint,
+        jwksEndpoint: record.oidc.jwksEndpoint,
+        ...(record.oidc.userInfoEndpoint ? { userInfoEndpoint: record.oidc.userInfoEndpoint } : {}),
+        scopes: [...record.oidc.scopes],
+        tokenEndpointAuthentication: 'client_secret_basic' as const,
+      },
+    } : {}),
     ...(record.saml ? { samlConfig: record.saml } : {}),
   };
 }
@@ -452,7 +474,7 @@ export function explicitCompanySsoSelection(
     throw new CompanySsoValidationError('COMPANY_PROVIDER_MISMATCH', 'The selected SSO provider is not bound to this company', 403);
   }
   if (record.status !== 'active') throw new CompanySsoValidationError('PROVIDER_DISABLED', 'The selected SSO provider is disabled', 403);
-  const callbackURL = companySsoCallbackUrl(appOrigin, providerId, allowLoopbackHttp);
+  const callbackURL = companySsoCallbackUrl(appOrigin, providerId, allowLoopbackHttp, record.protocol);
   if (record.callbackUrl !== callbackURL) throw new CompanySsoValidationError('CALLBACK_MISMATCH', 'The stored company callback does not match the generated callback', 500);
   return { organizationId, providerId, callbackURL };
 }
