@@ -4,6 +4,7 @@ import {
   type FilesSdkBlobStoreOptions,
 } from "./files.js";
 import { digestBytes } from "./digest.js";
+import { normalizeStorageProviderBinding } from "./receipt.js";
 
 /** Providers supported by the current files-sdk adapter catalog. */
 export type FilesProvider =
@@ -237,14 +238,37 @@ export async function createNodeFilesClient(
 export async function createNodeFilesSdkBlobStore(
   options: NodeFilesSdkOptions
 ): Promise<FilesSdkBlobStore> {
+  const providerBinding = await resolveNodeStorageProviderBinding(options);
   const client = await createNodeFilesClient(options);
-  const providerBinding = options.providerBinding ?? await derivedProviderBinding(options);
   return new FilesSdkBlobStore({
     client,
     maxBytes: options.maxBytes,
     prefix: options.prefix,
     providerBinding,
   });
+}
+
+/**
+ * Resolve the stable identity used by recovery for a Node Files SDK store.
+ * Hosts may pass a validated non-secret identity when the provider does not
+ * expose one in its ordinary configuration (for example a Vercel Blob token
+ * without a store ID). This helper is exported so low-level callers that use
+ * `createNodeFilesClient` directly can apply the same check before wrapping
+ * the client in `FilesSdkBlobStore`.
+ */
+export async function resolveNodeStorageProviderBinding(
+  options: NodeFilesSdkOptions,
+): Promise<string> {
+  if (options.providerBinding !== undefined) {
+    const explicit = normalizeStorageProviderBinding(options.providerBinding);
+    if (!explicit) {
+      throw new Error(
+        "Files SDK providerBinding must be a bounded non-secret storage identity",
+      );
+    }
+    return explicit;
+  }
+  return derivedProviderBinding(options);
 }
 
 /**
@@ -259,6 +283,24 @@ async function derivedProviderBinding(options: NodeFilesSdkOptions): Promise<str
   if (options.provider === "vercel-blob" && !storeId) {
     throw new Error(
       "Files SDK vercel-blob requires providerBinding or credentials.storeId for durable storage recovery",
+    );
+  }
+  if (
+    options.provider === "r2" &&
+    !options.credentials?.accountId &&
+    !options.endpoint
+  ) {
+    throw new Error(
+      "Files SDK r2 requires providerBinding, credentials.accountId, or endpoint for durable storage recovery",
+    );
+  }
+  if (
+    options.provider === "azure" &&
+    !options.credentials?.accountName &&
+    !options.endpoint
+  ) {
+    throw new Error(
+      "Files SDK azure requires providerBinding, credentials.accountName, or endpoint for durable storage recovery",
     );
   }
   const identity = {
