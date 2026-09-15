@@ -10,6 +10,7 @@ import type {
   StorageObjectInspection,
   StoredBlob,
 } from "../../contracts/src/index.js";
+import { isVerifiedStorageWriteReceipt, storageProviderBinding } from "./receipt.js";
 
 export type { StorageBillingCorrection } from "../../contracts/src/index.js";
 
@@ -214,6 +215,25 @@ function nowIso(now: () => Date): string {
 
 function cloneAttempt(attempt: StorageAttempt): StorageAttempt {
   return { ...attempt };
+}
+
+/**
+ * A receipt is provider finality for one exact, bound write. It is only
+ * trusted while recovery is using the same provider configuration that minted
+ * it; changing the endpoint, account, bucket, or private prefix must leave the
+ * old attempt retained until the old provider is reconciled separately.
+ */
+function hasVerifiedStorageWriteReceipt(
+  attempt: StorageAttempt,
+  activeBinding: string | undefined,
+): boolean {
+  if (!activeBinding || attempt.providerBinding !== activeBinding || !attempt.writeReceipt) return false;
+  return isVerifiedStorageWriteReceipt(attempt.writeReceipt, {
+    providerBinding: activeBinding,
+    key: attempt.objectKey,
+    digest: attempt.digest,
+    size: attempt.size,
+  });
 }
 
 function recoveryToken(): string {
@@ -451,11 +471,28 @@ export class StorageRecoveryService {
     const attempt = claimedAttempt;
     const key = attempt.objectKey!;
 
-    let writerTerminated = false;
-    try {
-      writerTerminated = await this.#verifyWriteTermination({ request, attempt: cloneAttempt(attempt) });
-    } catch {
-      writerTerminated = false;
+    const activeBinding = storageProviderBinding(this.#blobs);
+    // A receipt belongs to the exact provider configuration that performed
+    // the write. Never ask the currently configured provider to certify an old
+    // binding: that could release bytes whose timed-out writer is still live
+    // in the previous account, bucket, endpoint, or prefix.
+    if (attempt.providerBinding !== undefined && attempt.providerBinding !== activeBinding) {
+      return this.#retainClaimed(
+        request.organizationId,
+        request.attemptId,
+        claimed.token,
+        { state: "unknown", key, reason: "provider-error" },
+        "writer-unconfirmed",
+      );
+    }
+
+    let writerTerminated = hasVerifiedStorageWriteReceipt(attempt, activeBinding);
+    if (attempt.writeReceipt === undefined) {
+      try {
+        writerTerminated = await this.#verifyWriteTermination({ request, attempt: cloneAttempt(attempt) });
+      } catch {
+        writerTerminated = false;
+      }
     }
     if (!writerTerminated) {
       return this.#retainClaimed(request.organizationId, request.attemptId, claimed.token, { state: "unknown", key, reason: "provider-error" }, "writer-unconfirmed");
