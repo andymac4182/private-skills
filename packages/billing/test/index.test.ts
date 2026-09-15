@@ -7,6 +7,7 @@ import {
   STRIPE_API_VERSION,
   billingPostgresSchemaSql,
   createBillingWebhookHandler,
+  createBillingServiceFromEnv,
   createLocalBillingAdapter,
   createMemoryBillingRepository,
   createPlanCatalog,
@@ -222,6 +223,48 @@ describe('billing provider readiness', () => {
     await expect(unconfigured.checkout({ organizationId: 'org-unconfigured', subject: 'owner', planId: 'team' })).rejects.toMatchObject({ code: 'PLAN_NOT_CONFIGURED' });
   });
 
+  it('keeps usage enforcement available when hosted provider setup is deferred', async () => {
+    const repository = createMemoryBillingRepository({ now: () => NOW });
+    const service = new BillingService({
+      repository,
+      catalog: configuredCatalog(),
+      enabled: true,
+      now: () => NOW,
+      successUrl: 'https://private-skills.example/billing/success',
+      cancelUrl: 'https://private-skills.example/billing/cancel',
+      portalReturnUrl: 'https://private-skills.example/billing',
+    });
+    const timestamp = new Date(NOW).toISOString();
+    await repository.transaction('org-provider-deferred', (state) => {
+      state.customer = { organizationId: state.organizationId, provider: 'stripe', customerId: 'cus_deferred', createdAt: timestamp, updatedAt: timestamp };
+      state.subscription = {
+        organizationId: state.organizationId,
+        provider: 'stripe',
+        subscriptionId: 'sub_deferred',
+        customerId: 'cus_deferred',
+        priceId: 'price_team_test',
+        planId: 'team',
+        status: 'active',
+        cancelAtPeriodEnd: false,
+        eventCreatedAt: NOW_SECONDS,
+        lastEventId: 'evt_deferred',
+        source: 'verified-webhook',
+        updatedAt: timestamp,
+      };
+    });
+    expect(service.status()).toMatchObject({ enabled: true, usageEnforcement: true, providerReady: false, provider: null, checkout: false, portal: false, webhookVerification: false });
+    await expect(service.entitlement('org-provider-deferred')).resolves.toMatchObject({ planId: 'team', state: 'active' });
+    await expect(service.reserveUsage('org-provider-deferred', { scans: 1 }, 'deferred-eve-scan')).resolves.toMatchObject({ idempotent: false });
+  });
+
+  it('keeps explicit environment admission enabled without inferring a provider', () => {
+    const service = createBillingServiceFromEnv({
+      repository: createMemoryBillingRepository({ now: () => NOW }),
+      env: { PSKILLS_BILLING_ENABLED: 'true' },
+    });
+    expect(service.status()).toMatchObject({ enabled: true, usageEnforcement: true, providerReady: false, provider: null, checkout: false, portal: false });
+  });
+
   it('uses one server-owned customer mapping for hosted checkout and portal', async () => {
     const { provider, calls } = mockProvider();
     const service = serviceWith({ provider });
@@ -384,6 +427,29 @@ describe('provider invoice read model', () => {
 });
 
 describe('transactional usage enforcement', () => {
+  it('keeps global memory operation lookup available after the recent window ages out', async () => {
+    const repository = createMemoryBillingRepository({ now: () => NOW });
+    await repository.transaction('org-memory-aged', (state) => {
+      state.usageOperations = Array.from({ length: 20_001 }, (_, index) => ({
+        organizationId: 'org-memory-aged',
+        operationKey: index === 0 ? 'memory-aged-operation' : `memory-operation-${index}`,
+        delta: { scans: 1 },
+        usage: { ...state.usage },
+        createdAt: new Date(NOW + index).toISOString(),
+        status: 'released' as const,
+      }));
+    });
+
+    const recent = await repository.read('org-memory-aged');
+    expect(recent.usageOperations).toHaveLength(20_000);
+    expect(recent.usageOperations.some((operation) => operation.operationKey === 'memory-aged-operation')).toBe(false);
+    await expect(repository.findUsageOperation('memory-aged-operation')).resolves.toMatchObject({
+      organizationId: 'org-memory-aged',
+      operationKey: 'memory-aged-operation',
+      status: 'released',
+    });
+  });
+
   it('enforces all finite limits atomically and makes retries idempotent', async () => {
     const service = serviceWith({ enabled: false });
     const limit = (await service.entitlement('org-limits')).limits;
@@ -418,6 +484,64 @@ describe('transactional usage enforcement', () => {
     await service.reserveUsage('org-seats', { eveCostCents: 40 }, 'eve-estimate');
     await expect(service.reconcileUsage('org-seats', 'eve-estimate', { eveCostCents: 25 }, 'eve-actual')).resolves.toMatchObject({ idempotent: false, snapshot: { usage: { eveCostCents: 25 } } });
     await expect(service.reconcileReservedUsage('org-seats', 'eve-estimate', { eveCostCents: 25 }, 'eve-actual')).resolves.toMatchObject({ idempotent: true });
+  });
+
+  it('keeps concurrent seat holds across reconciliation and reuses lifecycle keys after release', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.syncSeatCount('org-seat-lifecycle', 2, 'seed');
+    const results = await Promise.allSettled([
+      service.reserveSeat('org-seat-lifecycle', 'invite-a'),
+      service.reserveSeat('org-seat-lifecycle', 'invite-b'),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const winner = results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof service.reserveSeat>>> => result.status === 'fulfilled')!.value.operationKey;
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+
+    // Cancellation releases the active hold. Re-inviting the same email/key
+    // is a new lifecycle and must reserve again rather than returning the old
+    // idempotent result.
+    await expect(service.releaseSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.reserveSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.commitSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.syncSeatCount('org-seat-lifecycle', 3, 'commit')).resolves.toMatchObject({ snapshot: { usage: { seats: 3 } } });
+
+    // A stale lower count must not lower the committed baseline. The explicit
+    // lifecycle release then frees the seat, and a later re-add of the same
+    // subject key admits a fresh seat.
+    await service.syncSeatCount('org-seat-lifecycle', 2, 'stale-remove-observation');
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+    await expect(service.releaseSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.reserveSeat('org-seat-lifecycle', winner)).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-seat-lifecycle')).resolves.toMatchObject({ usage: { seats: 3 } });
+  });
+
+  it('exposes active failed-write holds and requires matching operator proof to release them', async () => {
+    const service = serviceWith();
+    await service.reserveSeat('org-seat-recovery', 'failed-member-hold', { subjectKey: true });
+    await expect(service.activeSeatReservations('org-seat-recovery')).resolves.toMatchObject([
+      { operationKey: 'failed-member-hold', status: 'active', subjectKey: true, committed: false },
+    ]);
+
+    const proof = { kind: 'known-failure' as const, reference: 'better-auth-create-member-err-1' };
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', proof)).resolves.toMatchObject({
+      idempotent: false,
+      reservation: { operationKey: 'failed-member-hold', status: 'settled', committed: false, recoveryProof: proof },
+      snapshot: { usage: { seats: 0 } },
+    });
+    await expect(service.activeSeatReservations('org-seat-recovery')).resolves.toEqual([]);
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', proof)).resolves.toMatchObject({ idempotent: true });
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', { kind: 'known-failure', reference: 'different-proof' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    await service.reserveSeat('org-seat-recovery', 'failed-member-hold', { subjectKey: true });
+    const reactivated = await service.activeSeatReservations('org-seat-recovery');
+    expect(reactivated).toMatchObject([{ operationKey: 'failed-member-hold', status: 'active' }]);
+    expect(reactivated[0]).not.toHaveProperty('recoveryProof');
+    await service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', { kind: 'writer-terminated', reference: 'better-auth-create-member-err-2' });
+
+    await service.reserveSeat('org-seat-recovery', 'committed-member-hold', { subjectKey: true });
+    await service.commitSeat('org-seat-recovery', 'committed-member-hold');
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'committed-member-hold', { kind: 'writer-terminated', reference: 'writer-terminated-1' })).rejects.toMatchObject({ code: 'SEAT_RESERVATION_SETTLED' });
+    await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'missing-member-hold', proof)).rejects.toMatchObject({ code: 'SEAT_RESERVATION_NOT_FOUND' });
   });
 
   it('resets monthly counters while retaining seats and storage', async () => {
@@ -456,6 +580,25 @@ describe('transactional usage enforcement', () => {
     await service.reconcileUsage('org-partial-reconcile', 'estimate', { eveCostCents: 25 }, 'actual');
     await expect(service.usageSnapshot('org-partial-reconcile')).resolves.toMatchObject({ usage: { scans: 2, eveCostCents: 25 } });
   });
+
+  it('keeps explicit zero reconciliation and reopens the same released key', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import');
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
+    await expect(service.reserveUsage('org-reopen', { storageBytes: 40 }, 'stable-import')).resolves.toMatchObject({ idempotent: false, snapshot: { usage: { storageBytes: 40 } } });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 40 } });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: false });
+    await expect(service.usageSnapshot('org-reopen')).resolves.toMatchObject({ usage: { storageBytes: 0 } });
+    await expect(service.reconcileUsage('org-reopen', 'stable-import', { storageBytes: 0 }, 'stable-import-release')).resolves.toMatchObject({ idempotent: true });
+  });
+
+  it('releases a reserved metric when reconciliation explicitly reports zero', async () => {
+    const service = serviceWith({ enabled: false });
+    await service.reserveUsage('org-zero-reconcile', { eveCostCents: 40 }, 'estimate');
+    await service.reconcileUsage('org-zero-reconcile', 'estimate', { eveCostCents: 0 }, 'release');
+    await expect(service.usageSnapshot('org-zero-reconcile')).resolves.toMatchObject({ usage: { eveCostCents: 0 } });
+  });
 });
 
 describe('PostgreSQL repository contract', () => {
@@ -480,11 +623,11 @@ describe('PostgreSQL repository contract', () => {
         const current = this.usage.get(String(parameters[0]));
         if (text.includes('VALUES ($1, $2::timestamptz, $3::timestamptz, 0, 0, 0, 0')) {
           const [organizationId, periodStart, periodEnd, updatedAt] = parameters;
-          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, updated_at: updatedAt });
+          if (!current) this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats: 0, storage_bytes: 0, scans: 0, eve_cost_cents: 0, seat_baseline: 0, seat_reservations: '[]', seat_revision: 0, updated_at: updatedAt });
           return { rows: [] as Row[], rowCount: current ? 0 : 1 };
         }
-        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt] = parameters;
-        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, updated_at: updatedAt });
+        const [organizationId, periodStart, periodEnd, seats, storageBytes, scans, eveCostCents, updatedAt, seatBaseline, seatReservations, seatRevision] = parameters;
+        this.usage.set(String(organizationId), { organization_id: organizationId, period_start: periodStart, period_end: periodEnd, seats, storage_bytes: storageBytes, scans, eve_cost_cents: eveCostCents, seat_baseline: seatBaseline ?? seats, seat_reservations: seatReservations ?? '[]', seat_revision: seatRevision ?? 0, updated_at: updatedAt });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id, provider, customer_id') && text.includes('FROM "billing_contract_customers"')) {
@@ -538,10 +681,9 @@ describe('PostgreSQL repository contract', () => {
         return { rows: [row] as Row[], rowCount: 1 };
       }
       if (text.includes('INSERT INTO "billing_contract_usage_operations"')) {
-        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt] = parameters;
+        const [organizationId, operationKey, seats, storageBytes, scans, eveCostCents, usageSnapshot, createdAt, status, reconciled] = parameters;
         const key = `${organizationId}:${operationKey}`;
-        if (this.operations.has(key)) return { rows: [] as Row[], rowCount: 0 };
-        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt });
+        this.operations.set(key, { organization_id: organizationId, operation_key: operationKey, seats_delta: seats, storage_bytes_delta: storageBytes, scans_delta: scans, eve_cost_cents_delta: eveCostCents, usage_snapshot: usageSnapshot, created_at: createdAt, status: status ?? 'reserved', reconciled: reconciled ?? null });
         return { rows: [] as Row[], rowCount: 1 };
       }
       if (text.includes('SELECT organization_id FROM "billing_contract_customers"')) {

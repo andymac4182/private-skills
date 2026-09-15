@@ -13,7 +13,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createIdentityRuntime,
   createIdentityRuntimeConfig,
+  PostgresIdentityOperationsEventStore,
   type IdentityRuntimeAdmin,
+  type IdentityOperationsRole,
 } from '../packages/identity/src/index.js';
 import {
   companySsoSchemaSql,
@@ -44,16 +46,27 @@ import {
   type PlanCatalog,
 } from '../packages/billing/src/index.js';
 import {
+  HostedWorkerDispatchLeaseError,
   PostgresStateRepository,
   defaultRegistryState,
+  PostgresHostedWorkerDispatchStore,
+  hostedWorkerDispatchSchemaSql,
   postgresStateSchemaSql,
   type PgPoolLike,
 } from '../packages/database/src/index.js';
 import { createRegistryHandler, type RegistryHandler } from '../packages/core/src/index.js';
 import { createTenantHandlerRouter } from '../apps/web/server/tenant-runtime.js';
+import { StateRepositoryTenantReviewDispatchLedger } from '../apps/web/server/tenant-review-dispatch.js';
 import { FilesSdkBlobStore, digestBytes } from '../packages/storage/src/index.js';
 import { createNodeFilesClient } from '../packages/storage/src/node.js';
-import type { Authenticator, BlobStore, RegistryConfiguration, SkillVersion, StoredBlob } from '../packages/contracts/src/index.js';
+import type {
+  Authenticator,
+  BlobStore,
+  RegistryConfiguration,
+  RegistryState,
+  SkillVersion,
+  StoredBlob,
+} from '../packages/contracts/src/index.js';
 
 /**
  * This is an opt-in, loopback-only rehearsal. A production or non-loopback
@@ -88,6 +101,14 @@ const SESSION_A = 'operations-session-a';
 const SESSION_B = 'operations-session-b';
 const TOKEN_A = 'psk_operations_token_a';
 const TOKEN_B = 'psk_operations_token_b';
+const WORKER_TOKEN_A = 'operations-worker-token-a';
+const WORKER_JOB_A = 'operations-worker-job-a';
+const WORKER_JOB_B = 'operations-worker-job-b';
+const STORAGE_ATTEMPT_A = 'operations-storage-attempt-a';
+const STORAGE_ATTEMPT_B = 'operations-storage-attempt-b';
+const DISPATCH_CURSOR_ORGANIZATION_ID = '__private_skills_tenant_review_dispatch__';
+const DISPATCH_DAY = new Date(NOW).toISOString().slice(0, 10);
+const DISPATCH_OPERATION_A = `common-skill-review:${DISPATCH_DAY}`;
 
 type SqlClient = ReturnType<typeof postgres>;
 type QueryResult<Row = Record<string, unknown>> = { rows: Row[]; rowCount?: number };
@@ -96,6 +117,23 @@ interface TableSnapshot {
   count: number;
   digest: string;
 }
+
+/** Compatibility view for the billing/worker owner field until all hosts
+ * consume the durable metered reservation key. */
+type RehearsalJob = RegistryState['jobs'][number] & { meteredReservationKey?: string };
+type RehearsalStorageAttempt = {
+  id: string;
+  organizationId: string;
+  reservationKey: string;
+  digest: StoredBlob['digest'];
+  size: number;
+  state: 'pending' | 'committed' | 'orphaned' | 'released';
+  createdAt: string;
+  updatedAt: string;
+  objectKey?: string;
+  jobId?: string;
+};
+type RecoveryRegistryState = RegistryState & { storageAttempts?: RehearsalStorageAttempt[] };
 
 async function objectManifest(store: FilesSdkBlobStore, objects: readonly StoredBlob[]): Promise<TableSnapshot> {
   const rows: string[] = [];
@@ -412,6 +450,31 @@ async function membershipAuthorizer(sql: SqlClient, schema: string): Promise<Mem
   };
 }
 
+async function identityOperationsEventStore(
+  sql: SqlClient,
+  tableName: string,
+  authSchema: string,
+): Promise<PostgresIdentityOperationsEventStore> {
+  return new PostgresIdentityOperationsEventStore({
+    pool: pgPool(sql),
+    tableName,
+    now: () => NOW,
+    verifyTenant: async (organizationId, userId) => {
+      const rows = await sql.unsafe<{ organizationId: string; userId: string; role: string }[]>(
+        `SELECT "organizationId", "userId", role FROM ${qualifiedSchema(authSchema, 'member')} WHERE "organizationId" = $1 AND "userId" = $2 LIMIT 1`,
+        [organizationId, userId],
+      );
+      const row = rows[0];
+      if (!row || !['owner', 'admin', 'publisher', 'reader'].includes(row.role)) return null;
+      return {
+        organizationId: row.organizationId,
+        userId: row.userId,
+        role: row.role as IdentityOperationsRole,
+      };
+    },
+  });
+}
+
 function sessionRequest(cookieValue: string, cookieName: string): Request {
   return new Request(`${ORIGIN}/v1/me`, {
     headers: { cookie: `${cookieName}=${cookieValue}` },
@@ -468,7 +531,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it('copies current identity, SSO, token, billing, registry, and sealed-object state through the Files SDK filesystem provider', async () => {
+  it('copies current identity, SSO, token, billing, registry, hosted-worker dispatch, and sealed-object state through the Files SDK filesystem provider', async () => {
     if (!DATABASE_URL) return;
     const runId = `${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const billingRunId = `${process.pid}_${randomUUID().slice(0, 8)}`;
@@ -480,6 +543,12 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const targetTokens = name('ops_tokens', runId, 'dst');
     const sourceRegistry = name('ops_registry', runId, 'src');
     const targetRegistry = name('ops_registry', runId, 'dst');
+    const sourceIdentityEvents = name('opsid_events', runId, 'src');
+    const targetIdentityEvents = name('opsid_events', runId, 'dst');
+    const sourceHostedWorkerDispatch = name('opsw_dispatch', runId, 'src');
+    const targetHostedWorkerDispatch = name('opsw_dispatch', runId, 'dst');
+    const sourceHostedWorkerRetry = name('opsw_retry', runId, 'src');
+    const targetHostedWorkerRetry = name('opsw_retry', runId, 'dst');
     const sourceBillingTable = name('opsbill', billingRunId, 'src');
     const targetBillingTable = name('opsbill', billingRunId, 'dst');
     const sql = postgres(DATABASE_URL, { max: 20, prepare: false });
@@ -488,6 +557,22 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const targetIdentity = identity(targetAuthSchema, DATABASE_URL);
     const sourceSsoAuth = ssoMirrorAuth(sourceAuthSchema, sql);
     const targetSsoAuth = ssoMirrorAuth(targetAuthSchema, sql);
+    const sourceOperationsEvents = await identityOperationsEventStore(sql, sourceIdentityEvents, sourceAuthSchema);
+    const targetOperationsEvents = await identityOperationsEventStore(sql, targetIdentityEvents, targetAuthSchema);
+    let sourceHostedLeaseSequence = 0;
+    let targetHostedLeaseSequence = 0;
+    const sourceHostedWorkerStore = new PostgresHostedWorkerDispatchStore({
+      pool,
+      tableName: sourceHostedWorkerDispatch,
+      retryTableName: sourceHostedWorkerRetry,
+      leaseTokenFactory: () => `operations-hosted-source-${++sourceHostedLeaseSequence}`,
+    });
+    const targetHostedWorkerStore = new PostgresHostedWorkerDispatchStore({
+      pool,
+      tableName: targetHostedWorkerDispatch,
+      retryTableName: targetHostedWorkerRetry,
+      leaseTokenFactory: () => `operations-hosted-target-${++targetHostedLeaseSequence}`,
+    });
     const storageRoot = await mkdtemp(join(tmpdir(), 'private-skills-operations-files-'));
     cleanups.push(async () => {
       await rm(storageRoot, { recursive: true, force: true });
@@ -508,7 +593,7 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       await targetIdentity.close().catch(() => undefined);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${identifier(sourceAuthSchema)} CASCADE`);
       await sql.unsafe(`DROP SCHEMA IF EXISTS ${identifier(targetAuthSchema)} CASCADE`);
-      await sql.unsafe(`DROP TABLE IF EXISTS ${[targetSso, sourceSso, targetTokens, sourceTokens, targetRegistry, sourceRegistry, `${targetBillingTable}_usage_operations`, `${targetBillingTable}_webhook_events`, `${targetBillingTable}_subscriptions`, `${targetBillingTable}_customers`, `${targetBillingTable}_usage`, `${sourceBillingTable}_usage_operations`, `${sourceBillingTable}_webhook_events`, `${sourceBillingTable}_subscriptions`, `${sourceBillingTable}_customers`, `${sourceBillingTable}_usage`].map(identifier).join(', ')}`);
+      await sql.unsafe(`DROP TABLE IF EXISTS ${[targetSso, sourceSso, targetTokens, sourceTokens, targetRegistry, sourceRegistry, targetIdentityEvents, sourceIdentityEvents, targetHostedWorkerRetry, sourceHostedWorkerRetry, targetHostedWorkerDispatch, sourceHostedWorkerDispatch, `${targetBillingTable}_usage_operations`, `${targetBillingTable}_webhook_events`, `${targetBillingTable}_subscriptions`, `${targetBillingTable}_customers`, `${targetBillingTable}_usage`, `${sourceBillingTable}_usage_operations`, `${sourceBillingTable}_webhook_events`, `${sourceBillingTable}_subscriptions`, `${sourceBillingTable}_customers`, `${sourceBillingTable}_usage`].map(identifier).join(', ')}`);
       await sql.end({ timeout: 5 });
     });
 
@@ -526,10 +611,37 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await sql.unsafe(postgresStateSchemaSql(targetRegistry));
     await sql.unsafe(billingPostgresSchemaSql(sourceBillingTable));
     await sql.unsafe(billingPostgresSchemaSql(targetBillingTable));
+    await sql.unsafe(hostedWorkerDispatchSchemaSql(sourceHostedWorkerDispatch, sourceHostedWorkerRetry));
+    await sql.unsafe(hostedWorkerDispatchSchemaSql(targetHostedWorkerDispatch, targetHostedWorkerRetry));
+    await sourceOperationsEvents.runMigrations();
+    await targetOperationsEvents.runMigrations();
 
     await seedIdentity(sourceIdentity);
     const sourceSession = await signedSessionRequest(sourceIdentity, 'operations-session-token-a');
     await expect(sourceIdentity.getSession(sourceSession)).resolves.toMatchObject({ activeOrganizationId: ORG_A });
+
+    await sourceOperationsEvents.recordGlobal({
+      kind: 'callback_failure',
+      reasonCode: 'callback_unavailable',
+      providerId: 'operations-oidc',
+      occurredAt: new Date(NOW - 2 * 60 * 60 * 1_000),
+    });
+    const trustedA = await sourceOperationsEvents.trustedTenant(ORG_A, USER_A);
+    expect(trustedA).toMatchObject({ organizationId: ORG_A, userId: USER_A, role: 'owner' });
+    if (!trustedA) throw new Error('operations rehearsal could not establish tenant A identity context');
+    await expect(sourceOperationsEvents.recordTenant(trustedA, {
+      kind: 'membership_denial',
+      reasonCode: 'membership_role_denied',
+      occurredAt: new Date(NOW - 60 * 60 * 1_000),
+    })).resolves.toBe(true);
+    const trustedB = await sourceOperationsEvents.trustedTenant(ORG_B, USER_B);
+    expect(trustedB).toMatchObject({ organizationId: ORG_B, userId: USER_B, role: 'owner' });
+    if (!trustedB) throw new Error('operations rehearsal could not establish tenant B identity context');
+    await expect(sourceOperationsEvents.recordTenant(trustedB, {
+      kind: 'authentication_failure',
+      reasonCode: 'authentication_rejected',
+      occurredAt: new Date(NOW - 30 * 60 * 1_000),
+    })).resolves.toBe(true);
 
     const sourceSsoRepository = createPostgresCompanySsoRepository(pool, { tableName: sourceSso });
     const ssoRecord: CompanySsoProviderRecord = {
@@ -582,7 +694,11 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       await sourceBillingService.handleWebhook(event.body, event.signature);
     }
     await sourceBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, 'ops-reservation-a');
+    await sourceBillingService.reconcileUsage(ORG_A, 'ops-reservation-a', { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a');
     await sourceBillingService.reserveUsage(ORG_B, { scans: 1, eveCostCents: 11 }, 'ops-reservation-b');
+    await sourceBillingService.reserveSeat(ORG_A, 'ops-seat-a', { subjectKey: true });
+    await sourceBillingService.commitSeat(ORG_A, 'ops-seat-a');
+    await sourceBillingService.reserveSeat(ORG_B, 'ops-seat-b', { subjectKey: true });
 
     const sourceRegistryRepository = new PostgresStateRepository(pool, {
       tableName: sourceRegistry,
@@ -598,12 +714,122 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     const artifactB = await sourceBlobs.put(artifactBytesB);
     await sourceRegistryRepository.transaction(ORG_A, (state) => state.skills.push(skill(ORG_A, 'operations-skill-a', artifactA)));
     await sourceRegistryRepository.transaction(ORG_B, (state) => state.skills.push(skill(ORG_B, 'operations-skill-b', artifactB)));
+    const recoveryCreatedAt = new Date(NOW - 10 * 60 * 1_000).toISOString();
+    const recoveryUpdatedAt = new Date(NOW).toISOString();
+    const recoveryLeaseExpiresAt = new Date(NOW + 5 * 60 * 1_000).toISOString();
+    await sourceRegistryRepository.transaction(ORG_A, (state) => {
+      const mutable = state as RecoveryRegistryState;
+      (mutable.jobs as RehearsalJob[]).push({
+        id: WORKER_JOB_A,
+        organizationId: ORG_A,
+        kind: 'scan',
+        state: 'queued',
+        resourceId: 'operations-skill-a',
+        artifact: artifactA,
+        policyRevision: mutable.policy.revision,
+        policy: mutable.policy,
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        attempts: 1,
+        meteredReservationKey: 'ops-reservation-a',
+      });
+      mutable.storageAttempts ??= [];
+      mutable.storageAttempts.push({
+        id: STORAGE_ATTEMPT_A,
+        organizationId: ORG_A,
+        reservationKey: 'ops-reservation-a',
+        digest: artifactA.digest,
+        size: artifactBytesA.byteLength,
+        state: 'committed',
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        objectKey: artifactA.key,
+        jobId: WORKER_JOB_A,
+      });
+    });
+    await sourceRegistryRepository.transaction(ORG_B, (state) => {
+      const mutable = state as RecoveryRegistryState;
+      (mutable.jobs as RehearsalJob[]).push({
+        id: WORKER_JOB_B,
+        organizationId: ORG_B,
+        kind: 'scan',
+        state: 'failed',
+        resourceId: 'operations-skill-b',
+        artifact: artifactB,
+        policyRevision: mutable.policy.revision,
+        policy: mutable.policy,
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        attempts: 3,
+        meteredReservationKey: 'ops-reservation-b',
+        error: 'operations scanner retry exhausted',
+      });
+      mutable.storageAttempts ??= [];
+      mutable.storageAttempts.push({
+        id: STORAGE_ATTEMPT_B,
+        organizationId: ORG_B,
+        reservationKey: 'ops-reservation-b',
+        digest: artifactB.digest,
+        size: artifactBytesB.byteLength,
+        state: 'orphaned',
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        objectKey: artifactB.key,
+        jobId: WORKER_JOB_B,
+      });
+    });
+    const sourceDispatchLedger = new StateRepositoryTenantReviewDispatchLedger(sourceRegistryRepository);
+    const dispatchClaimA = await sourceDispatchLedger.claim({
+      organizationId: ORG_A,
+      operationKey: DISPATCH_OPERATION_A,
+      now: new Date(NOW),
+      leaseMs: 5 * 60 * 1_000,
+    });
+    expect(dispatchClaimA.claimed).toBe(true);
+    if (!dispatchClaimA.claimToken) throw new Error('operations rehearsal did not obtain tenant A dispatch claim');
+    await expect(sourceDispatchLedger.markStarting({
+      organizationId: ORG_A,
+      operationKey: DISPATCH_OPERATION_A,
+      claimToken: dispatchClaimA.claimToken,
+      now: new Date(NOW),
+    })).resolves.toBe(true);
+    const dispatchClaimB = await sourceDispatchLedger.claim({
+      organizationId: ORG_B,
+      operationKey: DISPATCH_OPERATION_A,
+      now: new Date(NOW),
+      leaseMs: 5 * 60 * 1_000,
+    });
+    expect(dispatchClaimB.claimed).toBe(true);
+    if (!dispatchClaimB.claimToken) throw new Error('operations rehearsal did not obtain tenant B dispatch claim');
+    await expect(sourceDispatchLedger.markUncertain({
+      organizationId: ORG_B,
+      operationKey: DISPATCH_OPERATION_A,
+      claimToken: dispatchClaimB.claimToken,
+      sessionId: 'operations-eve-session-b',
+      now: new Date(NOW),
+    })).resolves.toBe(true);
+    await sourceDispatchLedger.cursorStore.write({ cursor: {
+      day: DISPATCH_DAY,
+      pendingOrganizationIds: [ORG_A],
+      completedOrganizationIds: [],
+      blockedOrganizationIds: [ORG_B],
+      updatedAt: recoveryUpdatedAt,
+    } });
+    const sourceHostedLease = await sourceHostedWorkerStore.acquireLease(NOW, 5 * 60 * 1_000);
+    expect(sourceHostedLease).toMatchObject({ cursor: null, expiresAt: NOW + 5 * 60 * 1_000 });
+    if (!sourceHostedLease) throw new Error('operations rehearsal did not acquire the hosted worker dispatch lease');
+    await sourceHostedWorkerStore.advance(sourceHostedLease, ORG_A, NOW);
+    await sourceHostedWorkerStore.recordFailure(sourceHostedLease, ORG_B, ORG_A, 'tenant_worker_unavailable', NOW);
+    await expect(sourceHostedWorkerStore.isRetryReady(ORG_B, NOW)).resolves.toBe(false);
 
     const identitySourceManifest = await copyIdentitySchema(sql, sourceAuthSchema, targetAuthSchema);
     const publicSourceManifest = await copyPublicTables(sql, [
       [sourceSso, targetSso],
       [sourceTokens, targetTokens],
       [sourceRegistry, targetRegistry],
+      [sourceIdentityEvents, targetIdentityEvents],
+      [sourceHostedWorkerDispatch, targetHostedWorkerDispatch],
+      [sourceHostedWorkerRetry, targetHostedWorkerRetry],
       [`${sourceBillingTable}_customers`, `${targetBillingTable}_customers`],
       [`${sourceBillingTable}_subscriptions`, `${targetBillingTable}_subscriptions`],
       [`${sourceBillingTable}_usage`, `${targetBillingTable}_usage`],
@@ -621,6 +847,9 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
       [targetSso, publicTable(targetSso)],
       [targetTokens, publicTable(targetTokens)],
       [targetRegistry, publicTable(targetRegistry)],
+      [targetIdentityEvents, publicTable(targetIdentityEvents)],
+      [targetHostedWorkerDispatch, publicTable(targetHostedWorkerDispatch)],
+      [targetHostedWorkerRetry, publicTable(targetHostedWorkerRetry)],
       [`${targetBillingTable}_customers`, publicTable(`${targetBillingTable}_customers`)],
       [`${targetBillingTable}_subscriptions`, publicTable(`${targetBillingTable}_subscriptions`)],
       [`${targetBillingTable}_usage`, publicTable(`${targetBillingTable}_usage`)],
@@ -632,6 +861,184 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await expect(objectManifest(targetBlobs, [artifactA, artifactB])).resolves.toEqual(await objectManifest(sourceBlobs, [artifactA, artifactB]));
     await expect(targetBlobs.getVerified(artifactA.key, artifactA.digest)).resolves.toEqual(artifactBytesA);
     await expect(targetBlobs.getVerified(artifactB.key, artifactB.digest)).resolves.toEqual(artifactBytesB);
+    const restoredHostedDispatch = await sql.unsafe<{
+      cursor_org_id: string | null;
+      lease_token: string | null;
+      lease_expires_ms: string | null;
+    }[]>(
+      `SELECT cursor_org_id, lease_token,
+        (extract(epoch FROM lease_expires_at) * 1000)::bigint::text AS lease_expires_ms
+       FROM ${publicTable(targetHostedWorkerDispatch)} WHERE singleton_id = 'default'`,
+    );
+    expect(restoredHostedDispatch).toEqual([{
+      cursor_org_id: ORG_A,
+      lease_token: sourceHostedLease.token,
+      lease_expires_ms: String(NOW + 5 * 60 * 1_000),
+    }]);
+    const restoredHostedRetry = await sql.unsafe<{
+      organization_id: string;
+      attempts: string;
+      next_attempt_ms: string;
+      last_error: string;
+    }[]>(
+      `SELECT organization_id, attempts::text AS attempts,
+        (extract(epoch FROM next_attempt_at) * 1000)::bigint::text AS next_attempt_ms,
+        last_error
+       FROM ${publicTable(targetHostedWorkerRetry)} ORDER BY organization_id`,
+    );
+    expect(restoredHostedRetry).toEqual([{
+      organization_id: ORG_B,
+      attempts: '1',
+      next_attempt_ms: String(NOW + 30 * 1_000),
+      last_error: 'tenant_worker_unavailable',
+    }]);
+    await expect(targetHostedWorkerStore.acquireLease(NOW, 5 * 60 * 1_000)).resolves.toBeNull();
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, NOW)).resolves.toBe(false);
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, NOW + 60 * 1_000)).resolves.toBe(true);
+    const takeoverNow = NOW + 6 * 60 * 1_000;
+    const targetTakeoverLease = await targetHostedWorkerStore.acquireLease(takeoverNow, 5 * 60 * 1_000);
+    expect(targetTakeoverLease).toMatchObject({
+      cursor: ORG_A,
+      expiresAt: takeoverNow + 5 * 60 * 1_000,
+    });
+    if (!targetTakeoverLease) throw new Error('operations rehearsal did not take over the expired hosted worker lease');
+    await expect(targetHostedWorkerStore.advance(
+      { ...targetTakeoverLease, token: sourceHostedLease.token },
+      ORG_B,
+      takeoverNow,
+    )).rejects.toBeInstanceOf(HostedWorkerDispatchLeaseError);
+    await expect(targetHostedWorkerStore.isRetryReady(ORG_B, takeoverNow)).resolves.toBe(true);
+    await targetHostedWorkerStore.release(targetTakeoverLease, ORG_A);
+    const restoredRegistryA = await targetRegistryRepository.read(ORG_A) as RecoveryRegistryState;
+    expect(restoredRegistryA.jobs).toEqual([
+      expect.objectContaining({
+        id: WORKER_JOB_A,
+        organizationId: ORG_A,
+        state: 'queued',
+        attempts: 1,
+        meteredReservationKey: 'ops-reservation-a',
+      }),
+    ]);
+    expect(restoredRegistryA.storageAttempts).toEqual([
+      {
+        id: STORAGE_ATTEMPT_A,
+        organizationId: ORG_A,
+        reservationKey: 'ops-reservation-a',
+        digest: artifactA.digest,
+        size: artifactBytesA.byteLength,
+        state: 'committed',
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        objectKey: artifactA.key,
+        jobId: WORKER_JOB_A,
+      },
+    ]);
+    expect(restoredRegistryA.tenantReviewDispatches).toEqual([
+      {
+        operationKey: DISPATCH_OPERATION_A,
+        state: 'starting',
+        claimToken: expect.any(String),
+        leaseExpiresAt: recoveryLeaseExpiresAt,
+        updatedAt: recoveryUpdatedAt,
+        startingAt: recoveryUpdatedAt,
+      },
+    ]);
+    const restoredRegistryB = await targetRegistryRepository.read(ORG_B) as RecoveryRegistryState;
+    expect(restoredRegistryB.jobs).toEqual([
+      expect.objectContaining({
+        id: WORKER_JOB_B,
+        organizationId: ORG_B,
+        state: 'failed',
+        attempts: 3,
+        meteredReservationKey: 'ops-reservation-b',
+        error: 'operations scanner retry exhausted',
+      }),
+    ]);
+    expect(restoredRegistryB.storageAttempts).toEqual([
+      {
+        id: STORAGE_ATTEMPT_B,
+        organizationId: ORG_B,
+        reservationKey: 'ops-reservation-b',
+        digest: artifactB.digest,
+        size: artifactBytesB.byteLength,
+        state: 'orphaned',
+        createdAt: recoveryCreatedAt,
+        updatedAt: recoveryUpdatedAt,
+        objectKey: artifactB.key,
+        jobId: WORKER_JOB_B,
+      },
+    ]);
+    expect(restoredRegistryB.tenantReviewDispatches).toEqual([
+      {
+        operationKey: DISPATCH_OPERATION_A,
+        state: 'uncertain',
+        leaseExpiresAt: recoveryLeaseExpiresAt,
+        sessionId: 'operations-eve-session-b',
+        updatedAt: recoveryUpdatedAt,
+        uncertainAt: recoveryUpdatedAt,
+      },
+    ]);
+    const restoredDispatchCursor = await targetRegistryRepository.read(DISPATCH_CURSOR_ORGANIZATION_ID) as RegistryState;
+    expect(restoredDispatchCursor.tenantReviewDispatchCursor).toEqual({
+      day: DISPATCH_DAY,
+      pendingOrganizationIds: [ORG_A],
+      completedOrganizationIds: [],
+      blockedOrganizationIds: [ORG_B],
+      updatedAt: recoveryUpdatedAt,
+    });
+    const targetDispatchLedger = new StateRepositoryTenantReviewDispatchLedger(targetRegistryRepository);
+    await expect(targetDispatchLedger.claim({
+      organizationId: ORG_A,
+      operationKey: DISPATCH_OPERATION_A,
+      now: new Date(NOW),
+      leaseMs: 5 * 60 * 1_000,
+    })).resolves.toEqual({ claimed: false, reason: 'in-progress' });
+    await expect(targetDispatchLedger.claim({
+      organizationId: ORG_B,
+      operationKey: DISPATCH_OPERATION_A,
+      now: new Date(NOW),
+      leaseMs: 5 * 60 * 1_000,
+    })).resolves.toEqual({ claimed: false, reason: 'in-progress' });
+    await expect(targetDispatchLedger.cursorStore.read({ day: DISPATCH_DAY })).resolves.toEqual({
+      day: DISPATCH_DAY,
+      pendingOrganizationIds: [ORG_A],
+      completedOrganizationIds: [],
+      blockedOrganizationIds: [ORG_B],
+      updatedAt: recoveryUpdatedAt,
+    });
+    const workerAuthenticator: Authenticator = {
+      async authenticate(request) {
+        return request.headers.get('authorization') === `Bearer ${WORKER_TOKEN_A}`
+          ? { organizationId: ORG_A, subject: 'operations-worker', roles: ['worker'], scopes: ['jobs:claim', 'jobs:complete'] }
+          : null;
+      },
+    };
+    const restoredWorkerHandler = await registryHandler({ organizationId: ORG_A, auth: workerAuthenticator }, targetRegistryRepository, targetBlobs);
+    const workerClaim = await restoredWorkerHandler(new Request(`${ORIGIN}/internal/jobs/claim`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${WORKER_TOKEN_A}` },
+    }));
+    expect(workerClaim.status).toBe(200);
+    const claimedWorkerJob = (await workerClaim.json()) as { job?: { id?: string; state?: string; attempts?: number; meteredReservationKey?: string; fencingToken?: string } };
+    expect(claimedWorkerJob.job).toMatchObject({
+      id: WORKER_JOB_A,
+      state: 'running',
+      attempts: 2,
+      meteredReservationKey: 'ops-reservation-a',
+    });
+    expect(claimedWorkerJob.job?.fencingToken).toEqual(expect.any(String));
+    const staleWorkerCompletion = await restoredWorkerHandler(new Request(`${ORIGIN}/internal/jobs/${WORKER_JOB_A}/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${WORKER_TOKEN_A}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'operations-worker-lease-stale', error: 'stale worker retry' }),
+    }));
+    expect(staleWorkerCompletion.status).toBe(409);
+    const foreignWorkerCompletion = await restoredWorkerHandler(new Request(`${ORIGIN}/internal/jobs/${WORKER_JOB_B}/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${WORKER_TOKEN_A}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'operations-worker-lease-foreign', error: 'foreign worker retry' }),
+    }));
+    expect(foreignWorkerCompletion.status).toBe(404);
     const restoredIdentityRows = await sql.unsafe<{ users: string; organizations: string; members: string; sessions: string }[]>(
       `SELECT
         (SELECT count(*)::text FROM ${qualifiedSchema(targetAuthSchema, 'user')}) AS users,
@@ -658,6 +1065,31 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await expect(targetTokenService.authenticateBearerToken(TOKEN_A)).resolves.toMatchObject({ organizationId: ORG_A, subject: USER_A });
     await expect(targetTokenService.authenticateBearerToken(TOKEN_B)).resolves.toBeNull();
     await expect(targetTokenRepository.findById(ORG_B, 'operations-token-a')).resolves.toBeNull();
+    await expect(targetOperationsEvents.summarize(ORG_A)).resolves.toMatchObject({
+      authenticationFailures: { total: 0, last24h: 0 },
+      callbackFailures: { total: 0, last24h: 0 },
+      membershipDenials: { total: 1, last24h: 1 },
+    });
+    await expect(targetOperationsEvents.summarize(ORG_B)).resolves.toMatchObject({
+      authenticationFailures: { total: 1, last24h: 1 },
+      callbackFailures: { total: 0, last24h: 0 },
+      membershipDenials: { total: 0, last24h: 0 },
+    });
+    await expect(targetOperationsEvents.trustedTenant(ORG_B, USER_A)).resolves.toBeNull();
+    const restoredOperationsRows = await sql.unsafe<{
+      organization_id: string | null;
+      role: string | null;
+      event_kind: string;
+      reason_code: string;
+      provider_id: string | null;
+    }[]>(
+      `SELECT organization_id, role, event_kind, reason_code, provider_id FROM ${publicTable(targetIdentityEvents)} ORDER BY event_kind, organization_id NULLS FIRST`,
+    );
+    expect(restoredOperationsRows).toEqual([
+      { organization_id: ORG_B, role: 'owner', event_kind: 'authentication_failure', reason_code: 'authentication_rejected', provider_id: null },
+      { organization_id: null, role: null, event_kind: 'callback_failure', reason_code: 'callback_unavailable', provider_id: 'operations-oidc' },
+      { organization_id: ORG_A, role: 'owner', event_kind: 'membership_denial', reason_code: 'membership_role_denied', provider_id: null },
+    ]);
     await sql.unsafe(`DELETE FROM ${qualifiedSchema(targetAuthSchema, 'member')} WHERE "organizationId" = $1 AND "userId" = $2`, [ORG_A, USER_A]);
     await expect(targetIdentity.authenticate(targetSession)).resolves.toBeNull();
     await sql.unsafe(`INSERT INTO ${qualifiedSchema(targetAuthSchema, 'member')} ("id", "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, $5)`, [`${ORG_A}-member-restored`, ORG_A, USER_A, 'owner', new Date(NOW)]);
@@ -696,9 +1128,41 @@ local('full tenant PostgreSQL backup and restore rehearsal', () => {
     await expect(targetBillingService.entitlement(ORG_B)).resolves.toMatchObject({ organizationId: ORG_B, state: 'active', customerId: 'cus_operations_b', subscriptionId: 'sub_operations_b' });
     await expect(targetBillingRepository.findOrganizationByCustomerId('local', 'cus_operations_a')).resolves.toBe(ORG_A);
     await expect(targetBillingRepository.findOrganizationByCustomerId('local', 'cus_operations_b')).resolves.toBe(ORG_B);
+    const restoredUsageOperations = await sql.unsafe<{
+      organization_id: string;
+      operation_key: string;
+      scans_delta: number;
+      eve_cost_cents_delta: number;
+      status: string;
+      reconciled: { scans?: number; eveCostCents?: number } | null;
+    }[]>(
+      `SELECT organization_id, operation_key, scans_delta::int AS scans_delta, eve_cost_cents_delta::int AS eve_cost_cents_delta, status, reconciled FROM ${publicTable(`${targetBillingTable}_usage_operations`)} WHERE organization_id = $1 ORDER BY operation_key`,
+      [ORG_A],
+    );
+    expect(restoredUsageOperations).toEqual([
+      { organization_id: ORG_A, operation_key: 'ops-reconcile-a', scans_delta: -1, eve_cost_cents_delta: -8, status: 'committed', reconciled: null },
+      { organization_id: ORG_A, operation_key: 'ops-reservation-a', scans_delta: 2, eve_cost_cents_delta: 17, status: 'committed', reconciled: { scans: 1, eveCostCents: 9 } },
+    ]);
+    const restoredAUsage = await targetBillingService.usageSnapshot(ORG_A);
+    expect(restoredAUsage).toMatchObject({ organizationId: ORG_A, usage: { seats: 1, scans: 1, eveCostCents: 9 } });
+    const restoredBUsage = await targetBillingService.usageSnapshot(ORG_B);
+    expect(restoredBUsage).toMatchObject({ organizationId: ORG_B, usage: { seats: 1, scans: 1, eveCostCents: 11 } });
+    const restoredABillingState = await targetBillingRepository.read(ORG_A);
+    expect(restoredABillingState.seatBaseline).toBe(1);
+    expect(restoredABillingState.seatRevision).toBeGreaterThan(0);
+    expect(restoredABillingState.seatReservations).toEqual([
+      expect.objectContaining({ operationKey: 'ops-seat-a', status: 'settled', committed: true, subjectKey: true }),
+    ]);
+    const restoredBBillingState = await targetBillingRepository.read(ORG_B);
+    expect(restoredBBillingState.seatBaseline).toBe(0);
+    expect(restoredBBillingState.seatRevision).toBeGreaterThan(0);
+    expect(restoredBBillingState.seatReservations).toEqual([
+      expect.objectContaining({ operationKey: 'ops-seat-b', status: 'active', committed: false, subjectKey: true }),
+    ]);
+    const usageBeforeReplay = await targetBillingService.usageSnapshot(ORG_A);
     await expect(targetBillingService.reserveUsage(ORG_A, { scans: 2, eveCostCents: 17 }, 'ops-reservation-a')).resolves.toMatchObject({ idempotent: true });
-    await expect(targetBillingService.usageSnapshot(ORG_A)).resolves.toMatchObject({ organizationId: ORG_A, usage: { scans: 2, eveCostCents: 17 } });
-    await expect(targetBillingService.usageSnapshot(ORG_B)).resolves.toMatchObject({ organizationId: ORG_B, usage: { scans: 1, eveCostCents: 11 } });
+    await expect(targetBillingService.reconcileUsage(ORG_A, 'ops-reservation-a', { scans: 1, eveCostCents: 9 }, 'ops-reconcile-a')).resolves.toMatchObject({ idempotent: true });
+    await expect(targetBillingService.usageSnapshot(ORG_A)).resolves.toEqual(usageBeforeReplay);
 
     const targetBlobsRepository = targetRegistryRepository;
     const router = createTenantHandlerRouter({

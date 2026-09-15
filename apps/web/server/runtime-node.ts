@@ -1,7 +1,12 @@
 import postgres from 'postgres';
 import { getVercelOidcToken } from '@vercel/oidc';
 import { FileStateRepository } from '../../../packages/database/src/file';
-import { PostgresStateRepository, type PgPoolLike } from '../../../packages/database/src/postgres';
+import {
+  PostgresStateRepository,
+  PostgresHostedWorkerDispatchStore,
+  createHostedWorkerDispatcher,
+  type PgPoolLike,
+} from '../../../packages/database/src/index';
 import { HttpStateRepository } from '../../../packages/database/src/http';
 import { createNodeFilesSdkBlobStore, type FilesProvider } from '../../../packages/storage/src/node';
 import { HttpBlobStore } from '../../../packages/storage/src/http';
@@ -59,6 +64,10 @@ import {
   createNodeCliReleaseAssetProvider,
 } from '../../../packages/cli-release/src/node.js';
 import type { CliReleaseAssetProvider } from '../../../packages/cli-release/src/index.js';
+import {
+  createPostgresTenantReviewTargetLister,
+  type PostgresTenantOrganizationCatalog,
+} from './tenant-review-runtime.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -76,6 +85,10 @@ export interface BillingRuntime {
   service: BillingService;
   /** Server-only provider read model; never returned to browser code. */
   invoiceHistory: (lookup: BillingInvoiceLookup) => Promise<readonly BillingProviderInvoice[]>;
+}
+
+export interface HostedWorkerDispatcherRuntime {
+  handler: (request: Request) => Promise<Response>;
 }
 
 const OPENCLAW_SOURCE_CONFIG_MAX_BYTES = 512 * 1024;
@@ -361,16 +374,20 @@ export function createBillingRuntime(
 ): BillingRuntime {
   const requested = billingEnvironmentBool(env.PSKILLS_BILLING_ENABLED);
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
+  const meteredEvaluationRequested = requested && billingEnvironmentBool(env.PSKILLS_BILLING_METERED_EVALUATION);
+  // Providerless finite usage is a hosted production mode when its state is
+  // durable. The PostgreSQL boundary is the safety requirement; deployment
+  // labels must not silently disable enforcement.
+  const meteredEvaluationAllowed = meteredEvaluationRequested && postgresPool !== undefined;
   const localTest = requested && !production && env.PSKILLS_BILLING_PROVIDER === 'local'
     && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
-  const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local'
-    && env.PSKILLS_BILLING_LOCAL_TEST?.trim().toLowerCase() === 'true';
+  const localProviderRequested = requested && env.PSKILLS_BILLING_PROVIDER === 'local';
   // Live billing must have the same durable PostgreSQL boundary as company
   // mappings. An explicit local provider is allowed only in development/test
   // and is visibly test mode; a file/HTTP production profile stays disabled.
   const durable = postgresPool !== undefined || localTest;
   const providerAllowed = !localProviderRequested || localTest;
-  const effectiveEnv = requested && (!durable || !providerAllowed)
+  const effectiveEnv = requested && (!durable || !providerAllowed || (meteredEvaluationRequested && !meteredEvaluationAllowed))
     ? { ...env, PSKILLS_BILLING_ENABLED: 'false' }
     : env;
   const testOrigin = trustedLocalBillingOrigin(env.PSKILLS_BILLING_LOCAL_BASE_URL ?? publicOrigin);
@@ -401,7 +418,11 @@ export function createBillingRuntime(
   if (requested && !service.status().enabled) {
     // Keep the registry available, but leave an operator-visible and
     // credential-free reason when an enabled request could not be honoured.
-    const reason = !providerAllowed
+    const reason = meteredEvaluationRequested && !meteredEvaluationAllowed
+      ? production
+        ? 'metered evaluation requires a durable PostgreSQL billing boundary'
+        : 'a durable PostgreSQL billing boundary is required'
+      : !providerAllowed
       ? 'the local billing provider is test-only'
       : !durable
         ? 'a durable PostgreSQL billing boundary is required'
@@ -414,7 +435,67 @@ export function createBillingRuntime(
   };
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+/**
+ * Compose the durable cross-company worker cron boundary. This is kept as a
+ * small Node-only adapter so the database dispatcher remains host-neutral and
+ * the edge runtime never imports PostgreSQL or worker/provider code.
+ *
+ * The dispatcher is available only when all server-owned inputs are present:
+ * a Better Auth organization catalog, a durable PostgreSQL pool, the signed
+ * tenant worker factory, and the operator cron secret. Missing dispatch
+ * tables remain an explicit migration/configuration error at request time;
+ * automatic DDL is opt-in through the dedicated environment flag.
+ */
+export function createHostedWorkerDispatcherRuntime(options: {
+  env: RuntimeEnvironment;
+  postgresPool?: PgPoolLike;
+  catalog?: PostgresTenantOrganizationCatalog;
+  workerForOrganization?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
+}): HostedWorkerDispatcherRuntime | undefined {
+  const cronSecret = options.env.CRON_SECRET?.trim();
+  if (options.env.PSKILLS_HOSTED_WORKER !== 'true' || !cronSecret || options.postgresPool === undefined || options.catalog === undefined || options.workerForOrganization === undefined) {
+    return undefined;
+  }
+
+  const store = new PostgresHostedWorkerDispatchStore({
+    pool: options.postgresPool,
+    autoMigrate: billingEnvironmentBool(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_AUTO_MIGRATE),
+    ...(optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_TABLE) === undefined ? {} : {
+      tableName: optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_TABLE),
+    }),
+    ...(optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_RETRY_TABLE) === undefined ? {} : {
+      retryTableName: optionalEnvironmentValue(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_RETRY_TABLE),
+    }),
+  });
+  const maxOrganizations = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_ORGANIZATIONS, 1, 1_024, 'max organizations');
+  const pageSize = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_PAGE_SIZE, 1, 256, 'page size');
+  const maxJobsPerOrganization = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_JOBS_PER_ORGANIZATION, 1, 16, 'max jobs per organization');
+  const maxDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_MAX_DURATION_MS, 1_000, 15 * 60_000, 'max duration');
+  const leaseDurationMs = hostedWorkerDispatchOption(options.env.PSKILLS_HOSTED_WORKER_DISPATCH_LEASE_DURATION_MS, 1_000, 30 * 60_000, 'lease duration');
+  const handler = createHostedWorkerDispatcher({
+    cronSecret,
+    catalog: options.catalog,
+    store,
+    workerForOrganization: options.workerForOrganization,
+    ...(maxOrganizations === undefined ? {} : { maxOrganizations }),
+    ...(pageSize === undefined ? {} : { pageSize }),
+    ...(maxJobsPerOrganization === undefined ? {} : { maxJobsPerOrganization }),
+    ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
+    ...(leaseDurationMs === undefined ? {} : { leaseDurationMs }),
+  });
+  return { handler };
+}
+
+function hostedWorkerDispatchOption(value: string | undefined, minimum: number, maximum: number, label: string): number | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized === '') return undefined;
+  if (!/^\d+$/u.test(normalized)) throw new Error(`Hosted worker dispatch ${label} is invalid`);
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error(`Hosted worker dispatch ${label} is invalid`);
+  return parsed;
+}
+
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; billing: BillingRuntime; hostedWorker?: (request: Request) => Promise<Response>; hostedWorkerDispatcher?: (request: Request) => Promise<Response>; createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; billingRecovery?: IdentityInfrastructure['billingRecovery']; companySso?: IdentityInfrastructure['companySso']; operationsEvents?: IdentityInfrastructure['operationsEvents']; bootstrapAdoptionStore?: BootstrapAdoptionStore; cliReleaseProvider: CliReleaseAssetProvider; listTenantReviewTargets?: ReturnType<typeof createPostgresTenantReviewTargetLister>; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
   const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
@@ -444,6 +525,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const identityInfrastructure = createIdentityInfrastructure(env, {
     ...(postgresPool === undefined ? {} : { postgresPool }),
     ...(identityEnabled(env) ? { canonicalOrigin: canonicalOriginFromEnv(env) } : {}),
+    billing: billing.service,
   });
   // Do not expose a partially migrated identity runtime. When the deployment
   // explicitly opts into startup migrations, this waits for Better Auth's
@@ -454,6 +536,9 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     await identityInfrastructure.identity?.close().catch(() => undefined);
     throw error;
   }
+  const listTenantReviewTargets = identityInfrastructure.identity && postgresPool
+    ? createPostgresTenantReviewTargetLister(postgresPool, { schemaName: identitySchemaName })
+    : undefined;
   // Adoption is an explicit deployment operation. Construct only when the
   // Better Auth runtime and its shared PostgreSQL pool are both present; the
   // endpoint remains unavailable for file/edge/legacy-only profiles.
@@ -520,6 +605,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     : undefined;
   const hostedWorkerEnv = { ...env, PSKILLS_API_URL: env.PSKILLS_API_URL?.trim() || env.PSKILLS_PUBLIC_ORIGIN?.trim() };
   const hostedWorkerOverrides = {
+    billing: billing.service,
     ...(directoryOfficialAvailable ? { acquisition: { getSkillsShToken: hostedSkillsShToken } } : {}),
     ...(hostedOpenClawSource === undefined ? {} : { openClawSource: hostedOpenClawSource }),
   };
@@ -568,6 +654,12 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
       return handler;
     }
     : undefined;
+  const hostedWorkerDispatcher = createHostedWorkerDispatcherRuntime({
+    env,
+    postgresPool,
+    catalog: listTenantReviewTargets,
+    workerForOrganization: createHostedWorkerForTenant,
+  });
   const uploadReviewEnabled = env.PSKILLS_UPLOAD_REVIEW_ENABLED === 'true';
   const uploadReview = uploadReviewEnabled
     ? createUploadReviewRuntime(env, repository)
@@ -577,6 +669,7 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     blobs,
     billing,
     hostedWorker,
+    ...(hostedWorkerDispatcher === undefined ? {} : { hostedWorkerDispatcher: hostedWorkerDispatcher.handler }),
     ...(createHostedWorkerForTenant === undefined ? {} : { createHostedWorkerForTenant }),
     directoryTokenProvider,
     directoryOfficialTokenProvider,
@@ -584,10 +677,12 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     ...(uploadReview === undefined ? {} : { uploadReview }),
     ...(identityInfrastructure.identity === null ? {} : { identity: identityInfrastructure.identity }),
     ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
+    ...(identityInfrastructure.billingRecovery === undefined ? {} : { billingRecovery: identityInfrastructure.billingRecovery }),
     ...(identityInfrastructure.companySso === null ? {} : { companySso: identityInfrastructure.companySso }),
     ...(identityInfrastructure.operationsEvents === null ? {} : { operationsEvents: identityInfrastructure.operationsEvents }),
     ...(bootstrapAdoptionStore === undefined ? {} : { bootstrapAdoptionStore }),
     cliReleaseProvider,
+    ...(listTenantReviewTargets === undefined ? {} : { listTenantReviewTargets }),
     createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {

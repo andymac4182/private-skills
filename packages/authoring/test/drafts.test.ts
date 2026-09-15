@@ -12,6 +12,7 @@ import type {
   SkillDraftPublicationRecord,
   SkillBundle,
   SkillVersion,
+  StateRepository,
   StoredBlob,
 } from '../../contracts/src/index.js';
 import type {
@@ -67,6 +68,22 @@ class MemoryBlobs implements BlobStore {
 
   async remove(key: string): Promise<void> {
     this.values.delete(key);
+  }
+}
+
+class FailDraftMetadataTransactionRepository implements StateRepository {
+  private transactionCount = 0;
+
+  constructor(private readonly inner: StateRepository) {}
+
+  read(organizationId: string): Promise<RegistryState> {
+    return this.inner.read(organizationId);
+  }
+
+  transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T> {
+    this.transactionCount += 1;
+    if (this.transactionCount === 2) throw new Error('simulated draft metadata CAS outage');
+    return this.inner.transaction(organizationId, updater);
   }
 }
 
@@ -279,6 +296,26 @@ function publishRequest(draftId: string, key: string, expectedRevision: number, 
 }
 
 describe('durable skill drafts', () => {
+  it('retains an uploaded blob as an orphaned storage attempt when draft metadata commit is uncertain', async () => {
+    const test = await fixture();
+    const inner = test.repository;
+    const repository = new FailDraftMetadataTransactionRepository(inner);
+    test.deps.repository = repository;
+
+    const response = await test.handler(new Request(`${ORIGIN}/v1/drafts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'orphaned-upload' },
+      body: JSON.stringify({ name: '@team/orphaned-upload', files: [test.bundle.files[0]] }),
+    }));
+
+    expect(response.status).toBe(500);
+    expect(test.blobs.putCalls).toBe(2);
+    expect((await inner.read(ORGANIZATION)).drafts ?? []).toHaveLength(0);
+    expect((await inner.read(ORGANIZATION)).storageAttempts).toEqual([
+      expect.objectContaining({ state: 'orphaned', objectKey: 'sealed-1', size: expect.any(Number) }),
+    ]);
+  });
+
   it('creates an upload-origin draft, edits it, and queues a scanner release without a fake base', async () => {
     const test = await fixture();
     const denied = await test.handler(uploadCreateRequest('@other/demo', 'upload-denied', test.bundle.files));

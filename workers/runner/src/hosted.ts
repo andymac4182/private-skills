@@ -26,6 +26,7 @@ import {
   type WorkerRunnerOptions,
 } from './worker.js';
 import type { WorkerTenantCredentialProvider } from './identity.js';
+import type { BillingUsageAdmission } from '../../../packages/contracts/src/index.js';
 
 /**
  * Configuration for a single protected worker invocation. The route remains
@@ -43,6 +44,8 @@ import type { WorkerTenantCredentialProvider } from './identity.js';
  * snapshot:<id>|revision:<source-revision>|source:sha256:<artifact-digest>.
  */
 export interface HostedWorkerOptions {
+  /** Optional server-side metered admission; never supplied by a browser. */
+  billing?: BillingUsageAdmission;
   apiUrl: string;
   /** Legacy fixed worker credential. Omit when a tenant provider is supplied. */
   workerToken?: string;
@@ -131,6 +134,7 @@ export function createHostedWorkerHandler(options: HostedWorkerOptions): (reques
 
     const runnerOptions: WorkerRunnerOptions = {
       baseUrl: options.apiUrl,
+      ...(options.billing === undefined ? {} : { billing: options.billing }),
       workerId: resolveWorkerId(options.workerId),
       ...(options.workerToken === undefined ? {} : { workerToken: options.workerToken }),
       ...(options.tenantId === undefined ? {} : { tenantId: options.tenantId }),

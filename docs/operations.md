@@ -193,20 +193,45 @@ PSKILLS_IMAGE_SKILLSGUARD=registry.example/skillsguard@sha256:<64-lowercase-hex>
 
 The route accepts only `GET` and requires an exact
 `Authorization: Bearer $CRON_SECRET` value. The scheduler user-agent is not
-authentication. Each call claims at most one durable job and returns only
-`ok`, `claimed`, `jobId`, `allow`, or a generic error. Scanner reports,
-artifact bytes, worker tokens, and scanner stderr never appear in the route
-response. Vercel Sandbox creates a fresh ephemeral sandbox with deny-all
-network access and bounded input/output; the edge runtime cannot run this
-Node/Sandbox boundary.
+authentication. With the explicit Better Auth/PostgreSQL tenant dispatcher
+configured, one call walks a bounded keyset page of server-listed
+organizations, invokes only a server-constructed tenant worker for each, and
+persists a fenced cursor and per-company retry backoff. Without that
+dispatcher, the route retains the single default-company worker fallback.
+Scanner reports, artifact bytes, worker tokens, and scanner stderr never appear
+in the route response. Vercel Sandbox creates a fresh ephemeral sandbox with
+deny-all network access and bounded input/output; the edge runtime cannot run
+this Node/Sandbox boundary.
 
-The repository-root Vercel fallback cron invokes the route at `0 21 * * *`
-UTC. A successful `POST /v1/publish`, `/v1/imports`, or skill rescan also
-starts a bounded drain of at most two jobs through Nitro's `waitUntil` hook
-when the platform provides it. Queue leases and fencing remain authoritative;
-cron is liveness, not durable retry. Keep at least one reviewed required
-scanner configured and do not enable `PSKILLS_ALLOW_UNSCANNED` to fit a
-function limit.
+The repository-root Vercel fallback cron invokes the route every five minutes
+(`*/5 * * * *` UTC), so a bounded page continues on the same day and a failed
+company receives durable backoff retries. A successful `POST /v1/publish`,
+`/v1/imports`, or skill rescan also starts a bounded drain of at most two jobs
+through Nitro's `waitUntil` hook when the platform provides it. Queue leases
+and fencing remain authoritative; cron is liveness for the durable queue.
+Keep at least one reviewed required scanner configured and do not enable
+`PSKILLS_ALLOW_UNSCANNED` to fit a function limit.
+
+The hosted-worker dispatcher owns two separate PostgreSQL tables. Its
+`hostedWorkerDispatchSchemaSql()` migration is not run by default; set
+`PSKILLS_HOSTED_WORKER_DISPATCH_AUTO_MIGRATE=true` only as an explicit
+operator choice, or apply the exported migration during deployment. Bounds
+can be reduced with the `PSKILLS_HOSTED_WORKER_DISPATCH_*` settings shown in
+`.env.example`; the lease duration must outlive the invocation budget.
+
+When tenant-bound Eve review is enabled, the same deployment invokes
+`/internal/reviewer/dispatch` every 15 minutes (`*/15 * * * *` UTC). Each
+invocation drains one bounded cursor page and persists the next page in the
+registry state row, allowing all explicitly provisioned organizations to be
+attempted within the daily UTC window without making one function unbounded.
+Set `PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS` when the host needs a lower
+budget; the dispatcher keeps a persistence margin before the lease or platform
+deadline. A tenant review claim is durably marked `starting` before cost
+reservation or the Eve session call. `starting` and `uncertain` records remain
+fenced after lease expiry until an operator or reconciliation process resolves
+the provider outcome, so a host crash cannot automatically open a duplicate
+session. Definite provider rejections release their claim and can retry on the
+next scheduled invocation.
 
 Use immutable scanner references. A SkillsGuard source-built snapshot must
 include its source revision and prepared artifact digest:
@@ -251,9 +276,11 @@ Vercel `VERCEL_OIDC_TOKEN`). Keep these values in each project's runtime secret
 store; never expose them to the browser or put them in candidate text.
 
 The authored schedule is `0 22 * * *` UTC (08:00 Australia/Brisbane). The root
-Vercel fallback worker cron is separate at `0 21 * * *` UTC. Manual runs use
-the authenticated admin review action or the Eve server-side Client SDK; do
-not put the Eve token in a browser request. The deployed reviewer health probe
+Vercel hosted-worker cron is separate at `*/5 * * * *` UTC and dispatches up to
+32 organizations and 2 jobs per organization per invocation under its shipped
+240-second budget and 300-second lease. Manual runs use the authenticated admin
+review action or the Eve server-side Client SDK; do not put the Eve token in a
+browser request. The deployed reviewer health probe
 at `https://private-skills-reviewer.vercel.app/eve/v1/health` returned `200`,
 while an unauthenticated session request returned `401`. This verifies the
 reviewer service boundary only; the main registry project has not been claimed

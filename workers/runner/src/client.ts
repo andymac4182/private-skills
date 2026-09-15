@@ -31,6 +31,8 @@ export interface WorkerClaimedJob {
   openclawSource?: unknown;
   /** Server-owned native source acquisition descriptor; never browser input. */
   sourceAcquisition?: unknown;
+  /** Server-owned metered reservation owner; retries must reuse this key. */
+  meteredReservationKey?: string;
   [key: string]: unknown;
 }
 

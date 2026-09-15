@@ -1,5 +1,6 @@
 import type {
   Authenticator,
+  BillingUsageAdmission,
   BlobStore,
   Digest,
   Principal,
@@ -64,6 +65,8 @@ export interface AuthoringHandlerDependencies {
   blobs: BlobStore;
   auth: Authenticator;
   config: AuthoringHandlerConfig;
+  /** Optional server-side metered admission for draft storage/publication. */
+  billing?: BillingUsageAdmission;
   releaseAdmission: ReleaseAdmission;
   /** Synchronous admission predicate evaluated inside the repository CAS transaction. */
   releaseAdmissionAtCommit?: (state: RegistryState, release: SkillVersion, principal: Principal) => boolean;

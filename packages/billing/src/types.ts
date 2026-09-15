@@ -117,12 +117,63 @@ export interface BillingWebhookEvent {
   ignoredReason?: 'unsupported' | 'stale' | 'unbound';
 }
 
+export type BillingUsageOperationStatus = 'reserved' | 'committed' | 'released';
+
 export interface BillingUsageOperation {
   organizationId: string;
   operationKey: string;
   delta: Partial<Record<BillingMetric, number>>;
   usage: BillingUsage;
   createdAt: string;
+  /** Lifecycle of the reservation. Older rows are treated as reserved. */
+  status?: BillingUsageOperationStatus;
+  /** Per-metric measured usage applied by a reconciliation, including zero. */
+  reconciled?: Partial<Record<BillingMetric, number>>;
+}
+
+/**
+ * A seat admission is kept separately from the aggregate usage operation log.
+ * `active` means the Better Auth write is still in flight; `settled` means the
+ * admission was committed or released and can be reused by a later lifecycle
+ * for the same subject. Active holds stay fail-closed until an explicit
+ * lifecycle transition resolves them.
+ */
+export interface BillingSeatReservation {
+  operationKey: string;
+  status: 'active' | 'settled';
+  /**
+   * A settled reservation is either a committed identity row or a released
+   * admission. Older rows omit this field; readers treat those as committed
+   * so recovery fails closed rather than undercounting seats.
+  */
+  committed?: boolean;
+  /** True when the key names a Better Auth member or invitation lifecycle. */
+  subjectKey?: boolean;
+  /** Billing transaction revision that last changed this lifecycle entry. */
+  revision?: number;
+  /** Operator proof recorded when a failed identity writer is released. */
+  recoveryProof?: BillingSeatRecoveryProof;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Explicit proof required to release a Better Auth seat hold whose after hook
+ * could not run. The reference is an operator-owned incident/request id; it
+ * is deliberately not an exception message or a client supplied tenant id.
+ */
+export type BillingSeatRecoveryProofKind = 'known-failure' | 'writer-terminated';
+
+export interface BillingSeatRecoveryProof {
+  kind: BillingSeatRecoveryProofKind;
+  reference: string;
+}
+
+export interface BillingSeatRecoveryResult {
+  operationKey: string;
+  idempotent: boolean;
+  reservation: BillingSeatReservation;
+  snapshot: UsageSnapshot;
 }
 
 export interface BillingOrganizationState {
@@ -132,14 +183,45 @@ export interface BillingOrganizationState {
   usage: BillingUsage;
   webhookEvents: BillingWebhookEvent[];
   usageOperations: BillingUsageOperation[];
+  /** Authoritative member + pending invitation count before active admissions. */
+  seatBaseline?: number;
+  /** Durable in-flight seat admissions, including their lifecycle state. */
+  seatReservations?: BillingSeatReservation[];
+  /** Monotonic billing transaction revision used for identity snapshot reconciliation. */
+  seatRevision?: number;
 }
 
 export interface BillingRepository {
   read(organizationId: string): Promise<BillingOrganizationState>;
   /** The updater must be synchronous so every implementation can commit atomically. */
   transaction<T>(organizationId: string, updater: (state: BillingOrganizationState) => T): Promise<T>;
+  /** Locate a retained usage operation by its durable idempotency key. */
+  findUsageOperation(operationKey: string): Promise<BillingUsageOperation | undefined>;
+  /**
+   * Run a transaction while retaining one requested usage operation even when
+   * the repository bounds its normal newest-operation read window.
+   */
+  transactionWithUsageOperation?<T>(
+    organizationId: string,
+    operationKey: string,
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T>;
+  /** Variant used by reconciliation, which must retain both the reservation
+   * and its correction idempotency row inside the same transaction. */
+  transactionWithUsageOperations?<T>(
+    organizationId: string,
+    operationKeys: readonly string[],
+    updater: (state: BillingOrganizationState) => T,
+  ): Promise<T>;
   findOrganizationByCustomerId(provider: BillingProviderId, customerId: string): Promise<string | undefined>;
   findOrganizationBySubscriptionId(provider: BillingProviderId, subscriptionId: string): Promise<string | undefined>;
+  /**
+   * Look up one usage operation by its durable organization/key primary key.
+   * Reads may retain only a bounded recent history, so admission and
+   * reconciliation use this exact lookup when a key has aged out of the
+   * in-memory/read snapshot.
+   */
+  findUsageOperation(organizationId: string, operationKey: string): Promise<BillingUsageOperation | undefined>;
   findWebhookEvent(provider: BillingProviderId, eventId: string): Promise<BillingWebhookEvent | undefined>;
 }
 
@@ -266,7 +348,12 @@ export interface UsageLimitDetails {
 }
 
 export interface BillingStatus {
+  /** Usage and plan enforcement is available when billing was explicitly enabled. */
   enabled: boolean;
+  /** True only when a provider adapter is configured for hosted billing calls. */
+  providerReady: boolean;
+  /** Explicit alias for host runtimes that need admission without checkout. */
+  usageEnforcement: boolean;
   provider: BillingProviderId | null;
   mode: BillingMode;
   webhookVerification: boolean;
@@ -279,6 +366,12 @@ export interface BillingServiceOptions {
   catalog?: PlanCatalog;
   provider?: BillingProvider;
   enabled?: boolean;
+  /**
+   * Enable finite usage admission without a payment provider. This is an
+   * explicitly configured providerless metered mode and still requires a
+   * durable repository; checkout, portal, and webhooks remain unavailable.
+   */
+  usageEnabled?: boolean;
   webhookSecret?: string;
   webhookToleranceSeconds?: number;
   maxWebhookBodyBytes?: number;

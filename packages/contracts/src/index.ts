@@ -412,7 +412,41 @@ export interface ImportRequest {
   /** Provider version retained separately from the registry SemVer cache version. */
   sourceCatalogProviderVersion?: string;
 }
-export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; /** Server-owned metered reservation owner; workers must reuse this key across retries. */ meteredReservationKey?: string; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+/**
+ * Durable ownership for a reserved artifact write.  The billing reservation
+ * remains charged while an attempt is pending or orphaned; a reconciler may
+ * release it only after it verifies that no object remains (or deletion has
+ * completed).  This is intentionally separate from a Job because publication
+ * and draft writes can fail before a job exists.
+ */
+export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'released';
+export interface StorageAttempt {
+  id: string;
+  organizationId: string;
+  reservationKey: string;
+  digest: Digest;
+  size: number;
+  state: StorageAttemptState;
+  createdAt: string;
+  updatedAt: string;
+  objectKey?: string;
+  jobId?: string;
+}
+/**
+ * Durable fence for a metered reservation while a caller is deciding whether
+ * it owns a queued job. `releasing` is committed before the external billing
+ * correction so a concurrent queue cannot acquire the same reservation in
+ * the gap between the ownership check and the correction.
+ */
+export type MeteredReservationOwnerState = 'owned' | 'releasing' | 'released';
+export interface MeteredReservationOwner {
+  reservationKey: string;
+  state: MeteredReservationOwnerState;
+  updatedAt: string;
+  jobId?: string;
+  releaseToken?: string;
+}
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
 export interface RegistryState {
   metadataRevision?: number;
@@ -434,11 +468,93 @@ export interface RegistryState {
   installReceipts?: InstallReceipt[];
   /** Optional so states written before the interactive builder can still be loaded. */
   builderSessions?: SkillBuilderSessionRecord[];
+  /** Optional so pre-metering state documents remain readable. */
+  storageAttempts?: StorageAttempt[];
+  /** Optional durable ownership fences for metered reservations. */
+  meteredReservationOwners?: MeteredReservationOwner[];
   grants: TransferGrant[];
   audit: AuditEvent[];
+  /** Optional host-owned daily Eve dispatch records. */
+  tenantReviewDispatches?: TenantReviewDispatchRecord[];
+  /** Optional host-owned cursor for bounded tenant review fan-out. */
+  tenantReviewDispatchCursor?: TenantReviewDispatchCursor;
 }
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
+
+/** Durable scheduler bookkeeping; no prompts, credentials, or candidate text. */
+export interface TenantReviewDispatchRecord {
+  operationKey: string;
+  /** `starting` is durably committed before an external provider call. */
+  /** `uncertain` means the provider may have accepted the session; retries are fenced. */
+  state: 'claimed' | 'starting' | 'completed' | 'uncertain';
+  claimToken?: string;
+  leaseExpiresAt: string;
+  sessionId?: string;
+  updatedAt: string;
+  startingAt?: string;
+  completedAt?: string;
+  uncertainAt?: string;
+}
+
+/** Durable bounded queue state used when a deployment has more tenants than one page. */
+export interface TenantReviewDispatchCursor {
+  day: string;
+  pendingOrganizationIds: string[];
+  completedOrganizationIds: string[];
+  /** Tenants whose provider outcome is uncertain for this daily operation. */
+  blockedOrganizationIds?: string[];
+  updatedAt: string;
+}
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
+/**
+ * Host-neutral metered admission used by registry, authoring, and worker
+ * adapters. The billing package implements this shape without making the
+ * portable contracts depend on a provider SDK or a web framework.
+ */
+export interface MeteredUsageDelta {
+  seats?: number;
+  storageBytes?: number;
+  scans?: number;
+  eveCostCents?: number;
+}
+export interface BillingUsageAdmission {
+  status(): { enabled: boolean };
+  reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<unknown>;
+  reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string): Promise<unknown>;
+  setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
+}
+
+/**
+ * Canonical input shared by registry queue admission and the worker retry
+ * path. Callers project request fields to match their durable deduplication
+ * semantics before hashing this value; the full request is never exposed as
+ * a billing operation key.
+ */
+export interface MeteredImportIdentity {
+  organizationId: string;
+  policyRevision: string;
+  request: ImportRequest;
+  upstream?: Pick<Upstream, 'id' | 'kind' | 'namespace' | 'baseUrl' | 'repositories' | 'configRevision' | 'credentialEnv'>;
+  sourceAcquisition?: unknown;
+  openclawSource?: unknown;
+}
+
+export function canonicalMeteredImportIdentity(input: MeteredImportIdentity): string {
+  const stable = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map((entry) => stable(entry)).join(',')}]`;
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stable(record[key])}`).join(',')}}`;
+  };
+  return stable({
+    organizationId: input.organizationId,
+    policyRevision: input.policyRevision,
+    request: input.request,
+    upstream: input.upstream ?? null,
+    sourceAcquisition: input.sourceAcquisition ?? null,
+    openclawSource: input.openclawSource ?? null,
+  });
+}
 export interface RegistryConfiguration {
   publicOrigin: string;
   maxBodyBytes: number;
