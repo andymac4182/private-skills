@@ -32,15 +32,29 @@ vi.mock('../lib/directoryFeed', () => ({
 
 vi.mock('./CommandPalette', () => ({
   CommandPalette: () => null,
-  registrySections: [{ id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' }],
-  registryNavGroups: [{
-    id: 'skills',
-    label: 'Skills',
-    hint: 'Build and publish',
-    glyph: '⌕',
-    defaultSectionId: 'catalog',
-    sections: [{ id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' }],
-  }],
+  registrySections: [
+    { id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' },
+    { id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' },
+  ],
+  registryNavGroups: [
+    {
+      id: 'skills',
+      label: 'Skills',
+      hint: 'Build and publish',
+      glyph: '⌕',
+      defaultSectionId: 'catalog',
+      sections: [{ id: 'catalog', label: 'Skills', hint: 'Browse releases', glyph: '⌕' }],
+    },
+    {
+      id: 'company-admin',
+      label: 'Company admin',
+      hint: 'Team and controls',
+      glyph: '◍',
+      defaultSectionId: 'company',
+      admin: true,
+      sections: [{ id: 'company', label: 'Company', hint: 'Team and access', glyph: '◍' }],
+    },
+  ],
 }))
 
 vi.mock('./HealthStatus', () => ({ HealthStatus: () => null }))
@@ -213,6 +227,53 @@ describe('RegistryShell auth return route', () => {
     expect(container.querySelector('.principal-chip')?.textContent).toContain('Alice Example')
     expect(container.textContent).not.toContain('user_opaque_7f2a')
     expect(container.textContent).not.toContain('org-opaque-42')
+  })
+
+  it('labels company navigation as access for a read-only member', async () => {
+    authState.status = 'signed-in'
+    authState.session = {
+      user: { id: 'user-reader', email: 'reader@example.test', name: 'Reader Example', emailVerified: true },
+      sessionId: 'session-reader',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-01-02T00:00:00.000Z',
+      organizations: [{ id: 'member-reader', organizationId: 'org-1', role: 'reader', organization: { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' } }],
+      activeOrganizationId: 'org-1',
+      activeOrganization: { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' },
+      activeMembership: { id: 'member-reader', organizationId: 'org-1', role: 'reader', organization: { id: 'org-1', name: 'Acme Skills', slug: 'acme-skills' } },
+      needsOnboarding: false,
+      authMethod: 'better-auth',
+    }
+
+    const rootRoute = createRootRoute({ component: () => createElement(Outlet) })
+    const appRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/app',
+      component: RegistryShell,
+    })
+    const companyRoute = createRoute({
+      getParentRoute: () => appRoute,
+      path: '/company',
+      component: () => createElement('div', null, 'company'),
+    })
+    const testRouter = createRouter({
+      routeTree: rootRoute.addChildren([appRoute.addChildren([companyRoute])]),
+      history: createMemoryHistory({ initialEntries: ['/app/company'] }),
+    })
+    await testRouter.load()
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(createElement(RouterProvider, { router: testRouter }))
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+
+    const companyGroup = [...container.querySelectorAll<HTMLElement>('.nav-group')].find((group) => group.textContent?.includes('Team and access'))
+    expect(companyGroup?.querySelector('strong')?.textContent).toBe('Company')
+    expect(companyGroup?.querySelector('small')?.textContent).toBe('Team and access')
+    expect(companyGroup?.classList.contains('nav-group-admin')).toBe(false)
+    expect(container.textContent).not.toContain('Company admin')
   })
 
   it('opens a focus-trapped mobile drawer and restores the menu trigger on close', async () => {
