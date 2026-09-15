@@ -44,3 +44,9 @@ Working hypothesis to test: an approachable company skills platform for engineer
 - Review company-login wrapper against trusted canonical origin: do not propagate untrusted forwarded host/protocol into Better Auth. Confirm UI consumes the company-specific provider selection endpoint and disabled/foreign providers are rejected. Assigned to editor_test_stability.
 - Billing admission patch is in private-skills-business-billing-enforcement. Review queue/worker shared reservation key, retries after failure reconciliation, no provider/blob calls on quota rejection, and concurrent seat admission before accepting.
 - Token browser sessions must retain live token expiry/revocation and membership/scope checks, including non-default companies; a signed static copy of grants is insufficient. Assigned to tenant_ui.
+
+## 16 September local browser acceptance follow-up
+
+- Candidate 5404 (`acca451`): actual Acme fixture login and explicit company selection pass. Company administration correctly separates accepted Ben invitation into history and pending invitation into pending list. SSO settings fails with "Company SSO operation failed"; editor_test_stability is investigating actual runtime/PG failure. This is an open acceptance failure, not a completed SSO setup journey.
+- Candidate 5405 (`89ef195`): actual UI-issued Reader token with seven-day expiry, hide-secret, identity sign-out, token sign-in and company overview read pass. Existing-session revocation remains pending; native CLI proof assigned separately. Token session currently shows internal user/company identifiers instead of display names; queued for correction. No secret recorded.
+- Foundation reports isolated frozen install, 1,098 passing tests with 20 skipped, typecheck and production build for 5405. These do not replace the pending browser/CLI or hosted provider gates.
