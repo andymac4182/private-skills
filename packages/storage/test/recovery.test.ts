@@ -513,7 +513,7 @@ describe("durable storage-attempt recovery", () => {
       status: () => ({ enabled: true }),
       reserveUsage: async () => {
         positiveReserveCalls += 1;
-        return undefined;
+        return { idempotent: false, reservationGeneration: 1 };
       },
       reconcileUsage: async () => {
         referenceAppeared = true;
