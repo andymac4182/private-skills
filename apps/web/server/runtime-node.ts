@@ -33,6 +33,11 @@ import {
   SKILLS_DIRECTORY_AUTH_UNAVAILABLE,
   type SkillsTokenProvider,
 } from '../../../packages/directory/src/index';
+import {
+  canonicalOriginFromEnv,
+  createIdentityInfrastructure,
+  type IdentityInfrastructure,
+} from './identity-infrastructure.js';
 
 export { createBuilderBffRuntime } from './builder-runtime';
 
@@ -156,6 +161,45 @@ export function createOfficialDirectoryTokenProvider(env: RuntimeEnvironment): S
   };
 }
 
+/**
+ * Return the initial-state factory used by every persistence transport. The
+ * deployment's configured organization keeps its existing development
+ * override, while a new organization always starts with the required Cisco
+ * scanner and `allowUnscanned: false`. Persisted rows are never rewritten by
+ * this factory, so an existing legacy policy remains unchanged.
+ */
+export function createTenantStateFactory(env: RuntimeEnvironment): (organizationId: string) => ReturnType<typeof defaultRegistryState> {
+  const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
+  const defaultOrganizationId = env.PSKILLS_ORGANIZATION_ID ?? 'default';
+  const requiredScanner = requiredScannerForNewTenants(env);
+  return (organizationId: string) => {
+    const isNewTenant = organizationId !== defaultOrganizationId;
+    const state = defaultRegistryState({
+      production: production || isNewTenant,
+      allowUnscanned: !isNewTenant && env.PSKILLS_ALLOW_UNSCANNED === 'true',
+    });
+    if (isNewTenant && requiredScanner !== 'cisco-skill-scanner') {
+      state.policy.scanners = state.policy.scanners.map((scanner) => ({
+        ...scanner,
+        mode: scanner.id === requiredScanner ? 'required' : 'advisory',
+      }));
+    }
+    return state;
+  };
+}
+
+function requiredScannerForNewTenants(env: RuntimeEnvironment): 'cisco-skill-scanner' | 'nvidia-skillspector' | 'skillsguard' {
+  const configured = env.PSKILLS_REQUIRED_SCANNER?.trim();
+  if (configured !== undefined && configured !== '') {
+    if (configured === 'cisco-skill-scanner' || configured === 'nvidia-skillspector' || configured === 'skillsguard') return configured;
+    throw new Error('PSKILLS_REQUIRED_SCANNER is invalid');
+  }
+  const skillsGuardImage = env.PSKILLS_IMAGE_SKILLSGUARD?.trim();
+  const hostedSkillsGuard = env.PSKILLS_HOSTED_SKILLSGUARD?.trim().toLowerCase() === 'true'
+    || (skillsGuardImage !== undefined && skillsGuardImage !== '');
+  return hostedSkillsGuard ? 'skillsguard' : 'cisco-skill-scanner';
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
 }
@@ -259,33 +303,34 @@ function required(env: RuntimeEnvironment, name: string): string {
   return value;
 }
 
-export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
+export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ repository: StateRepository; blobs: BlobStore; hostedWorker?: (request: Request) => Promise<Response>; directoryTokenProvider: SkillsTokenProvider; directoryOfficialTokenProvider: SkillsTokenProvider; directoryOfficialAvailable: boolean; uploadReview?: UploadReviewRuntime; identity?: IdentityInfrastructure['identity']; apiTokens?: IdentityInfrastructure['apiTokens']; createSearchIndex: (profile: EmbeddingProfile) => SemanticIndex }> {
   const production = env.PSKILLS_ENVIRONMENT !== 'development' && env.PSKILLS_ENVIRONMENT !== 'test';
-  const stateFactory = () => defaultRegistryState({ production, allowUnscanned: env.PSKILLS_ALLOW_UNSCANNED === 'true' });
+  const stateFactory = createTenantStateFactory(env);
   const stateProvider = env.PSKILLS_STATE_PROVIDER ?? (production ? 'postgres' : 'file');
   let repository: StateRepository;
   let postgresPool: PgPoolLike | undefined;
+  // Better Auth and API tokens use the same deployment PostgreSQL connection
+  // as metadata whenever that profile is selected. When an operator chooses
+  // file/HTTP metadata while enabling Better Auth, retain one shared pool for
+  // identity-backed token membership checks rather than silently disabling
+  // company credentials.
+  const needsIdentityDatabase = identityEnabled(env) && stateProvider !== 'postgres';
   if (stateProvider === 'file') {
     if (production && env.PSKILLS_SINGLE_PROCESS !== 'true') throw new Error('File metadata requires PSKILLS_SINGLE_PROCESS=true or a development environment');
+    if (needsIdentityDatabase) postgresPool = createPostgresPool(required(env, 'DATABASE_URL'));
     repository = new FileStateRepository({ directory: env.PSKILLS_STATE_PATH ?? './work/data/state', stateFactory });
   } else if (stateProvider === 'postgres') {
-    const sql = postgres(required(env, 'DATABASE_URL'), { max: 5, prepare: false, idle_timeout: 20, connect_timeout: 10 });
-    const query = async (connection: typeof sql, text: string, parameters: readonly unknown[] = []) => {
-      const result = await connection.unsafe(text, [...parameters] as never[]);
-      return { rows: [...result], rowCount: result.count };
-    };
-    const pool = {
-      query: (text: string, parameters?: readonly unknown[]) => query(sql, text, parameters),
-      connect: async () => {
-        const connection = await sql.reserve();
-        return { query: (text: string, parameters?: readonly unknown[]) => query(connection as unknown as typeof sql, text, parameters), release: () => connection.release() };
-      },
-    } as PgPoolLike;
-    postgresPool = pool;
-    repository = new PostgresStateRepository(pool, { autoMigrate: true, stateFactory });
+    postgresPool = createPostgresPool(required(env, 'DATABASE_URL'));
+    repository = new PostgresStateRepository(postgresPool, { autoMigrate: true, stateFactory });
   } else if (stateProvider === 'http') {
+    if (needsIdentityDatabase) postgresPool = createPostgresPool(required(env, 'DATABASE_URL'));
     repository = new HttpStateRepository({ baseUrl: required(env, 'PSKILLS_STATE_ENDPOINT'), headers: { authorization: `Bearer ${required(env, 'PSKILLS_STATE_TOKEN')}` } });
   } else throw new Error('Unsupported PSKILLS_STATE_PROVIDER');
+
+  const identityInfrastructure = createIdentityInfrastructure(env, {
+    ...(postgresPool === undefined ? {} : { postgresPool }),
+    ...(identityEnabled(env) ? { canonicalOrigin: canonicalOriginFromEnv(env) } : {}),
+  });
 
   const provider = env.PSKILLS_STORAGE_PROVIDER ?? (production ? 's3' : 'filesystem');
   const blobs = provider === 'http'
@@ -340,7 +385,17 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
   const uploadReview = uploadReviewEnabled
     ? createUploadReviewRuntime(env, repository)
     : undefined;
-  return { repository, blobs, hostedWorker, directoryTokenProvider, directoryOfficialTokenProvider, directoryOfficialAvailable, ...(uploadReview === undefined ? {} : { uploadReview }), createSearchIndex: (profile) => {
+  return {
+    repository,
+    blobs,
+    hostedWorker,
+    directoryTokenProvider,
+    directoryOfficialTokenProvider,
+    directoryOfficialAvailable,
+    ...(uploadReview === undefined ? {} : { uploadReview }),
+    ...(identityInfrastructure.identity === null ? {} : { identity: identityInfrastructure.identity }),
+    ...(identityInfrastructure.apiTokens === null ? {} : { apiTokens: identityInfrastructure.apiTokens }),
+    createSearchIndex: (profile) => {
     const provider = env.PSKILLS_SEARCH_PROVIDER ?? (postgresPool ? 'pgvector' : 'state');
     if (provider === 'pgvector') {
       if (!postgresPool) throw new Error('pgvector search requires PostgreSQL metadata');
@@ -348,7 +403,32 @@ export async function createInfrastructure(env: RuntimeEnvironment): Promise<{ r
     }
     if (provider !== 'state') throw new Error('Unsupported PSKILLS_SEARCH_PROVIDER');
     return new StateSemanticIndex(repository, { profile });
-  } };
+    },
+  };
+}
+
+function identityEnabled(env: RuntimeEnvironment): boolean {
+  const value = env.PSKILLS_BETTER_AUTH_ENABLED ?? env.BETTER_AUTH_ENABLED;
+  if (value === undefined) return false;
+  return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
+}
+
+function createPostgresPool(connectionString: string): PgPoolLike {
+  const sql = postgres(connectionString, { max: 5, prepare: false, idle_timeout: 20, connect_timeout: 10 });
+  const query = async (connection: typeof sql, text: string, parameters: readonly unknown[] = []) => {
+    const result = await connection.unsafe(text, [...parameters] as never[]);
+    return { rows: [...result], rowCount: result.count };
+  };
+  return {
+    query: (text: string, parameters?: readonly unknown[]) => query(sql, text, parameters),
+    connect: async () => {
+      const connection = await sql.reserve();
+      return {
+        query: (text: string, parameters?: readonly unknown[]) => query(connection as unknown as typeof sql, text, parameters),
+        release: () => connection.release(),
+      };
+    },
+  } as PgPoolLike;
 }
 
 function createUploadReviewRuntime(

@@ -11,6 +11,7 @@ import {
   createDirectoryTokenProvider,
   createHostedOpenClawSourceConfigFromEnv,
   createOfficialDirectoryTokenProvider,
+  createTenantStateFactory,
 } from '../server/runtime-node.js';
 import { openClawConsumerRefreshResult } from '../server/openclaw-runtime.js';
 import type { OpenClawNormalizedSource } from '../../../packages/openclaw/src/types.js';
@@ -278,5 +279,37 @@ describe('node directory token provider', () => {
       .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
     expect(openClawConsumerRefreshResult({ kind: 'not-modified', status: 304, snapshot }).snapshot)
       .toMatchObject({ compatibilityProfile: OPENCLAW_CLAWHUB_SKILLS_COMPATIBILITY_PROFILE });
+  });
+});
+
+describe('tenant initial state policy', () => {
+  it('keeps the legacy override while giving new organizations a required scanner policy', () => {
+    const factory = createTenantStateFactory({
+      PSKILLS_ENVIRONMENT: 'development',
+      PSKILLS_ORGANIZATION_ID: 'legacy-org',
+      PSKILLS_ALLOW_UNSCANNED: 'true',
+    });
+
+    const legacy = factory('legacy-org');
+    expect(legacy.policy.allowUnscanned).toBe(true);
+    expect(legacy.policy.scanners.every((scanner) => scanner.mode === 'disabled')).toBe(true);
+
+    const newTenant = factory('new-org');
+    expect(newTenant.policy.allowUnscanned).toBe(false);
+    expect(newTenant.policy.scanners.find((scanner) => scanner.id === 'cisco-skill-scanner')?.mode).toBe('required');
+    expect(newTenant.policy.scanners.filter((scanner) => scanner.mode === 'required')).toHaveLength(1);
+  });
+
+  it('uses the configured hosted SkillsGuard as the required scanner for new organizations', () => {
+    const factory = createTenantStateFactory({
+      PSKILLS_ENVIRONMENT: 'production',
+      PSKILLS_ORGANIZATION_ID: 'legacy-org',
+      PSKILLS_HOSTED_SKILLSGUARD: 'true',
+    });
+
+    const newTenant = factory('new-org');
+    expect(newTenant.policy.allowUnscanned).toBe(false);
+    expect(newTenant.policy.scanners.find((scanner) => scanner.id === 'skillsguard')?.mode).toBe('required');
+    expect(newTenant.policy.scanners.find((scanner) => scanner.id === 'cisco-skill-scanner')?.mode).toBe('advisory');
   });
 });
