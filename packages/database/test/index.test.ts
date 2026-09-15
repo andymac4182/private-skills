@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ConcurrentStateUpdateError,
+  assertRegistryState,
+  cloneRegistryState,
   FileStateRepository,
   HttpRepositoryServer,
   HttpStateRepository,
@@ -62,6 +64,34 @@ describe('state repositories', () => {
     await expect(repository.transaction('acme', (mutable) => {
       mutable.tenantReviewDispatchCursor!.pendingOrganizationIds.push('other');
     })).resolves.toBeUndefined();
+  });
+
+  it('round-trips durable storage attempts and rejects malformed ownership metadata', () => {
+    const state = defaultRegistryState({ production: false, allowUnscanned: true });
+    state.storageAttempts!.push({
+      id: 'storage-attempt-1',
+      organizationId: 'org/storage',
+      reservationKey: 'private-skills:publish-storage:job-1',
+      digest: `sha256:${'a'.repeat(64)}`,
+      size: 42,
+      state: 'orphaned',
+      createdAt: '2026-09-16T00:00:00.000Z',
+      updatedAt: '2026-09-16T00:00:01.000Z',
+      objectKey: 'blob-1',
+      jobId: 'job-1',
+    });
+    state.meteredReservationOwners!.push({
+      reservationKey: 'private-skills:scan:owner-1',
+      state: 'releasing',
+      releaseToken: 'release-1',
+      updatedAt: '2026-09-16T00:00:01.000Z',
+    });
+    const clone = cloneRegistryState(state);
+    assertRegistryState(clone);
+    expect(clone.storageAttempts).toEqual(state.storageAttempts);
+    expect(clone.meteredReservationOwners).toEqual(state.meteredReservationOwners);
+    clone.storageAttempts![0]!.digest = 'sha256:short';
+    expect(() => assertRegistryState(clone)).toThrow('storage attempt metadata');
   });
 
   it('isolates organizations and rolls back failed transactions', async () => {

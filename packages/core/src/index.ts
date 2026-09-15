@@ -45,6 +45,9 @@ import {
   type Upstream,
   type UpstreamRequestObserver,
   type MeteredUsageDelta,
+  type MeteredReservationOwner,
+  canonicalMeteredImportIdentity,
+  type StorageAttempt,
 } from '../../contracts/src/index.js';
 import {
   digestBytes,
@@ -415,13 +418,23 @@ export function createOpenClawImportQueue(
           ...(input.feedCompatibilityProfile === undefined ? {} : { compatibilityProfile: input.feedCompatibilityProfile }),
         },
       };
+      const initialState = await options.repository.read(options.organizationId);
       const candidateJobId = randomId('job');
-      const reservationKey = meteredOperationKey('scan', candidateJobId);
+      const reservationKey = await meteredImportReservationKey({
+        organizationId: options.organizationId,
+        policyRevision: initialState.policy.revision,
+        request: importRequest,
+        includeVersion: false,
+        upstream,
+        openclawSource: sourceDescriptor,
+      });
       const reservationDelta: MeteredUsageDelta = { scans: 1 };
       let billing: BillingUsageAdmission | undefined;
+      let reservationIdempotent = false;
       if (options.billing?.status().enabled === true) {
         try {
-          await options.billing.reserveUsage(options.organizationId, reservationDelta, reservationKey);
+          const reservation = await options.billing.reserveUsage(options.organizationId, reservationDelta, reservationKey);
+          reservationIdempotent = isObject(reservation) && reservation.idempotent === true;
           billing = options.billing;
         } catch (error) {
           throw meteredError(error);
@@ -431,6 +444,10 @@ export function createOpenClawImportQueue(
       try {
         result = await options.repository.transaction(options.organizationId, (state) => {
         const mutable = ensureState(state, defaultPolicy());
+        if (mutable.policy.revision !== initialState.policy.revision) {
+          throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
+        }
+        if (billing) prepareMeteredReservationOwner(mutable, reservationKey, reservationIdempotent);
         const sameSource = (job: Job): boolean => {
           if (job.organizationId !== options.organizationId || job.kind !== 'import' || !job.import || !isObject(job.openclawSource)) return false;
           if (job.import.externalId !== input.externalId || job.import.name !== managedName || !job.upstream) return false;
@@ -443,7 +460,14 @@ export function createOpenClawImportQueue(
           .filter(sameSource)
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
         const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
-        if (active) return { operationId: active.id, state: active.state === 'queued' ? 'queued' : 'running' };
+        if (active) {
+          // Persist the reservation owner while the request is inside the
+          // same transaction that joins the durable job.  A late duplicate
+          // must see this fence before it attempts cleanup.
+          active.meteredReservationKey ??= reservationKey;
+          if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, active.id);
+          return { operationId: active.id, state: active.state === 'queued' ? 'queued' : 'running' };
+        }
         const completed = candidates.find((job) => job.state === 'completed' && job.resourceId);
         if (completed) {
           const skill = mutable.skills.find((candidate) => candidate.id === completed.resourceId);
@@ -466,11 +490,13 @@ export function createOpenClawImportQueue(
           import: importRequest,
           upstream,
           openclawSource: sourceDescriptor,
+          meteredReservationKey: reservationKey,
           createdAt: new Date(queueNow).toISOString(),
           updatedAt: new Date(queueNow).toISOString(),
           attempts: 0,
         };
         mutable.jobs.push(job);
+        if (billing) claimMeteredReservationOwner(mutable, reservationKey, reservationIdempotent, job.id);
         appendAudit(mutable, audit(input.principal, 'openclaw.import.queued', job.id, {
           feedId: input.feedId,
           feedSequence: input.feedSequence,
@@ -481,11 +507,11 @@ export function createOpenClawImportQueue(
         return { operationId: job.id, state: 'queued' as const };
         });
       } catch (error) {
-        await releaseMeteredUsage(billing, options.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+        if (!reservationIdempotent) await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent);
         throw error;
       }
-      if (result.operationId !== candidateJobId) {
-        await releaseMeteredUsage(billing, options.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+      if (!reservationIdempotent && result.operationId !== candidateJobId) {
+        await releaseMeteredUsageIfUnowned(options.repository, billing, options.organizationId, reservationKey, reservationDelta, reservationIdempotent);
       }
       return result;
     },
@@ -556,6 +582,8 @@ export function createEmptyRegistryState(policy: Policy = defaultPolicy()): Regi
     policy,
     upstreams: [],
     feeds: [],
+    storageAttempts: [],
+    meteredReservationOwners: [],
     authorizations: [],
     installReceiptTickets: [],
     installReceipts: [],
@@ -1932,14 +1960,26 @@ async function queueSourceCatalogImport(
 ): Promise<SourceCatalogQueueResult> {
   const sourceCatalog = deps.sourceCatalog;
   if (!sourceCatalog) throw new RegistryApiError('SOURCE_CATALOG_UNAVAILABLE', 'Source discovery is not configured for this registry', 503, { retryable: true });
+  const initialState = await readState(deps.repository, config.organizationId);
   const candidateJobId = randomId('job');
-  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationKey = await meteredImportReservationKey({
+    organizationId: config.organizationId,
+    policyRevision: initialState.policy.revision,
+    request: mapping.importRequest,
+    includeVersion: false,
+    upstream: mapping.upstream,
+    sourceAcquisition: mapping.acquisition,
+  });
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
-  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  const reservation = await reserveMeteredUsageResult(deps, config.organizationId, reservationDelta, reservationKey);
   let committed: SourceCatalogQueueResult;
   try {
-    committed = await deps.repository.transaction<SourceCatalogQueueResult>(config.organizationId, (state) => {
-    const mutable = ensureState(state, defaultPolicy());
+    committed = await deps.repository.transaction<SourceCatalogQueueResult>(config.organizationId, (currentState) => {
+    const mutable = ensureState(currentState, defaultPolicy());
+    if (mutable.policy.revision !== initialState.policy.revision) {
+      throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
+    }
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
     if (sourceCatalog.configRevision(mapping.sourceId) !== mapping.importRequest.sourceCatalogConfigRevision) {
       throw new RegistryApiError('SOURCE_CONFIGURATION_CHANGED', 'Source configuration changed while this import was being queued', 409, { retryable: true });
     }
@@ -1962,7 +2002,11 @@ async function queueSourceCatalogImport(
       .filter(sameSource)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
-    if (active) return { status: 202, job: active, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+    if (active) {
+      active.meteredReservationKey ??= reservationKey;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      return { status: 202, job: active, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
+    }
     for (const candidate of candidates) {
       if (candidate.state !== 'completed' || !candidate.resourceId) continue;
       const skill = mutable.skills.find((entry) => entry.id === candidate.resourceId && entry.organizationId === config.organizationId);
@@ -1979,6 +2023,8 @@ async function queueSourceCatalogImport(
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     const physicalActive = physicalCandidates.find((job) => job.state === 'queued' || job.state === 'running');
     if (physicalActive) {
+      physicalActive.meteredReservationKey ??= reservationKey;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, physicalActive.id);
       addSourceCatalogAlias(physicalActive, mapping);
       return { status: 202, job: physicalActive, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
     }
@@ -2014,11 +2060,13 @@ async function queueSourceCatalogImport(
       import: importRequest,
       upstream: mapping.upstream,
       sourceAcquisition: mapping.acquisition,
+      meteredReservationKey: reservationKey,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
     appendAudit(mutable, audit(principal, 'source.import.queued', job.id, {
       sourceId: mapping.sourceId,
       externalId: mapping.externalId,
@@ -2029,11 +2077,13 @@ async function queueSourceCatalogImport(
     return { status: 202, job, reference: mapping.reference, sourceId: mapping.sourceId, externalId: mapping.externalId };
     });
   } catch (error) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    if (reservation && !reservation.idempotent) {
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    }
     throw error;
   }
-  if (committed.status !== 202 || committed.job.id !== candidateJobId) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  if (reservation && !reservation.idempotent && (committed.status !== 202 || committed.job.id !== candidateJobId)) {
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
   }
   return committed;
 }
@@ -2862,10 +2912,19 @@ async function publishSkill(
     await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
     throw error;
   }
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
   try {
     // Admission happens before the first blob write. A rejected plan therefore
     // cannot leave a newly stored artifact or enqueue scanner work.
-    const stored = await putVerifiedBlob(deps, bytes, digest);
+    storageAttempt = await beginStorageAttempt(deps, {
+      organizationId: config.organizationId,
+      reservationKey: storageReservationKey,
+      digest,
+      size: bytes.byteLength,
+      jobId,
+    });
+    stored = await putVerifiedBlob(deps, bytes, digest);
     const skill: SkillVersion = {
       id: skillId,
       organizationId: config.organizationId,
@@ -2890,17 +2949,21 @@ async function publishSkill(
       artifact: stored,
       policyRevision: policy.revision,
       policy,
+      meteredReservationKey: scanReservationKey,
       createdAt: now,
       updatedAt: now,
       attempts: 0,
     };
     const result = await deps.repository.transaction(config.organizationId, (current) => {
       const mutable = ensureState(current, state.policy);
+      if (scanBilling) prepareMeteredReservationOwner(mutable, scanReservationKey, false);
       if (mutable.skills.some((candidate) => candidate.name === name && candidate.version === version)) {
         throw new RegistryApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
       }
       mutable.skills.push(skill);
       mutable.jobs.push(job);
+      if (scanBilling) claimMeteredReservationOwner(mutable, scanReservationKey, false, job.id);
+      commitStorageAttempt(mutable, storageAttempt!.id, stored!);
       appendAudit(mutable, audit(principal, 'skill.publish.queued', skillId, {
         digest,
         version,
@@ -2910,8 +2973,14 @@ async function publishSkill(
     });
     return jsonResponse({ operation: result }, 202);
   } catch (error) {
-    await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
-    await releaseMeteredUsage(scanBilling, config.organizationId, scanReservationKey, { scans: 1 }, `${scanReservationKey}:release`);
+    if (storageAttempt) await markStorageAttemptOrphaned(deps, config.organizationId, storageAttempt.id, stored?.key);
+    else {
+      // beginStorageAttempt completed no provider call.  If its transaction
+      // failed after an uncertain metadata write, the external object is still
+      // known absent, so reconcile the admission back to zero safely.
+      await releaseMeteredUsage(storageBilling, config.organizationId, storageReservationKey, storageReservationDelta, `${storageReservationKey}:release`);
+    }
+    await releaseMeteredUsageIfUnowned(deps.repository, scanBilling, config.organizationId, scanReservationKey, { scans: 1 }, false);
     throw error;
   }
 }
@@ -3861,15 +3930,18 @@ async function rescanSkill(
     attempts: 0,
   };
   const reservationKey = meteredOperationKey('scan', jobId);
+  job.meteredReservationKey = reservationKey;
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
   const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
   try {
     const result = await deps.repository.transaction(config.organizationId, (mutableState) => {
       const mutable = ensureState(mutableState, state.policy);
+      if (billing) prepareMeteredReservationOwner(mutable, reservationKey, false);
       const currentSkill = mutable.skills.find((candidate) => candidate.id === id);
       if (!currentSkill || !canReadNamespace(principal, currentSkill.name)) throw unavailable();
       if (currentSkill.state !== 'revoked') currentSkill.state = 'pending';
       mutable.jobs.push(job);
+      if (billing) claimMeteredReservationOwner(mutable, reservationKey, false, job.id);
       appendAudit(mutable, audit(principal, 'skill.rescan.queued', id, {
         digest: skill.artifact.digest,
         requestId,
@@ -3878,7 +3950,7 @@ async function rescanSkill(
     });
     return jsonResponse({ operation: result }, 202);
   } catch (error) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    await releaseMeteredUsageIfUnowned(deps.repository, billing, config.organizationId, reservationKey, reservationDelta, false);
     throw error;
   }
 }
@@ -5277,13 +5349,31 @@ async function queueSourceReferenceImport(
 ): Promise<SourceCachedResult> {
   const state = await readState(deps.repository, config.organizationId);
   const candidateJobId = randomId('job');
-  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationKey = await meteredImportReservationKey({
+    organizationId: config.organizationId,
+    policyRevision: state.policy.revision,
+    request: {
+      upstreamId: upstream.id,
+      repository: source.repository,
+      path: source.path,
+      ...(requestedRevision ? { ref: requestedRevision } : {}),
+      name: managedName,
+      version: '0.0.0',
+      sourceReference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
+    },
+    includeVersion: false,
+    upstream,
+  });
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
-  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  const reservation = await reserveMeteredUsageResult(deps, config.organizationId, reservationDelta, reservationKey);
   let result: SourceCachedResult;
   try {
     result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
+    if (mutable.policy.revision !== state.policy.revision) {
+      throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
+    }
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
     const current = mutable.upstreams.find((candidate) => candidate.id === upstream.id);
     if (!current || !current.enabled || !sameUpstreamOrigin(current, upstream) || !canReadNamespace(principal, current.namespace)) {
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'The source mapping changed while this import was being resolved', 409);
@@ -5302,7 +5392,11 @@ async function queueSourceReferenceImport(
       })
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
     const active = candidates.find((candidate) => candidate.state === 'queued' || candidate.state === 'running');
-    if (active) return { status: 202 as const, job: active };
+    if (active) {
+      active.meteredReservationKey ??= reservationKey;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      return { status: 202 as const, job: active };
+    }
     for (const candidate of candidates) {
       if (candidate.state !== 'completed' || !candidate.resourceId) continue;
       const skill = mutable.skills.find((value) => value.id === candidate.resourceId);
@@ -5331,11 +5425,13 @@ async function queueSourceReferenceImport(
       policy: clonePolicy(mutable.policy),
       import: importRequest,
       upstream: current,
+      meteredReservationKey: reservationKey,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
     appendAudit(mutable, audit(principal, 'source.proxy.queued', job.id, {
       reference: sourceReferenceFromCanonical({ ...source, ...(requestedRevision ? { revision: requestedRevision } : {}) }),
       upstreamId: upstream.id,
@@ -5345,11 +5441,13 @@ async function queueSourceReferenceImport(
     return { status: 202 as const, job };
     });
   } catch (error) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    if (reservation && !reservation.idempotent) {
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    }
     throw error;
   }
-  if (result.status !== 202 || result.job.id !== candidateJobId) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  if (reservation && !reservation.idempotent && (result.status !== 202 || result.job.id !== candidateJobId)) {
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
   }
   return result;
 }
@@ -5690,13 +5788,22 @@ async function queueTransparentImport(
   }
   const upstream = feedAsUpstream(configuredFeed);
   const candidateJobId = randomId('job');
-  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationKey = await meteredImportReservationKey({
+    organizationId: config.organizationId,
+    policyRevision: state.policy.revision,
+    request: { ...template, version: '0.0.0' },
+    includeVersion: false,
+    upstream,
+  });
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
-  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  const reservation = await reserveMeteredUsageResult(deps, config.organizationId, reservationDelta, reservationKey);
   let committed: { value: TransparentCachedResult; created: boolean };
   try {
     committed = await deps.repository.transaction<{ value: TransparentCachedResult; created: boolean }>(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
+    if (mutable.policy.revision !== state.policy.revision) {
+      throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being queued', 409, { retryable: true });
+    }
     const currentFeed = (mutable.feeds ?? []).find((candidate) => candidate.id === feed.id);
     if (!currentFeed || currentFeed.name !== feed.name || !currentFeed.enabled || !canReadNamespace(principal, feedNamespace(currentFeed))) {
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'The feed configuration changed while this import was being resolved', 409);
@@ -5706,6 +5813,7 @@ async function queueTransparentImport(
     if (!sameUpstreamOrigin(currentUpstream, upstream)) {
       throw new RegistryApiError('PROVENANCE_CONFLICT', 'The upstream mapping changed while this import was being resolved', 409);
     }
+    if (reservation) prepareMeteredReservationOwner(mutable, reservationKey, reservation.idempotent);
     const candidates = mutable.jobs
       .filter((job) => {
         if (job.organizationId !== config.organizationId || job.kind !== 'import') return false;
@@ -5726,7 +5834,11 @@ async function queueTransparentImport(
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
 
     const active = candidates.find((job) => job.state === 'queued' || job.state === 'running');
-    if (active) return { value: { status: 202 as const, job: active }, created: false };
+    if (active) {
+      active.meteredReservationKey ??= reservationKey;
+      if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, active.id);
+      return { value: { status: 202 as const, job: active }, created: false };
+    }
 
     for (const candidate of candidates) {
       if (candidate.state !== 'completed' || !candidate.resourceId || !candidate.import) continue;
@@ -5761,11 +5873,13 @@ async function queueTransparentImport(
       policy: clonePolicy(mutable.policy),
       import: importRequest,
       upstream: currentUpstream,
+      meteredReservationKey: reservationKey,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
     };
     mutable.jobs.push(job);
+    if (reservation) claimMeteredReservationOwner(mutable, reservationKey, reservation.idempotent, job.id);
     appendAudit(mutable, audit(principal, 'skill.proxy.queued', job.id, {
       externalId: template.externalId,
       feed: template.feedName,
@@ -5779,11 +5893,13 @@ async function queueTransparentImport(
     return { value: { status: 202 as const, job }, created: true };
     });
   } catch (error) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    if (reservation && !reservation.idempotent) {
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    }
     throw error;
   }
-  if (!committed.created) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  if (reservation && !reservation.idempotent && !committed.created) {
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
   }
   // The transaction may retry or roll back. Count only the committed result,
   // after the repository has returned successfully, so one request cannot
@@ -5827,13 +5943,24 @@ async function resolveOrQueueImport(
   if (upstream.kind === 'skills-sh') requireDirectoryId(importRequest.path);
   const cacheKey = importCacheKey(config.organizationId, importRequest);
   const candidateJobId = randomId('job');
-  const reservationKey = meteredOperationKey('scan', candidateJobId);
+  const reservationKey = await meteredImportReservationKey({
+    organizationId: config.organizationId,
+    policyRevision: state.policy.revision,
+    request: importRequest,
+    includeVersion: importRequest.sourceCatalogId === undefined &&
+      importRequest.sourceReference === undefined &&
+      importRequest.feedId === undefined,
+    upstream,
+  });
   const reservationDelta: MeteredUsageDelta = { scans: 1 };
-  const billing = await reserveMeteredUsage(deps, config.organizationId, reservationDelta, reservationKey);
+  const reservation = await reserveMeteredUsageResult(deps, config.organizationId, reservationDelta, reservationKey);
   let result: ImportResolutionResult;
   try {
     result = await deps.repository.transaction(config.organizationId, (mutableState) => {
     const mutable = ensureState(mutableState, state.policy);
+    if (mutable.policy.revision !== state.policy.revision) {
+      throw new RegistryApiError('POLICY_CHANGED', 'The scanner policy changed while this import was being resolved', 409, { retryable: true });
+    }
     const currentUpstream = findImportUpstream(mutable, importRequest, principal);
     if (!sameUpstreamOrigin(currentUpstream, upstream)) {
       throw new RegistryApiError(
@@ -5861,6 +5988,7 @@ async function resolveOrQueueImport(
     if (activeTargets.length > 0) {
       const activeTarget = activeTargets.find((candidate) => sameJobSource(candidate));
       if (activeTarget && activeTargets.every((candidate) => sameJobSource(candidate))) {
+        activeTarget.meteredReservationKey ??= reservationKey;
         appendAudit(mutable, audit(principal, 'skill.import.joined', activeTarget.id, {
           cacheKey,
           upstreamId: importRequest.upstreamId,
@@ -5934,6 +6062,7 @@ async function resolveOrQueueImport(
       policy: clonePolicy(mutable.policy),
       import: importRequest,
       upstream: currentUpstream,
+      meteredReservationKey: reservationKey,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       attempts: 0,
@@ -5949,11 +6078,13 @@ async function resolveOrQueueImport(
     return { job, status: 202 as const };
     });
   } catch (error) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+    if (reservation && !reservation.idempotent) {
+      await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
+    }
     throw error;
   }
-  if (result.status !== 202 || result.job.id !== candidateJobId) {
-    await releaseMeteredUsage(billing, config.organizationId, reservationKey, reservationDelta, `${reservationKey}:release`);
+  if (reservation && !reservation.idempotent && (result.status !== 202 || result.job.id !== candidateJobId)) {
+    await releaseMeteredUsageIfUnowned(deps.repository, reservation.billing, config.organizationId, reservationKey, reservationDelta, reservation.idempotent);
   }
   return result;
 }
@@ -6327,6 +6458,8 @@ async function completeJob(
 
   let imported: { bundle: SkillBundle; bytes: Uint8Array; stored: StoredBlob; digest: Digest; metadata: { skillName?: string; description?: string } } | undefined;
   let importedStorageAdmission: { billing: BillingUsageAdmission; reservationKey: string; delta: MeteredUsageDelta } | undefined;
+  let importedStorageAttempt: StorageAttempt | undefined;
+  let importedStored: StoredBlob | undefined;
   if (job.kind === 'import' && !body.error) {
     if (!isObject(body.bundle)) throw new RegistryApiError('INVALID_JOB_RESULT', 'An import completion requires a bundle', 400);
     try {
@@ -6337,14 +6470,25 @@ async function completeJob(
       const delta: MeteredUsageDelta = { storageBytes: bytes.byteLength };
       const billing = await reserveMeteredUsage(deps, config.organizationId, delta, reservationKey);
       if (billing) importedStorageAdmission = { billing, reservationKey, delta };
-      const stored = await putVerifiedBlob(deps, bytes, digest);
+      importedStorageAttempt = await beginStorageAttempt(deps, {
+        organizationId: config.organizationId,
+        reservationKey,
+        digest,
+        size: bytes.byteLength,
+        jobId: job.id,
+      });
+      importedStored = await putVerifiedBlob(deps, bytes, digest);
       const metadata = parseSkillMetadata(bundle) as { skillName?: string; description?: string };
       if (requestedDigest && requestedDigest !== digest) {
         throw new RegistryApiError('DIGEST_MISMATCH', 'Completion artifact digest does not match the imported bundle', 409);
       }
-      imported = { bundle, bytes, stored, digest, metadata };
+      imported = { bundle, bytes, stored: importedStored, digest, metadata };
     } catch (error) {
-      if (importedStorageAdmission) {
+      if (importedStorageAttempt) {
+        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+        importedStorageAttempt = undefined;
+        importedStorageAdmission = undefined;
+      } else if (importedStorageAdmission) {
         await releaseMeteredUsage(
           importedStorageAdmission.billing,
           config.organizationId,
@@ -6371,7 +6515,11 @@ async function completeJob(
       const resultIds = new Set(scanResults.map((scan) => scan.id));
       if (resultIds.size !== scanResults.length) throw new RegistryApiError('INVALID_SCAN_RESULT', 'Scan result ids must be unique', 400);
     } catch (error) {
-      if (importedStorageAdmission) {
+      if (importedStorageAttempt) {
+        await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+        importedStorageAttempt = undefined;
+        importedStorageAdmission = undefined;
+      } else if (importedStorageAdmission) {
         await releaseMeteredUsage(
           importedStorageAdmission.billing,
           config.organizationId,
@@ -6475,6 +6623,7 @@ async function completeJob(
     };
     mutable.skills.push(skill);
     mutable.scans.push(...scanResults);
+    commitStorageAttempt(mutable, importedStorageAttempt!.id, imported.stored);
     currentJob.resourceId = skill.id;
     currentJob.artifact = imported.stored;
     currentJob.state = 'completed';
@@ -6491,7 +6640,11 @@ async function completeJob(
     return currentJob;
     });
   } catch (error) {
-    if (importedStorageAdmission) {
+    if (importedStorageAttempt) {
+      await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+      importedStorageAttempt = undefined;
+      importedStorageAdmission = undefined;
+    } else if (importedStorageAdmission) {
       await releaseMeteredUsage(
         importedStorageAdmission.billing,
         config.organizationId,
@@ -6503,14 +6656,12 @@ async function completeJob(
     }
     throw error;
   }
-  if (importedStorageAdmission && !(result.kind === 'import' && result.state === 'completed')) {
-    await releaseMeteredUsage(
-      importedStorageAdmission.billing,
-      config.organizationId,
-      importedStorageAdmission.reservationKey,
-      importedStorageAdmission.delta,
-      `${importedStorageAdmission.reservationKey}:release`,
-    );
+  if (importedStorageAttempt && !(result.kind === 'import' && result.state === 'completed')) {
+    // The provider write already happened. A requeue or other non-completed
+    // result therefore owns an orphaned object until reconciliation verifies
+    // deletion; releasing the storage admission here would undercount bytes.
+    await markStorageAttemptOrphaned(deps, config.organizationId, importedStorageAttempt.id, importedStored?.key);
+    importedStorageAttempt = undefined;
     importedStorageAdmission = undefined;
   }
   const recordSourceProof = (deps as RegistryHandlerDependencies).openClaw?.recordSourceProof;
@@ -7202,6 +7353,39 @@ function validateStateStatuses(state: RegistryState, organizationId: string): vo
     assertOrganization(job.organizationId, organizationId);
     if (job.upstream) assertOrganization(job.upstream.organizationId, organizationId);
     if (!JOB_STATES.has(job.state)) throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job state is invalid', 500);
+    if (job.meteredReservationKey !== undefined && !isMeteredReservationKey(job.meteredReservationKey)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Job metered reservation key is invalid', 500);
+    }
+  }
+  const storageAttemptIds = new Set<string>();
+  for (const attempt of state.storageAttempts ?? []) {
+    assertOrganization(attempt.organizationId, organizationId);
+    if (!attempt.id || storageAttemptIds.has(attempt.id) || !attempt.reservationKey || !attempt.createdAt || !attempt.updatedAt) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt state is invalid', 500);
+    }
+    if (!['pending', 'committed', 'orphaned', 'released'].includes(attempt.state) || !/^sha256:[0-9a-f]{64}$/u.test(attempt.digest) || !Number.isSafeInteger(attempt.size) || attempt.size < 0) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt metadata is invalid', 500);
+    }
+    if (attempt.objectKey !== undefined && (typeof attempt.objectKey !== 'string' || attempt.objectKey.length === 0)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt object key is invalid', 500);
+    }
+    if (attempt.jobId !== undefined && (typeof attempt.jobId !== 'string' || attempt.jobId.length === 0)) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Storage attempt job id is invalid', 500);
+    }
+    storageAttemptIds.add(attempt.id);
+  }
+  const reservationOwnerKeys = new Set<string>();
+  for (const owner of state.meteredReservationOwners ?? []) {
+    if (
+      !isMeteredReservationKey(owner.reservationKey) ||
+      reservationOwnerKeys.has(owner.reservationKey) ||
+      !['owned', 'releasing', 'released'].includes(owner.state) ||
+      !owner.updatedAt ||
+      (owner.state === 'releasing' && !owner.releaseToken)
+    ) {
+      throw new RegistryApiError('INTERNAL_STATE_INVALID', 'Metered reservation owner state is invalid', 500);
+    }
+    reservationOwnerKeys.add(owner.reservationKey);
   }
   for (const scan of state.scans) {
     assertOrganization(scan.organizationId, organizationId);
@@ -7317,6 +7501,8 @@ function ensureState(state: RegistryState | undefined, fallbackPolicy: Policy): 
   target.installReceiptTickets ||= [];
   target.installReceipts ||= [];
   target.builderSessions ||= [];
+  target.storageAttempts ||= [];
+  target.meteredReservationOwners ||= [];
   target.grants ||= [];
   target.audit ||= [];
   if (!target.policy) target.policy = fallbackPolicy;
@@ -7508,6 +7694,10 @@ function meteredOperationKey(kind: string, id: string): string {
   return `private-skills:${kind}:${id}`;
 }
 
+function isMeteredReservationKey(value: unknown): value is string {
+  return typeof value === 'string' && /^private-skills:scan:[^\s]{1,512}$/u.test(value);
+}
+
 async function reserveMeteredUsage(
   deps: RegistryDependencies,
   organizationId: string,
@@ -7519,6 +7709,30 @@ async function reserveMeteredUsage(
   try {
     await billing.reserveUsage(organizationId, delta, operationKey);
     return billing;
+  } catch (error) {
+    throw meteredError(error);
+  }
+}
+
+interface MeteredUsageReservation {
+  readonly billing: BillingUsageAdmission;
+  readonly idempotent: boolean;
+}
+
+async function reserveMeteredUsageResult(
+  deps: RegistryDependencies,
+  organizationId: string,
+  delta: MeteredUsageDelta,
+  operationKey: string,
+): Promise<MeteredUsageReservation | undefined> {
+  const billing = meteredAdmission(deps);
+  if (!billing) return undefined;
+  try {
+    const result = await billing.reserveUsage(organizationId, delta, operationKey);
+    return {
+      billing,
+      idempotent: isObject(result) && result.idempotent === true,
+    };
   } catch (error) {
     throw meteredError(error);
   }
@@ -7538,17 +7752,305 @@ async function releaseMeteredUsage(
   reservationKey: string,
   delta: MeteredUsageDelta,
   operationKey: string,
-): Promise<void> {
-  if (!billing) return;
+): Promise<boolean> {
+  if (!billing) return true;
   const actual = releaseDelta(delta);
-  if (Object.keys(actual).length === 0) return;
+  if (Object.keys(actual).length === 0) return true;
   try {
     await billing.reconcileUsage(organizationId, reservationKey, actual, operationKey);
+    return true;
   } catch {
     // The caller's durable transaction error is more useful than a cleanup
     // error. A later reconciliation can repair a reservation if the provider
     // repository is temporarily unavailable.
+    return false;
   }
+}
+
+/**
+ * A reservation may be shared by requests that crossed the queue transaction
+ * boundary.  The owner transition and the active-job check must be one
+ * persisted transaction.  A read followed by a release permits a concurrent
+ * queue transaction to acquire the reservation after the read but before the
+ * correction; `releasing` closes that gap and makes the queue retryable.
+ */
+export async function releaseMeteredUsageIfUnowned(
+  repository: StateRepository,
+  billing: BillingUsageAdmission | undefined,
+  organizationId: string,
+  reservationKey: string,
+  delta: MeteredUsageDelta,
+  reservationIdempotent = false,
+): Promise<void> {
+  if (!billing) return;
+  let decision: { kind: 'keep' | 'busy' | 'release'; token?: string };
+  try {
+    decision = await repository.transaction(organizationId, (state) => {
+      const mutable = ensureState(state, defaultPolicy());
+      const active = mutable.jobs.find((job) =>
+        job.organizationId === organizationId &&
+        (job.state === 'queued' || job.state === 'running') &&
+        job.meteredReservationKey === reservationKey,
+      );
+      if (active) {
+        const owner = upsertMeteredReservationOwner(mutable, reservationKey, 'owned');
+        owner.jobId = active.id;
+        return { kind: 'keep' as const };
+      }
+      const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (owner?.state === 'releasing') {
+        // A non-idempotent admission may have arrived after another process
+        // completed its external correction but before that process persisted
+        // the terminal owner state. It is safe to correct this admission as
+        // well because the release fence still rejects queue ownership.
+        return reservationIdempotent
+          ? { kind: 'busy' as const }
+          : { kind: 'release' as const };
+      }
+      const token = randomId('metered-release');
+      if (owner) {
+        owner.state = 'releasing';
+        owner.releaseToken = token;
+        owner.updatedAt = nowIso();
+        owner.jobId = undefined;
+      } else {
+        mutable.meteredReservationOwners!.push({
+          reservationKey,
+          state: 'releasing',
+          releaseToken: token,
+          updatedAt: nowIso(),
+        });
+      }
+      return { kind: 'release' as const, token };
+    });
+  } catch {
+    // A repository failure must leave the reservation charged for a later
+    // reconciliation rather than subtracting another request's admission.
+    return;
+  }
+  if (decision.kind !== 'release') return;
+  if (!decision.token) {
+    await releaseMeteredUsage(
+      billing,
+      organizationId,
+      reservationKey,
+      delta,
+      `${reservationKey}:release`,
+    );
+    return;
+  }
+  const released = await releaseMeteredUsage(
+    billing,
+    organizationId,
+    reservationKey,
+    delta,
+    `${reservationKey}:release`,
+  );
+  try {
+    await repository.transaction(organizationId, (state) => {
+      const mutable = ensureState(state, defaultPolicy());
+      const owner = findMeteredReservationOwner(mutable, reservationKey);
+      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== decision.token) return;
+      owner.updatedAt = nowIso();
+      if (released) {
+        owner.state = 'released';
+        owner.releaseToken = undefined;
+      } else {
+        // Permit a future correction attempt while retaining the durable
+        // owner row.  A failed correction never opens a queue race by itself.
+        owner.state = 'owned';
+        owner.releaseToken = undefined;
+      }
+    });
+  } catch {
+    // Keep the `releasing` fence if the final state transition is uncertain.
+  }
+}
+
+function findMeteredReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+): MeteredReservationOwner | undefined {
+  state.meteredReservationOwners ??= [];
+  return state.meteredReservationOwners.find((owner) => owner.reservationKey === reservationKey);
+}
+
+function upsertMeteredReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+  ownerState: 'owned' | 'released',
+  jobId?: string,
+): MeteredReservationOwner {
+  state.meteredReservationOwners ??= [];
+  const existing = findMeteredReservationOwner(state, reservationKey);
+  if (existing?.state === 'releasing') {
+    throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered operation is settling; retry shortly', 503, { retryable: true });
+  }
+  if (existing) {
+    existing.state = ownerState;
+    existing.updatedAt = nowIso();
+    existing.releaseToken = undefined;
+    if (jobId !== undefined) existing.jobId = jobId;
+    return existing;
+  }
+  const created: MeteredReservationOwner = {
+    reservationKey,
+    state: ownerState,
+    updatedAt: nowIso(),
+    ...(jobId === undefined ? {} : { jobId }),
+  };
+  state.meteredReservationOwners.push(created);
+  return created;
+}
+
+function prepareMeteredReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+  reservationIdempotent: boolean,
+): void {
+  const owner = findMeteredReservationOwner(state, reservationKey);
+  if (owner?.state === 'releasing' || (owner?.state === 'released' && reservationIdempotent)) {
+    throw new RegistryApiError('METERED_RESERVATION_BUSY', 'The metered operation is settling; retry shortly', 503, { retryable: true });
+  }
+  if (owner?.state === 'released') {
+    owner.state = 'owned';
+    owner.updatedAt = nowIso();
+    owner.releaseToken = undefined;
+    owner.jobId = undefined;
+  }
+}
+
+export function claimMeteredReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+  reservationIdempotent: boolean,
+  jobId: string,
+): void {
+  prepareMeteredReservationOwner(state, reservationKey, reservationIdempotent);
+  const owner = upsertMeteredReservationOwner(state, reservationKey, 'owned', jobId);
+  owner.jobId = jobId;
+}
+
+function meteredImportRequest(request: ImportRequest, includeVersion: boolean): ImportRequest {
+  // Some source proxy routes intentionally generate a fresh release version
+  // for every retry. Their durable deduplication identity is the source
+  // reference, feed, or acquisition descriptor, so a random version cannot
+  // become a second scan reservation. Keep the field present as undefined so
+  // the canonical serializer has one representation in core and workers.
+  return includeVersion ? request : { ...request, version: undefined as unknown as string };
+}
+
+function meteredUpstream(upstream: Upstream | undefined): Pick<Upstream, 'id' | 'kind' | 'namespace' | 'baseUrl' | 'repositories' | 'configRevision' | 'credentialEnv'> | undefined {
+  if (!upstream) return undefined;
+  return {
+    id: upstream.id,
+    kind: upstream.kind,
+    namespace: upstream.namespace,
+    baseUrl: upstream.baseUrl,
+    repositories: upstream.repositories,
+    configRevision: upstream.configRevision,
+    credentialEnv: upstream.credentialEnv,
+  };
+}
+
+async function meteredImportReservationKey(input: {
+  organizationId: string;
+  policyRevision: string;
+  request: ImportRequest;
+  includeVersion: boolean;
+  upstream?: Upstream;
+  sourceAcquisition?: unknown;
+  openclawSource?: unknown;
+}): Promise<string> {
+  const identity = canonicalMeteredImportIdentity({
+    organizationId: input.organizationId,
+    policyRevision: input.policyRevision,
+    request: meteredImportRequest(input.request, input.includeVersion),
+    upstream: meteredUpstream(input.upstream),
+    sourceAcquisition: input.sourceAcquisition,
+    openclawSource: input.openclawSource,
+  });
+  const digest = await digestBytes(new TextEncoder().encode(identity));
+  return meteredOperationKey('scan', digest);
+}
+
+function storageAttemptRecord(input: {
+  organizationId: string;
+  reservationKey: string;
+  digest: Digest;
+  size: number;
+  jobId?: string;
+}): StorageAttempt {
+  const timestamp = nowIso();
+  return {
+    id: randomId('storage-attempt'),
+    organizationId: input.organizationId,
+    reservationKey: input.reservationKey,
+    digest: input.digest,
+    size: input.size,
+    state: 'pending',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...(input.jobId ? { jobId: input.jobId } : {}),
+  };
+}
+
+async function beginStorageAttempt(
+  deps: RegistryDependencies,
+  input: {
+    organizationId: string;
+    reservationKey: string;
+    digest: Digest;
+    size: number;
+    jobId?: string;
+  },
+): Promise<StorageAttempt> {
+  const attempt = storageAttemptRecord(input);
+  await deps.repository.transaction(input.organizationId, (state) => {
+    const mutable = ensureState(state, defaultPolicy());
+    mutable.storageAttempts!.push(attempt);
+  });
+  return attempt;
+}
+
+async function markStorageAttemptOrphaned(
+  deps: RegistryDependencies,
+  organizationId: string,
+  attemptId: string,
+  objectKey?: string,
+): Promise<void> {
+  try {
+    await deps.repository.transaction(organizationId, (state) => {
+      const mutable = ensureState(state, defaultPolicy());
+      const attempt = mutable.storageAttempts!.find((candidate) => candidate.id === attemptId);
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'released') return;
+      attempt.state = 'orphaned';
+      attempt.updatedAt = nowIso();
+      if (objectKey) attempt.objectKey = objectKey;
+    });
+  } catch {
+    // A pending attempt is deliberately retained when its state transition is
+    // uncertain. The reservation remains charged until reconciliation proves
+    // that the provider object is absent or has been deleted.
+  }
+}
+
+function commitStorageAttempt(
+  state: RegistryState,
+  attemptId: string,
+  stored: StoredBlob,
+): void {
+  const mutable = ensureState(state, defaultPolicy());
+  const attempt = mutable.storageAttempts!.find((candidate) => candidate.id === attemptId);
+  if (!attempt) throw new RegistryApiError('STORAGE_ATTEMPT_MISSING', 'Storage write ownership record is missing', 503, { retryable: true });
+  if (attempt.state === 'committed') {
+    if (attempt.objectKey !== stored.key) throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership record conflicts with the stored object', 409);
+    return;
+  }
+  if (attempt.state === 'released') throw new RegistryApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership was already released', 409);
+  attempt.state = 'committed';
+  attempt.objectKey = stored.key;
+  attempt.updatedAt = nowIso();
 }
 
 function unavailable(): RegistryApiError {

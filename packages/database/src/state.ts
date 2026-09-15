@@ -79,6 +79,8 @@ export function defaultRegistryState(
     scans: [],
     policy: initialPolicy(options),
     upstreams: [],
+    storageAttempts: [],
+    meteredReservationOwners: [],
     authorizations: [],
     installReceiptTickets: [],
     installReceipts: [],
@@ -104,6 +106,8 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 const SEVERITIES = new Set(['info', 'low', 'medium', 'high', 'critical']);
+const STORAGE_ATTEMPT_STATES = new Set(['pending', 'committed', 'orphaned', 'released']);
+const METERED_RESERVATION_OWNER_STATES = new Set(['owned', 'releasing', 'released']);
 
 function validScannerPolicy(value: unknown): value is ScannerPolicy {
   if (!isObject(value)) return false;
@@ -131,6 +135,35 @@ function validPolicy(value: unknown): value is Policy {
     Number.isFinite(value.evidenceMaxAgeSeconds) &&
     value.evidenceMaxAgeSeconds >= 0 &&
     (value.hooks === undefined || Array.isArray(value.hooks))
+  );
+}
+
+function validStorageAttempt(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === 'string' && value.id.length > 0 &&
+    typeof value.organizationId === 'string' && value.organizationId.length > 0 &&
+    typeof value.reservationKey === 'string' && value.reservationKey.length > 0 &&
+    typeof value.digest === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value.digest) &&
+    Number.isSafeInteger(value.size) && (value.size as number) >= 0 &&
+    typeof value.state === 'string' && STORAGE_ATTEMPT_STATES.has(value.state) &&
+    typeof value.createdAt === 'string' && value.createdAt.length > 0 &&
+    typeof value.updatedAt === 'string' && value.updatedAt.length > 0 &&
+    (value.objectKey === undefined || (typeof value.objectKey === 'string' && value.objectKey.length > 0)) &&
+    (value.jobId === undefined || (typeof value.jobId === 'string' && value.jobId.length > 0))
+  );
+}
+
+function validMeteredReservationOwner(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.reservationKey === 'string' && value.reservationKey.length > 0 && value.reservationKey.length <= 512 &&
+    /^private-skills:scan:[^\s]{1,512}$/u.test(value.reservationKey) &&
+    typeof value.state === 'string' && METERED_RESERVATION_OWNER_STATES.has(value.state) &&
+    typeof value.updatedAt === 'string' && value.updatedAt.length > 0 && value.updatedAt.length <= 64 &&
+    (value.jobId === undefined || (typeof value.jobId === 'string' && value.jobId.length > 0 && value.jobId.length <= 256)) &&
+    (value.releaseToken === undefined || (typeof value.releaseToken === 'string' && value.releaseToken.length > 0 && value.releaseToken.length <= 256)) &&
+    (value.state !== 'releasing' || value.releaseToken !== undefined)
   );
 }
 
@@ -172,6 +205,34 @@ export function assertRegistryState(value: unknown): asserts value is RegistrySt
   }
   if (value.tenantReviewDispatchCursor !== undefined && !validTenantReviewDispatchCursor(value.tenantReviewDispatchCursor)) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid tenant review dispatch cursor');
+  }
+  if (value.storageAttempts !== undefined && !Array.isArray(value.storageAttempts)) {
+    throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid storage attempt collection');
+  }
+  if (value.storageAttempts !== undefined) {
+    const storageAttemptIds = new Set<string>();
+    if (value.storageAttempts.some((attempt) => {
+      if (!validStorageAttempt(attempt)) return true;
+      if (storageAttemptIds.has(attempt.id as string)) return true;
+      storageAttemptIds.add(attempt.id as string);
+      return false;
+    })) {
+      throw new StateRepositoryError('INVALID_STATE', 'Registry state has invalid storage attempt metadata');
+    }
+  }
+  if (value.meteredReservationOwners !== undefined && !Array.isArray(value.meteredReservationOwners)) {
+    throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid metered reservation owner collection');
+  }
+  if (value.meteredReservationOwners !== undefined) {
+    const reservationKeys = new Set<string>();
+    if (value.meteredReservationOwners.length > 100_000 || value.meteredReservationOwners.some((owner) => {
+      if (!validMeteredReservationOwner(owner)) return true;
+      if (reservationKeys.has(owner.reservationKey as string)) return true;
+      reservationKeys.add(owner.reservationKey as string);
+      return false;
+    })) {
+      throw new StateRepositoryError('INVALID_STATE', 'Registry state has invalid metered reservation owner metadata');
+    }
   }
   if (!validPolicy(value.policy)) {
     throw new StateRepositoryError('INVALID_STATE', 'Registry state has an invalid scanner policy');

@@ -309,7 +309,10 @@ describe('file-backed authoring restart composition', () => {
     expect(reloaded.draft).toEqual(updated.draft);
 
     const reloadedState = await second.repository.read(ORGANIZATION);
-    expect(reloadedState.metadataRevision).toBe(2);
+    // Each draft write now persists a storage-attempt ownership record before
+    // the provider write, so the two logical edits occupy four repository
+    // transactions while the draft revision remains two.
+    expect(reloadedState.metadataRevision).toBe(4);
     const persistedDraft = reloadedState.drafts?.find((draft) => draft.id === created.draft.id);
     expect(persistedDraft).toMatchObject({
       revision: 2,

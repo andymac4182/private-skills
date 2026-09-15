@@ -16,6 +16,8 @@ import type {
   SkillBuilderPatchOperation,
   SkillBuilderProposalRecord,
   SkillBuilderSessionRecord,
+  StorageAttempt,
+  MeteredReservationOwner,
 } from '../../contracts/src/index.js';
 import { createUploadReviewSnapshot } from '../../upload-reviews/src/snapshot.js';
 import type {
@@ -67,6 +69,7 @@ interface DraftUsageAdmission {
   readonly billing: BillingUsageAdmission;
   readonly reservationKey: string;
   readonly delta: { storageBytes?: number; scans?: number };
+  readonly idempotent: boolean;
 }
 
 function authoringBilling(deps: AuthoringHandlerDependencies): BillingUsageAdmission | undefined {
@@ -106,18 +109,19 @@ async function reserveDraftUsage(
   const billing = authoringBilling(deps);
   if (!billing) return undefined;
   try {
-    await billing.reserveUsage(deps.config.organizationId, delta, reservationKey);
+    const result = await billing.reserveUsage(deps.config.organizationId, delta, reservationKey);
+    const idempotent = typeof result === 'object' && result !== null && (result as { idempotent?: unknown }).idempotent === true;
+    return { billing, reservationKey, delta, idempotent };
   } catch (error) {
     throw authoringMeteredError(error);
   }
-  return { billing, reservationKey, delta };
 }
 
 async function releaseDraftUsage(
   admission: DraftUsageAdmission | undefined,
   organizationId: string,
-): Promise<void> {
-  if (!admission) return;
+): Promise<boolean> {
+  if (!admission) return true;
   try {
     await admission.billing.reconcileUsage(
       organizationId,
@@ -125,10 +129,194 @@ async function releaseDraftUsage(
       Object.fromEntries(Object.keys(admission.delta).map((metric) => [metric, 0])) as DraftUsageAdmission['delta'],
       `${admission.reservationKey}:release`,
     );
+    return true;
   } catch {
     // Preserve the primary storage or repository error. The durable billing
     // row remains visible for an operator/reconciliation pass.
+    return false;
   }
+}
+
+function draftReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+): MeteredReservationOwner | undefined {
+  state.meteredReservationOwners ??= [];
+  return state.meteredReservationOwners.find((owner) => owner.reservationKey === reservationKey);
+}
+
+function prepareDraftReservationOwner(
+  state: RegistryState,
+  admission: DraftUsageAdmission,
+): void {
+  const owner = draftReservationOwner(state, admission.reservationKey);
+  if (owner?.state === 'releasing' || (owner?.state === 'released' && admission.idempotent)) {
+    throw new AuthoringApiError('METERED_RESERVATION_BUSY', 'The metered operation is settling; retry shortly', 503);
+  }
+  if (owner?.state === 'released') {
+    owner.state = 'owned';
+    owner.releaseToken = undefined;
+    owner.jobId = undefined;
+    owner.updatedAt = new Date().toISOString();
+  }
+}
+
+function claimDraftReservationOwner(
+  state: RegistryState,
+  admission: DraftUsageAdmission,
+  jobId: string,
+): void {
+  prepareDraftReservationOwner(state, admission);
+  state.meteredReservationOwners ??= [];
+  const owner = draftReservationOwner(state, admission.reservationKey);
+  if (owner) {
+    owner.state = 'owned';
+    owner.jobId = jobId;
+    owner.releaseToken = undefined;
+    owner.updatedAt = new Date().toISOString();
+    return;
+  }
+  state.meteredReservationOwners.push({
+    reservationKey: admission.reservationKey,
+    state: 'owned',
+    jobId,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * If publication's queue transaction is uncertain, atomically transition the
+ * durable reservation owner before releasing its scan admission. An active
+ * job may already be in the worker, so a repository failure must fail closed
+ * and retain the charge.
+ */
+async function releaseDraftUsageIfUnowned(
+  admission: DraftUsageAdmission | undefined,
+  deps: AuthoringHandlerDependencies,
+): Promise<void> {
+  if (!admission) return;
+  let token: string | undefined;
+  try {
+    const decision = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      state.meteredReservationOwners ??= [];
+      const active = state.jobs.find((job) =>
+        job.organizationId === deps.config.organizationId &&
+        (job.state === 'queued' || job.state === 'running') &&
+        job.meteredReservationKey === admission.reservationKey,
+      );
+      if (active) {
+        claimDraftReservationOwner(state, admission, active.id);
+        return 'keep' as const;
+      }
+      const owner = draftReservationOwner(state, admission.reservationKey);
+      if (owner?.state === 'releasing') {
+        // A non-idempotent admission may have arrived after another process
+        // completed its correction but before that process persisted the
+        // terminal owner state. The release fence still prevents queueing, so
+        // correcting this admission concurrently is safe.
+        return admission.idempotent ? 'busy' as const : 'release-unfenced' as const;
+      }
+      token = randomId('metered-release');
+      if (owner) {
+        owner.state = 'releasing';
+        owner.releaseToken = token;
+        owner.jobId = undefined;
+        owner.updatedAt = new Date().toISOString();
+      } else {
+        state.meteredReservationOwners.push({
+          reservationKey: admission.reservationKey,
+          state: 'releasing',
+          releaseToken: token,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      return 'release' as const;
+    });
+    if (decision === 'release-unfenced') {
+      await releaseDraftUsage(admission, deps.config.organizationId);
+      return;
+    }
+    if (decision !== 'release' || !token) return;
+  } catch {
+    return;
+  }
+  const released = await releaseDraftUsage(admission, deps.config.organizationId);
+  try {
+    await deps.repository.transaction(deps.config.organizationId, (state) => {
+      const owner = draftReservationOwner(state, admission.reservationKey);
+      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== token) return;
+      owner.state = released ? 'released' : 'owned';
+      owner.releaseToken = undefined;
+      owner.updatedAt = new Date().toISOString();
+    });
+  } catch {
+    // Keep the release fence if the final transition is uncertain.
+  }
+}
+
+function draftStorageAttemptRecord(input: {
+  organizationId: string;
+  reservationKey: string;
+  digest: Digest;
+  size: number;
+}): StorageAttempt {
+  const timestamp = new Date().toISOString();
+  return {
+    id: randomId('storage-attempt'),
+    organizationId: input.organizationId,
+    reservationKey: input.reservationKey,
+    digest: input.digest,
+    size: input.size,
+    state: 'pending',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+async function beginDraftStorageAttempt(
+  deps: AuthoringHandlerDependencies,
+  input: { reservationKey: string; digest: Digest; size: number },
+): Promise<StorageAttempt> {
+  const attempt = draftStorageAttemptRecord({ organizationId: deps.config.organizationId, ...input });
+  await deps.repository.transaction(deps.config.organizationId, (state) => {
+    state.storageAttempts ??= [];
+    state.storageAttempts.push(attempt);
+  });
+  return attempt;
+}
+
+async function markDraftStorageAttemptOrphaned(
+  deps: AuthoringHandlerDependencies,
+  attemptId: string,
+  objectKey?: string,
+): Promise<void> {
+  try {
+    await deps.repository.transaction(deps.config.organizationId, (state) => {
+      state.storageAttempts ??= [];
+      const attempt = state.storageAttempts.find((candidate) => candidate.id === attemptId);
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'released') return;
+      attempt.state = 'orphaned';
+      attempt.updatedAt = new Date().toISOString();
+      if (objectKey) attempt.objectKey = objectKey;
+    });
+  } catch {
+    // Keep a pending attempt charged when its transition is uncertain. A
+    // later operator reconciliation must verify the provider object first.
+  }
+}
+
+function commitDraftStorageAttempt(state: RegistryState, attemptId: string, stored: StoredBlob): void {
+  state.storageAttempts ??= [];
+  const attempt = state.storageAttempts.find((candidate) => candidate.id === attemptId);
+  if (!attempt) throw new AuthoringApiError('STORAGE_ATTEMPT_MISSING', 'Storage write ownership record is missing', 503);
+  if (attempt.state === 'committed') {
+    if (attempt.objectKey !== stored.key) throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
+    return;
+  }
+  if (attempt.state === 'released') throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership was already released', 409);
+  attempt.state = 'committed';
+  attempt.objectKey = stored.key;
+  attempt.updatedAt = new Date().toISOString();
 }
 
 export interface PublicSkillDraft {
@@ -951,11 +1139,21 @@ async function createDraft(
     { storageBytes: snapshot.bytes.byteLength },
     await draftUsageKey(draftId, requestDigest, 'draft-storage'),
   );
-  let stored: StoredBlob;
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
   try {
+    storageAttempt = await beginDraftStorageAttempt(deps, {
+      reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+      digest: snapshot.release.artifact.digest,
+      size: snapshot.bytes.byteLength,
+    });
     stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
     throw error;
   }
   record.artifact = stored;
@@ -984,14 +1182,23 @@ async function createDraft(
         throw unavailableDraft();
       }
       state.drafts!.push(draft);
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
       appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
       return { draft, idempotent: false };
     });
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
     throw error;
   }
-  if (result.idempotent) await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   const bundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
@@ -1082,11 +1289,21 @@ async function createUploadDraft(
     { storageBytes: encoded.byteLength },
     await draftUsageKey(draftId, requestDigest, 'draft-storage'),
   );
-  let stored: StoredBlob;
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
   try {
+    storageAttempt = await beginDraftStorageAttempt(deps, {
+      reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+      digest,
+      size: encoded.byteLength,
+    });
     stored = await putVerifiedDraftBlob(deps, encoded, digest);
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
     throw error;
   }
   record.artifact = stored;
@@ -1108,14 +1325,23 @@ async function createUploadDraft(
         return { draft: current, idempotent: true };
       }
       state.drafts!.push(draft);
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
       appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
       return { draft, idempotent: false };
     });
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
     throw error;
   }
-  if (result.idempotent) await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   await syncDraftReview(responseDraft, responseDraft.files, deps, false);
@@ -1359,11 +1585,21 @@ export async function writeDraftRevision(
     { storageBytes: encoded!.byteLength },
     await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
   );
-  let stored: StoredBlob;
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
   try {
+    storageAttempt = await beginDraftStorageAttempt(input.deps, {
+      reservationKey: await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
+      digest: digest!,
+      size: encoded!.byteLength,
+    });
     stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    }
     throw error;
   }
   record.artifact = stored;
@@ -1418,6 +1654,7 @@ export async function writeDraftRevision(
       current.files = bundle!.files;
       current.updatedAt = now;
       current.idempotency = nextIdempotency;
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
       appendDraftAudit(
         state,
         input.principal,
@@ -1430,10 +1667,18 @@ export async function writeDraftRevision(
       return { draft: current, idempotent: false };
     });
   } catch (error) {
-    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+    } else {
+      await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    }
     throw error;
   }
-  if (result.idempotent) await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent
     ? await draftFromIdempotency(result.draft, findIdempotency(result.draft, idempotencyKey, input.principal.subject)!, input.deps)
@@ -1790,9 +2035,11 @@ async function publishDraft(
     { scans: 1 },
     `private-skills:scan:${jobId}`,
   );
+  job.meteredReservationKey = `private-skills:scan:${jobId}`;
   let result: { operation: DraftPublishOperation; idempotent: boolean };
   try {
     result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      if (scanAdmission) prepareDraftReservationOwner(state, scanAdmission);
       const current = findDraft(state, draftId, principal, deps.config.organizationId);
       const concurrent = findPublication(current, idempotencyKey, principal.subject);
       if (concurrent) {
@@ -1831,6 +2078,7 @@ async function publishDraft(
       }
       state.skills.push(skill);
       state.jobs.push(job);
+      if (scanAdmission) claimDraftReservationOwner(state, scanAdmission, job.id);
       current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
       appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
         digest: publication.digest,
@@ -1843,10 +2091,10 @@ async function publishDraft(
       return { operation: operationFromPublication(publication), idempotent: false };
     });
   } catch (error) {
-    await releaseDraftUsage(scanAdmission, deps.config.organizationId);
+    await releaseDraftUsageIfUnowned(scanAdmission, deps);
     throw error;
   }
-  if (result.idempotent) await releaseDraftUsage(scanAdmission, deps.config.organizationId);
+  if (result.idempotent) await releaseDraftUsageIfUnowned(scanAdmission, deps);
 
   return jsonResponse(result, result.idempotent ? 200 : 202, {
     'cache-control': 'private, no-store',
