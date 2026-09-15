@@ -1154,6 +1154,7 @@ export class BillingService {
         existing.committed = false;
         existing.subjectKey = subjectKey || existing.subjectKey === true;
         existing.revision = revision;
+        delete existing.recoveryProof;
         existing.updatedAt = timestamp;
       } else {
         reservations.push({ operationKey: normalizedKey, status: 'active', committed: false, subjectKey, revision, createdAt: timestamp, updatedAt: timestamp });

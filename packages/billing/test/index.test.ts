@@ -532,6 +532,11 @@ describe('transactional usage enforcement', () => {
     await expect(service.activeSeatReservations('org-seat-recovery')).resolves.toEqual([]);
     await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', proof)).resolves.toMatchObject({ idempotent: true });
     await expect(service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', { kind: 'known-failure', reference: 'different-proof' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    await service.reserveSeat('org-seat-recovery', 'failed-member-hold', { subjectKey: true });
+    const reactivated = await service.activeSeatReservations('org-seat-recovery');
+    expect(reactivated).toMatchObject([{ operationKey: 'failed-member-hold', status: 'active' }]);
+    expect(reactivated[0]).not.toHaveProperty('recoveryProof');
+    await service.releaseSeatAfterFailure('org-seat-recovery', 'failed-member-hold', { kind: 'writer-terminated', reference: 'better-auth-create-member-err-2' });
 
     await service.reserveSeat('org-seat-recovery', 'committed-member-hold', { subjectKey: true });
     await service.commitSeat('org-seat-recovery', 'committed-member-hold');
