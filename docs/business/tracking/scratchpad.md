@@ -23,3 +23,5 @@ Date / observation / affected requirement / proposed next check / owner / backlo
 ## Integration dependency coordination
 
 15 September: after SSO dependency edits, a targeted pnpm test command attempted automatic install and failed with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY. No adoption/worker test result was produced by that command. SSO agent owns completion of one noninteractive frozen install; coordinator pauses concurrent package commands until it reports completion. Then rerun the two targeted suites.
+
+Resolved dependency check: coordinator ran CI=true pnpm install --frozen-lockfile successfully, then the adoption and worker identity suites passed (7 tests). Runtime integration is still awaiting owner handoff; these focused tests alone do not prove real database adoption or end-to-end worker isolation.
