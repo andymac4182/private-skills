@@ -27,6 +27,33 @@ function safeSlug(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 64)
 }
 
+async function copyToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      // Fall through to the selection-based copy for browsers that expose the
+      // Clipboard API but deny the write in the current context.
+    }
+  }
+  if (typeof document === 'undefined') return false
+  const fallback = document.createElement('textarea')
+  fallback.value = value
+  fallback.setAttribute('readonly', '')
+  fallback.style.position = 'fixed'
+  fallback.style.opacity = '0'
+  document.body.append(fallback)
+  fallback.select()
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    fallback.remove()
+  }
+}
+
 export function CompanyView() {
   const navigate = useNavigate()
   const { principal, session, refresh, switchOrganization } = useAuth()
@@ -142,10 +169,14 @@ function InvitePanel({ disabled, onInvited }: { disabled: boolean; onInvited: ()
     finally { setBusy(false) }
   }
   async function copyInviteLink() {
-    if (!inviteLink || !navigator.clipboard) return
-    try { await navigator.clipboard.writeText(inviteLink); setCopied(true) } catch { setCopied(false) }
+    if (!inviteLink) return
+    const copiedToClipboard = await copyToClipboard(inviteLink)
+    setCopied(copiedToClipboard)
+    setMessage(copiedToClipboard
+      ? { kind: 'success', text: 'Invitation link copied to clipboard.' }
+      : { kind: 'error', text: 'Copy is unavailable here. Select the invitation link below and copy it manually.' })
   }
-  return <Panel className="company-invite-panel" title="Invite a teammate" description={disabled ? 'Owner or admin access is required to invite teammates.' : 'The identity service creates a bounded invitation. Email delivery may be disabled.'}><form className="stack-form company-invite-form" onSubmit={submit}><Field label="Email address"><input disabled={disabled} name="inviteEmail" onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" type="email" value={email} /></Field><Field label="Role"><select disabled={disabled} name="inviteRole" onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{INVITABLE_ROLES.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select></Field>{message && <Notice kind={message.kind}>{message.text}</Notice>}{inviteLink && <div className="invite-link-block"><code>{inviteLink}</code><Button kind="secondary" type="button" onClick={() => void copyInviteLink()}>{copied ? 'Copied' : 'Copy invitation link'}</Button></div>}<Button busy={busy} disabled={disabled} type="submit">Create invitation</Button></form></Panel>
+  return <Panel className="company-invite-panel" title="Invite a teammate" description={disabled ? 'Owner or admin access is required to invite teammates.' : 'The identity service creates a bounded invitation. Email delivery may be disabled.'}><form className="stack-form company-invite-form" onSubmit={submit}><Field label="Email address"><input disabled={disabled} name="inviteEmail" onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" type="email" value={email} /></Field><Field label="Role"><select disabled={disabled} name="inviteRole" onChange={(event) => setRole(event.target.value as OrganizationRole)} value={role}>{INVITABLE_ROLES.map((candidate) => <option key={candidate} value={candidate}>{displayRole(candidate)}</option>)}</select></Field>{message && <Notice kind={message.kind}>{message.text}</Notice>}{inviteLink && <div className="invite-link-block"><Field label="Invitation link"><input aria-label="Invitation link" onClick={(event) => event.currentTarget.select()} onFocus={(event) => event.currentTarget.select()} readOnly value={inviteLink} /></Field><Button kind="secondary" type="button" onClick={() => void copyInviteLink()}>{copied ? 'Copied' : 'Copy invitation link'}</Button><span className="helper">If clipboard access is blocked, select the link above and copy it manually.</span></div>}<Button busy={busy} disabled={disabled} type="submit">Create invitation</Button></form></Panel>
 }
 
 function TeamPanel({ canManage, invitations, members, onChanged }: { canManage: boolean; invitations: OrganizationInvitation[] | null; members: TeamMember[] | null; onChanged: () => void }) {

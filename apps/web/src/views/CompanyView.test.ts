@@ -173,7 +173,7 @@ describe('CompanyView', () => {
     vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
     const createInvitation = vi.spyOn(api, 'inviteOrganizationMember').mockResolvedValue({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending' })
     const writeText = vi.fn(async () => {})
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
     root = (await renderView()).root
     await flushEffects()
 
@@ -188,12 +188,44 @@ describe('CompanyView', () => {
     await vi.waitFor(() => expect(createInvitation).toHaveBeenCalledWith({ email: 'new@acme.test', role: 'reader' }))
 
     const expectedLink = new URL('/organization/accept-invitation?id=invite%2F1', window.location.origin).toString()
-    await vi.waitFor(() => expect(document.body.textContent).toContain(expectedLink))
+    const linkInput = document.querySelector<HTMLInputElement>('input[aria-label="Invitation link"]')
+    await vi.waitFor(() => expect(linkInput?.value).toBe(expectedLink))
     const copyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy invitation link')
     await act(async () => { copyButton?.click() })
 
     expect(writeText).toHaveBeenCalledWith(expectedLink)
     expect(document.body.textContent).toContain('Copied')
+  })
+
+  it('leaves a selectable link and explains clipboard failures', async () => {
+    harness.auth.session = makeSession()
+    vi.spyOn(api, 'organizationMembers').mockResolvedValue({ members: [] })
+    vi.spyOn(api, 'organizationInvitations').mockResolvedValue({ invitations: [] })
+    const createInvitation = vi.spyOn(api, 'inviteOrganizationMember').mockResolvedValue({ id: 'invite/1', email: 'new@acme.test', role: 'reader', status: 'pending' })
+    const writeText = vi.fn(async () => { throw new Error('clipboard permission denied') })
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    root = (await renderView()).root
+    await flushEffects()
+
+    const input = document.querySelector<HTMLInputElement>('input[name="inviteEmail"]')
+    const form = document.querySelector('form')
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setValue?.call(input, 'new@acme.test')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await vi.waitFor(() => expect(createInvitation).toHaveBeenCalledOnce())
+
+    const expectedLink = new URL('/organization/accept-invitation?id=invite%2F1', window.location.origin).toString()
+    const linkInput = document.querySelector<HTMLInputElement>('input[aria-label="Invitation link"]')
+    await vi.waitFor(() => expect(linkInput?.value).toBe(expectedLink))
+    const copyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Copy invitation link')
+    await act(async () => { copyButton?.click() })
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Copy is unavailable here. Select the invitation link below and copy it manually.'))
+    expect(writeText).toHaveBeenCalledWith(expectedLink)
+    expect(copyButton?.textContent).toBe('Copy invitation link')
   })
 
   it('keeps member access read-only and does not request restricted invitations for readers', async () => {
