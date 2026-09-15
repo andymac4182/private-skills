@@ -183,3 +183,7 @@ Reviewed and integrated type-only fix0fcc803 as36385d0. Root independently ran T
 ### Commercial decision checkpoint — 16 September
 
 Source review confirms contact page still uses the honest launch-preview fallback when PUBLIC_CONTACT_URL is absent. It is not a working support channel and remains a launch input alongside legal/entity details. Root presented concrete brand options (keep Private Skills, ReleaseLoom, Vouchpack) and a positioning approval question via asynchronous input; no selection is inferred while waiting. Proposed positioning: a private registry taking AI-agent skills from source to a checked, repeatable install, initially for platform/DevEx leads. Domain observations are snapshots, not secured assets. GitHub readback at this checkpoint showed no open PR; release owner is preparing the corrected candidate.
+
+### Main merge and anonymous production readback — 16 September
+
+Root independently confirmed PR54 merged to main11b5e1d7888d28e65e37143fc7d3da940c37a318 and merged origin/main into the integration branch. Subsequent anonymous requests returned marketing homepage200, marketing robots.txt200, and registry /v1/cli/releases401. This proves public-route availability and anonymous inventory denial at observation time; exact deployment-SHA correlation and authenticated archive byte checks remain with the release owner. Do not treat these anonymous checks as full CLI or identity acceptance.
