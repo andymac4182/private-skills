@@ -4,7 +4,7 @@ Last reconciled: 15 September 2026, Brisbane. Target: 18 September; contingency 
 
 | ID | Work | Owner | State / next proof |
 | --- | --- | --- | --- |
-| L01 | Separate marketing deployment | foundation_release | Source merged; provision separate project and verify Git deployment, public routes and app links |
+| L01 | Separate marketing deployment | foundation_release | Project private-skills-marketing deployed READY at 6c8b958; routes/links pass with bypass; anonymous public reachability still open |
 | L02 | Marketing usability, support and accurate claims | marketing_finish | Active; review desktop/mobile, support path and calls to action |
 | L03 | Company portal navigation | tenant_ui | Active; replace 16 equal menu items with task groups and accessible mobile drawer |
 | L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
@@ -29,3 +29,5 @@ Brand selection; actual legal entity and support contact; real identity-provider
 - Billing backend `9089e10`: 20 focused tests and integration typecheck passed. PostgreSQL coverage currently includes a simulated SQL contract; real database concurrency and full console/Stripe proofs remain open.
 
 - Browser proof on committed dc836e7 at local port 5399: Acme callback showed Alice/Acme Labs Demo; Sign out returned to provider login; Globex callback showed Globex Research Demo only. No real identity-provider accounts were used.
+
+- Separate marketing project `prj_UCQvxPTnSjcTjwONPwLroAGvAb7m`, deployment `dpl_4nd7MgcZhUf2TygC2oq4ieuRR5xC`, canonical private-skills-marketing.vercel.app. Agent verified eight routes with Vercel bypass. Deployment protection still enabled at this observation, so public launch is not proven.
