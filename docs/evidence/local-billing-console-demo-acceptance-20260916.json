@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-billing-console-demo-browser-acceptance",
+  "capturedAt": "2026-09-15T22:13:05Z",
+  "source": {
+    "sourceHead": "3548be24526020cec1ca1b72b1c3b612313b21f5",
+    "appVersion": "0.4.0",
+    "origin": "http://127.0.0.1:5305",
+    "identityFixture": "local-identity-demo",
+    "billingAdapter": "LocalBillingAdapter",
+    "persistence": "disposable loopback PostgreSQL",
+    "browser": "headless agent-browser",
+    "stripeAccount": false
+  },
+  "runtime": {
+    "localOnly": true,
+    "productionWrites": false,
+    "liveCharges": false,
+    "hostedAcceptance": false,
+    "fixtureLeftRunning": false,
+    "databaseContainerRemoved": true
+  },
+  "flows": {
+    "ownerOnboarding": {
+      "passed": true,
+      "observed": "Synthetic Alice owner signed in through the local Acme identity provider, created Console Fixture, and opened /app/billing."
+    },
+    "ownerCheckoutPage": {
+      "passed": true,
+      "httpStatus": 200,
+      "observed": "Start checkout opened /billing/test-checkout in a new tab. The page displayed Local test billing, Team, Provider Local, Mode Test, and Complete test checkout."
+    },
+    "ownerCheckoutCompletion": {
+      "passed": true,
+      "httpStatus": 200,
+      "observed": "Complete test checkout returned a completed session and applied webhook status. The page stated that the signed fixture webhook was accepted and offered Return to billing."
+    },
+    "ownerVerifiedEntitlementReturn": {
+      "passed": true,
+      "httpStatus": 200,
+      "observed": "Return to billing navigated to /app/billing?billing=success and displayed Local · Test, Team, Active · Active Subscription, Webhooks Verified, 2/10 seats, 0/750 scans, and USD 0.00/USD 5.00 Eve budget."
+    },
+    "ownerPortalPage": {
+      "passed": true,
+      "httpStatus": 200,
+      "observed": "Manage subscription opened /billing/test-portal in a new tab. The page displayed Test subscription portal and explicitly stated that no provider customer portal is opened in local test mode."
+    },
+    "ownerPortalReturn": {
+      "passed": true,
+      "httpStatus": 200,
+      "observed": "Portal Return to billing navigated to /app/billing and the owner console still displayed Team Active with Local · Test provider state."
+    },
+    "readerDenial": {
+      "passed": true,
+      "pageStatus": 200,
+      "billingApiStatus": 403,
+      "observed": "Ben accepted a server-created Reader invitation, then direct /app/billing rendered the server denial 'Owner or admin access is required for company billing.' and exposed no checkout or portal actions."
+    },
+    "productionStripeDemoGuard": {
+      "passed": true,
+      "httpStatus": 404,
+      "observed": "The route contract rejects the local demo session surface when the configured provider is Stripe; no test session page is available through a production provider adapter."
+    },
+    "browserDiagnostics": {
+      "passed": true,
+      "observed": "Headless agent-browser reported no page errors or console messages on the final Reader billing page; the prior owner/checkout/portal CUA record also had empty browser diagnostics."
+    }
+  },
+  "screenshots": [
+    {
+      "name": "checkout-ready",
+      "path": "/private/tmp/private-skills-business-billing-console-demo-checkout.png",
+      "captured": true,
+      "sanitized": true
+    },
+    {
+      "name": "billing-return-after-signed-completion",
+      "path": "/private/tmp/private-skills-business-billing-console-demo-billing-return.png",
+      "captured": true,
+      "sanitized": true
+    },
+    {
+      "name": "portal",
+      "path": "/private/tmp/private-skills-business-billing-console-demo-portal.png",
+      "captured": true,
+      "sanitized": true
+    },
+    {
+      "name": "reader-denial",
+      "path": "/private/tmp/private-skills-business-billing-console-demo-reader-denial.png",
+      "captured": true,
+      "sanitized": true
+    }
+  ],
+  "defects": [
+    {
+      "id": "billing-local-test-hosted-pages-404",
+      "severity": "acceptance-blocker",
+      "status": "resolved",
+      "observed": "The prior composed runtime returned 404 for the LocalBillingAdapter checkout and portal URLs. The app now serves tenant-bound test routes, a signed completion path, and billing return navigation.",
+      "scope": "local test harness/runtime route; this does not claim a live Stripe outcome"
+    }
+  ],
+  "limits": [
+    "Local synthetic identity and LocalBillingAdapter only; no Stripe account, live provider, remote customer, product, price, charge, or real payment method.",
+    "The local checkout completion signs and processes an in-memory fixture through the same server webhook verification and durable billing ledger path; the browser cannot provide plan, customer, organization, or signing secret values.",
+    "The local adapter's session registry is process-local and bounded; this demo is a deterministic development fixture, not commercial payment availability.",
+    "The production Stripe adapter is deliberately excluded from the local demo route and still requires configured server Price IDs, account onboarding, and webhook setup before live checkout can be offered."
+  ]
+}
