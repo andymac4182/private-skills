@@ -80,7 +80,7 @@ export function CliReleaseChooser() {
       </div>
 
       <p className="marketing-cli-note">
-        <strong>Verification boundary.</strong> v{release.version} archive checksums and member shapes were verified from the private release. Apple Silicon macOS has a native smoke check; Linux and Windows native validation is pending for this delivery. The company workspace reports whether each private archive is provisioned.
+        <strong>Verification boundary.</strong> v{release.version} archive checksums and packaged files were verified from the private release. Apple Silicon macOS has a native smoke check; Linux and Windows native validation is pending for this delivery. The company workspace reports whether each private archive is provisioned.
       </p>
     </section>
   )

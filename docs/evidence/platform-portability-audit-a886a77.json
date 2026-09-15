@@ -1,0 +1,186 @@
+{
+  "schemaVersion": "platform-portability-audit-v1",
+  "capturedAtUtc": "2026-09-15T21:11:03Z",
+  "source": {
+    "repository": "andymac4182/private-skills",
+    "commit": "a886a7792d0f4ebfa7598c97512200cca74d06bf",
+    "worktree": "isolated detached worktree",
+    "productionCredentialsRead": false,
+    "productionMutations": false
+  },
+  "toolchain": {
+    "node": "24.20.0",
+    "pnpm": "11.19.0",
+    "nitro": "3.0.260903-beta",
+    "wrangler": "4.130.0"
+  },
+  "currentSourceBuilds": [
+    {
+      "target": "node",
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts node",
+      "result": "passed",
+      "qualification": "Nitro production artifact build only; no Node service was started by this check."
+    },
+    {
+      "target": "vercel",
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts vercel",
+      "result": "passed",
+      "buildOutputApi": {
+        "version": 3,
+        "functionEntrypoint": "index.mjs",
+        "runtime": "nodejs24.x"
+      },
+      "qualification": "Vercel Build Output API generation only; no deployment or hosted request was made by this check."
+    },
+    {
+      "target": "cloudflare",
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts cloudflare",
+      "result": "passed",
+      "preset": "cloudflare_module",
+      "staticBoundary": {
+        "filesSdkImportFiles": 0,
+        "runtimeNodeImportFiles": 0,
+        "postgresImportFiles": 1,
+        "postgresImportPaths": [
+          "apps/web/.output/server/_chunks/runtime.mjs -> ../_libs/postgres.mjs"
+        ],
+        "versionMetadataOnlyFiles": 1
+      },
+      "qualification": "Local edge artifact build only; no Files SDK or runtime-node import was found, but the generated shared runtime still bundles a postgres compatibility module. This is an open edge portability follow-up."
+    }
+  ],
+  "validation": {
+    "install": {
+      "command": "CI=true pnpm install --frozen-lockfile --offline",
+      "result": "passed"
+    },
+    "typecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed"
+    },
+    "focusedEdgeRouteTests": {
+      "command": "CI=true node_modules/.bin/vitest run apps/web/src/auth-route.test.ts",
+      "result": "passed",
+      "testFilesPassed": 1,
+      "testsPassed": 1
+    }
+  },
+  "freshLocalEdgeSmoke": {
+    "result": "passed",
+    "runtime": "local Wrangler/workerd",
+    "runtimeVersion": "Wrangler 4.130.0",
+    "harness": "scripts/edge-local-smoke.ts",
+    "orchestration": "temporary untracked loopback gateway and Wrangler dev.vars file; neither contained production values",
+    "gateway": "disposable loopback registry handler using the e2e memory state repository and Files SDK filesystem blob store",
+    "gatewayAuthentication": "synthetic worker bearer token held only by the local harness",
+    "identity": "legacy bearer token; Better Auth disabled",
+    "policy": {
+      "environment": "development",
+      "allowUnscanned": true,
+      "scannerVerdict": "not exercised"
+    },
+    "requests": {
+      "health": 200,
+      "authenticatedMe": 200,
+      "capabilities": 200,
+      "catalog": 200,
+      "resolve": 200,
+      "authorization": 201,
+      "grant": 200,
+      "transfer": 200
+    },
+    "fixture": {
+      "approvedSkillReturned": true,
+      "artifactBytes": 315,
+      "digest": "sha256:8547cdcf2faecf724caf522f30733f4355b1b0926cdf78792909fd2386081a1c",
+      "content": "inert synthetic SKILL.md and README.md fixture"
+    },
+    "qualification": "This proves current-source authenticated local edge request, state gateway, blob gateway, catalog, grant, and digest-checked transfer behavior. It ran under nodejs_compat and does not prove a hosted Worker, external gateway, TLS, production identity, scanner, provider control plane, or a clean no-PostgreSQL edge bundle."
+  },
+  "evidenceByTarget": {
+    "node": {
+      "status": "prior-local-runtime-evidence",
+      "record": "docs/evidence/platform-portability-6c70ab5.json",
+      "sourceCommit": "6c70ab500b4af39b25306826e96d2eac1ec10d42",
+      "observed": [
+        "real local Node runtime health 200",
+        "identity config disabled and identity session null",
+        "authenticated /v1/me 200",
+        "authenticated /v1/capabilities 200"
+      ],
+      "currentSourceProof": false,
+      "remaining": "Repeat the authenticated Node/container flow against the selected current release artifact or deployment before declaring the current portable baseline complete."
+    },
+    "container": {
+      "status": "prior-local-runtime-evidence",
+      "record": "docs/evidence/platform-portability-6c70ab5.json",
+      "sourceCommit": "6c70ab500b4af39b25306826e96d2eac1ec10d42",
+      "observed": [
+        "real local Docker runtime health 200",
+        "identity config disabled and identity session null",
+        "authenticated /v1/me 200",
+        "authenticated /v1/capabilities 200"
+      ],
+      "currentSourceProof": false,
+      "remaining": "Repeat a current-source container start and authenticated flow; the current-source build alone is insufficient."
+    },
+    "vercel": {
+      "status": "current-deployment-readback-limited",
+      "record": "docs/evidence/production-release-1ed4435-20260916.json",
+      "sourceCommit": "1ed44357996b6d6a6f805f0f25588eccc3cc1e3b",
+      "observed": [
+        "Git-triggered production deployment is READY",
+        "registry /health returned 200",
+        "registry identity config returned 200 with Better Auth deliberately disabled"
+      ],
+      "currentAuthenticatedRegistryFlow": "not recorded in that current release readback",
+      "historicalAuthenticatedRecord": {
+        "record": "docs/evidence/production-git-main-deployment-dpl_AHgRgwcbEC2dzSBiw3aBf8GQAKVH.json",
+        "sourceCommit": "7c7a33ec57ead2365cddcf83c93b2992bd92f201",
+        "authenticatedMe": 200,
+        "qualification": "Older Git-triggered source; it does not certify the current source."
+      },
+      "remaining": "Run the authenticated current-release Vercel registry flow, including private transfer and worker callback, before treating Vercel portability as current."
+    },
+    "edge": {
+      "status": "current-local-authenticated-smoke",
+      "record": "this file",
+      "sourceCommit": "a886a7792d0f4ebfa7598c97512200cca74d06bf",
+      "observed": [
+        "local workerd health, authenticated identity, capabilities, and catalog returned success",
+        "resolve, install authorization, grant, and digest-checked transfer returned success",
+        "static boundary scan found one bundled postgres compatibility module in the shared runtime"
+      ],
+      "staticBoundaryIssue": "The edge build still imports postgres through the shared runtime; runtime/worker ownership is outside this audit scope.",
+      "hostedDeploymentProof": false,
+      "existingRequiredScanRecord": {
+        "record": "docs/evidence/local-required-scan-portability-9caf.json",
+        "sourceCommit": "9caf2c178e92821cb9f3176a91a8ff5dafe2942f",
+        "qualification": "Local workerd plus local Node gateway with required SkillsGuard; not a hosted Cloudflare proof."
+      },
+      "remaining": "Deploy and exercise the edge target with real HTTP state/blob bindings and TLS, then run the required scanner and tenant/revocation matrix with the host worker."
+    }
+  },
+  "launchAssessment": {
+    "portableBaselineComplete": false,
+    "launchEvidenceStillRequired": [
+      "Current-source authenticated Node and container runtime readbacks.",
+      "Current-release authenticated Vercel registry flow, private transfer, and worker callback.",
+      "Resolve the current edge artifact's bundled postgres import or document and validate an intentional compatible boundary before edge launch.",
+      "Hosted edge Worker with real gateway bindings and TLS, beyond local workerd fixtures.",
+      "The same-source positive and negative publish, required-scan, revocation, and cross-tenant checks across the selected launch targets."
+    ],
+    "postLaunchOrSeparateScope": [
+      "Hosted Cloudflare provider/account setup and external scanner worker operation.",
+      "Better Auth company-session and membership acceptance, which is a product identity gate separate from this legacy-token portability smoke.",
+      "Native Linux/Windows execution and CI, which the current release record marks blocked before runner execution and waived."
+    ],
+    "decision": "Do not call the portable baseline complete from these results. Current local edge runtime behavior is demonstrated; hosted edge and current-source Node/container/Vercel authenticated acceptance remain open."
+  },
+  "redaction": {
+    "credentialsIncluded": false,
+    "rawTokensIncluded": false,
+    "privateObjectKeysIncluded": false,
+    "artifactBytesIncluded": false
+  }
+}

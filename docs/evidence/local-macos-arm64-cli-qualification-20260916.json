@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-macos-arm64-cli-qualification",
+  "observedAtUtc": "2026-09-15T21:25:57Z",
+  "artifact": {
+    "releaseTag": "v0.4.0",
+    "target": "aarch64-apple-darwin",
+    "filename": "pskills-aarch64-apple-darwin.tar.gz",
+    "size": 2673030,
+    "digest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+    "expectedDigestSource": "docs/evidence/local-cli-v0.4.0-assets-staging-20260916.json",
+    "provisionSource": "docs/evidence/local-cli-v0.4.0-private-provision-20260916.json",
+    "archiveMember": "pskills",
+    "memberSize": 6295248,
+    "memberDigest": "sha256:c7f77c8e4ff47d67d0e3d7dffddc852807eefe41e2138b528ae3e7e5ed7bb0d1",
+    "memberDescription": "Mach-O 64-bit executable arm64",
+    "binarySlices": ["arm64"],
+    "codeSignature": "Mach-O thin (arm64), ad hoc linker-signed"
+  },
+  "host": {
+    "os": "macOS 26.5.1 (25F80)",
+    "architecture": "arm64",
+    "kernel": "Darwin 25.5.0",
+    "nativeArm64": true,
+    "rosettaTranslated": false,
+    "execution": "The arm64 release binary ran directly on the Apple Silicon macOS host; Rosetta translation was not active."
+  },
+  "isolation": {
+    "fixtureRoot": "/private/tmp/private-skills-macos-cli-fixture-20260916",
+    "registry": "http://127.0.0.1:18181",
+    "directory": "/private/tmp/private-skills-macos-cli-fixture-20260916/install",
+    "home": "/private/tmp/private-skills-macos-cli-fixture-20260916/home",
+    "config": "/private/tmp/private-skills-macos-cli-fixture-20260916/config",
+    "scope": "project",
+    "agent": "universal",
+    "userSkillDirectoriesTouched": false,
+    "productionServicesContacted": false
+  },
+  "checks": [
+    {
+      "name": "release archive digest and size",
+      "command": "shasum -a 256 <staged>/pskills-aarch64-apple-darwin.tar.gz; stat size",
+      "result": "passed",
+      "actualDigest": "sha256:1e5b8119f98644d48cdeab7f6e8b5b338de7bb7b00a73b8382648ef353c4ff37",
+      "actualSize": 2673030,
+      "matchesPinnedManifest": true
+    },
+    {
+      "name": "binary extraction and native architecture",
+      "command": "tar -xzf <archive>; file pskills; lipo -archs pskills",
+      "result": "passed",
+      "observed": "Mach-O 64-bit executable arm64; lipo slices: arm64"
+    },
+    {
+      "name": "released binary version",
+      "command": "pskills --version",
+      "result": "passed",
+      "stdout": "pskills 0.4.0"
+    },
+    {
+      "name": "released binary help",
+      "command": "pskills --help",
+      "result": "passed",
+      "observedCommands": [
+        "health",
+        "login",
+        "logout",
+        "whoami",
+        "search",
+        "sources",
+        "directory",
+        "show",
+        "versions",
+        "publish",
+        "proxy",
+        "install",
+        "list",
+        "verify",
+        "remove",
+        "update",
+        "doctor",
+        "scan",
+        "pack",
+        "help"
+      ]
+    },
+    {
+      "name": "controlled registry install",
+      "command": "pskills --registry http://127.0.0.1:<fixture-port> --directory <fixture>/install --agent universal --json install @fixture/macos-demo@1.0.0",
+      "result": "passed",
+      "stdout": {
+        "ok": true,
+        "changed": true,
+        "reference": "@fixture/macos-demo",
+        "version": "1.0.0",
+        "digest": "sha256:43ada4af8d559f4b3224147a023afff7a783b3c2efedd93e3fe11ada347cb99a",
+        "destination": "<fixture>/install/macos-demo"
+      },
+      "bundle": {
+        "format": "pskills-bundle-v1",
+        "size": 201,
+        "digest": "sha256:43ada4af8d559f4b3224147a023afff7a783b3c2efedd93e3fe11ada347cb99a",
+        "installedFile": "macos-demo/SKILL.md",
+        "installedFileSize": 96,
+        "installedFileDigest": "sha256:5c51e59dbd9f50a53ec043a0b81276786d3f943e72d9e82ef0fb59f9963524f6",
+        "treeDigest": "sha256:37d09383c525c80117dfe10aa0540c38016eb1888520f7433a7a728a4a3b215a"
+      },
+      "requestSequence": [
+        "POST /v1/resolve -> 200",
+        "POST /v1/install-authorizations -> 201",
+        "POST /v1/artifacts/<digest>/download -> 200",
+        "GET /v1/transfers/macos-demo -> 200",
+        "POST /v1/install-authorizations/auth-macos-demo/validate -> 200",
+        "POST /v1/install-receipts -> 201"
+      ],
+      "fixture": "stdlib Python HTTP server on loopback; one deterministic approved bundle; no upstream or production service"
+    },
+    {
+      "name": "installed tree verification",
+      "command": "pskills --directory <fixture>/install --agent universal --json verify",
+      "result": "passed",
+      "ok": true,
+      "actualTreeDigest": "sha256:37d09383c525c80117dfe10aa0540c38016eb1888520f7433a7a728a4a3b215a",
+      "expectedTreeDigest": "sha256:37d09383c525c80117dfe10aa0540c38016eb1888520f7433a7a728a4a3b215a"
+    },
+    {
+      "name": "installed tree removal",
+      "command": "pskills --registry http://127.0.0.1:<fixture-port> --directory <fixture>/install --agent universal --json remove @fixture/macos-demo",
+      "result": "passed",
+      "stdout": {
+        "ok": true,
+        "dryRun": false,
+        "removed": "macos-demo"
+      },
+      "postRemoveList": []
+    }
+  ],
+  "limits": [
+    "This is native Apple Silicon macOS coverage for the arm64 release asset; Intel macOS and Rosetta execution were not tested.",
+    "The lifecycle exercised one project-scope universal-agent install against a deterministic loopback fixture; other agent adapters, global installation, and hosted registry behavior were not tested.",
+    "The fixture does not establish hosted identity, scanners, provider callbacks, tenant isolation, or production authorization behavior.",
+    "The archive is ad hoc linker-signed; notarization, Gatekeeper quarantine, and a clean consumer download were not evaluated.",
+    "No Windows execution result is claimed."
+  ],
+  "redaction": {
+    "rawTokensIncluded": false,
+    "productionCredentialsIncluded": false,
+    "productionUrlsIncluded": false,
+    "privateStorageKeysIncluded": false,
+    "archiveBytesIncluded": false
+  }
+}

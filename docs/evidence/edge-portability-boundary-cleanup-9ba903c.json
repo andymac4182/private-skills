@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "platform-portability-edge-boundary-v1",
+  "capturedAtUtc": "2026-09-15T21:21:08Z",
+  "source": {
+    "repository": "andymac4182/private-skills",
+    "baseCommit": "298816d70f0404625c96d3b918c67c6b4c802248",
+    "commit": "9ba903c767552b0b2ac6a5007ef081d6186a9c9d",
+    "worktree": "isolated detached worktree",
+    "productionCredentialsRead": false,
+    "productionMutations": false,
+    "deploymentAttempted": false
+  },
+  "change": {
+    "file": "apps/web/server/operations-status.ts",
+    "previousImport": "../../../packages/identity/src/index.js",
+    "newImport": "../../../packages/identity/src/operations-events.js",
+    "reason": "Keep the shared operations telemetry seam while excluding the identity barrel, Better Auth, and PostgreSQL driver from the edge dependency graph.",
+    "behavior": "The Node path retains the same captureIdentityOperationsTask implementation and type contract; edge infrastructure still omits an operations-event sink."
+  },
+  "classification": {
+    "kind": "dependency-boundary-cleanup",
+    "runtimeOutageProven": false,
+    "explanation": "The pre-change artifact contained an unnecessary executable postgres compatibility module, while the pre-change default local workerd smoke still passed. The post-change artifact removes that module and passes both compatibility modes."
+  },
+  "staticBoundary": {
+    "edgeBuild": {
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts cloudflare",
+      "result": "passed",
+      "preset": "cloudflare_module"
+    },
+    "before": {
+      "sourceRecord": "docs/evidence/platform-portability-audit-a886a77.json",
+      "postgresExecutableImportFiles": 1,
+      "postgresExecutableImportPaths": [
+        "apps/web/.output/server/_chunks/runtime.mjs -> ../_libs/postgres.mjs"
+      ]
+    },
+    "after": {
+      "scanCommand": "rg -n --glob '*.mjs' 'postgres\\.mjs|runtime-node\\.mjs|files-sdk\\.mjs' apps/web/.output/server",
+      "postgresExecutableImportFiles": 0,
+      "runtimeNodeImportFiles": 0,
+      "filesSdkExecutableImportFiles": 0,
+      "versionMetadataOnlyFiles": 1,
+      "versionMetadataPath": "apps/web/.output/server/_chunks/version.mjs",
+      "versionMetadataPackages": [
+        "files-sdk",
+        "kysely-postgres-js",
+        "postgres"
+      ]
+    }
+  },
+  "validation": {
+    "focusedTests": {
+      "command": "CI=true node_modules/.bin/vitest run apps/web/src/operations-status.test.ts packages/identity/test/operations-events.test.ts",
+      "result": "passed",
+      "testFilesPassed": 2,
+      "testsPassed": 11
+    },
+    "typecheck": {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed"
+    },
+    "portableBuilds": [
+      {
+        "target": "node",
+        "command": "CI=true pnpm exec tsx scripts/platform-build.ts node",
+        "result": "passed"
+      },
+      {
+        "target": "vercel",
+        "command": "CI=true pnpm exec tsx scripts/platform-build.ts vercel",
+        "result": "passed",
+        "qualification": "Build Output API generation only; no deployment or hosted request was made."
+      },
+      {
+        "target": "cloudflare",
+        "command": "CI=true pnpm exec tsx scripts/platform-build.ts cloudflare",
+        "result": "passed"
+      }
+    ]
+  },
+  "localWorkerdSmoke": [
+    {
+      "compatibilityFlags": [
+        "nodejs_compat"
+      ],
+      "result": "passed",
+      "runtime": "local Wrangler/workerd",
+      "gateway": "disposable loopback Nitro-shaped registry handler with memory state and Files SDK filesystem blob store",
+      "identity": "synthetic legacy bearer token; Better Auth disabled",
+      "policy": {
+        "environment": "development",
+        "allowUnscanned": true,
+        "scannerExercised": false
+      },
+      "requests": {
+        "health": 200,
+        "authenticatedMe": 200,
+        "capabilities": 200,
+        "catalog": 200,
+        "resolve": 200,
+        "authorization": 201,
+        "grant": 200,
+        "transfer": 200
+      },
+      "transferBytes": 315,
+      "digestVerified": true
+    },
+    {
+      "compatibilityFlags": [],
+      "result": "passed",
+      "runtime": "local Wrangler/workerd",
+      "gateway": "disposable loopback Nitro-shaped registry handler with memory state and Files SDK filesystem blob store",
+      "identity": "synthetic legacy bearer token; Better Auth disabled",
+      "policy": {
+        "environment": "development",
+        "allowUnscanned": true,
+        "scannerExercised": false
+      },
+      "requests": {
+        "health": 200,
+        "authenticatedMe": 200,
+        "capabilities": 200,
+        "catalog": 200,
+        "resolve": 200,
+        "authorization": 201,
+        "grant": 200,
+        "transfer": 200
+      },
+      "transferBytes": 315,
+      "digestVerified": true
+    }
+  ],
+  "limitations": [
+    "The smoke uses a loopback fixture gateway, synthetic legacy identity, development allowUnscanned=true, and an inert artifact; it is not hosted Cloudflare, TLS, production identity, scanner, provider-control-plane, or current Vercel authenticated evidence.",
+    "No production configuration, deployment, object, or credential was read or changed."
+  ],
+  "redaction": {
+    "rawTokensIncluded": false,
+    "secretsIncluded": false,
+    "productionValuesIncluded": false
+  }
+}

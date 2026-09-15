@@ -13,12 +13,16 @@ import type {
   BillingStatus,
   UsageSnapshot,
 } from '../../../packages/billing/src/index.js';
-import { captureIdentityOperationsTask } from '../../../packages/identity/src/index.js';
+// Keep the shared route's telemetry seam dependency-free. Importing the
+// identity barrel here also pulls Better Auth and its PostgreSQL driver into
+// the edge bundle, even though edge infrastructure never supplies an
+// operations-event sink.
+import { captureIdentityOperationsTask } from '../../../packages/identity/src/operations-events.js';
 import type {
   IdentityOperationsCounter,
   IdentityOperationsEventSink,
   IdentityOperationsFailure,
-} from '../../../packages/identity/src/index.js';
+} from '../../../packages/identity/src/operations-events.js';
 import type { ReviewRun } from '../../../packages/reviews/src/index.js';
 import type { UploadReviewJob } from '../../../packages/upload-reviews/src/index.js';
 
