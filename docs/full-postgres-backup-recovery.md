@@ -52,3 +52,27 @@ objects, billing-provider state, identity-provider credentials, or deployment
 environment values. Those stores require their own recovery evidence. A
 nonzero result is blocked evidence; retain any reported isolated target and
 encrypted artifact for diagnosis and do not treat it as a migration gate.
+
+## Forward migration recovery proof
+
+After the read-only backup proof, a separate local check cloned the retained
+14-table PG18 target into one new loopback `pgvector/pg18` container and ran
+the reviewed additive billing SQL from
+`packages/billing/migrations/0001_billing_schema.sql` at commit `ac87e31`.
+The SQL digest was `sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880`
+and its length was 4,705 bytes. The migration ran in one local transaction
+with `search_path` set to `public, pg_catalog` and `ON_ERROR_STOP` enabled.
+
+The current billing shape verifier
+`validateBillingCreationReadback` (from the runner lineage at `77194d0`)
+accepted five empty billing tables with 51 columns, 13 checks, and 9 physical
+indexes. The resulting 19-table catalog retained the original 12 identity
+tables, two semantic-index rows, and the registry row at revision `232` with
+its `jsonb` SQL type and observed JSONB string representation. Its row digests
+matched the retained template. See
+[`full-postgres-forward-billing-recovery-20260916.json`](evidence/full-postgres-forward-billing-recovery-20260916.json).
+
+This is a local forward-recovery proof. It does not apply billing SQL to
+production, create billing/provider rows, enable identity, change Vercel
+configuration, or modify Blob objects. The new target is retained for
+inspection; existing containers and data remain untouched.
