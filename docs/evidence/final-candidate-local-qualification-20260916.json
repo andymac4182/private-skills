@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "kind": "final-candidate-local-qualification",
+  "recordedAt": "2026-09-16T00:59:49Z",
+  "source": {
+    "commit": "8cdbb3001955573a80d12b3e097e1f7135946004",
+    "branch": "release/tenant-runtime-candidate-20260916",
+    "node": "v24.20.0",
+    "pnpm": "11.19.0",
+    "lockfile": "pnpm-lock.yaml",
+    "postgres": "postgres:16-alpine fresh loopback disposable instance",
+    "hostedWrites": false
+  },
+  "fullSuite": {
+    "command": "CI=true pnpm test -- --no-file-parallelism --reporter=dot",
+    "result": "passed",
+    "testFiles": {
+      "passed": 180,
+      "skipped": 19,
+      "total": 199
+    },
+    "tests": {
+      "passed": 1292,
+      "skipped": 45,
+      "total": 1337
+    },
+    "durationSeconds": 33.11
+  },
+  "typecheck": {
+    "command": "CI=true pnpm typecheck",
+    "result": "passed"
+  },
+  "builds": [
+    {
+      "target": "node-nitro",
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts node",
+      "result": "passed"
+    },
+    {
+      "target": "vercel-build-output",
+      "command": "CI=true PSKILLS_STORAGE_BUILD_PROFILE=vercel-blob node scripts/build-vercel.mjs",
+      "result": "passed",
+      "observed": [
+        "maxDuration=615s, runtime=600s, headroom=15s, declared plan max=800s",
+        "one generated Vercel function config received the budget",
+        "31 relocated output symlinks verified",
+        "five traced provider dependencies loaded from isolated function output"
+      ]
+    },
+    {
+      "target": "cloudflare-edge",
+      "command": "CI=true pnpm exec tsx scripts/platform-build.ts cloudflare",
+      "result": "passed"
+    }
+  ],
+  "postgres": {
+    "scope": "Fresh loopback disposable PostgreSQL 16 instance; connection URL, credentials, container ID, and transient schema names omitted.",
+    "direct": {
+      "command": "CI=true node_modules/.bin/vitest run <12 explicit PostgreSQL integration files> --no-file-parallelism --reporter=dot",
+      "testFiles": [
+        "packages/billing/test/postgres.integration.test.ts",
+        "packages/storage/test/recovery.postgres.integration.test.ts",
+        "packages/storage/test/recovery.receipt.postgres.integration.test.ts",
+        "packages/identity/test/postgres.integration.test.ts",
+        "packages/identity/test/operations-events.postgres.integration.test.ts",
+        "packages/identity/test/company-sso.postgres.integration.test.ts",
+        "packages/identity/test/company-sso.better-auth.integration.test.ts",
+        "apps/web/src/tenant-identity-route.postgres.integration.test.ts",
+        "apps/web/src/company-sso-runtime.postgres.integration.test.ts",
+        "apps/web/src/bootstrap-adoption-better-auth.integration.test.ts",
+        "tests/e2e/multi-tenant-postgres-acceptance.test.ts",
+        "tests/operations-postgres-rehearsal.test.ts"
+      ],
+      "result": "passed",
+      "testFilesPassed": 12,
+      "testsPassed": 33,
+      "coverage": [
+        "Better Auth memberships, invitations, company SSO, operations events, and API-token tenant routing",
+        "Billing usage reservations, generation fencing, recovery compensation, and schema search-path guards",
+        "Storage recovery, receipt recovery, and stale-generation protection",
+        "Bootstrap adoption, multi-tenant registry isolation, and PostgreSQL backup/restore rehearsal"
+      ]
+    },
+    "composedNitro": {
+      "command": "CI=true node_modules/.bin/vitest run tests/e2e/nitro-postgres-files-acceptance.test.ts --no-file-parallelism --reporter=dot",
+      "result": "passed",
+      "testFilesPassed": 1,
+      "testsPassed": 2,
+      "coverage": "Built Node Nitro HTTP runtime with real PostgreSQL and Files SDK filesystem adapters; tenant publish/scan/approved-transfer and cross-company isolation journeys passed."
+    }
+  },
+  "limits": [
+    "All PostgreSQL checks used fresh loopback disposable instances and were cleaned up after each invocation; no hosted database or hosted write was used.",
+    "The full suite retains 19 skipped files and 45 skipped tests in the recorded count; skipped opt-in, hosted, and native checks are not represented as passes.",
+    "Build checks generated local artifacts only; no deployment was attempted.",
+    "Native Linux and Windows CI remains waived and is not claimed by this local qualification.",
+    "The qualification ran on the source commit above; this evidence file is the only subsequent commit content."
+  ]
+}
