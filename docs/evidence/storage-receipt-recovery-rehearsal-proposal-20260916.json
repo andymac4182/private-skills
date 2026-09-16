@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 2,
+  "status": "executed-bounded-owned-object-without-production-route-claim",
+  "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+  "executedEvidenceCapturedAt": "2026-09-15T23:01:07Z",
+  "executionProvenance": {
+    "reviewedInertPlanBeforeFullShaPin": {
+      "sourceRevision": "49f31ea",
+      "prefix": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9",
+      "objectKey": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9/sealed/bb8a233e35b5a9609de4c917c62061d4a380b34121c9747b",
+      "executed": false,
+      "mutationPerformed": false
+    },
+    "executedPlanCommit": "52cff71ce18bb76755551ba6aad7c2a66ee4a0d8",
+    "executedPrefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+    "executedObjectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+    "firstPrefixMutation": false
+  },
+  "payload": {
+    "fixture": "canonical-receipt-rehearsal-bundle-v1",
+    "digest": "sha256:dfa0d9a1bb9841a2cdf6fe3e771bef3865834d4c9dce2dc8cbe2e1af83982caa",
+    "size": 177
+  },
+  "localExecution": {
+    "script": "scripts/storage-receipt-recovery-rehearsal.ts",
+    "command": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_RECEIPT_REHEARSAL_SOURCE_SHA=49f31eace58149e5d7b4349a0465012f0facde39 pnpm exec tsx scripts/storage-receipt-recovery-rehearsal.ts",
+    "databaseTarget": "loopback PostgreSQL only; unique state and billing tables are verified and dropped after the local run",
+    "storageTarget": "temporary Files SDK filesystem root only",
+    "credentials": "provided in process; never logged or written to evidence"
+  },
+  "hostedExecution": {
+    "script": "scripts/hosted-storage-receipt-recovery-rehearsal.ts",
+    "planCommand": "pnpm exec tsx scripts/hosted-storage-receipt-recovery-rehearsal.ts --source-sha 49f31eace58149e5d7b4349a0465012f0facde39 --write-plan docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json",
+    "executeCommand": "PSKILLS_RECEIPT_REHEARSAL_DATABASE_URL=<loopback-only-disposable-postgres-url> PSKILLS_ALLOW_HOSTED_STORAGE_RECEIPT_REHEARSAL=I_UNDERSTAND_NEW_PREFIX_ONLY vercel env run -e production -- /absolute/path/to/worktree/node_modules/.bin/tsx /absolute/path/to/worktree/scripts/hosted-storage-receipt-recovery-rehearsal.ts --execute-plan /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-plan-20260916.json --write-evidence /absolute/path/to/worktree/docs/evidence/hosted-storage-receipt-rehearsal-20260916.json",
+    "runFrom": "the linked Vercel project directory so the production Blob credential is injected only into the child process",
+    "databaseTarget": "loopback PostgreSQL only; the production registry database is refused",
+    "providerSwitch": {
+      "provider": "vercel-blob",
+      "access": "private",
+      "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+      "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+      "providerBinding": "files-sdk:vercel-blob:store_C0EMhnU7DH3uSMaw"
+    },
+    "planInvariants": [
+      "fresh rehearsal/tenant-runtime/<uuid>/ prefix",
+      "exact sealed/<48-lowercase-hex> object key inside that prefix",
+      "canonical fixture digest and size are re-derived before upload",
+      "exact prefix is read with a bounded list and must be empty before upload",
+      "no existing object or default registry state is addressed"
+    ],
+    "writeFinality": "the private Files SDK adapter mints the verified receipt only after upload and exact object readback; no receipt means no destructive cleanup",
+    "recoveryAssertions": [
+      "a fresh Vercel Blob client sees the same provider binding after restart",
+      "the verified receipt allows deletion of only the planned object",
+      "the provider reports that exact object absent after delete",
+      "the PostgreSQL BillingService reports zero storage after the exact generation is reconciled",
+      "unknown outcome without receipt and provider-binding mismatch remain retained and charged; these negative cases run only on the local disposable filesystem adapter"
+    ],
+    "failureHandling": "on upload, metadata, recovery, or cleanup failure, retain the generated local tables and emit mode hosted-recovery-failure with exact table names, organization, prefix, object key, provider binding, and next action; never emit credentials or raw provider/database errors",
+    "acknowledgement": "I_UNDERSTAND_NEW_PREFIX_ONLY",
+    "recoveryExecutionPrepared": true,
+    "recoveryExecuted": true,
+    "mutationPerformed": true,
+    "evidence": "docs/evidence/hosted-storage-receipt-rehearsal-20260916.json",
+    "productionAcceptanceClaim": false
+  },
+  "readOnlyHostedEvidence": "docs/evidence/hosted-storage-receipt-readonly-20260916.json",
+  "localScenarioManifest": [
+    {
+      "name": "metadata-failure-with-verified-receipt-after-client-restart",
+      "setup": [
+        "real PostgreSQL state repository",
+        "real PostgreSQL-backed BillingService",
+        "private Files SDK filesystem adapter",
+        "core metadata commit fails after awaited provider readback"
+      ],
+      "requiredEvidence": [
+        "attempt is orphaned and stores a verified receipt",
+        "fresh client has the same provider binding",
+        "exact object inspection is absent after cleanup",
+        "exact billing usage operation is released",
+        "storage usage is zero",
+        "metadata attempt is released"
+      ],
+      "expected": {
+        "receipt": "verified",
+        "recoveryStatus": "released",
+        "objectAfterRecovery": "absent",
+        "billingStorageBytesAfterRecovery": 0,
+        "metadataStateAfterRecovery": "released"
+      }
+    },
+    {
+      "name": "unknown-provider-outcome-without-receipt",
+      "expected": {
+        "receipt": "absent",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": "reservation size",
+        "metadataStateAfterRecovery": "orphaned"
+      }
+    },
+    {
+      "name": "binding-mismatch-receipt-retained",
+      "expected": {
+        "receipt": "binding-mismatch",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": "reservation size",
+        "metadataStateAfterRecovery": "orphaned"
+      }
+    }
+  ],
+  "externalInputsBeforeAnyHostedMutation": [
+    "fresh production Blob metadata and exact-prefix read-only probe",
+    "loopback PostgreSQL URL for disposable local state and billing tables",
+    "the reviewed fresh plan file",
+    "the explicit I_UNDERSTAND_NEW_PREFIX_ONLY acknowledgement",
+    "operator ability to inspect the emitted failure manifest before any retry"
+  ]
+}

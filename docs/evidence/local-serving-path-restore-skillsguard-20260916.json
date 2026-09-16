@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.local-serving-path-restore-rehearsal",
+  "observedAt": "2026-09-16T00:58:58.724Z",
+  "status": "passed",
+  "source": {
+    "postgresContainer": "pskills-full-pg-restore-mu3bdlhl-3ffa573c85",
+    "postgresDatabase": "private_skills_restore",
+    "registryOrganizationId": "default",
+    "registryRevision": 232,
+    "stateReferenceCount": 91,
+    "uniqueReferencedObjects": 11,
+    "referencedTotalBytes": 37741,
+    "referenceManifestDigest": "sha256:192c448e3cfdf87e430afa7b956c276446a0ca0942988a467a3b9855a63a60eb",
+    "sourceUnchanged": true
+  },
+  "blob": {
+    "evidenceFile": "docs/evidence/hosted-blob-restore-proof-20260916.json",
+    "destinationPrefix": "restore/skill-registry-proof-20260916-3fae894786d35e9b",
+    "manifestObjectCount": 11,
+    "manifestTotalBytes": 37741,
+    "manifestDigest": "sha256:192c448e3cfdf87e430afa7b956c276446a0ca0942988a467a3b9855a63a60eb",
+    "exactStateManifestMatch": true,
+    "hostedReadCount": 11,
+    "hostedWrites": 0,
+    "hostedDeletes": 0,
+    "localMaterializedObjectCount": 11,
+    "localMaterializedTotalBytes": 37741,
+    "localReadbackVerified": true
+  },
+  "application": {
+    "runtimeProfile": "node",
+    "stateProvider": "postgres",
+    "storageProvider": "filesystem",
+    "betterAuth": "disabled",
+    "billing": "disabled",
+    "externalDirectory": "disabled",
+    "externalScanner": "disabled",
+    "localBootstrapPrincipal": "local-serving-restore-reader",
+    "selectedSkill": {
+      "id": "skill_49873f1e-37f9-40b3-ae4c-2139e93580a6",
+      "name": "@acme/m6-inert-builder-fixture",
+      "version": "0.0.1-m6-inert",
+      "digest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+      "size": 325,
+      "historicalState": "approved"
+    },
+    "routes": {
+      "health": 200,
+      "catalog": 200,
+      "detail": 200,
+      "files": 200,
+      "resolve": 200,
+      "authorization": 201,
+      "downloadDescriptor": 200,
+      "transfer": 200,
+      "unauthenticatedCatalog": 401
+    },
+    "servedBytes": 325,
+    "servedDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+    "downloadMetadataWritesOnClone": 2,
+    "admission": {
+      "allowed": true,
+      "status": "current",
+      "reason": "current"
+    },
+    "denial": {
+      "downloadBlockedByCurrentAdmission": false,
+      "downloadBlockStatus": null,
+      "downloadBlockCode": null
+    },
+    "localScanner": {
+      "mode": "docker-skillsguard",
+      "policy": {
+        "revision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+        "unchangedAfterScan": true
+      },
+      "image": {
+        "reference": "private-skills/skillsguard:1.1.1",
+        "id": "sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0",
+        "verified": true
+      },
+      "rescan": {
+        "status": 202,
+        "operationId": "job_7abe9a19-4717-473d-9156-6dd44202666b",
+        "resourceId": "skill_49873f1e-37f9-40b3-ae4c-2139e93580a6",
+        "organizationId": "default",
+        "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0"
+      },
+      "worker": {
+        "claimed": true,
+        "jobId": "job_7abe9a19-4717-473d-9156-6dd44202666b",
+        "allow": true,
+        "error": null,
+        "completionState": "completed"
+      },
+      "scanner": {
+        "scannerId": "skillsguard",
+        "artifactDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "policyRevision": "policy_44f241a8-2e94-4380-b5f2-55078b71deb0",
+        "status": "completed",
+        "engineVersion": "1.1.1",
+        "rulesRevision": "7badb5157f8f9e4dd9ee2acb6e0129636e3147e3",
+        "coverage": {
+          "filesEnumerated": 1,
+          "filesAnalyzed": 1,
+          "filesSkipped": 0,
+          "filesUnsupported": 0
+        },
+        "findings": 0
+      },
+      "before": {
+        "routes": {
+          "catalog": 200,
+          "detail": 200,
+          "files": 404,
+          "resolve": 404,
+          "authorization": null,
+          "downloadDescriptor": null,
+          "transfer": null,
+          "unauthenticatedCatalog": 401
+        },
+        "admission": {
+          "allowed": false,
+          "status": "needs-rescan",
+          "reason": "evidence-stale"
+        },
+        "filesCount": null,
+        "servedBytes": null,
+        "servedDigest": null,
+        "denial": {
+          "downloadBlockedByCurrentAdmission": true,
+          "downloadBlockStatus": 404,
+          "downloadBlockCode": "NOT_AVAILABLE"
+        }
+      },
+      "after": {
+        "routes": {
+          "catalog": 200,
+          "detail": 200,
+          "files": 200,
+          "resolve": 200,
+          "authorization": 201,
+          "downloadDescriptor": 200,
+          "transfer": 200,
+          "unauthenticatedCatalog": 401
+        },
+        "admission": {
+          "allowed": true,
+          "status": "current",
+          "reason": "current"
+        },
+        "filesCount": 1,
+        "servedBytes": 325,
+        "servedDigest": "sha256:a826a988df12f1e49f88bd1e19740a32fcfff560685f2d051271e1057331521b",
+        "denial": {
+          "downloadBlockedByCurrentAdmission": false,
+          "downloadBlockStatus": null,
+          "downloadBlockCode": null
+        }
+      }
+    },
+    "runtimeBuild": {
+      "sourceCommit": "c4d93750fcc4711a0bd4ca9fa74073d221096279",
+      "binary": "apps/web/.output/server/index.mjs",
+      "command": "PSKILLS_STORAGE_BUILD_PROFILE=filesystem PSKILLS_STORAGE_PROVIDER=filesystem PSKILLS_RUNTIME_PROFILE=node pnpm --filter @private-skills/web build"
+    }
+  },
+  "mutationBoundary": {
+    "retainedPostgres": "read-only pg_dump and bounded SELECT",
+    "clonePostgres": "created, restored, and destroyed",
+    "hostedBlob": "getVerified reads only",
+    "localFilesystem": "writes and readback only",
+    "application": "local Nitro process only",
+    "hostedRollback": "not run",
+    "productionConfiguration": "not changed"
+  },
+  "limits": [
+    "The PostgreSQL clone was copied from the retained local recovery target; this is not a fresh hosted production snapshot.",
+    "The PostgreSQL and hosted Blob proofs were captured separately; no shared MVCC/provider snapshot or coordinated freeze was established.",
+    "The application used a generated legacy bootstrap token with Better Auth disabled; restored Better Auth sessions, memberships, SSO, and service-token revocations were not exercised.",
+    "Billing, external directory, and hosted worker integrations were disabled. The persisted required-scanner policy was preserved: stale evidence denied the pre-scan routes, then the pinned local SkillsGuard Docker worker refreshed the disposable clone through the normal rescan/job path.",
+    "The selected snapshot fixture can prove read authorization only for its default organization. No second-company route denial was asserted by this single-tenant restore.",
+    "Hosted rollback, hosted filesystem remapping, provider IAM/lifecycle state, and external identity or billing provider state remain outside this rehearsal."
+  ],
+  "redaction": {
+    "credentialsIncluded": false,
+    "statePayloadIncluded": false,
+    "objectBytesIncluded": false,
+    "fullEnvironmentExported": false,
+    "privateUrlsIncluded": false
+  }
+}

@@ -20,11 +20,12 @@ import {
 } from '../../storage/src/index.js';
 import type {
   Authenticator,
-  BlobStore,
   Feed,
   Principal,
+  RecoverableBlobStore,
   RegistryConfiguration,
   SkillBundle,
+  StorageObjectInspection,
   StoredBlob,
   UpstreamRequestObserver,
 } from '../../contracts/src/index.js';
@@ -100,18 +101,30 @@ function fixtureBundle(): SkillBundle {
   };
 }
 
-class MemoryBlobs implements BlobStore {
+class MemoryBlobs implements RecoverableBlobStore {
   private sequence = 0;
   private readonly values = new Map<string, Uint8Array>();
+  // The fixture writes synchronously; retain an explicit terminal fact rather
+  // than inferring provider finality from the object's current presence.
+  private readonly terminatedWrites = new Set<string>();
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
+    return this.putAtKey(this.allocateObjectKey(), bytes);
+  }
+
+  allocateObjectKey(): string {
+    return `transparent-${this.sequence++}`;
+  }
+
+  async putAtKey(key: string, bytes: Uint8Array): Promise<StoredBlob> {
     const copy = bytes.slice();
     const stored: StoredBlob = {
-      key: `transparent-${this.sequence++}`,
+      key,
       digest: await digestBytes(copy),
       size: copy.byteLength,
     };
     this.values.set(stored.key, copy);
+    this.terminatedWrites.add(stored.key);
     return stored;
   }
 
@@ -123,6 +136,16 @@ class MemoryBlobs implements BlobStore {
 
   async remove(key: string): Promise<void> {
     this.values.delete(key);
+  }
+
+  async inspectObject(key: string): Promise<StorageObjectInspection> {
+    const bytes = this.values.get(key);
+    if (!bytes) return { state: 'absent', key };
+    return { state: 'present', key, digest: await digestBytes(bytes), size: bytes.byteLength };
+  }
+
+  async confirmWriteTerminated(key: string): Promise<boolean> {
+    return this.terminatedWrites.has(key);
   }
 }
 

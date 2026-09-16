@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.identity-write-contention-probe",
+  "observedAt": "2026-09-16T01:09:50.377Z",
+  "source": {
+    "gitRevision": "8cdbb30",
+    "runtime": "Better Auth organization plugin through IdentityRuntime.handler",
+    "database": "loopback PostgreSQL only",
+    "databaseHost": "127.0.0.1",
+    "schemaEphemeral": true,
+    "hostedProviderCalls": 0,
+    "emailDeliveries": 0,
+    "productionMutation": false
+  },
+  "configuration": {
+    "runtimeInstances": 4,
+    "advisoryLockKey": 2147483647,
+    "lockSampleIntervalMs": 2,
+    "connectionPoolPerRuntime": "Better Auth max=10; lock pool max=1"
+  },
+  "workload": {
+    "invitationSingleCompany": {
+      "companies": 1,
+      "invitationsPerCompany": 16,
+      "route": "/api/auth/organization/invite-member"
+    },
+    "invitationManyCompanies": {
+      "companies": 8,
+      "invitationsPerCompany": 2,
+      "route": "/api/auth/organization/invite-member"
+    },
+    "ownerDemotionManyCompanies": {
+      "companies": 8,
+      "ownersPerCompany": 4,
+      "route": "/api/auth/organization/update-member-role",
+      "targetRole": "reader"
+    }
+  },
+  "results": [
+    {
+      "name": "invitations-one-company",
+      "operations": 16,
+      "runtimeInstances": 4,
+      "companyCount": 1,
+      "elapsedMs": 564.19,
+      "throughputPerSecond": 28.36,
+      "latencyMs": {
+        "p50": 311.55,
+        "p95": 551.73,
+        "p99": 551.73,
+        "max": 551.73,
+        "mean": 324.56
+      },
+      "outcomes": {
+        "statusCounts": {
+          "200": 16
+        },
+        "exceptions": 0
+      },
+      "advisoryLock": {
+        "maxGranted": 1,
+        "maxWaiting": 3,
+        "samplesWithWaiters": 93,
+        "sampleCount": 102,
+        "maxObservedWaitMs": 129.16
+      }
+    },
+    {
+      "name": "invitations-eight-companies",
+      "operations": 16,
+      "runtimeInstances": 4,
+      "companyCount": 8,
+      "elapsedMs": 491.23,
+      "throughputPerSecond": 32.57,
+      "latencyMs": {
+        "p50": 263.43,
+        "p95": 489.59,
+        "p99": 489.59,
+        "max": 489.59,
+        "mean": 273.53
+      },
+      "outcomes": {
+        "statusCounts": {
+          "200": 16
+        },
+        "exceptions": 0
+      },
+      "advisoryLock": {
+        "maxGranted": 1,
+        "maxWaiting": 3,
+        "samplesWithWaiters": 85,
+        "sampleCount": 92,
+        "maxObservedWaitMs": 99.21
+      }
+    },
+    {
+      "name": "owner-demotions-eight-companies",
+      "operations": 32,
+      "runtimeInstances": 4,
+      "companyCount": 8,
+      "elapsedMs": 1039.15,
+      "throughputPerSecond": 30.79,
+      "latencyMs": {
+        "p50": 577,
+        "p95": 1019.8,
+        "p99": 1037.47,
+        "max": 1037.47,
+        "mean": 574.93
+      },
+      "outcomes": {
+        "statusCounts": {
+          "200": 24,
+          "400": 8
+        },
+        "exceptions": 0
+      },
+      "advisoryLock": {
+        "maxGranted": 1,
+        "maxWaiting": 3,
+        "samplesWithWaiters": 170,
+        "sampleCount": 174,
+        "maxObservedWaitMs": 116.72
+      }
+    }
+  ],
+  "invariants": {
+    "invitationSingleCompanyPending": 16,
+    "invitationManyCompanyPendingByCompany": {
+      "company-0": 2,
+      "company-1": 2,
+      "company-2": 2,
+      "company-3": 2,
+      "company-4": 2,
+      "company-5": 2,
+      "company-6": 2,
+      "company-7": 2
+    },
+    "ownerCountByCompany": {
+      "company-0": 1,
+      "company-1": 1,
+      "company-2": 1,
+      "company-3": 1,
+      "company-4": 1,
+      "company-5": 1,
+      "company-6": 1,
+      "company-7": 1
+    },
+    "ownerDemotionExceptions": 0,
+    "ownerDemotionSuccessfulResponses": 24,
+    "ownerDemotionDeniedResponses": 8,
+    "allCompaniesRetainedOneOwner": true
+  },
+  "interpretation": {
+    "globalAdvisoryLockSerializesOrganizationWrites": true,
+    "crossCompanyWritesShareTheSameLockKey": true,
+    "observedCapacityClaim": false,
+    "recommendation": "Keep the shared advisory lock for the small launch; size runtime and database pools from a larger deployment-specific probe before increasing tenant or write concurrency."
+  },
+  "limits": [
+    "Local loopback PostgreSQL only; no hosted database, OAuth provider, or email transport was contacted.",
+    "Four runtime instances, eight companies, 32 demotion writes, and 16 invitation writes are a representative contention sample, not a 1000-tenant capacity test.",
+    "Latency includes local Node, PostgreSQL, and Better Auth work and should not be compared directly with hosted production latency.",
+    "maxObservedWaitMs is the sampled pg_stat_activity.query_start age for ungranted advisory locks, not an exact per-request lock-wait timer.",
+    "The advisory-lock monitor samples pg_locks every 2ms and can under-sample very short waits; sampling adds small query overhead."
+  ]
+}

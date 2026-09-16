@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-16T00:00:00.000Z",
+  "sourceRevision": "cf69fbb6ac1cc04bb4d8dfcde084c5b2e6e3cf59",
+  "mode": "local-disposable-only",
+  "hosted": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "recoveryExecuted": false,
+    "mutationPerformed": false,
+    "readOnlyProbe": "operator-supplied-separately",
+    "inertPrefixProposal": "rehearsal/9559_f6516e7c5ca1/"
+  },
+  "local": {
+    "postgresHost": "127.0.0.1",
+    "stateTable": "receipt_rehearsal_9559_f6516e7c5ca1_registry_state",
+    "billingTablePrefix": "receipt_rehearsal_9559_f6516e7c5ca1",
+    "databaseObjectsDropped": true,
+    "storageAdapter": "files-sdk/fs",
+    "storageRootEphemeral": true,
+    "storagePrefix": "rehearsal-9559_f6516e7c5ca1",
+    "providerBinding": "rehearsal:fs:9559_f6516e7c5ca1",
+    "freshClientRestart": true,
+    "receiptWasMintedAfterAwaitedReadback": true,
+    "scenarios": [
+      {
+        "name": "metadata-failure-with-verified-receipt-after-client-restart",
+        "organizationId": "org-receipt-positive-9559_f6516e7c5ca1",
+        "objectKeyFingerprint": "sha256:935c9262f6584e31",
+        "reservationBytes": 177,
+        "receipt": "verified",
+        "recoveryStatus": "released",
+        "objectAfterRecovery": "absent",
+        "billingStorageBytesAfterRecovery": 0,
+        "metadataStateAfterRecovery": "released"
+      },
+      {
+        "name": "unknown-provider-outcome-without-receipt",
+        "organizationId": "org-receipt-unknown-9559_f6516e7c5ca1",
+        "objectKeyFingerprint": "sha256:4d2cb5700052563d",
+        "reservationBytes": 24,
+        "receipt": "absent",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": 24,
+        "metadataStateAfterRecovery": "orphaned"
+      },
+      {
+        "name": "binding-mismatch-receipt-retained",
+        "organizationId": "org-receipt-mismatch-9559_f6516e7c5ca1",
+        "objectKeyFingerprint": "sha256:172c8a0a2ccaca81",
+        "reservationBytes": 25,
+        "receipt": "binding-mismatch",
+        "recoveryStatus": "retained",
+        "recoveryReason": "writer-unconfirmed",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesAfterRecovery": 25,
+        "metadataStateAfterRecovery": "orphaned"
+      }
+    ]
+  },
+  "acceptance": {
+    "actualHostedRoute": false,
+    "productionMutation": false,
+    "localAssertionsPassed": true,
+    "requiredExternalInputs": [
+      "Loopback PostgreSQL URL for a disposable database only",
+      "Hosted production Blob metadata probe result (read-only names/counts only)",
+      "Operator-owned provider termination/finality evidence before any hosted recovery action",
+      "Explicit cleanup and billing-release authorization for any future hosted rehearsal"
+    ]
+  }
+}

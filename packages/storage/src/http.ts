@@ -1,5 +1,12 @@
-import type { BlobStore, Digest, StoredBlob } from "../../contracts/src/index.js";
+import type {
+  BlobStore,
+  Digest,
+  RecoverableBlobStore,
+  StorageObjectInspection,
+  StoredBlob,
+} from "../../contracts/src/index.js";
 import { digestBytes, isSha256Digest } from "./digest.js";
+import { isRecoverableBlobStore } from "./recovery.js";
 
 export const DEFAULT_GATEWAY_MAX_BODY_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 30_000;
@@ -28,8 +35,15 @@ export interface HttpBlobStoreOptions {
   allowLoopback?: boolean;
   /** Injected fetch implementation for tests or a host runtime. */
   fetch?: typeof fetch;
+  /** Prefix used when allocating stable sealed object identities. */
+  prefix?: string;
   maxBytes?: number;
   timeoutMs?: number;
+  /**
+   * Provider/gateway proof that an earlier stable-key write is terminal and
+   * cannot materialize later. Missing proof remains unknown and fail-closed.
+   */
+  confirmWriteTerminated?: (key: string) => boolean | Promise<boolean>;
 }
 
 export interface BlobGatewayHandlerOptions {
@@ -114,6 +128,43 @@ function normalizeOrigin(
   return parsed.origin;
 }
 
+function normalizePrefix(prefix: string | undefined): string {
+  if (prefix === undefined || prefix === "") return "";
+  const value = prefix.replace(/^\/+|\/+$/gu, "");
+  if (
+    value.length === 0 ||
+    value.includes("\\") ||
+    value.includes(":") ||
+    value.includes("//") ||
+    value.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    throw new HttpBlobError("storage prefix is invalid", 500, "configuration");
+  }
+  return value;
+}
+
+function randomKeyPart(): string {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.getRandomValues) {
+    throw new HttpBlobError("secure Web Crypto randomness is required for sealed storage keys", 500, "configuration");
+  }
+  const bytes = new Uint8Array(24);
+  cryptoApi.getRandomValues(bytes);
+  let result = "";
+  for (const byte of bytes) result += byte.toString(16).padStart(2, "0");
+  return result;
+}
+
+function isKnownNotFound(error: unknown): boolean {
+  if (error instanceof HttpBlobError) return error.status === 404;
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown };
+    const code = typeof candidate.code === "string" ? candidate.code.toLowerCase() : "";
+    if (code === "notfound" || code === "not_found" || code === "enoent" || candidate.status === 404 || candidate.statusCode === 404) return true;
+  }
+  return error instanceof Error && /^(?:not[ -]?found|enoent)$/iu.test(error.message.trim());
+}
+
 function combineTimeout(timeoutMs: number, parent?: AbortSignal): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   if (!parent) return timeoutSignal;
@@ -145,6 +196,14 @@ function pathForKey(key: string): string {
     throw new HttpBlobError("storage key is invalid", 400, "http");
   }
   return `/internal/blobs/${encodeURIComponent(key)}`;
+}
+
+function assertStableKey(key: string, prefix: string): void {
+  pathForKey(key);
+  const expectedPrefix = `${prefix ? `${prefix}/` : ""}sealed/`;
+  if (!key.startsWith(expectedPrefix) || !/^[0-9a-f]{48}$/u.test(key.slice(expectedPrefix.length))) {
+    throw new HttpBlobError("storage key is not a Private Skills sealed-object key", 400, "integrity");
+  }
 }
 
 function requestHeaders(value: HttpHeaders | undefined): Headers {
@@ -273,12 +332,14 @@ function rejectRedirect(response: Response, operation: string): void {
 }
 
 /** BlobStore client for the private gateway, with no provider credentials. */
-export class HttpBlobStore implements BlobStore {
+export class HttpBlobStore implements RecoverableBlobStore {
   readonly #origin: string;
   readonly #headers: HttpHeaders | undefined;
   readonly #fetch: typeof fetch;
+  readonly #prefix: string;
   readonly #maxBytes: number;
   readonly #timeoutMs: number;
+  readonly #confirmWriteTerminated?: (key: string) => boolean | Promise<boolean>;
   readonly #records = new Map<string, LocalBlobRecord>();
 
   constructor(options: HttpBlobStoreOptions) {
@@ -300,8 +361,20 @@ export class HttpBlobStore implements BlobStore {
     // Store a bound function so calling it through a private class field does
     // not lose the required global receiver.
     this.#fetch = fetchImplementation.bind(globalThis);
+    this.#prefix = normalizePrefix(options.prefix);
     this.#maxBytes = positiveLimit(options.maxBytes, DEFAULT_GATEWAY_MAX_BODY_BYTES);
     this.#timeoutMs = positiveLimit(options.timeoutMs, DEFAULT_GATEWAY_TIMEOUT_MS);
+    this.#confirmWriteTerminated = options.confirmWriteTerminated;
+  }
+
+  async confirmWriteTerminated(key: string): Promise<boolean> {
+    assertStableKey(key, this.#prefix);
+    if (!this.#confirmWriteTerminated) return false;
+    try {
+      return (await this.#confirmWriteTerminated(key)) === true;
+    } catch {
+      return false;
+    }
   }
 
   async put(bytes: Uint8Array): Promise<StoredBlob> {
@@ -348,6 +421,84 @@ export class HttpBlobStore implements BlobStore {
     }
     this.#records.set(descriptor.key, { digest, size: payload.byteLength });
     return descriptor;
+  }
+
+  allocateObjectKey(): string {
+    return `${this.#prefix ? `${this.#prefix}/` : ""}sealed/${randomKeyPart()}`;
+  }
+
+  async putAtKey(
+    key: string,
+    bytes: Uint8Array,
+    metadata?: Record<string, string>,
+  ): Promise<StoredBlob> {
+    assertStableKey(key, this.#prefix);
+    if (!(bytes instanceof Uint8Array)) {
+      throw new HttpBlobError("put expects a Uint8Array", 400);
+    }
+    if (bytes.byteLength > this.#maxBytes) {
+      throw new HttpBlobError("blob exceeds the configured byte limit", 413, "limit");
+    }
+    const payload = new Uint8Array(bytes);
+    const digest = await digestBytes(payload);
+    const existing = await this.inspectObject(key);
+    if (existing.state === "present") {
+      if (existing.digest !== digest || existing.size !== payload.byteLength) {
+        throw new HttpBlobError("stable storage key contains different bytes", 409, "integrity");
+      }
+      this.#records.set(key, { digest, size: payload.byteLength });
+      return { key, digest, size: payload.byteLength };
+    }
+    if (existing.state === "unknown") {
+      throw new HttpBlobError("cannot establish whether stable storage key exists", 502, "integrity");
+    }
+    const headers = requestHeaders(this.#headers);
+    headers.set("content-type", "application/octet-stream");
+    headers.set("content-length", String(payload.byteLength));
+    headers.set("cache-control", "no-store");
+    // Gateway metadata is deliberately not forwarded: the private route
+    // derives object identity and integrity from the request body.
+    void metadata;
+    let response: Response;
+    try {
+      response = await this.#fetch(`${this.#origin}${pathForKey(key)}`, {
+        method: "PUT",
+        headers,
+        body: payload,
+        redirect: "manual",
+        signal: combineTimeout(this.#timeoutMs),
+      });
+    } catch {
+      throw new HttpBlobError("blob gateway request failed", 502);
+    }
+    rejectRedirect(response, "stable upload");
+    if (!response.ok) await responseError(response, "stable upload");
+    let descriptor: StoredBlob;
+    try {
+      const descriptorBytes = await readResponseBytes(response, 64 * 1024);
+      descriptor = validateStoredBlob(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(descriptorBytes)) as unknown);
+    } catch (error) {
+      if (error instanceof HttpBlobError) throw error;
+      throw new HttpBlobError("blob gateway returned invalid JSON", 502, "integrity");
+    }
+    if (descriptor.key !== key || descriptor.digest !== digest || descriptor.size !== payload.byteLength) {
+      throw new HttpBlobError("blob gateway changed the stable upload descriptor", 502, "integrity");
+    }
+    this.#records.set(key, { digest, size: payload.byteLength });
+    return descriptor;
+  }
+
+  async inspectObject(key: string): Promise<StorageObjectInspection> {
+    pathForKey(key);
+    try {
+      const bytes = await this.get(key);
+      return { state: "present", key, digest: await digestBytes(bytes), size: bytes.byteLength };
+    } catch (error) {
+      if (isKnownNotFound(error)) return { state: "absent", key };
+      if (error instanceof HttpBlobError && error.code === "limit") return { state: "unknown", key, reason: "limit" };
+      if (error instanceof HttpBlobError && error.code === "integrity") return { state: "unknown", key, reason: "integrity" };
+      return { state: "unknown", key, reason: "provider-error" };
+    }
   }
 
   async getVerified(key: string, expectedDigest: Digest): Promise<Uint8Array> {
@@ -478,6 +629,8 @@ function responseForError(error: unknown): Response {
   const status =
     error instanceof HttpBlobError
       ? error.status
+      : isKnownNotFound(error)
+        ? 404
       : candidate?.code === "limit"
         ? 413
         : candidate?.code === "invalid_key"
@@ -590,6 +743,26 @@ export function createBlobGatewayHandler(
     if (!key) return responseForError(new HttpBlobError("storage key is invalid", 400));
 
     try {
+      if (request.method === "PUT") {
+        if (!isRecoverableBlobStore(blobStore)) {
+          return responseForError(new HttpBlobError("stable blob writes are unavailable on this gateway", 501));
+        }
+        if (
+          request.headers.get("content-encoding") &&
+          request.headers.get("content-encoding") !== "identity"
+        ) {
+          return responseForError(new HttpBlobError("encoded request bodies are not accepted", 415));
+        }
+        const bytes = await requestBytes(request, maxBytes, timeoutMs);
+        const stored = await blobStore.putAtKey(key, bytes);
+        if (stored.key !== key) {
+          return responseForError(new HttpBlobError("stable blob store returned a different key", 502, "integrity"));
+        }
+        return new Response(JSON.stringify(stored), {
+          status: 201,
+          headers: JSON_HEADERS,
+        });
+      }
       if (request.method === "GET") {
         const bytes = await blobStore.get(key);
         if (bytes.byteLength > maxBytes) {

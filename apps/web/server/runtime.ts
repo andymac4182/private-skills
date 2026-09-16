@@ -54,7 +54,17 @@ import {
 import { canonicalOriginFromEnv } from './identity-origin.js';
 import { handleCompanySsoRoute } from './company-sso-runtime.js';
 import { createSignedWorkerAuthenticatorFromEnv } from './worker-identity.js';
-import { BILLING_ROUTE_PATHS, createBillingRoutes } from './routes/billing.js';
+import {
+  BILLING_ROUTE_PATHS,
+  BILLING_SEAT_RECOVERY_SCOPE,
+  createBillingRoutes,
+  createBillingSeatRecoveryRoutes,
+} from './routes/billing.js';
+import {
+  STORAGE_RECOVERY_ROUTE_PATH,
+  createStorageRecoveryRoutes,
+} from './routes/storage-recovery.js';
+import { STORAGE_RECOVERY_SCOPE } from '../../../packages/storage/src/index.js';
 import { createOperationsStatusHandler } from './operations-status.js';
 import { createBillingWebhookHandler } from '../../../packages/billing/src/index.js';
 import {
@@ -72,6 +82,7 @@ import {
   type EveTenantService,
 } from '../../../packages/eve-tenant/src/index.js';
 import { createEveTenantHostRuntime } from './eve-tenant-runtime.js';
+import { createTenantReviewRuntime } from './tenant-review-runtime.js';
 
 async function createRuntime(env: RuntimeEnvironment) {
   const directoryConnection = resolveSkillsDirectoryConnection(env);
@@ -109,6 +120,39 @@ async function createRuntime(env: RuntimeEnvironment) {
   const cliReleaseManifest = resolveCliReleaseManifest(env.PSKILLS_CLI_RELEASE_MANIFEST);
   const cliReleaseProvider = infrastructure.cliReleaseProvider ?? createBlobCliReleaseAssetProvider(infrastructure.blobs);
   const billingWebhook = createBillingWebhookHandler(infrastructure.billing.service, { path: BILLING_ROUTE_PATHS.webhook });
+  const billingRecoveryAuthenticator = infrastructure.billingRecovery === undefined
+    ? undefined
+    : await createBillingRecoveryAuthenticator(env);
+  const billingRecovery = infrastructure.billingRecovery && billingRecoveryAuthenticator
+    ? createBillingSeatRecoveryRoutes({
+      // Recovery is bearer-only. The dedicated authenticator has no user
+      // tokens and authenticateWorker rejects browser session cookies.
+      authorizeOperator: (request) => billingRecoveryAuthenticator.authenticateWorker(request),
+      listReservations: (organizationId) => infrastructure.billingRecovery!.activeSeatReservations(organizationId),
+      recoverSeat: (input) => infrastructure.billingRecovery!.recoverFailedSeat(input),
+    })
+    : undefined;
+  const storageRecoveryAuthenticator = infrastructure.storageRecovery === undefined
+    ? undefined
+    : await createStorageRecoveryAuthenticator(env);
+  const storageRecovery = infrastructure.storageRecovery && storageRecoveryAuthenticator
+    ? createStorageRecoveryRoutes({
+      // This authenticator is built from a dedicated environment namespace;
+      // it never consults the shared tenant, scanner, or queue credentials.
+      authorizeOperator: (request) => storageRecoveryAuthenticator.authenticateWorker(request),
+      service: infrastructure.storageRecovery,
+      operatorTokenId: storageRecoveryOperatorTokenId(env),
+    })
+    : undefined;
+  const tenantReviewDispatch = eveTenant && infrastructure.listTenantReviewTargets
+    ? createTenantReviewRuntime({
+      env,
+      repository: infrastructure.repository,
+      billing: infrastructure.billing.service,
+      eveTenant,
+      listTenants: infrastructure.listTenantReviewTargets,
+    })
+    : undefined;
   // Better Auth is optional and Node-owned. The infrastructure profile may
   // provide it without making the shared runtime import a database driver;
   // edge keeps this value absent and continues to serve legacy tokens.
@@ -274,6 +318,7 @@ async function createRuntime(env: RuntimeEnvironment) {
           organizationId: config.organizationId,
           namespace: openClawNamespace,
           sourceProviderOrigin: openClawSourceOrigin,
+          billing: infrastructure.billing.service,
         });
       } catch {
         return undefined;
@@ -458,6 +503,7 @@ async function createRuntime(env: RuntimeEnvironment) {
     });
     const registry = createRegistryHandler({
       ...baseInfrastructure,
+      billing: infrastructure.billing.service,
       auth: context.auth,
       config: tenantConfig,
       ...tenantDependencies,
@@ -616,6 +662,14 @@ async function createRuntime(env: RuntimeEnvironment) {
     const companySsoResponse = await handleCompanySsoRoute(request, companySsoRuntime, companySsoLoginRuntime);
     if (companySsoResponse) return companySsoResponse;
     if (path.startsWith('/v1/internal/state/')) return stateGateway(request);
+    if (path === STORAGE_RECOVERY_ROUTE_PATH || path.startsWith(`${STORAGE_RECOVERY_ROUTE_PATH}/`)) {
+      const response = await storageRecovery?.(request);
+      if (response) return response;
+      return Response.json({ code: 'STORAGE_RECOVERY_UNAVAILABLE', message: 'Storage recovery is not configured.', retryable: false }, {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
+    }
     if (path === '/internal/blobs' || path.startsWith('/internal/blobs/')) return blobGateway(request);
     if (path.startsWith('/internal/upload-review/')) {
       const supplied = request.headers.get('authorization')?.match(/^Bearer[ \t]+([^ \t]+)$/iu)?.[1];
@@ -634,11 +688,25 @@ async function createRuntime(env: RuntimeEnvironment) {
       if (response) return response;
     }
     if (path === BILLING_ROUTE_PATHS.webhook || path.startsWith(`${BILLING_ROUTE_PATHS.webhook}/`)) return billingWebhook(request);
+    if (path === BILLING_ROUTE_PATHS.seatReservations || path.startsWith(`${BILLING_ROUTE_PATHS.seatReservations}/`)
+      || path === BILLING_ROUTE_PATHS.seatRecovery || path.startsWith(`${BILLING_ROUTE_PATHS.seatRecovery}/`)) {
+      const response = await billingRecovery?.(request);
+      if (response) return response;
+    }
     if (path === '/internal/worker/run') {
-      const workerHandler = infrastructure.hostedWorker
+      const workerHandler = infrastructure.hostedWorkerDispatcher
+        ?? infrastructure.hostedWorker
         ?? infrastructure.createHostedWorkerForTenant?.(defaultOrganizationId);
       return workerHandler ? workerHandler(request)
         : Response.json({ code: 'WORKER_DISABLED' }, { status: 503, headers: { 'cache-control': 'no-store' } });
+    }
+    if (path === '/internal/reviewer/dispatch' || path === '/internal/reviewer/dispatch/') {
+      const response = await tenantReviewDispatch?.(request);
+      if (response) return response;
+      return Response.json({ code: 'REVIEW_DISPATCH_UNAVAILABLE', message: 'Tenant review dispatch is not configured.', retryable: false }, {
+        status: 503,
+        headers: { 'cache-control': 'no-store' },
+      });
     }
     if (path === '/v1/tokens' || path.startsWith('/v1/tokens/')) {
       const response = await apiTokenRuntime?.handler(request);
@@ -728,6 +796,89 @@ function isBetterAuthPrincipal(value: Principal & { authMethod?: unknown }): boo
 function optionalEnvironmentValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized === '' ? undefined : normalized;
+}
+
+/**
+ * Resolve the platform-only recovery credential without inheriting any
+ * bootstrap, gateway, scanner, or ordinary worker token. The route remains
+ * absent when this separately provisioned credential is not complete.
+ */
+async function createBillingRecoveryAuthenticator(env: RuntimeEnvironment) {
+  const token = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN);
+  const tokenHash = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN_HASH);
+  if (token === undefined && tokenHash === undefined) return undefined;
+  if (token !== undefined && tokenHash !== undefined) {
+    console.error('Billing seat recovery route disabled: configure exactly one dedicated operator token or token hash.');
+    return undefined;
+  }
+  const organizationId = optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_ORGANIZATION_ID);
+  if (organizationId === undefined) {
+    console.error('Billing seat recovery route disabled: PSKILLS_BILLING_RECOVERY_ORGANIZATION_ID is required.');
+    return undefined;
+  }
+  const dedicatedEnvironment: RuntimeEnvironment = {
+    PSKILLS_ENVIRONMENT: env.PSKILLS_ENVIRONMENT,
+    PSKILLS_PUBLIC_ORIGIN: env.PSKILLS_PUBLIC_ORIGIN,
+    PSKILLS_SESSION_SECRET: env.PSKILLS_SESSION_SECRET,
+    PSKILLS_WORKER_TOKEN: token,
+    PSKILLS_WORKER_TOKEN_HASH: tokenHash,
+    PSKILLS_WORKER_TOKEN_ID: optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_TOKEN_ID) ?? 'billing-recovery-operator',
+    PSKILLS_WORKER_ORGANIZATION_ID: organizationId,
+    PSKILLS_WORKER_SUBJECT: optionalEnvironmentValue(env.PSKILLS_BILLING_RECOVERY_SUBJECT) ?? 'billing-recovery-operator',
+    // This scope is fixed in code; deployment config cannot accidentally turn
+    // an ordinary worker token into a recovery credential.
+    PSKILLS_WORKER_SCOPES: BILLING_SEAT_RECOVERY_SCOPE,
+  };
+  try {
+    return await createAuthenticatorFromEnv(dedicatedEnvironment);
+  } catch {
+    console.error('Billing seat recovery route disabled: the dedicated operator credential is invalid.');
+    return undefined;
+  }
+}
+
+function storageRecoveryOperatorTokenId(env: RuntimeEnvironment): string {
+  return optionalEnvironmentValue(env.PSKILLS_STORAGE_RECOVERY_TOKEN_ID) ?? 'storage-recovery-operator';
+}
+
+/**
+ * Resolve a platform-only storage recovery credential. This is deliberately
+ * a separate worker authenticator: the shared tenant authenticator, scanner
+ * worker, and hosted queue credentials can never gain storage:recovery by
+ * inheriting a role or a configured scope.
+ */
+async function createStorageRecoveryAuthenticator(env: RuntimeEnvironment) {
+  const token = optionalEnvironmentValue(env.PSKILLS_STORAGE_RECOVERY_TOKEN);
+  const tokenHash = optionalEnvironmentValue(env.PSKILLS_STORAGE_RECOVERY_TOKEN_HASH);
+  if (token === undefined && tokenHash === undefined) return undefined;
+  if (token !== undefined && tokenHash !== undefined) {
+    console.error('Storage recovery route disabled: configure exactly one dedicated operator token or token hash.');
+    return undefined;
+  }
+  const organizationId = optionalEnvironmentValue(env.PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID);
+  if (organizationId === undefined) {
+    console.error('Storage recovery route disabled: PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID is required.');
+    return undefined;
+  }
+  const dedicatedEnvironment: RuntimeEnvironment = {
+    PSKILLS_ENVIRONMENT: env.PSKILLS_ENVIRONMENT,
+    PSKILLS_PUBLIC_ORIGIN: env.PSKILLS_PUBLIC_ORIGIN,
+    PSKILLS_SESSION_SECRET: env.PSKILLS_SESSION_SECRET,
+    PSKILLS_WORKER_TOKEN: token,
+    PSKILLS_WORKER_TOKEN_HASH: tokenHash,
+    PSKILLS_WORKER_TOKEN_ID: storageRecoveryOperatorTokenId(env),
+    PSKILLS_WORKER_ORGANIZATION_ID: organizationId,
+    PSKILLS_WORKER_SUBJECT: optionalEnvironmentValue(env.PSKILLS_STORAGE_RECOVERY_SUBJECT) ?? 'storage-recovery-operator',
+    // The storage capability is fixed here. Deployment configuration cannot
+    // turn a regular worker token into an object-recovery credential.
+    PSKILLS_WORKER_SCOPES: STORAGE_RECOVERY_SCOPE,
+  };
+  try {
+    return await createAuthenticatorFromEnv(dedicatedEnvironment);
+  } catch {
+    console.error('Storage recovery route disabled: the dedicated operator credential is invalid.');
+    return undefined;
+  }
 }
 
 interface EveTenantInboundRoute {

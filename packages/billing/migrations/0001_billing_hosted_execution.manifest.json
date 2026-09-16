@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "migrationFile": "packages/billing/migrations/0001_billing_schema.sql",
+  "tablePrefix": "private_skills_billing",
+  "sqlSha256": "sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880",
+  "sqlByteLength": 4705,
+  "targetSchema": "public",
+  "advisoryLock": {
+    "function": "pg_advisory_xact_lock(hashtextextended(text, integer))",
+    "key": "private-skills.billing-schema.v1",
+    "scope": "transaction",
+    "timeoutMs": 3000
+  },
+  "transaction": {
+    "isolation": "repeatable read",
+    "statementTimeoutMs": 15000,
+    "lockTimeoutMs": 3000,
+    "idleInTransactionTimeoutMs": 30000,
+    "searchPath": ["public", "pg_catalog"]
+  },
+  "expectedShape": {
+    "tableCount": 5,
+    "columnCount": 51,
+    "checkCount": 13,
+    "physicalIndexCount": 9,
+    "zeroRows": true
+  },
+  "catalogValidation": {
+    "exactColumns": true,
+    "exactDefaults": true,
+    "exactNullability": true,
+    "exactConstraintDefinitions": true,
+    "exactIndexColumns": true,
+    "exactIndexDefinitions": true
+  },
+  "baselineDomains": ["identity", "registry", "billing"],
+  "identityTables": [
+    "user",
+    "account",
+    "session",
+    "verification",
+    "organization",
+    "member",
+    "invitation",
+    "rateLimit",
+    "ssoProvider",
+    "private_skills_company_sso_providers",
+    "private_skills_identity_operations_events",
+    "private_skills_service_tokens"
+  ],
+  "registryTable": "public.private_skills_registry_state",
+  "safety": {
+    "defaultMode": "plan-only",
+    "applyRequires": ["--apply", "PSKILLS_BILLING_MIGRATION_CONFIRM=APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916", "--baseline-output PATH"],
+    "noDestructiveStatements": true,
+    "noApplicationRowWrites": true,
+    "independentPostApplyConnection": true,
+    "noWebhookFenceSynthesizedForCreateOnlyTarget": true
+  }
+}

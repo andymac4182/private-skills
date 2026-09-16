@@ -18,7 +18,7 @@ Use the same state machine for private publishing and upstream proxy acquisition
 
 1. Create a fenced ingestion attempt and a random quarantine upload target. Authorize only that attempt, expected source, tenant, operation, expiry, and permitted size. Upload completion is a claim requiring verification.
 2. Trusted ingestion completely reads the candidate, enforces archive/extraction limits, and produces the canonical distribution bytes. Record the original digest separately if normalization changes the archive. Never execute uploaded code.
-3. Before scanning, write those canonical bytes to a fresh, random, server-only **sealed object** for this attempt. Complete the write, independently retrieve/hash it, and record its digest and size. Clients never receive write access to that object. Do not reuse an object ID after an uncertain write; reconcile or abandon the attempt.
+3. Before scanning, write those canonical bytes to a fresh, random, server-only **sealed object** for this attempt. Complete the write, independently retrieve/hash it, and record its digest and size. Clients never receive write access to that object. A durable attempt records the object key before provider I/O so a lost response can retry the same identity and verify its bytes.
 4. Each isolated scanner receives read-only input independently verified against the sealed digest. Scanner identities cannot rewrite the object, publish versions, or issue ordinary download access.
 5. After every required scan satisfies its policy, the trusted coordinator atomically commits the immutable version-to-object pointer and matching evidence in PostgreSQL, checking fencing, current permissions, policy, and revocation. Until this transaction succeeds, normal download routes deny the sealed object.
 
@@ -70,3 +70,63 @@ Certify each runtime/backend/transfer-mode combination against real infrastructu
 Initial acceptance covers Node/container, Vercel, and an edge Nitro target, including private signed delivery and gateway fallback across different storage adapters. Additional Files SDK/custom adapters are eligible through the same suite. Interface compatibility alone is not a universal tested-support claim.
 
 Track object references and retention holds transactionally. Collect abandoned attempts only after leases and retention expire; exclude published artifacts, active jobs, and required reports. Back up database mappings and private objects together, then restore and verify digests, access, and scan evidence before reopening distribution. Storage migration and cleanup must preserve the same approval boundary.
+
+## Ambiguous write recovery
+
+`RecoverableBlobStore` adds a stable prewrite key, same-key idempotent upload, and bounded object inspection. An upload that may have reached the provider remains an `orphaned` storage attempt with its metered reservation charged. The reconciler treats only a verified `absent` result after provider write termination is confirmed as safe to release; provider errors, timeouts, oversized reads, and digest mismatches remain `unknown` and retain the charge.
+
+Recovery requires a dedicated operator capability (`private-skills:storage-recovery-operator`) and `storage:recovery` scope. Tenant owner/admin, scanner worker, and ordinary service credentials do not authorize it. A trusted platform proof that the writer failed or was terminated is required for every attempt. If the exact object is present, an operator must explicitly authorize cleanup and the reconciler reads it again to confirm absence before issuing the exact `{ storageBytes: 0 }` billing correction. A durable `recovering` fence makes the workflow resumable after a process crash; there is no age-based automatic deletion or billing release. Metadata references are checked under the organization transaction before claim and before release.
+
+The Node/Nitro mount is `POST /internal/storage/recovery`. It accepts only
+`attemptId`, `cleanupConfirmed`, and `resume`; the organization and proof are
+server-derived. Configure the separate
+`PSKILLS_STORAGE_RECOVERY_TOKEN` (or its SHA-256 hash) and
+`PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID` to enable it. The runtime's proof
+verifier requires the durable orphaned writer transition, or a failed
+lease-free job for a pending attempt, and will not convert a still-pending
+attempt to orphaned when a proof is rejected. Recovery also calls the
+adapter's provider-specific `confirmWriteTerminated(key)` proof; an absent or
+false result retains the attempt and charge because a rejected or timed-out
+remote write may still materialize later. The adapter must return true only
+after its provider can no longer create that key. A successful recovery first
+persists a `releasing` metadata fence, then verifies/cleans the exact object,
+records `billingCorrection: "release-pending"` before the external billing
+zero, passes the captured billing reservation generation, and finally marks
+the attempt released while clearing that marker. If a process dies after the
+marker or billing call, a resumed reconciler keeps the marker and reuses the
+same generation-bound correction key. It may settle the release only after the
+ledger proves either an exact zero or an atomic source-generation fence. When
+a late metadata reference exists, the preferred ledger resolver atomically
+returns either `restored` (the zero was committed, so the inverse advances G1
+to G2) or `fenced` (the reservation was
+untouched, so G1 is advanced without changing usage); the storage attempt then
+persists G2 and clears the marker. Older adapters may promote only an exact
+settled zero to `restore-pending`; a missing or unreadable ledger row retains
+the charge and marker for a later retry. Attempts without a generation remain
+retained unless the operator explicitly enables
+`PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`; the ledger still rejects a
+reopened key.
+
+If a metadata reference appears after the exact zero correction, the attempt is
+marked `billingCorrection: "restore-pending"` in the same durable transition
+that retains it. The preceding `release-pending` marker is never cleared by a
+resume that merely observes metadata: the reconciler first reads the exact
+generation-bound zero operation. Retries settle the inverse reservation under a
+stable operation key bound to the original reservation generation (G1) before
+clearing that marker. The ledger returns a fresh generation (G2); the storage
+attempt persists G2 and removes the marker in one transaction. A lost response
+retries the same G1 restoration operation, while a delayed G1 zero is rejected
+and a later cleanup uses a G2-specific correction key. A failed or unknown
+inverse leaves the marker and the original reservation charged.
+
+The current Node factory does not claim this finality for any built-in provider.
+The filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters expose
+no provider-authoritative termination callback, so their recovery route remains
+fail-closed and keeps the reservation charged. The HTTP adapter has the same
+default: it can be enabled only when its gateway is constructed with a
+`confirmWriteTerminated` callback backed by a provider-specific terminal
+acknowledgement and writer fence. A host that cannot produce that evidence must
+leave hosted recovery open; a local or custom adapter may implement the
+callback after it has fenced the writer and received a provider-terminal
+result. A missing, timeout, rejection, absent read, or operator assertion is
+never a substitute for that result.

@@ -1,0 +1,53 @@
+{
+  "recordedAt": "2026-09-15T21:19:39Z",
+  "scope": "independent populated two-company B05/L10 authorization matrix",
+  "sourceCommit": "b7efd48b6804d5f6e4d6415f299b214e441d1df5",
+  "checkout": "isolated worktree at /private/tmp/private-skills-tenant-matrix-b7efd48",
+  "environment": "Disposable loopback PostgreSQL was used for the PostgreSQL checks; connection values and credentials are omitted. No production database, storage provider, worker, or hosted identity was used.",
+  "checks": [
+    {
+      "command": "CI=true pnpm exec vitest run tests/e2e/multi-tenant-postgres-acceptance.test.ts --reporter=dot",
+      "result": "1 test file passed, 1 test passed"
+    },
+    {
+      "command": "CI=true pnpm exec vitest run tests/e2e/multi-tenant-postgres-acceptance.test.ts tests/e2e/source-tenant-isolation.test.ts apps/web/src/tenant-identity-route.postgres.integration.test.ts --reporter=dot",
+      "result": "3 test files passed, 3 tests passed"
+    },
+    {
+      "command": "PSKILLS_NITRO_POSTGRES_ACCEPTANCE=true CI=true pnpm exec vitest run tests/e2e/nitro-postgres-files-acceptance.test.ts --reporter=dot",
+      "result": "1 test file passed, 2 tests passed"
+    },
+    {
+      "command": "CI=true pnpm typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "priorCandidateBaseline": {
+    "sourceCommit": "b7efd48b6804d5f6e4d6415f299b214e441d1df5",
+    "reportedResult": "45 passed, 13 skipped, typecheck passed",
+    "provenance": "Parent-provided candidate verification; the independent checks above cover the populated tenant matrix and related tenant suites."
+  },
+  "coverageAdded": [
+    "populated-company wrong-company skill detail, rescan, revoke, and owner readback",
+    "pack creation that references a foreign-company member",
+    "foreign-company draft update with unchanged owner readback",
+    "company-scoped upstream lists",
+    "Eve proposal completion containing a foreign-company resource, plus Eve audience denial on registry routes",
+    "company-scoped source list, search, resolve, operation lookup, and authenticated organization-header spoof denial"
+  ],
+  "relatedCoverage": [
+    "live PostgreSQL identity/API-token exchange, organization-header mismatch, role downgrade, revocation, and member removal",
+    "composed Nitro/PostgreSQL/Files SDK populated pack, draft, search, analytics, token, revoke, transfer, and cross-company denial journeys"
+  ],
+  "limits": [
+    "worker dispatch, scanner execution, storage recovery, and provider lifecycle acceptance were excluded from this bounded audit",
+    "source routes use a deterministic in-process adapter; no external source provider or credentials were contacted",
+    "no hosted provider or external IdP was exercised",
+    "the later same-prefix multi-schema migration constraint issue remains under separate fix; these passing checks do not close migration acceptance",
+    "this is scoped test evidence and does not by itself establish full B05/L10 release readiness"
+  ]
+}

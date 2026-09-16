@@ -1,141 +1,138 @@
 # Launch status
 
 Last reconciled: 16 September 2026, Brisbane. Target: 18 September;
-contingency through 20 September. Overall: implementation in progress, not
-launched.
+contingency through 20 September. Overall: **Hold** — implementation is in
+progress and no paid or hosted launch is claimed.
 
-Production `main` is `c8709858659767850dfc35d39a925e83aace55bb`, merged from PR
-#57. All four Git-triggered Vercel deployments are READY for that exact source;
-the [production evidence](../../evidence/production-release-c870985-20260916.json)
-records the deployment readbacks, frozen checks, and public route checks. The
-production identity configuration is deliberately disabled, native CI was
-blocked before runner execution and is recorded as waived, and no hosted
-identity or customer billing activation is implied.
+## Current production and candidate
 
-The local candidate merge is `2348002`, based on candidate source `a65c8a9`.
-The latest focused recovery candidate is `05136ac`; its author reported 52
-focused tests plus typecheck. The [full candidate record](../../evidence/local-final-candidate-a65c8a9-20260916.json)
-reports 173 files passed / 17 skipped and 1,240 tests passed / 40 skipped,
-plus the focused billing/database/storage/tenant checks. These are local
-candidate results; they do not replace hosted acceptance or close the active
-billing recovery gates.
+Production `main` is `ee7d3c` (PR #60). The [production marketing/claims release record](../../evidence/production-release-marketing-claims-ee7d3c35-20260916.json)
+records all four Git-triggered Vercel deployments READY at that exact merge,
+nine marketing routes, app health/config/robots/sitemap readbacks, corrected
+access copy, identity disabled with `providers: []`, and the user-authorized
+native-CI waiver. It does not prove an authenticated hosted tenant journey,
+provider callbacks, or paid activation. Native CI remains waived/blocked, not
+passed. The prior [PR #59 reader release record](../../evidence/production-release-reader-ui-884992f-20260916.json)
+is retained as historical production evidence.
 
-The published v0.4.0 CLI now has direct native Apple Silicon evidence for
-version/help and install → verify → remove in an isolated local fixture, and
-emulated Linux amd64 evidence for version/help and the same controlled install
-path. The [macOS record](../../evidence/local-macos-arm64-cli-qualification-20260916.json)
-and [Linux record](../../evidence/local-linux-amd64-cli-qualification-20260916.json)
-state their architecture and limits explicitly; native Linux hardware/CI and
-Windows execution remain unverified.
+The latest frozen candidate qualification is the [final local qualification
+record](../../evidence/final-candidate-local-qualification-20260916.json)
+from runtime source `8cdbb30`, recorded in evidence commit `1f8a814`. It reports
+180 test files passed / 19 skipped, 1,292 tests passed / 45 skipped, passing
+typecheck and Node, Vercel Build Output, and Cloudflare builds, 12 direct
+disposable loopback PostgreSQL files / 33 tests, and 1 composed Nitro file / 2
+tests. These checks are local or disposable and do not replace hosted
+acceptance. The earlier `87a2f0c` record remains a dated 178-file / 1,281-test
+snapshot rather than the current qualification.
 
-The edge dependency cleanup in `1b043cb`/`9ba903c` removes executable
-PostgreSQL, runtime-node, and Files SDK imports from the edge output. Its local
-edge builds, focused tests, and workerd smoke are recorded in the
-[boundary evidence](../../evidence/edge-portability-boundary-cleanup-9ba903c.json).
-This is local portability evidence, not hosted edge acceptance.
+The [local serving-path restore record](../../evidence/local-serving-path-restore-skillsguard-20260916.json)
+from `d4fa33d` adds script and evidence only after the frozen qualification; it
+does not change runtime behavior. It proves the bounded default-organization
+restore through a local Node/PostgreSQL/Files SDK filesystem process and the
+pinned SkillsGuard rescan, while hosted coordinated recovery remains open.
 
-The read-only hosted identity baseline in `7140029` is the pre-preparation
-comparison: production Better Auth was disabled, no providers were configured,
-and the target identity, company-SSO, service-token, and operations-event
-tables were absent. The later bounded additive schema preparation is recorded
-in `eb23f54` and independently verified in the [schema-preparation evidence](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json):
-12 target tables now exist with zero rows and verified columns/indexes, while
-the registry stayed at revision `232` with state-set digest
-`sha256:b66c89c23173577df7907c6936fee49e669cc8f735ab4b1a9e67bd935038c55c`.
-The independent config readback still reports Better Auth disabled and
-`providers: []`; no provider rows, token rows, adoption, existing-data DML,
-blob changes, or environment changes occurred. This is schema preparation,
-not customer IdP configuration, traffic activation, or hosted restore
-acceptance. The earlier [readback](../../evidence/hosted-identity-migration-review-20260916.json)
-and [SQL manifest](../../evidence/hosted-identity-migration-review-20260916.sql-manifest.json)
-remain historical review artifacts.
+The hosted billing schema is now applied with independent readback in the
+[billing migration evidence](../../evidence/billing-hosted-migration-plan-20260916.json),
+from the `ac87e314` / `95eaf2a` documentation chain. PostgreSQL reports five
+billing tables, 51 columns, 13 checks, 9 indexes, and zero billing rows; the 12
+identity relations remain present with zero rows and the registry remains at
+revision `232`. The migration created schema only: billing, metering, Stripe,
+webhook activation, and customer payment state are not enabled.
 
-The local billing-console browser record at source `2348002` passes owner
-onboarding, free/Team entitlement readback, PostgreSQL persistence, signed
-webhook handling, and reader denial, with no browser console errors. Its local
-test checkout and portal URLs both return 404 and require a fix and rerun; no
-live provider or charge was used. Billing restore/over-cap handling,
-known-completed-write recovery, and durable billing compensation remain active
-release work. The local PostgreSQL operator/recovery proof passed 16 tests, but
-the ledger candidate `1d3ca34` reports 32 unit tests, 14 PostgreSQL tests, and
-typecheck, while the metered reservation crash repro still leaves a reservation
-in `releasing`. Provider finality review requires retaining ambiguous writes
-until an authoritative terminal result. B21, B22, and B28 therefore remain
-open alongside the hosted restore and Stripe/commercial inputs.
+The [forward recovery record](../../evidence/full-postgres-forward-billing-recovery-20260916.json)
+proves a local isolated forward recovery with 19 tables, including the five
+empty billing tables, while preserving the 14-table source state, identity
+rows, semantic rows, and registry revision. The [composed PostgreSQL/Blob
+record](../../evidence/composed-pg-blob-backup-coverage-20260916.json) verifies
+11 referenced objects totaling 37,741 bytes by key, digest, and size against a
+fresh private Blob read. The two source records were separate: no coordinated
+freeze, application-level key remap, upload/delete, or hosted application
+restore was performed in those records. The later local serving-path rehearsal
+proves only the bounded local default-organization serving path.
 
-Market research, brand selection, legal entity/support details, real customer
-IdP configuration, final offer, and Stripe account activation remain external
-inputs. The dated [market update](../developer-ai-market-update-20260916.md)
-and [brand follow-up](../brand-clearance-next-steps.md) remain owned by
-`business_billing` and `oauth_demo_finish`; no brand or domain purchase is
-selected.
+The [populated B05/L10 matrix](../../evidence/local-b05-l10-populated-tenant-matrix-b7efd48-20260916.json)
+and [two-company browser proof](../../evidence/local-two-company-switch-acceptance-20260916.json)
+are **local complete for their stated scopes**. They cover populated company
+resource isolation, role/switch readback, catalog/pack/draft separation, source
+lists/search/resolve, analytics, Eve audience denial, and Reader billing
+`403`. Fixed handlers, deterministic adapters, local PostgreSQL/filesystem
+state, and scanner-disabled fixtures remain explicit limits; hosted runtime,
+provider, worker, scanner, and customer IdP behavior are still open.
 
-## Current checkpoint — 16 September 2026
+The [marketing claims/pricing audit](../../evidence/marketing-claims-pricing-audit-20260916.md)
+was produced from `a74dc3e`, the exact cherry-pick of `968363c7` included in
+PR #60; its corrected access/preview copy is deployed. PR #59 delivered the
+contrast change and PR #60 provides the corrected-copy/public-route readback.
+The [Vercel entitlement record](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
+shows a Hobby/Fluid team: Hobby's 300-second function maximum and daily cron
+minimum are separate constraints, both exceeded by the candidate's 615-second
+function budget and 5-/15-minute schedules. Pro versus adaptation remains a
+hosting decision.
 
-The current documentation checkpoint is `eb23f54`, with production `main`
-`c870985`, candidate merge `2348002`, full candidate source evidence `a65c8a9`,
-and the latest focused recovery candidate `05136ac` (52 focused tests plus
-typecheck reported by its author).
-The production record reports all four deployments READY for the merged main
-SHA. The candidate record reports 1,240 passed / 40 skipped and its focused
-PostgreSQL, billing, storage, and populated-tenant checks passed. The passed
-checks are bounded local evidence and do not establish launch readiness.
+Market research is complete in the dated [developer/AI market update](../developer-ai-market-update-20260916.md)
+and related research records. It is not an unresolved external input. Brand and
+domain selection remains a business decision, alongside real customer IdP
+credentials, hosting plan, legal/support inputs, final offer, and Stripe-last
+activation.
 
-The current next actions are:
+## Current status matrix
 
-1. `tenant_auth_backend` and Hosting/Operations review the committed hosted
-   identity schema preparation and its 12-table/registry readback, then record
-   any migration, restore, or activation decision separately. Keep Better Auth
-   disabled with `providers: []` until separately approved customer IdP inputs
-   and recovery evidence exist.
-2. `billing_finish`, `business_billing`, and `runtime_finish` complete the
-   restore/over-cap, durable reservation ownership and compensation,
-   delayed-write finality, and billing/finalization barrier work, then rerun the
-   targeted candidate checks. `business_billing` must also repair and rerun the
-   local test checkout and portal routes, which currently return 404.
-3. `oauth_demo_finish` and `runtime_finish` complete the same-deployment hosted
-   archive install and worker/scanner acceptance, including negative stale,
-   revoked, and foreign-company cases. Native Linux hardware/CI and Windows
-   remain separate platform gaps.
-4. `root` keeps B14–B16, legal/support/entity, real IdP, final offer, and Stripe
-   account decisions open while preserving the later MCP, editor, OpenClaw,
-   SCIM, residency, and custom-domain roadmap items.
-
-| ID | Work | Owner | State / next proof |
+| ID | Work | Current owner | State and next proof |
 | --- | --- | --- | --- |
-| L01 | Separate marketing deployment | foundation_release | Production main `c870985` has the marketing deployment READY; public route readback is recorded in [production evidence](../../evidence/production-release-c870985-20260916.json), while full interactive/mobile review remains open |
-| L02 | Marketing usability, support and accurate claims | marketing_finish | Active; production pricing projection and compact mobile menu markup are deployed, while full responsive/accessibility review, support path, and claims review remain open |
-| L03 | Company portal navigation | tenant_ui | Navigation, overview, and connected token console are integrated (`d529e42`, `491ddc7`, `d30fcc8`); fresh 5407 operations readback passed locally, while final invitee/admin browser proof remains open |
-| L04 | Invitations and member administration | editor_test_stability | Integrated 574286e; 25 focused checks pass; inviter/invitee browser journey remains open |
-| L05 | Company-managed SSO | editor_test_stability / oauth_demo_finish | Signed local OIDC/SAML and PostgreSQL checks pass; hosted preparation `eb23f54` verifies 12 empty identity/SSO/token/operations tables while Better Auth remains disabled with `providers: []`. Customer IdP configuration, callback, migration/recovery, and hosted browser flow remain open |
-| L06 | Existing registry adoption and tenant workers | runtime_finish | Local Nitro/PostgreSQL/Files SDK/worker transfer and edge dependency-boundary checks pass; hosted worker/scanner acceptance and the full same-deployment install path remain open |
-| L07 | Company billing console and enforced usage | billing_finish | Local owner/reader console, usage persistence, signed webhook, and denial checks pass in the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json), but its test checkout and portal URLs return 404; costly caller enforcement, restore/over-cap handling, known-completed-write recovery, durable compensation, browser payment fixture, and Stripe activation remain open |
-| L08 | Tenant-aware Eve callbacks | tenant_eve | Eve entrypoints integrated f486ee6, 26 tests pass; deterministic worker transfer/denial is separately recorded, while registry provider/client wiring, cost recovery, and end-to-end tenant Eve flows remain open |
-| L09 | Login/logout browser journey | root / editor_test_stability | dc836e7 browser proof passed Acme sign-in, sign-out to login, and Globex sign-in with only Globex membership; local 5405 token create/use/revoke also passed, while real customer SSO remains open |
-| L10 | Full isolation and launch acceptance | root | Open; candidate `a65c8a9` covers populated two-company local surfaces and `05136ac` is the latest focused recovery candidate, but hosted boundaries, provider behavior, billing recovery, and the full L10/B05 acceptance bundle remain open |
+| L01 | Production/public deployments | root / launch integration | **Complete public slice:** PR #60 at `ee7d3c`, all four Vercel deployments READY, nine marketing routes and app health/config/robots/sitemap read back. Identity remains disabled; authenticated hosted acceptance is open. |
+| L02 | Marketing usability and claims | marketing_finish | **Production copy and contrast verified:** PR #60 deployed the `a74dc3e`/`968363c7` corrected access/preview wording, while PR #59 delivered contrast; the nine-route production readback passes. Remaining pricing/offer review belongs to the billing and commercial gates. |
+| L03 | Company portal and switch | tenant_ui / tenant acceptance | **Local complete for bounded scope:** B05/L10 matrix and two-company browser evidence cover Alpha-owner/Beta-reader switch, catalog/packs/drafts, and Reader billing denial. Hosted two-company runtime remains open. |
+| L04 | Identity and company SSO | tenant_auth_backend / oauth_demo_finish | **Local evidence complete; hosted pending:** Better Auth routes, local signed OIDC/SAML, invitation/member acceptance, schema/readback, and the bounded B31 identity-write contention measurement exist, while production is disabled (`providers: []`). The [local invitation record](../../evidence/local-invitation-membership-acceptance-20260916.json) covers owner create, member acceptance, Reader role denial, revocation, and expiry in disposable fixtures. The [B31 record](../../evidence/local-identity-contention-20260916.json) measured four runtime instances across eight companies: invitation p95 `551.73 ms` for one company and `489.59 ms` across eight, demotion p95 `1,019.8 ms`, and at most three lock waiters; all 32 invitations returned `200`, while 24 demotions returned `200` and eight expected last-owner denials returned `400`. The shared global lock remains retained; hosted database capacity and production contention remain open. Configure a real customer provider and callback only after hosted recovery and owner approval. |
+| L05 | Registry/source/search/analytics isolation | runtime_finish / tenant acceptance | **Local bounded evidence complete:** populated matrix covers resource, source, search, analytics, and Eve denials. Same-deployment publish → required scan → approval → CLI install and hosted negatives remain open. |
+| L06 | Worker, scanner, and Eve boundary | runtime_finish / tenant_eve | **Local runtime implementation/regression complete for B23/B24/B29:** durable tenant-review start/reconciliation, Eve reservation restart/eviction recovery, and multi-company worker dispatch/lease/retry paths are covered by local tests and PostgreSQL restore rehearsal. Hosted worker/scanner/model bindings, capacity, provider finality, and cost traces remain open. |
+| L07 | Billing schema and console | billing_finish | **Schema applied, activation open:** five hosted billing tables now exist empty with independent readback; local test-mode console passes. Metering/caller enforcement, hosted route readback, webhook/provider state, and Stripe activation remain open. |
+| L08 | Backup, restore, and recovery | Hosting/Operations / runtime_finish | **Bounded local recovery and serving complete:** 19-table local forward restore plus 11-object Blob read verification pass, and the [local serving-path record](../../evidence/local-serving-path-restore-skillsguard-20260916.json) proves Files SDK materialization, pinned SkillsGuard rescan, and exact Node route/transfer readback for the default organization. Coordinated hosted PostgreSQL/Blob freeze, IAM/provider finality, identity/billing state, and rollback remain open. |
+| L09 | CLI and edge portability | release / Hosting/Operations | **Mac complete; Linux emulated:** v0.4.0 native arm64 Mac lifecycle and emulated Linux amd64 lifecycle pass. Native Linux hardware/CI and Windows remain unverified. |
+| L10 | Full launch acceptance | root | **Hold:** local implementation and evidence are substantial, but hosted identity/runtime, coordinated recovery, provider/worker proof, hosting choice, and commercial inputs are not all closed. |
 
-## Verified evidence
+## Concrete next actions
 
-- [Production PR #57 evidence](../../evidence/production-release-c870985-20260916.json): main `c870985` has all four Vercel deployments READY at the exact merged SHA. The record includes frozen checks, 1,146 passed / 27 skipped in its full suite, public health/pricing readbacks, and the native-CI billing-admission waiver. Production identity remains deliberately disabled.
-- [Local candidate evidence](../../evidence/local-final-candidate-a65c8a9-20260916.json): source `a65c8a9` passed 173 files / 17 skipped and 1,240 tests / 40 skipped; five focused files passed 43 tests and the populated two-company matrix passed separately. The later focused recovery candidate `05136ac` is reported at 52 focused tests plus typecheck. This is local evidence with explicit provider, runtime, and recovery limits.
-- [Local billing-console evidence](../../evidence/local-billing-console-acceptance-20260916.json) at source `2348002`: owner onboarding, entitlement and PostgreSQL persistence, signed local webhook, reader denial, and browser-console cleanliness pass; local test checkout and portal pages both return 404, so the record is not paid-readiness evidence.
-- [Native macOS CLI evidence](../../evidence/local-macos-arm64-cli-qualification-20260916.json) records direct arm64 version/help and isolated install → verify → remove. [Linux evidence](../../evidence/local-linux-amd64-cli-qualification-20260916.json) records the equivalent v0.4.0 path in an emulated `linux/amd64` container on an arm64 Docker host. Native Linux hardware/CI and Windows remain unverified.
-- [Edge boundary evidence](../../evidence/edge-portability-boundary-cleanup-9ba903c.json) records the `1b043cb` cleanup, local Node/Vercel/Cloudflare builds, two focused files / 11 tests, and both local workerd compatibility modes. It does not prove a hosted edge deployment.
-- [Hosted identity readback](../../evidence/hosted-identity-migration-review-20260916.json) at `7140029` is the pre-preparation comparison. The [schema-preparation evidence](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json) records 12 empty target tables, verified columns/indexes, unchanged registry revision `232` and state-set digest, and an independent disabled/`providers: []` config readback; it does not prove customer IdP activation or hosted restore.
-- [Local billing/operator recovery evidence](../../evidence/local-billing-operator-restore-root-20260916.json) passes 16 PostgreSQL tests with no skips. The [metered reservation repro](../../evidence/local-metered-reservation-repro-root-20260916.json), [storage finality review](../../evidence/storage-recovery-finality-review.md), and [provider finality research](../../evidence/storage-provider-finality-research.md) keep B21/B22/B28 open for restore/over-cap, known-completed-write recovery, and durable billing compensation.
+1. `runtime_finish`, `tenant_auth_backend`, and Hosting/Operations bind the
+   Better Auth callback, outer tenant router, required scan, worker/Eve
+   audiences, source/cache controls, and billing routes in one selected
+   deployment. Record the existing two-company browser/CLI flow against that
+   deployment, including role/switch/revocation, stale/revoked/foreign-company
+   negatives, and publish → scan → approval → install.
+2. `billing_finish` proves hosted catalog, entitlement, usage, webhook/
+   reconciliation, and authorized-role route behavior from the now-applied
+   five-table schema without treating empty tables as billing activation. Keep
+   Stripe test/live setup behind the external account gate.
+3. Hosting/Operations and `runtime_finish` turn the local recovery records into
+   a coordinated proof: fence PostgreSQL and Blob state, verify application key
+   mapping and tenant scope, exercise provider-finality/negative retention,
+   and record rollback or forward-fix readback. The completed local recovery
+   implementation is not reopened.
+4. Hosting/Operations resolves the Hobby/Fluid plan choice or adapts the
+   candidate's independent 615-second function and 5-/15-minute cron settings,
+   then records capacity, monitoring, callback/device caps, and redacted
+   provider/secret readback.
 
-## External inputs still open
+## External decisions still open
 
-Brand selection; actual legal entity and support contact; real identity-provider application configuration; final commercial offer. Stripe account and live activation explicitly stay until the end. Continue independent implementation while these remain open.
+- Hosting plan: Hobby/Fluid adaptation versus Pro, including the independent
+  function and cron limits above.
+- Real customer identity-provider applications, callback origins, and approval;
+  production remains `providers: []`.
+- Brand/domain choice, legal entity, support contact, final commercial offer,
+  and policy/contact decisions.
+- Stripe account, products/prices, webhook, and live activation remain the last
+  commercial step.
 
-- **Identity/hosting:** review the additive schema preparation, then select and configure the customer IdP, callback origins, production env bindings, recovery point, and authenticated hosted browser flow. The local signed OIDC/SAML and 5407 settings evidence and the empty hosted schema do not close this gate; owners: `editor_test_stability` / `oauth_demo_finish` / `Hosting/Operations`.
-- **Hosted install and worker boundary:** the production registry now proves authenticated metadata and exact-byte/digest archive delivery for all three v0.4.0 targets, while the same-deployment positive publish → required scan → approval → CLI archive install and negative stale/revoked/foreign-company checks remain open. The local deterministic Nitro/worker proof is bounded evidence; owners: `runtime_finish` / `oauth_demo_finish`.
-- **Billing and commercial:** repair and rerun the local test checkout/portal routes, connect costly scan/storage/seat/Eve callers to durable reservations, complete test-mode lifecycle/reconciliation and plan projection, then record legal entity, support contact, offer, and Stripe account/readback. Owners: `billing_finish` / `business_billing` / Finance.
-- **Recovery and operations:** prove explicit default adoption, rollback/forward-fix, hosted migration/restore, monitoring, auth/callback/membership signals, queue age, scan freshness, billing webhooks, and Eve crash/restart reconciliation. Owners: Hosting/Operations / `runtime_finish` / `tenant_auth_backend`.
-- **Marketing:** finish separate deployment/cross-site and responsive/claim review, then record the brand/domain decision. Owners: `foundation_release` / `marketing_finish`.
+The dated market research is complete and informs these choices; it is not a
+pending external approval. Preserve later MCP, editor, OpenClaw, SCIM,
+residency, custom-domain, broad marketplace/source, organization-erasure, and
+dedicated-scanner roadmap items.
 
 ## Historical evidence — dated snapshots
 
+- The prior [PR #59 reader release record](../../evidence/production-release-reader-ui-884992f-20260916.json), [Hobby/Fluid entitlement readback](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json), [edge boundary record](../../evidence/edge-portability-boundary-cleanup-9ba903c.json), and [local billing console demo](../../evidence/local-billing-console-demo-acceptance-20260916.json) remain available as dated predecessor evidence. They do not override the current PR #60, candidate, or hosted boundaries above.
+- The [hosted identity migration review](../../evidence/hosted-identity-migration-review-20260916.json) and [schema-preparation record](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json) preserve the pre- and post-preparation comparisons: identity remains disabled and the target tables are empty. They do not prove a customer IdP callback or hosted traffic acceptance.
+- The [native Mac](../../evidence/local-macos-arm64-cli-qualification-20260916.json), [emulated Linux](../../evidence/local-linux-amd64-cli-qualification-20260916.json), [hosted CLI provision](../../evidence/hosted-cli-v0.4.0-private-provision-20260916.json), and [bounded Blob receipt](../../evidence/hosted-storage-receipt-rehearsal-20260916.json) records retain their exact v0.4.0 and storage-slice boundaries; native Linux hardware and Windows remain unverified.
 - 15 September recovery (`da2606b`/`3950816`) and hosting (`b15ed1b`) records are local/provider planning evidence. Hosted migration, restore, capacity, and monitoring remain open.
 - 15 September browser and invitation snapshots (`dc836e7`, `d529e42`, `205a28e`) remain fixture history. They do not prove customer identity, hosted onboarding, or the current B05/L10 matrix.
 - The earlier 5403 token-session rejection is superseded by the dated 5405 create/use/revoke/readback proof above; it remains historical context, not a release blocker.

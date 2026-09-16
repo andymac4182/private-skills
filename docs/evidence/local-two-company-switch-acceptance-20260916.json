@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-two-company-switch-browser-acceptance",
+  "capturedAt": "2026-09-15T23:46:19Z",
+  "source": {
+    "sourceHead": "253f1e060ed058ef84888229d88fa70505dc1284",
+    "appVersion": "0.4.0",
+    "origin": "http://127.0.0.1:5310",
+    "identityFixture": "local-identity-demo",
+    "persistence": "disposable loopback PostgreSQL and local filesystem registry state",
+    "billingAdapter": "LocalBillingAdapter",
+    "stripeAccount": false
+  },
+  "runtime": {
+    "browser": "headless Chrome via agent-browser",
+    "localOnly": true,
+    "productionWrites": false,
+    "liveCharges": false,
+    "externalScannerOrLlm": false,
+    "fixtureContainer": "pskills-company-switch-20260916",
+    "fixtureLeftRunning": false
+  },
+  "fixture": {
+    "human": "Alice Acme",
+    "companies": [
+      {
+        "label": "Switch Alpha",
+        "aliceRole": "owner",
+        "skill": "@alpha/switch-skill 1.0.0",
+        "pack": "@alpha/switch-pack 1.0.0",
+        "draft": "@alpha/switch-draft",
+        "skillCount": 1,
+        "packCount": 1,
+        "draftCount": 1
+      },
+      {
+        "label": "Switch Beta",
+        "aliceRole": "reader",
+        "skill": "@beta/switch-skill 1.0.0",
+        "pack": "@beta/switch-pack 1.0.0",
+        "draft": "@beta/switch-draft",
+        "skillCount": 1,
+        "packCount": 1,
+        "draftCount": 1
+      }
+    ],
+    "ownerFixtureSupport": "Ben Acme remained owner in Switch Beta while Alice was changed to reader; no external account or payment provider was used."
+  },
+  "flows": {
+    "ownerRoleAndSwitchReadback": {
+      "passed": true,
+      "observed": "The same signed-in Alice session read Switch Alpha as owner, then Switch Beta as reader, then restored Switch Alpha as owner and Switch Beta as reader through the company selector. GET /v1/me returned the corresponding role on each switch."
+    },
+    "alphaCatalogIsolation": {
+      "passed": true,
+      "route": "/app/catalog",
+      "observed": "Switch Alpha displayed one @alpha/switch-skill release and no @beta/switch-skill text."
+    },
+    "alphaPackIsolation": {
+      "passed": true,
+      "route": "/app/packs",
+      "observed": "Switch Alpha displayed one @alpha/switch-pack and no @beta/switch-pack text."
+    },
+    "alphaDraftIsolation": {
+      "passed": true,
+      "route": "/app/publish?draft=<alpha-fixture>",
+      "observed": "As Switch Alpha owner, the editable draft view displayed @alpha/switch-draft and no @beta/switch-draft text."
+    },
+    "betaCatalogIsolation": {
+      "passed": true,
+      "route": "/app/catalog",
+      "observed": "After switching to Switch Beta reader, the catalog displayed one @beta/switch-skill release and no @alpha/switch-skill text."
+    },
+    "betaPackIsolation": {
+      "passed": true,
+      "route": "/app/packs",
+      "observed": "After switching to Switch Beta reader, the packs view displayed one @beta/switch-pack and no @alpha/switch-pack text."
+    },
+    "crossCompanyDraftDenial": {
+      "passed": true,
+      "route": "/app/publish?draft=<foreign-fixture>",
+      "observed": "As Switch Beta reader, direct draft URLs for both the Beta fixture and the Alpha fixture rendered Upload draft unavailable without exposing either draft label."
+    },
+    "readerBillingDenial": {
+      "passed": true,
+      "route": "/app/billing",
+      "api": "/v1/billing",
+      "observed": "As Alice reader in Switch Beta, direct /app/billing rendered the server denial Owner or admin access is required for company billing; GET /v1/billing returned HTTP 403 with code BILLING_FORBIDDEN."
+    },
+    "mobileCompanySelector": {
+      "passed": true,
+      "viewport": "390x844",
+      "observed": "The compact header exposed an accessible Company combobox with Switch Alpha and Switch Beta options; selecting Alpha showed Switch Alpha content and owner role, and selecting Beta restored Switch Beta content and reader role. The selector measured 112x32 CSS pixels."
+    },
+    "browserErrors": {
+      "passed": true,
+      "observed": "agent-browser console and page-error reads were empty after the exercised routes."
+    }
+  },
+  "screenshots": [
+    "/private/tmp/private-skills-company-switch-owner-beta-catalog.png",
+    "/private/tmp/private-skills-company-switch-owner-beta-packs.png",
+    "/private/tmp/private-skills-company-switch-owner-beta-draft.png",
+    "/private/tmp/private-skills-company-switch-owner-alpha-catalog.png",
+    "/private/tmp/private-skills-company-switch-owner-alpha-packs.png",
+    "/private/tmp/private-skills-company-switch-owner-alpha-draft.png",
+    "/private/tmp/private-skills-company-switch-reader-beta-mobile.png",
+    "/private/tmp/private-skills-company-switch-reader-beta-billing-denied.png"
+  ],
+  "validation": [
+    {
+      "command": "npx --yes agent-browser --session company-switch-acceptance ...",
+      "result": "Passed authenticated headless route, selector, role, API, content-isolation, mobile viewport, screenshot, console, and page-error checks described above."
+    },
+    {
+      "command": "python3 -m json.tool docs/evidence/local-two-company-switch-acceptance-20260916.json",
+      "result": "Passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "Passed"
+    }
+  ],
+  "limits": [
+    "This is a local synthetic identity and LocalBillingAdapter proof only; no Stripe account, remote provider, customer, product, price, payment method, charge, or production database was contacted.",
+    "The inert catalog and pack fixtures used scanner-disabled local policy state and do not establish scanner safety or commercial launch readiness.",
+    "The proof covers two companies and one signed-in human; hosted deployment, real provider checkout, external identity, scanner/LLM execution, and production acceptance remain outside this record.",
+    "Screenshot paths are local ephemeral artifacts and are not a hosted product record."
+  ]
+}

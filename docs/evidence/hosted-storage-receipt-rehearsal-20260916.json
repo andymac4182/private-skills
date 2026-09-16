@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "mode": "hosted-execution-evidence",
+  "capturedAt": "2026-09-15T23:01:07Z",
+  "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+  "payload": {
+    "fixture": "canonical-receipt-rehearsal-bundle-v1",
+    "digest": "sha256:dfa0d9a1bb9841a2cdf6fe3e771bef3865834d4c9dce2dc8cbe2e1af83982caa",
+    "size": 177
+  },
+  "executionProvenance": {
+    "reviewedInertPlanBeforeFullShaPin": {
+      "sourceRevision": "49f31ea",
+      "prefix": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9",
+      "objectKey": "rehearsal/tenant-runtime/668ba81d-7ca4-4cc7-8b5a-f35991d4f0e9/sealed/bb8a233e35b5a9609de4c917c62061d4a380b34121c9747b",
+      "executed": false,
+      "mutationPerformed": false
+    },
+    "executedPlan": {
+      "planCommit": "52cff71ce18bb76755551ba6aad7c2a66ee4a0d8",
+      "sourceRevision": "49f31eace58149e5d7b4349a0465012f0facde39",
+      "prefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+      "objectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+      "executed": true,
+      "mutationPerformed": true
+    },
+    "firstPrefixMutation": false
+  },
+  "target": {
+    "registryProjectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "blobStoreId": "store_C0EMhnU7DH3uSMaw",
+    "provider": "vercel-blob",
+    "access": "private",
+    "prefix": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444",
+    "objectKey": "rehearsal/tenant-runtime/898b3a32-f435-42a2-9614-12d159564444/sealed/7cfb4204e71990434abe6c6b692d172a5960150be4973361",
+    "providerBinding": "files-sdk:vercel-blob:store_C0EMhnU7DH3uSMaw"
+  },
+  "preflight": {
+    "exactPrefixMatches": 0,
+    "exactPrefixHasMore": false,
+    "keysEmitted": false,
+    "credentialsEmitted": false
+  },
+  "local": {
+    "postgresHost": "127.0.0.1",
+    "metadataFailureProducedOrphan": true,
+    "receiptPersisted": true,
+    "freshClientRestart": true,
+    "negativeCasesScope": "local-disposable-filesystem-only; no additional hosted objects were created",
+    "negativeRetentionScenarios": [
+      {
+        "name": "unknown-provider-outcome-without-receipt",
+        "recoveryStatus": "retained",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesRetained": 24
+      },
+      {
+        "name": "binding-mismatch-receipt-retained",
+        "recoveryStatus": "retained",
+        "objectAfterRecovery": "present",
+        "billingStorageBytesRetained": 25
+      }
+    ]
+  },
+  "recovery": {
+    "receipt": "verified",
+    "status": "released",
+    "inspection": "deleted",
+    "objectAbsentAfterDelete": true,
+    "exactPrefixMatchesAfterDelete": 0,
+    "billingStorageBytesAfterRelease": 0,
+    "metadataState": "released"
+  },
+  "safety": {
+    "hostedRecoveryExecuted": true,
+    "mutationLimitedToPlanObject": true,
+    "existingObjectMutation": false,
+    "defaultRegistryMutation": false,
+    "productionAcceptanceClaim": false
+  }
+}

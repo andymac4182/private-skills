@@ -112,11 +112,20 @@ instead of masking a delegation failure.
    tenant from the active caller. The reviewer handler must use that tenant
    when reading candidate state and leases; it must never reuse the fixed
    default `organizationId` for a different tenant.
-3. The daily schedule in `apps/reviewer/agent/schedules/daily-review.ts`
-   currently has no tenant context. Keep it on the legacy default path until
-   the host dispatches one tenant-scoped run at a time, or change the
-   dispatcher to resolve and bind a provider for each tenant. Do not share a
-   candidate snapshot or review session across tenants.
+3. The host's `GET /internal/reviewer/dispatch` route enumerates the
+   server-owned Better Auth organizations and starts one tenant-scoped run at
+   a time. Its durable cursor advances bounded pages, and the host cron calls
+   it every 15 minutes throughout the UTC day, so a large organization list is
+   drained within the same daily window instead of starving IDs after the
+   first page. The route requires the deployment `CRON_SECRET`; it never
+   accepts a tenant selector from the request. Do not share a candidate
+   snapshot or review session across tenants.
+   Before reserving cost or calling Eve, the host durably changes the tenant's
+   dispatch record from `claimed` to `starting`. A `starting` or `uncertain`
+   record is fenced even after its lease expires and requires reconciliation;
+   it is never automatically retried after a host crash because the provider
+   may already have accepted the session. A definite provider rejection may
+   release its claim for the next scheduled attempt.
 4. Preserve the existing proposal-only boundary. Consolidation review cannot
    publish, merge, install, or bypass scanner admission.
 
@@ -134,8 +143,13 @@ interface EveTenantCostReservation {
     operation: string;
     idempotencyKey: string;
   }): Promise<{ reservationId: string }>;
-  settle(input: { reservationId: string }): Promise<void>;
+  settle(input: { reservationId: string; actualCostCents?: number }): Promise<void>;
   release(input: { reservationId: string }): Promise<void>;
+  reconcile?(input: {
+    reservationId: string;
+    actualCostCents: number;
+    operationKey?: string;
+  }): Promise<void>;
 }
 ```
 
@@ -143,6 +157,15 @@ The reservation id is host bookkeeping. It must not be placed in a prompt,
 model-visible tool result, or bearer claims unless a later contract explicitly
 requires that. Billing failures must prevent a new Eve session, while normal
 lease and scanner admission rules remain authoritative for completion.
+
+The Node host uses `createBillingEveCostReservation` to reserve a bounded
+`eveCostCents` estimate before opening a review session. A definite provider
+rejection releases that reservation with an explicit zero-cost reconciliation;
+an uncertain transport or settlement failure retains the deterministic
+reservation operation for retry. A later measured provider cost can call the
+adapter's optional `reconcile` method. Seats, retained storage, and scanner
+usage remain separate billing metrics owned by their respective admission
+paths.
 
 ## Verification boundary
 

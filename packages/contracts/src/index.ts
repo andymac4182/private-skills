@@ -58,6 +58,39 @@ export interface BundleFile { path: string; content: string; executable?: boolea
 export interface SkillBundle { format: 'pskills-bundle-v1'; files: BundleFile[]; }
 export interface StoredBlob { key: string; digest: Digest; size: number; }
 export interface BlobStore { put(bytes: Uint8Array): Promise<StoredBlob>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void>; }
+/**
+ * A bounded provider observation used by the storage-attempt reconciler.
+ * `unknown` is intentionally distinct from `absent`: a timeout, permission
+ * failure, or integrity failure must retain the metered reservation.
+ */
+export type StorageObjectInspection =
+  | { state: 'present'; key: string; digest: Digest; size: number }
+  | { state: 'absent'; key: string }
+  | { state: 'unknown'; key: string; reason: 'provider-error' | 'integrity' | 'limit' };
+
+/**
+ * BlobStore capability required for durable write recovery. The caller
+ * allocates the object identity before provider I/O, then retries the same
+ * key and verifies its bytes instead of creating an untracked object.
+ */
+export interface RecoverableBlobStore extends BlobStore {
+  allocateObjectKey(): string;
+  putAtKey(key: string, bytes: Uint8Array, metadata?: Record<string, string>): Promise<StoredBlob>;
+  inspectObject(key: string): Promise<StorageObjectInspection>;
+  /**
+   * Stable, non-secret identity for the provider configuration used by this
+   * store. Hosts should change it when the bucket, endpoint, account, or
+   * private object prefix changes. It is optional so legacy stores remain
+   * usable, but a verified write receipt cannot be minted without it.
+   */
+  readonly providerBinding?: string;
+  /**
+   * Provider-specific proof that the original write for this stable key has
+   * reached a terminal outcome and can no longer create the object later.
+   * An adapter must return false when it cannot establish that fact.
+   */
+  confirmWriteTerminated?(key: string): Promise<boolean>;
+}
 export type DistributionState = 'pending' | 'approved' | 'quarantined' | 'scan-error' | 'revoked';
 export type ScannerId = 'cisco-skill-scanner' | 'nvidia-skillspector' | 'skillsguard';
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
@@ -412,7 +445,79 @@ export interface ImportRequest {
   /** Provider version retained separately from the registry SemVer cache version. */
   sourceCatalogProviderVersion?: string;
 }
-export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public job input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public job input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+/** Durable settlement intent for the one scan reservation attached to a job. */
+export type MeteredScanSettlement = 'unused' | 'executed' | 'released';
+export interface Job { id: string; organizationId: string; kind: 'scan' | 'import'; state: 'queued' | 'running' | 'completed' | 'failed'; resourceId?: string; artifact?: StoredBlob; policyRevision: string; policy: Policy; import?: ImportRequest; upstream?: Upstream; /** Server-owned OpenClaw source target; never accepted from public input. */ openclawSource?: unknown; /** Server-owned source-catalog acquisition descriptor; never accepted from public input. */ sourceAcquisition?: unknown; /** Additional source adapters that have revalidated this physical source identity. */ sourceCatalogAliases?: Array<{ sourceId: string; externalId: string; configRevision: string }>; /** Server-owned metered reservation owner; workers must reuse this key across retries. */ meteredReservationKey?: string; /** Exact billing reservation lifecycle returned by server-side admission. */ meteredReservationGeneration?: number; /** Terminal worker intent; `unused` is reconciled only after the job transaction commits. */ meteredScanSettlement?: MeteredScanSettlement; createdAt: string; updatedAt: string; attempts: number; leaseToken?: string; leaseExpiresAt?: string; error?: string; }
+/**
+ * Durable ownership for a reserved artifact write.  The billing reservation
+ * remains charged while an attempt is pending or orphaned; a reconciler may
+ * release it only after it verifies that no object remains (or deletion has
+ * completed).  This is intentionally separate from a Job because publication
+ * and draft writes can fail before a job exists.
+ */
+export type StorageAttemptState = 'pending' | 'committed' | 'orphaned' | 'recovering' | 'releasing' | 'released';
+/**
+ * Durable marker for a metered correction that crossed an external boundary.
+ * `release-pending` is written before the billing zero and therefore also
+ * covers the crash window in which that call may still be in flight.
+ * `restore-pending` is written after a late metadata reference is observed
+ * following a settled zero and requires an exact ledger inverse.
+ */
+export type StorageBillingCorrection = 'release-pending' | 'restore-pending';
+export interface StorageAttempt {
+  id: string;
+  organizationId: string;
+  reservationKey: string;
+  digest: Digest;
+  size: number;
+  state: StorageAttemptState;
+  /** Exact metered reservation lifecycle captured at admission. */
+  reservationGeneration?: number;
+  /** Stable provider configuration identity captured before provider I/O. */
+  providerBinding?: string;
+  /** Server-created proof that this exact write completed and was verified. */
+  writeReceipt?: StorageWriteReceipt;
+  /** Set atomically around an external billing correction. */
+  billingCorrection?: StorageBillingCorrection;
+  createdAt: string;
+  updatedAt: string;
+  objectKey?: string;
+  jobId?: string;
+  /** A short-lived compare-and-set fence held during external recovery I/O. */
+  recoveryToken?: string;
+  recoveryStartedAt?: string;
+}
+
+/**
+ * A durable positive write result. This receipt is deliberately narrower than
+ * a provider error: callers may mint it only after the adapter has awaited the
+ * write and verified the exact returned bytes. An ambiguous write has no
+ * receipt and remains retained until provider finality is established.
+ */
+export interface StorageWriteReceipt {
+  kind: 'verified';
+  providerBinding: string;
+  key: string;
+  digest: Digest;
+  size: number;
+  completedAt: string;
+}
+/**
+ * Durable fence for a metered reservation while a caller is deciding whether
+ * it owns a queued job. `releasing` is committed before the external billing
+ * correction so a concurrent queue cannot acquire the same reservation in
+ * the gap between the ownership check and the correction.
+ */
+export type MeteredReservationOwnerState = 'owned' | 'releasing' | 'released';
+export interface MeteredReservationOwner {
+  reservationKey: string;
+  state: MeteredReservationOwnerState;
+  updatedAt: string;
+  jobId?: string;
+  /** Exact billing reservation lifecycle fenced by this owner row. */
+  reservationGeneration?: number;
+  releaseToken?: string;
+}
 export interface AuditEvent { id: string; organizationId: string; subject: string; action: string; resourceId?: string; createdAt: string; details?: Record<string, unknown>; }
 export interface RegistryState {
   metadataRevision?: number;
@@ -434,11 +539,156 @@ export interface RegistryState {
   installReceipts?: InstallReceipt[];
   /** Optional so states written before the interactive builder can still be loaded. */
   builderSessions?: SkillBuilderSessionRecord[];
+  /** Optional so pre-metering state documents remain readable. */
+  storageAttempts?: StorageAttempt[];
+  /** Optional durable ownership fences for metered reservations. */
+  meteredReservationOwners?: MeteredReservationOwner[];
   grants: TransferGrant[];
   audit: AuditEvent[];
+  /** Optional host-owned daily Eve dispatch records. */
+  tenantReviewDispatches?: TenantReviewDispatchRecord[];
+  /** Optional host-owned cursor for bounded tenant review fan-out. */
+  tenantReviewDispatchCursor?: TenantReviewDispatchCursor;
 }
 export interface StateRepository { read(organizationId: string): Promise<RegistryState>; transaction<T>(organizationId: string, updater: (state: RegistryState) => T): Promise<T>; }
+
+/** Durable scheduler bookkeeping; no prompts, credentials, or candidate text. */
+export interface TenantReviewDispatchRecord {
+  operationKey: string;
+  /** `starting` is durably committed before an external provider call. */
+  /** `uncertain` means the provider may have accepted the session; retries are fenced. */
+  state: 'claimed' | 'starting' | 'completed' | 'uncertain';
+  claimToken?: string;
+  leaseExpiresAt: string;
+  sessionId?: string;
+  updatedAt: string;
+  startingAt?: string;
+  completedAt?: string;
+  uncertainAt?: string;
+}
+
+/** Durable bounded queue state used when a deployment has more tenants than one page. */
+export interface TenantReviewDispatchCursor {
+  day: string;
+  pendingOrganizationIds: string[];
+  completedOrganizationIds: string[];
+  /** Tenants whose provider outcome is uncertain for this daily operation. */
+  blockedOrganizationIds?: string[];
+  updatedAt: string;
+}
 export interface Authenticator { authenticate(request: Request): Promise<Principal | null>; createSession?(token: string): Promise<{ cookie: string; principal: Principal } | null>; clearSessionCookie?(): string; }
+/**
+ * Host-neutral metered admission used by registry, authoring, and worker
+ * adapters. The billing package implements this shape without making the
+ * portable contracts depend on a provider SDK or a web framework.
+ */
+export interface MeteredUsageDelta {
+  seats?: number;
+  storageBytes?: number;
+  scans?: number;
+  eveCostCents?: number;
+}
+/**
+ * Result of a metered admission. The generation is the billing ledger's
+ * exact lifecycle token; older adapters may omit it and therefore cannot
+ * safely perform a delayed reconciliation.
+ */
+export interface MeteredUsageReservation {
+  idempotent: boolean;
+  reservationGeneration?: number;
+}
+
+/**
+ * Result of restoring the exact retained storage bytes from a released
+ * reservation. The returned generation is required for any later cleanup.
+ */
+export interface MeteredUsageRestoration extends MeteredUsageReservation {
+  /** Generation that was released before the inverse was applied. */
+  restoredFromGeneration: number;
+  reservationGeneration: number;
+}
+
+export type MeteredStorageRecoveryAction = 'restored' | 'fenced';
+
+/**
+ * Result of resolving an uncertain storage release. `fenced` advances only
+ * the lifecycle generation because the original charge is still present;
+ * `restored` inverses a committed zero reconciliation.
+ */
+export interface MeteredStorageRecoveryResolution {
+  action: MeteredStorageRecoveryAction;
+  idempotent: boolean;
+  restoredFromGeneration: number;
+  reservationGeneration: number;
+}
+export interface BillingUsageAdmission {
+  status(): { enabled: boolean };
+  reserveUsage(organizationId: string, delta: MeteredUsageDelta, operationKey: string): Promise<MeteredUsageReservation>;
+  /**
+   * Reconcile the exact reservation lifecycle returned by reserveUsage. A
+   * stale generation is rejected by the billing ledger without changing
+   * usage; callers must retain the value across retries.
+   */
+  reconcileUsage(organizationId: string, reservationKey: string, actual: MeteredUsageDelta, operationKey: string, reservationGeneration?: number): Promise<unknown>;
+  /**
+   * Restore the exact storage estimate from a released lifecycle. This is a
+   * compensation capability, not ordinary quota admission: it may put the
+   * organization above its current cap, while future admissions remain
+   * subject to the cap. Implementations must require the exact generation.
+   */
+  restoreUsage?(
+    organizationId: string,
+    reservationKey: string,
+    delta: Pick<MeteredUsageDelta, 'storageBytes'>,
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<MeteredUsageRestoration>;
+  /**
+   * Resolve the retain/reference branch of an uncertain storage release in
+   * one ledger transaction. A released source is restored above quota; a
+   * still-charged source is fenced without changing usage.
+   */
+  resolveStorageRecovery?(
+    organizationId: string,
+    reservationKey: string,
+    delta: Pick<MeteredUsageDelta, 'storageBytes'>,
+    operationKey: string,
+    reservationGeneration: number,
+  ): Promise<MeteredStorageRecoveryResolution>;
+  setSeatCount?(organizationId: string, seats: number, operationKey: string): Promise<unknown>;
+}
+
+/**
+ * Canonical input shared by registry queue admission and the worker retry
+ * path. Callers project request fields to match their durable deduplication
+ * semantics before hashing this value; the full request is never exposed as
+ * a billing operation key.
+ */
+export interface MeteredImportIdentity {
+  organizationId: string;
+  policyRevision: string;
+  request: ImportRequest;
+  upstream?: Pick<Upstream, 'id' | 'kind' | 'namespace' | 'baseUrl' | 'repositories' | 'configRevision' | 'credentialEnv'>;
+  sourceAcquisition?: unknown;
+  openclawSource?: unknown;
+}
+
+export function canonicalMeteredImportIdentity(input: MeteredImportIdentity): string {
+  const stable = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map((entry) => stable(entry)).join(',')}]`;
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stable(record[key])}`).join(',')}}`;
+  };
+  return stable({
+    organizationId: input.organizationId,
+    policyRevision: input.policyRevision,
+    request: input.request,
+    upstream: input.upstream ?? null,
+    sourceAcquisition: input.sourceAcquisition ?? null,
+    openclawSource: input.openclawSource ?? null,
+  });
+}
 export interface RegistryConfiguration {
   publicOrigin: string;
   maxBodyBytes: number;
@@ -449,4 +699,4 @@ export interface RegistryConfiguration {
   trustedSkillsShBaseUrls?: readonly string[];
 }
 export interface RegistryDependencies { repository: StateRepository; blobs: BlobStore; auth: Authenticator; config: RegistryConfiguration; }
-export interface WorkerCompletion { leaseToken: string; bundle?: SkillBundle; provenance?: Provenance; scanResults?: ScanResult[]; error?: string; }
+export interface WorkerCompletion { leaseToken: string; bundle?: SkillBundle; provenance?: Provenance; scanResults?: ScanResult[]; error?: string; /** Worker-authenticated marker; absent is conservative and keeps the reservation charged. */ scanInvocationStarted?: boolean; /** Exact billing reservation lifecycle observed at worker admission. */ meteredReservationGeneration?: number; }

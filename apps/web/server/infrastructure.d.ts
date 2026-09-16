@@ -7,7 +7,11 @@ declare module '#pskills-infrastructure' {
       service: import('../../../packages/billing/src/index').BillingService;
       invoiceHistory?: (lookup: import('../../../packages/billing/src/index').BillingInvoiceLookup) => Promise<readonly import('../../../packages/billing/src/index').BillingProviderInvoice[]>;
     };
+    /** Optional Node-owned durable storage-attempt reconciler. */
+    storageRecovery?: import('../../../packages/storage/src/index').StorageRecoveryService;
     hostedWorker?: (request: Request) => Promise<Response>;
+    /** Optional durable cross-company worker dispatcher for the cron route. */
+    hostedWorkerDispatcher?: (request: Request) => Promise<Response>;
     /** Optional signed worker factory bound to one server-selected tenant. */
     createHostedWorkerForTenant?: (organizationId: string) => ((request: Request) => Promise<Response>) | undefined;
     directoryTokenProvider: import('../../../packages/directory/src/index').SkillsTokenProvider;
@@ -30,6 +34,17 @@ declare module '#pskills-infrastructure' {
     apiTokens?: {
       handler: import('../../../packages/api-tokens/src/index').ApiTokenHandler;
       authenticator: import('../../../packages/contracts/src/index').Authenticator;
+    };
+    /** Optional platform-only Better Auth seat recovery capability. */
+    billingRecovery?: {
+      activeSeatReservations: (organizationId: string) => Promise<readonly import('../../../packages/billing/src/index').BillingSeatReservation[]>;
+      recoverFailedSeat: (input: {
+        organizationId: string;
+        operationKey: string;
+        subjectKind: 'member' | 'invitation';
+        subjectId: string;
+        proof: import('../../../packages/billing/src/index').BillingSeatRecoveryProof;
+      }) => Promise<import('../../../packages/billing/src/index').BillingSeatRecoveryResult>;
     };
     /** Optional Node-owned company SSO registry and Better Auth bridge. */
     companySso?: {
@@ -58,6 +73,8 @@ declare module '#pskills-infrastructure' {
     bootstrapAdoptionStore?: import('./bootstrap-adoption').BootstrapAdoptionStore;
     /** Optional Node-owned provider for verified private CLI release archives. */
     cliReleaseProvider?: import('../../../packages/cli-release/src/index').CliReleaseAssetProvider;
+    /** Server-owned Better Auth organization enumeration for daily Eve dispatch. */
+    listTenantReviewTargets?: () => Promise<readonly import('./tenant-review-dispatch').TenantReviewTarget[]>;
     directoryPacks?: import('../../../packages/core/src/index').RegistryDirectoryPackClient;
     createSearchIndex: (profile: import('../../../packages/search/src/types').EmbeddingProfile) => import('../../../packages/search/src/types').SemanticIndex;
   }>;

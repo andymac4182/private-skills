@@ -139,6 +139,9 @@ source credential is not selected by fallback:
 export PSKILLS_TARGET_DATABASE_URL='(isolated target connection supplied by the secret manager)'
 export PSKILLS_TARGET_BLOB_READ_WRITE_TOKEN='(isolated private target token supplied by the secret manager)'
 export PSKILLS_TARGET_STORAGE_PREFIX='restore-window'
+# Either the non-secret Vercel store ID or a bounded provider binding is required
+# when the token does not identify the target store.
+export PSKILLS_TARGET_BLOB_STORE_ID='(non-secret target store ID)'
 export PSKILLS_TARGET_INITIALIZE_SCHEMA=true
 
 scripts/restore-backup-postgres restore \
@@ -158,6 +161,14 @@ race between preflight and the metadata insert. The destination must remain
 isolated from ordinary writers for the rehearsal window; the lock prevents a
 normal concurrent insert from being silently overwritten, while a writer that
 arrives after the seed is still an operational isolation violation.
+
+Vercel Blob source capture may use `PSKILLS_STORAGE_BLOB_STORE_ID` or
+`PSKILLS_STORAGE_PROVIDER_BINDING`; target restore accepts the corresponding
+`PSKILLS_TARGET_BLOB_STORE_ID` or `PSKILLS_TARGET_STORAGE_PROVIDER_BINDING`.
+These values are required when the operation must mint or recover verified
+write receipts. Token-only storage remains usable, but recovery retains writes
+without a binding. Bindings are bounded non-secret configuration identities
+and never contain the Blob token.
 
 The manifest is private and mode-`0600`, but it is unsigned. The restore
 utility therefore treats it as operator-trusted backup metadata and does not

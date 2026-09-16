@@ -31,6 +31,12 @@ export interface WorkerClaimedJob {
   openclawSource?: unknown;
   /** Server-owned native source acquisition descriptor; never browser input. */
   sourceAcquisition?: unknown;
+  /** Server-owned metered reservation owner; retries must reuse this key. */
+  meteredReservationKey?: string;
+  /** Exact billing reservation lifecycle returned by worker admission. */
+  meteredReservationGeneration?: number;
+  /** Durable server settlement intent; workers only receive this for observability. */
+  meteredScanSettlement?: 'unused' | 'executed' | 'released';
   [key: string]: unknown;
 }
 
@@ -66,6 +72,10 @@ export interface CompletionPayload {
   bundle?: SkillBundle;
   /** Source evidence captured by the acquisition adapter. */
   provenance?: Provenance;
+  /** Set before the first scanner adapter invocation; omission is fail-closed. */
+  scanInvocationStarted?: boolean;
+  /** Exact billing reservation lifecycle captured before acquisition/scanning. */
+  meteredReservationGeneration?: number;
 }
 
 export interface WorkerCompletionResponse {

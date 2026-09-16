@@ -14,6 +14,8 @@ import { Route as AppRouteImport } from './routes/app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppSectionRouteImport } from './routes/app.$section'
+import { Route as BillingTestCheckoutRouteImport } from './routes/billing.test-checkout'
+import { Route as BillingTestPortalRouteImport } from './routes/billing.test-portal'
 import { Route as OrganizationAcceptInvitationRouteImport } from './routes/organization.accept-invitation'
 import { Route as AppTopicSlugRouteImport } from './routes/app.topic.$slug'
 
@@ -42,6 +44,16 @@ const AppSectionRoute = AppSectionRouteImport.update({
   path: '/$section',
   getParentRoute: () => AppRoute,
 } as any)
+const BillingTestCheckoutRoute = BillingTestCheckoutRouteImport.update({
+  id: '/billing/test-checkout',
+  path: '/billing/test-checkout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BillingTestPortalRoute = BillingTestPortalRouteImport.update({
+  id: '/billing/test-portal',
+  path: '/billing/test-portal',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OrganizationAcceptInvitationRoute =
   OrganizationAcceptInvitationRouteImport.update({
     id: '/organization/accept-invitation',
@@ -59,6 +71,8 @@ export interface FileRoutesByFullPath {
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/billing/test-checkout': typeof BillingTestCheckoutRoute
+  '/billing/test-portal': typeof BillingTestPortalRoute
   '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app/': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
@@ -67,6 +81,8 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/billing/test-checkout': typeof BillingTestCheckoutRoute
+  '/billing/test-portal': typeof BillingTestPortalRoute
   '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
@@ -77,6 +93,8 @@ export interface FileRoutesById {
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/app/$section': typeof AppSectionRoute
+  '/billing/test-checkout': typeof BillingTestCheckoutRoute
+  '/billing/test-portal': typeof BillingTestPortalRoute
   '/organization/accept-invitation': typeof OrganizationAcceptInvitationRoute
   '/app/': typeof AppIndexRoute
   '/app/topic/$slug': typeof AppTopicSlugRoute
@@ -88,6 +106,8 @@ export interface FileRouteTypes {
     | '/app'
     | '/login'
     | '/app/$section'
+    | '/billing/test-checkout'
+    | '/billing/test-portal'
     | '/organization/accept-invitation'
     | '/app/'
     | '/app/topic/$slug'
@@ -96,6 +116,8 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/app/$section'
+    | '/billing/test-checkout'
+    | '/billing/test-portal'
     | '/organization/accept-invitation'
     | '/app'
     | '/app/topic/$slug'
@@ -105,6 +127,8 @@ export interface FileRouteTypes {
     | '/app'
     | '/login'
     | '/app/$section'
+    | '/billing/test-checkout'
+    | '/billing/test-portal'
     | '/organization/accept-invitation'
     | '/app/'
     | '/app/topic/$slug'
@@ -114,6 +138,8 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
+  BillingTestCheckoutRoute: typeof BillingTestCheckoutRoute
+  BillingTestPortalRoute: typeof BillingTestPortalRoute
   OrganizationAcceptInvitationRoute: typeof OrganizationAcceptInvitationRoute
 }
 
@@ -154,6 +180,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSectionRouteImport
       parentRoute: typeof AppRoute
     }
+    '/billing/test-checkout': {
+      id: '/billing/test-checkout'
+      path: '/billing/test-checkout'
+      fullPath: '/billing/test-checkout'
+      preLoaderRoute: typeof BillingTestCheckoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/billing/test-portal': {
+      id: '/billing/test-portal'
+      path: '/billing/test-portal'
+      fullPath: '/billing/test-portal'
+      preLoaderRoute: typeof BillingTestPortalRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/organization/accept-invitation': {
       id: '/organization/accept-invitation'
       path: '/organization/accept-invitation'
@@ -189,6 +229,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
+  BillingTestCheckoutRoute: BillingTestCheckoutRoute,
+  BillingTestPortalRoute: BillingTestPortalRoute,
   OrganizationAcceptInvitationRoute: OrganizationAcceptInvitationRoute,
 }
 export const routeTree = rootRouteImport

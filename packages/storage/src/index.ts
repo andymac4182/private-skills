@@ -24,6 +24,33 @@ export {
   type StorageErrorCode,
 } from "./files.js";
 export {
+  STORAGE_PROVIDER_BINDING_MAX_LENGTH,
+  createVerifiedStorageWriteReceipt,
+  isVerifiedStorageWriteReceipt,
+  normalizeStorageProviderBinding,
+  storageProviderBinding,
+  type StorageWriteReceiptExpectation,
+} from "./receipt.js";
+export {
+  STORAGE_RECOVERY_CAPABILITY,
+  STORAGE_RECOVERY_SCOPE,
+  StorageRecoveryError,
+  StorageRecoveryService,
+  allocateStorageObjectKey,
+  createDurableStorageRecoveryProofVerifier,
+  isRecoverableBlobStore,
+  putStorageAttemptBlob,
+  type StorageRecoveryActor,
+  type StorageRecoveryErrorCode,
+  type StorageRecoveryOptions,
+  type StorageRecoveryProof,
+  type StorageRecoveryProofContext,
+  type StorageRecoveryReason,
+  type StorageRecoveryRequest,
+  type StorageRecoveryResult,
+  type StorageBillingCorrection,
+} from "./recovery.js";
+export {
   DEFAULT_GATEWAY_MAX_BODY_BYTES,
   DEFAULT_GATEWAY_TIMEOUT_MS,
   HttpBlobError,

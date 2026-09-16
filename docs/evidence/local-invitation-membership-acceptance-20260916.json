@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "kind": "local-invitation-membership-browser-acceptance",
+  "capturedAt": "2026-09-16T00:28:07Z",
+  "source": {
+    "sourceHead": "87a2f0c6740b9cd8141176d5b1697061ae113475",
+    "appVersion": "0.4.0",
+    "origin": "http://127.0.0.1:5312",
+    "identityFixture": "local-identity-demo",
+    "identityProvider": "Acme Identity (loopback deterministic fixture)",
+    "persistence": "disposable loopback PostgreSQL",
+    "productionWrites": false,
+    "realEmail": false,
+    "realExternalIdentityProvider": false
+  },
+  "priorEvidenceReviewed": {
+    "path": "docs/evidence/identity-browser-acceptance-20260915.json",
+    "sourceHead": "e18ad47b34fa1edfad46d0c12549cf2aa5258d5a",
+    "finding": "Historical local evidence covered owner invitation, invitee acceptance, Reader controls, and company enumeration, but explicitly left expiration and revocation open. This run retests the current candidate and closes those cases locally."
+  },
+  "fixture": {
+    "owner": "Alice Acme",
+    "invitee": "Ben Acme",
+    "acceptedCompany": "Invitation Journey Co",
+    "acceptedRole": "reader",
+    "lifecycleCompany": "Invitation Lifecycle Co",
+    "persistenceReadback": "Invitation Journey Co contained one owner and one reader member after the browser acceptance. Invitation Lifecycle Co contained one canceled invitation and one pending invitation whose expiry was moved into the past in the disposable database."
+  },
+  "flows": {
+    "ownerCreatesInvitation": {
+      "passed": true,
+      "route": "/app/company",
+      "observed": "Alice, signed in as the company owner, entered ben@acme.test, kept the Reader role, and used the actual Create invitation control. The page rendered a same-origin copy-link invitation."
+    },
+    "inviteeSignsInAndAccepts": {
+      "passed": true,
+      "route": "/organization/accept-invitation",
+      "observed": "A separate headless browser session opened the owner-created link, selected Ben Acme in the local Acme Identity provider, continued through the callback, reviewed the invitation details, and clicked Accept invitation. The session landed in Invitation Journey Co."
+    },
+    "acceptedMembershipReadback": {
+      "passed": true,
+      "route": "/app/company",
+      "api": "/v1/me",
+      "observed": "The invitee company page showed Alice as Owner and Ben as Reader. GET /v1/me returned HTTP 200 with the active Invitation Journey Co membership and reader role. PostgreSQL readback matched one owner and one reader member row."
+    },
+    "readerCannotInvite": {
+      "passed": true,
+      "route": "/app/company",
+      "api": "/api/auth/organization/invite-member",
+      "observed": "The Reader company page omitted the invite form and Create invitation control. A direct Reader POST returned HTTP 403 with code YOU_ARE_NOT_ALLOWED_TO_INVITE_USERS_TO_THIS_ORGANIZATION and no invitation."
+    },
+    "readerCannotUpdateMembership": {
+      "passed": true,
+      "api": "/api/auth/organization/update-member-role",
+      "observed": "A direct Reader attempt to change the existing owner membership returned HTTP 403 with code YOU_ARE_NOT_ALLOWED_TO_UPDATE_THIS_MEMBER; no role mutation occurred."
+    },
+    "revokedInvitationDenied": {
+      "passed": true,
+      "route": "/organization/accept-invitation",
+      "observed": "Alice created a second Reader invitation through the owner UI in Invitation Lifecycle Co. The owner session canceled it through the Better Auth organization endpoint. Ben opened the original link in the authenticated browser and saw Invitation unavailable with no Accept invitation control; neither company label was disclosed."
+    },
+    "expiredInvitationDenied": {
+      "passed": true,
+      "route": "/organization/accept-invitation",
+      "observed": "Alice created another Reader invitation through the owner UI. The disposable PostgreSQL fixture moved its expiresAt before the check, then Ben opened the link. The page showed Invitation unavailable and the expired-or-no-longer-available message with no Accept invitation control or company label."
+    },
+    "foreignCompanyDisclosure": {
+      "passed": true,
+      "observed": "While Ben's active session belonged to Invitation Journey Co, both the canceled and expired Invitation Lifecycle Co links rendered the generic unavailable state without exposing Invitation Lifecycle Co or Invitation Journey Co in the invitation page body."
+    },
+    "browserErrors": {
+      "passed": true,
+      "observed": "agent-browser console and page-error reads were empty for the owner and invitee sessions after the exercised flows."
+    }
+  },
+  "databaseCheck": {
+    "passed": true,
+    "command": "docker exec <disposable-container> psql ...",
+    "observed": [
+      "Invitation Journey Co|owner|1",
+      "Invitation Journey Co|reader|1",
+      "Invitation Lifecycle Co|canceled|1",
+      "Invitation Lifecycle Co|pending|1 (expiresAt set before now for this local expiry case)"
+    ]
+  },
+  "screenshots": [
+    "/private/tmp/private-skills-company-invitation-owner-lifecycle.png",
+    "/private/tmp/private-skills-company-invitation-reader-journey.png",
+    "/private/tmp/private-skills-company-invitation-revoked.png",
+    "/private/tmp/private-skills-company-invitation-expired.png"
+  ],
+  "validation": [
+    {
+      "command": "npx --yes agent-browser --session company-invitation-acceptance ...",
+      "result": "Passed owner sign-in, company creation, invitation creation, cancellation, and owner page checks."
+    },
+    {
+      "command": "npx --yes agent-browser --session company-invitation-invitee ...",
+      "result": "Passed invitee provider sign-in, actual acceptance, membership readback, Reader UI/API denials, revoked and expired invitation route checks, screenshots, console, and page-error checks."
+    },
+    {
+      "command": "python3 -m json.tool docs/evidence/local-invitation-membership-acceptance-20260916.json",
+      "result": "Passed"
+    },
+    {
+      "command": "CI=true node_modules/.bin/vitest run apps/web/src/views/InvitationAcceptanceView.test.ts apps/web/src/views/CompanyView.test.ts apps/web/src/lib/api.test.ts packages/identity/test/index.test.ts --no-file-parallelism",
+      "result": "4 test files passed; 26 tests passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "Passed"
+    }
+  ],
+  "limits": [
+    "The identity provider and users are deterministic loopback fixtures, not a real IdP; invitation delivery was copy-link and no email was sent.",
+    "The PostgreSQL database and filesystem state were disposable local fixtures; no hosted or production identity, email, database, or registry was contacted.",
+    "No external scanner, LLM, payment provider, or live charge was used. This evidence does not establish hosted acceptance or commercial launch readiness.",
+    "The cancellation endpoint and expiry timestamp mutation were local test setup for the provider lifecycle checks; the invite and accept path itself was exercised through the browser UI."
+  ]
+}

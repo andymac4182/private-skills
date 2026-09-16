@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "kind": "production-reader-ui-release-acceptance",
+  "capturedAt": "2026-09-15T23:35:27Z",
+  "source": {
+    "repository": "andymac4182/private-skills",
+    "pullRequest": 59,
+    "pullRequestUrl": "https://github.com/andymac4182/private-skills/pull/59",
+    "reviewedHead": "92b2ef038db9fac91a54b139682025f9b5dd154d",
+    "mergeCommit": "884992fdbba30a12dae29ddba7957746e8c1725d",
+    "previousMain": "ef8922c82eca9c4e008c39f49cbac5ae5addf6fc",
+    "mergedAt": "2026-09-15T23:30:04Z",
+    "mergeMethod": "merge commit"
+  },
+  "scope": {
+    "releaseType": "incremental UI and usability release",
+    "changedFiles": 9,
+    "insertions": 280,
+    "deletions": 34,
+    "dependencyChanges": false,
+    "configurationChanges": false,
+    "hobbyCompatibleConfigurationPreserved": true,
+    "protectedFilesVerifiedUnchanged": [
+      "vercel.json",
+      "package.json",
+      "pnpm-lock.yaml",
+      ".env.example",
+      "apps/web/server/runtime-node.ts"
+    ]
+  },
+  "productionDeployments": [
+    {
+      "project": "private-skills",
+      "target": "production",
+      "deploymentId": "dpl_C5DGrHWe7zA1TSdPRp1gZtXGfccy",
+      "deploymentUrl": "private-skills-b6bqdtzka-andrewmcclenaghan-6046s-projects.vercel.app",
+      "aliases": [
+        "private-skills-theta.vercel.app",
+        "private-skills-andrewmcclenaghan-6046s-projects.vercel.app",
+        "private-skills-git-main-andrewmcclenaghan-6046s-projects.vercel.app"
+      ],
+      "sourceSha": "884992fdbba30a12dae29ddba7957746e8c1725d",
+      "state": "READY",
+      "createdAt": "2026-09-15T23:30:09.151Z",
+      "readyAt": "2026-09-15T23:31:55.588Z",
+      "readback": "Vercel v13 deployment metadata matched deploymentId, target, state, and sourceSha"
+    },
+    {
+      "project": "private-skills-builder",
+      "target": "production",
+      "deploymentId": "dpl_BumJuNgTXYztZx4cufG736BmXmin",
+      "deploymentUrl": "private-skills-builder-nujw072yd.vercel.app",
+      "aliases": [
+        "private-skills-builder.vercel.app",
+        "private-skills-builder-andrewmcclenaghan-6046s-projects.vercel.app",
+        "private-skills-buil-git-a26f65-andrewmcclenaghan-6046s-projects.vercel.app"
+      ],
+      "sourceSha": "884992fdbba30a12dae29ddba7957746e8c1725d",
+      "state": "READY",
+      "createdAt": "2026-09-15T23:30:09.082Z",
+      "readyAt": "2026-09-15T23:31:18.325Z",
+      "readback": "Vercel v13 deployment metadata matched deploymentId, target, state, and sourceSha"
+    },
+    {
+      "project": "private-skills-marketing",
+      "target": "production",
+      "deploymentId": "dpl_4Sbt9mUg8qhFGEPN5Ymn8JJsSqPW",
+      "deploymentUrl": "private-skills-marketing-b064y39ix.vercel.app",
+      "aliases": [
+        "private-skills-marketing.vercel.app",
+        "private-skills-marketing-andrewmcclenaghan-6046s-projects.vercel.app",
+        "private-skills-mark-git-49a63e-andrewmcclenaghan-6046s-projects.vercel.app"
+      ],
+      "sourceSha": "884992fdbba30a12dae29ddba7957746e8c1725d",
+      "state": "READY",
+      "createdAt": "2026-09-15T23:30:09.057Z",
+      "readyAt": "2026-09-15T23:30:28.517Z",
+      "readback": "Vercel v13 deployment metadata matched deploymentId, target, state, and sourceSha"
+    },
+    {
+      "project": "private-skills-upload-reviewer",
+      "target": "production",
+      "deploymentId": "dpl_ExenWQUHRgjoXytSdKBfL6kNR5jo",
+      "deploymentUrl": "private-skills-upload-reviewer-1b423rzxu.vercel.app",
+      "aliases": [
+        "private-skills-upload-reviewer.vercel.app",
+        "private-skills-uplo-git-978b54-andrewmcclenaghan-6046s-projects.vercel.app",
+        "private-skills-upload-reviewer-andrewmcclenaghan-6046s-projects.vercel.app"
+      ],
+      "sourceSha": "884992fdbba30a12dae29ddba7957746e8c1725d",
+      "state": "READY",
+      "createdAt": "2026-09-15T23:30:09.041Z",
+      "readyAt": "2026-09-15T23:30:54.473Z",
+      "readback": "Vercel v13 deployment metadata matched deploymentId, target, state, and sourceSha"
+    }
+  ],
+  "publicReadback": {
+    "checkedAt": "2026-09-15T23:35:27Z",
+    "app": {
+      "origin": "https://private-skills-theta.vercel.app",
+      "routes": {
+        "/": 200,
+        "/health": 200,
+        "/auth/identity/config": 200
+      },
+      "healthBody": {
+        "ok": true,
+        "service": "private-skills",
+        "version": "0.4.0"
+      },
+      "identityConfigBoundary": {
+        "enabled": false,
+        "basePath": "/api/auth",
+        "providers": [],
+        "organizationEnabled": false
+      }
+    },
+    "builder": {
+      "origin": "https://private-skills-builder.vercel.app",
+      "routes": {
+        "/": 200
+      }
+    },
+    "marketing": {
+      "origin": "https://private-skills-marketing.vercel.app",
+      "routes": {
+        "/": 200,
+        "/product": 200,
+        "/pricing": 200,
+        "/docs": 200,
+        "/docs/getting-started": 200,
+        "/demo": 200,
+        "/faq": 200,
+        "/contact": 200,
+        "/legal": 200,
+        "/robots.txt": 200,
+        "/sitemap.xml": 200
+      },
+      "robotsBody": "User-agent: *\\nDisallow: /",
+      "sitemapBody": "empty public urlset",
+      "footerContrastRule": "production stylesheet uses var(--marketing-muted) for .marketing-footer-bottom"
+    },
+    "uploadReviewer": {
+      "origin": "https://private-skills-upload-reviewer.vercel.app",
+      "routes": {
+        "/": 200
+      }
+    }
+  },
+  "validation": [
+    {
+      "command": "CI=true pnpm install --frozen-lockfile",
+      "result": "passed",
+      "observed": "Completed in the isolated release checkout without tracked dependency changes."
+    },
+    {
+      "command": "node_modules/.bin/vitest run apps/web/src/components/RegistryShell.test.ts apps/web/src/views/CompanyView.test.ts",
+      "result": "passed",
+      "observed": "2 files, 14 tests passed."
+    },
+    {
+      "command": "pnpm --filter @private-skills/marketing test",
+      "result": "passed",
+      "observed": "1 file, 5 tests passed."
+    },
+    {
+      "command": "node_modules/.bin/tsc --noEmit && node_modules/.bin/tsc -p apps/reviewer/tsconfig.json",
+      "result": "passed"
+    },
+    {
+      "command": "node_modules/.bin/tsc --noEmit -p apps/marketing/tsconfig.json",
+      "result": "passed"
+    },
+    {
+      "command": "pnpm build",
+      "result": "passed",
+      "observed": "Web Vite client, SSR, and Nitro build completed; existing non-fatal bundle and dynamic-import warnings remained."
+    },
+    {
+      "command": "APP_ORIGIN=https://private-skills-theta.vercel.app MARKETING_ORIGIN=https://private-skills-marketing.vercel.app MARKETING_INDEXING=noindex node_modules/.bin/vite build",
+      "result": "passed",
+      "observed": "Marketing production build completed with documented non-secret build inputs."
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "nativeCiAdmission": {
+    "workflowRunId": 35035777958,
+    "waiver": "existing user-authorized native-CI billing/admission waiver",
+    "jobs": [
+      {
+        "name": "web (Node 24)",
+        "jobId": 104604457559,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "rust (x86_64-unknown-linux-gnu)",
+        "jobId": 104604457307,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "rust (aarch64-apple-darwin)",
+        "jobId": 104604457573,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "rust (x86_64-pc-windows-msvc)",
+        "jobId": 104604457466,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "build the Node container",
+        "jobId": 104604483924,
+        "conclusion": "skipped",
+        "stepsObserved": 0
+      }
+    ],
+    "interpretation": "The native jobs failed before executing steps; local functional checks and all four Vercel preview checks passed."
+  },
+  "limits": [
+    "Production identity and organization configuration remained disabled; this release does not activate providers or change environment/database state.",
+    "Production route probes covered public endpoints. Authenticated role UI evidence remains in docs/evidence/company-portal-usability-20260916.json from the disposable local fixture.",
+    "This is an incremental UI release and does not establish full business launch readiness."
+  ]
+}

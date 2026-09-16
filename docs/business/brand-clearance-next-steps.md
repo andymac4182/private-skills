@@ -123,4 +123,3 @@ day and run the checks that RDAP and a registrar cannot answer:
 5. If a name is selected, prepare a migration map for the product descriptor,
    CLI, package scopes, URLs, and existing documentation. Until that decision
    and the clearance work are complete, retain **Private Skills** and `pskills`.
-

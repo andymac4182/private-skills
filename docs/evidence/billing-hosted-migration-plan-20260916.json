@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "applied-with-independent-readback",
+  "preparedFrom": "77194d0f893387f53f2e325c806f48816c72ad84",
+  "source": {
+    "kind": "authenticated Vercel production DATABASE_URL environment-variable lookup by ID",
+    "credentialHandling": "The connection value was held in process memory only and was never printed or written to this repository or evidence file.",
+    "readOnly": true
+  },
+  "migration": {
+    "sqlPath": "packages/billing/migrations/0001_billing_schema.sql",
+    "manifestPath": "packages/billing/migrations/0001_billing_hosted_execution.manifest.json",
+    "runnerPath": "packages/billing/scripts/prepare-hosted-migration.ts",
+    "sqlSha256": "sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880",
+    "sqlByteLength": 4705,
+    "targetSchema": "public",
+    "serverVersion": "PostgreSQL 18.6",
+    "advisoryLockKey": "private-skills.billing-schema.v1",
+    "transaction": {
+      "isolation": "repeatable read",
+      "statementTimeoutMs": 15000,
+      "lockTimeoutMs": 3000,
+      "idleInTransactionTimeoutMs": 30000,
+      "searchPath": ["public", "pg_catalog"]
+    },
+    "expectedShape": {
+      "tables": 5,
+      "columns": 51,
+      "checks": 13,
+      "physicalIndexes": 9,
+      "rows": 0
+    }
+  },
+  "lockedBaseline": {
+    "namespace": {
+      "currentSchema": "public",
+      "currentSchemas": ["public", "pg_catalog"],
+      "searchPath": "public, pg_catalog"
+    },
+    "identity": {
+      "tableCount": 12,
+      "presentInPublic": 12,
+      "totalRows": 0
+    },
+    "registry": {
+      "table": "public.private_skills_registry_state",
+      "present": true,
+      "rowCount": 1,
+      "minimumRevision": 232,
+      "maximumRevision": 232,
+      "stateSqlType": "jsonb",
+      "stateJsonType": "string",
+      "stateBytes": 2395620,
+      "digest": "recorded in the local mode-0600 baseline artifact; omitted here"
+    },
+    "billing": {
+      "status": "absent",
+      "foundTables": 0,
+      "missingTables": 5
+    },
+    "capturedUnderAdvisoryLock": true,
+    "readOnly": true
+  },
+  "independentReadback": {
+    "phase": "pre-apply",
+    "readOnly": true,
+    "stableAgainstLockedBaseline": true,
+    "billingStatus": "absent",
+    "billingRows": 0
+  },
+  "decision": {
+    "status": "committed",
+    "exactAdditiveSqlApplicable": true,
+    "hostedDdlExecuted": true
+  },
+  "baselineArtifact": {
+    "generated": true,
+    "mode": "0600",
+    "encrypted": false,
+    "contents": "Bounded namespace, identity/registry counts, catalog metadata, and digests; no row payloads or credentials.",
+    "limitation": "This is not a complete encrypted PostgreSQL backup; the recorded AES-GCM backup/restore evidence below covers the recovery point used for the apply."
+  },
+  "initialApplyAttempt": {
+    "runnerCommit": "84e4045aadcce3ace919158e45fc1601cef0fe5e",
+    "processResult": "exit 1 with the runner's sanitized failure message",
+    "postFailureReadOnlyVerification": {
+      "billingStatus": "absent",
+      "billingTables": 0,
+      "identityRows": 0,
+      "registryRevision": 232,
+      "independentReadbackStable": true
+    },
+    "conclusion": "Transaction rolled back; no billing relation was committed."
+  },
+  "apply": {
+    "runnerCommit": "77194d0f893387f53f2e325c806f48816c72ad84",
+    "confirmation": "APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916",
+    "status": "committed",
+    "preflight": {
+      "billingStatus": "absent",
+      "billingFoundTables": 0,
+      "billingMissingTables": 5,
+      "identityRelations": 12,
+      "identityPresent": 12,
+      "identityRows": 0,
+      "registryRows": 1,
+      "registryRevision": 232
+    },
+    "transactionShape": {
+      "tableCount": 5,
+      "columnCount": 51,
+      "checkCount": 13,
+      "physicalIndexCount": 9,
+      "zeroRows": true
+    },
+    "postCommit": {
+      "readOnly": true,
+      "stable": true,
+      "billingStatus": "ready",
+      "billingTables": 5,
+      "billingRows": 0,
+      "identityRows": 0,
+      "registryRevision": 232
+    },
+    "baselineArtifact": {
+      "mode": "0600",
+      "encrypted": false,
+      "contents": "Bounded metadata and digests only; no credentials or row payloads."
+    }
+  },
+  "backupEvidence": {
+    "sourceCommit": "38915216d289afed66c608c9fe8e42a98137c4a0",
+    "kind": "AES-GCM encrypted full backup and isolated restore",
+    "sha256": "b395c43c40c21facb50f6474e89d078f59f49bab8a51333e5773da78edcf77dc",
+    "bytes": 590279,
+    "mode": "0600",
+    "restoreMatched": true,
+    "restoredRelations": 14,
+    "restoredIdentityRelations": 12,
+    "restoredSemanticRows": 2,
+    "restoredSemanticTables": 1,
+    "restoredRegistryRevision": 232,
+    "credentialHandling": "Key and backup material were retained outside this repository; no secret value is recorded here."
+  },
+  "applyProtocol": {
+    "confirmation": "APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916",
+    "requires": ["--apply", "PSKILLS_BILLING_MIGRATION_CONFIRM=APPLY_PRIVATE_SKILLS_BILLING_SCHEMA_20260916", "--baseline-output PATH"],
+    "sequence": [
+      "Acquire the transaction advisory lock and capture fresh identity, registry, namespace, and billing baselines.",
+      "Require all five billing relations to be absent in the public schema.",
+      "Run the exact reviewed SQL in the same transaction.",
+      "Validate every column name/type/nullability/default, primary and unique constraint, check definition, index column list/definition, and zero-row count.",
+      "Assert identity and registry baselines are unchanged before commit; any failure rolls back the transaction.",
+      "Read the committed catalog again on an independent read-only connection and require the same shape and empty rows."
+    ],
+    "noDestructiveStatements": true,
+    "noApplicationRowWrites": true,
+    "noWebhookFenceSynthesizedForCreateOnlyTarget": true
+  },
+  "verification": [
+    {
+      "command": "prepare-hosted-migration.ts --plan against targeted production DATABASE_URL",
+      "result": "passed",
+      "observed": "ready; billing absent; five missing relations; 12 identity relations present with zero rows; registry one row at revision 232; independent readback stable"
+    },
+    {
+      "command": "prepare-hosted-migration.ts --plan --baseline-output PATH",
+      "result": "passed",
+      "observed": "ready; artifact mode 0600; artifact contains no credential-shaped value"
+    },
+    {
+      "command": "pnpm exec vitest run packages/billing/test/hosted-migration-plan.test.ts packages/billing/test/schema-migration-review.test.ts --reporter=dot",
+      "result": "passed",
+      "tests": 8
+    },
+    {
+      "command": "prepare-hosted-migration.ts --apply --baseline-output PATH",
+      "result": "passed",
+      "observed": "committed on PostgreSQL 18.6; transaction shape 5 tables, 51 columns, 13 checks, 9 indexes, zero rows; independent readback stable"
+    },
+    {
+      "command": "read-only plan after initial guarded apply attempt",
+      "result": "passed",
+      "observed": "billing remained absent; all 12 identity relations remained present with zero rows; registry remained at revision 232; independent readback stable"
+    },
+    {
+      "command": "independent read-only billing catalog readback after apply",
+      "result": "passed",
+      "observed": "public schema ready; five relations, 51 columns, 13 checks, 9 indexes, zero billing rows; registry revision 232"
+    },
+    {
+      "command": "pnpm exec tsc --noEmit --pretty false",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "limitations": [
+    "The pre-apply target had no billing relations or billing data, so there was no existing billing shape or webhook history to fence or preserve.",
+    "The secure local artifact records metadata and digests, not a database backup; the separate AES-GCM backup/restore evidence covers recovery.",
+    "The apply created only the five billing relations; it did not enable billing, metering, a local payment provider, Stripe, or any environment value."
+  ]
+}

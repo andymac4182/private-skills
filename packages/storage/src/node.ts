@@ -3,6 +3,8 @@ import {
   type FilesClientLike,
   type FilesSdkBlobStoreOptions,
 } from "./files.js";
+import { digestBytes } from "./digest.js";
+import { normalizeStorageProviderBinding } from "./receipt.js";
 
 /** Providers supported by the current files-sdk adapter catalog. */
 export type FilesProvider =
@@ -236,10 +238,77 @@ export async function createNodeFilesClient(
 export async function createNodeFilesSdkBlobStore(
   options: NodeFilesSdkOptions
 ): Promise<FilesSdkBlobStore> {
+  const providerBinding = await resolveNodeStorageProviderBinding(options);
   const client = await createNodeFilesClient(options);
   return new FilesSdkBlobStore({
     client,
     maxBytes: options.maxBytes,
     prefix: options.prefix,
+    providerBinding,
   });
+}
+
+/**
+ * Resolve the stable identity used by recovery for a Node Files SDK store.
+ * Hosts may pass a validated non-secret identity when the provider does not
+ * expose one in its ordinary configuration (for example a Vercel Blob token
+ * without a store ID). This helper is exported so low-level callers that use
+ * `createNodeFilesClient` directly can apply the same check before wrapping
+ * the client in `FilesSdkBlobStore`.
+ */
+export async function resolveNodeStorageProviderBinding(
+  options: NodeFilesSdkOptions,
+): Promise<string | undefined> {
+  if (options.providerBinding !== undefined) {
+    const explicit = normalizeStorageProviderBinding(options.providerBinding);
+    if (!explicit) {
+      throw new Error(
+        "Files SDK providerBinding must be a bounded non-secret storage identity",
+      );
+    }
+    return explicit;
+  }
+  return derivedProviderBinding(options);
+}
+
+/**
+ * Build a stable non-secret identity when the host did not provide one.
+ * Credentials are intentionally excluded; rotation of a credential for the
+ * same bucket/account must not make a completed object look like another
+ * provider. Providers without a derivable public identity remain usable, but
+ * their writes cannot mint receipts until the host supplies `providerBinding`.
+ */
+async function derivedProviderBinding(options: NodeFilesSdkOptions): Promise<string | undefined> {
+  const storeId = options.credentials?.storeId;
+  if (
+    options.provider === "r2" &&
+    !options.credentials?.accountId &&
+    !options.endpoint
+  ) {
+    return undefined;
+  }
+  if (
+    options.provider === "azure" &&
+    !options.credentials?.accountName &&
+    !options.endpoint
+  ) {
+    return undefined;
+  }
+  if (options.provider === "vercel-blob" && !storeId) return undefined;
+  const identity = {
+    provider: options.provider,
+    prefix: options.prefix ?? "",
+    root: options.root ?? null,
+    bucket: options.bucket ?? null,
+    container: options.container ?? null,
+    region: options.region ?? null,
+    endpoint: options.endpoint ?? null,
+    forcePathStyle: options.forcePathStyle ?? null,
+    projectId: options.projectId ?? null,
+    accountId: options.credentials?.accountId ?? null,
+    accountName: options.credentials?.accountName ?? null,
+    storeId: storeId ?? null,
+  };
+  const digest = await digestBytes(new TextEncoder().encode(JSON.stringify(identity)));
+  return `files-sdk:${options.provider}:${digest}`;
 }

@@ -171,6 +171,70 @@ The worker defaults to `DockerExecutor`. Its scanner containers have no network,
 
 If a required scanner image or executable is unavailable, the resulting evidence is unsupported/error and the core policy remains closed. Install and test scanner images on the dedicated worker boundary before selecting `required` for production traffic.
 
+## Recover an ambiguous storage write
+
+The platform storage reconciler is mounted at `POST
+/internal/storage/recovery`. It is disabled unless the Node runtime has a
+recoverable sealed-object adapter and a separately provisioned operator
+credential. Configure exactly one of `PSKILLS_STORAGE_RECOVERY_TOKEN` or
+`PSKILLS_STORAGE_RECOVERY_TOKEN_HASH`, together with
+`PSKILLS_STORAGE_RECOVERY_ORGANIZATION_ID`; keep this credential separate from
+`PSKILLS_WORKER_TOKEN`. The credential is a bearer-only worker identity with
+the fixed `storage:recovery` scope. Tenant owner/admin sessions, API tokens,
+scanner workers, and hosted queue workers are rejected.
+
+The request body contains only the durable `attemptId`, plus optional
+`cleanupConfirmed` and `resume` flags:
+
+```sh
+curl -X POST "$PSKILLS_PUBLIC_ORIGIN/internal/storage/recovery" \
+  -H "Authorization: Bearer $PSKILLS_STORAGE_RECOVERY_TOKEN" \
+  -H 'content-type: application/json' \
+  --data '{"attemptId":"storage-attempt-id","cleanupConfirmed":true}'
+```
+
+The route derives the organization from the dedicated credential and creates
+the proof reference itself. Recovery is allowed only after the durable writer
+transition records an orphaned attempt (or a pending attempt is attached to a
+failed, lease-free job); queued or running jobs and still-pending provider
+writes retain their reservation. The configured adapter must also provide a
+provider-authoritative `confirmWriteTerminated(key)` result. A local timeout,
+rejected promise, failed lease, or one absent read cannot establish that a
+remote write will not materialize later, so false/unknown termination retains
+the charge. Once termination is confirmed, the reconciler persists a
+`releasing` metadata fence, verifies the exact object digest and size, requires
+explicit cleanup for a present object, confirms absence, then applies the
+exact billing-zero correction for the captured reservation generation.
+Provider-unknown inspection, persistence uncertainty, digest mismatch, and
+failed cleanup keep the attempt and charge held. A `recovering` or `releasing`
+fence can be retried with `{"resume":true}`; there is no age-based automatic
+deletion or release. Legacy attempts without a generation stay retained unless
+the operator explicitly enables `PSKILLS_STORAGE_RECOVERY_ALLOW_LEGACY_GENERATION`;
+the ledger still rejects a reopened key.
+
+If a metadata reference appears after the exact zero correction, the attempt is
+durably marked `billingCorrection: "restore-pending"`. Retry the same route
+until the stable inverse reservation succeeds; the marker is cleared only
+after that transaction, so a lost billing response is safe to retry and the
+original charge is not silently lost.
+
+Finality support is intentionally explicit. The Node factory's built-in
+filesystem, S3, R2, GCS, Azure, and Vercel Blob Files SDK adapters currently
+have no authoritative provider termination proof, so the mounted endpoint will
+retain their attempts and charges. The HTTP adapter also retains by default;
+only a gateway supplied with a `confirmWriteTerminated` implementation that
+fences the original writer and receives a provider-terminal acknowledgement
+can release a charge. Local and custom adapters may provide that callback. Do
+not treat a timeout, rejected request, failed lease, missing object, elapsed
+time, or tenant/operator assertion as provider finality; until the callback is
+backed by provider evidence, hosted recovery remains intentionally open.
+
+Provisioning this credential does not authorize production deletion by itself:
+the operator must choose `cleanupConfirmed` for the exact object, and the
+provider adapter remains the final deletion boundary. Exercise this route
+against a disposable repository and storage root before enabling it on a
+hosted deployment.
+
 Build and exercise the pinned engines with `./scripts/scanner-acceptance.sh all`. Use `PSKILLS_DOCKER_CONTEXT=desktop-linux` for a Docker Desktop controller, or the default daemon on a dedicated Linux worker. SkillsGuard can provide complete static evidence for supported files. Cisco's current JSON coverage and NVIDIA's offline OSV fallback are reported as degraded; they are useful in advisory mode, while required mode correctly blocks incomplete evidence. No scanner proves a skill harmless.
 
 Deployment code may inject local `ingest.validate` and `artifact.evaluate` hooks into `WorkerRunner`. Required hook rejection, timeout, or error denies approval. Automatic outbound webhook delivery is disabled; no remote URL receives skill content or job metadata automatically.
@@ -193,20 +257,45 @@ PSKILLS_IMAGE_SKILLSGUARD=registry.example/skillsguard@sha256:<64-lowercase-hex>
 
 The route accepts only `GET` and requires an exact
 `Authorization: Bearer $CRON_SECRET` value. The scheduler user-agent is not
-authentication. Each call claims at most one durable job and returns only
-`ok`, `claimed`, `jobId`, `allow`, or a generic error. Scanner reports,
-artifact bytes, worker tokens, and scanner stderr never appear in the route
-response. Vercel Sandbox creates a fresh ephemeral sandbox with deny-all
-network access and bounded input/output; the edge runtime cannot run this
-Node/Sandbox boundary.
+authentication. With the explicit Better Auth/PostgreSQL tenant dispatcher
+configured, one call walks a bounded keyset page of server-listed
+organizations, invokes only a server-constructed tenant worker for each, and
+persists a fenced cursor and per-company retry backoff. Without that
+dispatcher, the route retains the single default-company worker fallback.
+Scanner reports, artifact bytes, worker tokens, and scanner stderr never appear
+in the route response. Vercel Sandbox creates a fresh ephemeral sandbox with
+deny-all network access and bounded input/output; the edge runtime cannot run
+this Node/Sandbox boundary.
 
-The repository-root Vercel fallback cron invokes the route at `0 21 * * *`
-UTC. A successful `POST /v1/publish`, `/v1/imports`, or skill rescan also
-starts a bounded drain of at most two jobs through Nitro's `waitUntil` hook
-when the platform provides it. Queue leases and fencing remain authoritative;
-cron is liveness, not durable retry. Keep at least one reviewed required
-scanner configured and do not enable `PSKILLS_ALLOW_UNSCANNED` to fit a
-function limit.
+The repository-root Vercel fallback cron invokes the route every five minutes
+(`*/5 * * * *` UTC), so a bounded page continues on the same day and a failed
+company receives durable backoff retries. A successful `POST /v1/publish`,
+`/v1/imports`, or skill rescan also starts a bounded drain of at most two jobs
+through Nitro's `waitUntil` hook when the platform provides it. Queue leases
+and fencing remain authoritative; cron is liveness for the durable queue.
+Keep at least one reviewed required scanner configured and do not enable
+`PSKILLS_ALLOW_UNSCANNED` to fit a function limit.
+
+The hosted-worker dispatcher owns two separate PostgreSQL tables. Its
+`hostedWorkerDispatchSchemaSql()` migration is not run by default; set
+`PSKILLS_HOSTED_WORKER_DISPATCH_AUTO_MIGRATE=true` only as an explicit
+operator choice, or apply the exported migration during deployment. Bounds
+can be reduced with the `PSKILLS_HOSTED_WORKER_DISPATCH_*` settings shown in
+`.env.example`; the lease duration must outlive the invocation budget.
+
+When tenant-bound Eve review is enabled, the same deployment invokes
+`/internal/reviewer/dispatch` every 15 minutes (`*/15 * * * *` UTC). Each
+invocation drains one bounded cursor page and persists the next page in the
+registry state row, allowing all explicitly provisioned organizations to be
+attempted within the daily UTC window without making one function unbounded.
+Set `PSKILLS_REVIEW_DISPATCH_MAX_DURATION_MS` when the host needs a lower
+budget; the dispatcher keeps a persistence margin before the lease or platform
+deadline. A tenant review claim is durably marked `starting` before cost
+reservation or the Eve session call. `starting` and `uncertain` records remain
+fenced after lease expiry until an operator or reconciliation process resolves
+the provider outcome, so a host crash cannot automatically open a duplicate
+session. Definite provider rejections release their claim and can retry on the
+next scheduled invocation.
 
 Use immutable scanner references. A SkillsGuard source-built snapshot must
 include its source revision and prepared artifact digest:
@@ -251,9 +340,11 @@ Vercel `VERCEL_OIDC_TOKEN`). Keep these values in each project's runtime secret
 store; never expose them to the browser or put them in candidate text.
 
 The authored schedule is `0 22 * * *` UTC (08:00 Australia/Brisbane). The root
-Vercel fallback worker cron is separate at `0 21 * * *` UTC. Manual runs use
-the authenticated admin review action or the Eve server-side Client SDK; do
-not put the Eve token in a browser request. The deployed reviewer health probe
+Vercel hosted-worker cron is separate at `*/5 * * * *` UTC and dispatches up to
+32 organizations and 2 jobs per organization per invocation under its shipped
+240-second budget and 300-second lease. Manual runs use the authenticated admin
+review action or the Eve server-side Client SDK; do not put the Eve token in a
+browser request. The deployed reviewer health probe
 at `https://private-skills-reviewer.vercel.app/eve/v1/health` returned `200`,
 while an unauthenticated session request returned `401`. This verifies the
 reviewer service boundary only; the main registry project has not been claimed
@@ -290,7 +381,7 @@ Select the profile through the environment-backed runtime factory:
 | File state | `PSKILLS_STATE_PROVIDER=file`, `PSKILLS_STATE_PATH` | One API process only. Production requires `PSKILLS_SINGLE_PROCESS=true`; do not mount the same state directory into multiple API instances. |
 | PostgreSQL state | `PSKILLS_STATE_PROVIDER=postgres`, `DATABASE_URL` | Preferred multi-process Node profile. State is JSONB in `private_skills_registry_state`; updates are row-locked transactions. |
 | HTTP state | `PSKILLS_STATE_PROVIDER=http`, `PSKILLS_STATE_ENDPOINT`, `PSKILLS_STATE_TOKEN` | Use for edge or isolated metadata service. The server enforces the versioned HTTP CAS protocol. |
-| Files SDK storage | `PSKILLS_STORAGE_PROVIDER=filesystem`/`s3`/`r2`/`gcs`/`azure`/`vercel-blob` plus provider settings | Node loads the selected adapter. Credentials stay server-side and public object URLs are not accepted. |
+| Files SDK storage | `PSKILLS_STORAGE_PROVIDER=filesystem`/`s3`/`r2`/`gcs`/`azure`/`vercel-blob` plus provider settings; `PSKILLS_STORAGE_PROVIDER_BINDING` for a token-only Vercel Blob store, or `PSKILLS_STORAGE_BLOB_STORE_ID` when available | Node loads the selected adapter. Credentials stay server-side and public object URLs are not accepted. The provider binding is a bounded non-secret identity used by durable write-receipt recovery. |
 | HTTP blob gateway | `PSKILLS_STORAGE_PROVIDER=http`, `PSKILLS_STORAGE_ENDPOINT`, `PSKILLS_STORAGE_TOKEN` | Edge and provider-isolated profile. The gateway is authenticated, bounded, and digest-checking. |
 | Semantic search index | PostgreSQL with `PSKILLS_SEARCH_PROVIDER=pgvector`, or `PSKILLS_SEARCH_PROVIDER=state` | pgvector is the Node multi-process default when PostgreSQL is selected; StateRepository is the portable exact fallback. |
 

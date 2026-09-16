@@ -11,21 +11,28 @@ Observations are not completion evidence. Turn concrete next actions into backlo
 
 ## Next coordinator actions
 
-1. Keep the `c870985` production record, `2348002` candidate merge, focused
-   recovery candidate `05136ac`, and local platform evidence separated by
-   source and environment. The author reported 52 focused tests plus typecheck
-   for `05136ac`.
+1. Keep the `ef8922c` PR #58 production record, the unreleased runtime
+   candidate snapshot `c32f4a8`, and local platform evidence separated by
+   source and environment. The full recovery record at source `036fb746`
+   reports 178 test files passed / 18 skipped, 1,281 tests passed / 44
+   skipped, 34 direct PostgreSQL tests, and 2 composed Nitro tests; the earlier
+   86-focused/49-mixed/one-PostgreSQL result remains historical bounded
+   evidence.
 2. Have `tenant_auth_backend` and Hosting/Operations review the committed
    hosted identity schema preparation and its 12 empty-table/registry
    readback. Keep Better Auth disabled with `providers: []` until separately
    approved migration, recovery, and customer IdP evidence exists.
 3. Have `billing_finish`, `business_billing`, and `runtime_finish` close the
-   restore/over-cap, known-completed-write, durable compensation, and
-   billing/finalization recovery cases before treating the candidate as a
-   billing release.
+   G1 measurement-fence, restore/over-cap, known-completed-write, durable
+   compensation, owned-PUT receipt, and billing/finalization recovery cases
+   before treating the candidate as a billing release.
 4. Complete the hosted browser archive install and worker/scanner acceptance;
    keep native Linux hardware/CI and Windows separate from the passing macOS
    and emulated Linux CLI checks.
+5. Have `oauth_demo_finish` and Hosting/Operations resolve the observed
+   Hobby/Fluid team configuration against the candidate's 615-second function
+   budget and 5/15-minute cron schedules. The user decision between Pro and
+   adapting those settings is pending; do not deploy the candidate meanwhile.
 
 ## Capture template
 
@@ -243,21 +250,24 @@ The `40783cd` billing review found three additional B21/B28 gaps beyond that exe
 
 ### Current durable checkpoint — 16 September 2026
 
-The current shared documentation snapshot is `eb23f54`. Production `main`
-`c870985` is PR #57's merged source, and all four Git-triggered Vercel
+The current shared documentation snapshot is `c09a2d9`. Production `main`
+`ef8922c` is PR #58's merged source, and all four Git-triggered Vercel
 deployments are READY at that exact SHA. Its [sanitized production
-record](../../evidence/production-release-c870985-20260916.json) is the source
+record](../../evidence/production-release-ef8922c-20260916.json) is the source
 for deployment, public readback, and native-CI-waiver claims. The waiver records
 jobs blocked before runner execution; it is not a native test pass.
 
-Candidate merge `2348002` incorporates candidate source `a65c8a9`; focused
-recovery candidate `05136ac` is the latest author checkpoint, with 52 focused
-tests plus typecheck reported. The [local
-candidate record](../../evidence/local-final-candidate-a65c8a9-20260916.json)
-reports 173 files passed / 17 skipped and 1,240 tests passed / 40 skipped,
-with the focused billing, database, storage, and populated-tenant checks
-passing separately. These results are local and bounded; they do not establish
-hosted or commercial readiness.
+The unreleased runtime candidate snapshot is `c32f4a8`, based on bounded
+recovery source `036fb746` and incorporating billing schema review `6affd56`
+plus the production auto-migration guard `1cda201`. The [full local recovery
+record](../../evidence/local-storage-billing-restoration-20260916.json) reports
+178 test files passed / 18 skipped and 1,281 tests passed / 44 skipped;
+typecheck, Node production, Vercel Build Output, and Cloudflare edge builds
+passed; 34 tests passed directly against disposable loopback PostgreSQL and 2
+through the composed Nitro/PostgreSQL/Files SDK HTTP runtime. The bounded
+migration guard source `9ca72ce` passed 14 focused tests plus TypeScript. These
+results are local and bounded; final validation is running and no candidate
+deployment is claimed.
 
 The [native macOS CLI record](../../evidence/local-macos-arm64-cli-qualification-20260916.json)
 passes direct Apple Silicon version/help and isolated install → verify →
@@ -272,6 +282,14 @@ modes. The [boundary record](../../evidence/edge-portability-boundary-cleanup-9b
 shows removal of executable PostgreSQL, runtime-node, and Files SDK imports;
 hosted edge acceptance remains separate.
 
+The [Vercel entitlement record](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
+is a sanitized read-only capture of the current Hobby/Fluid team and its
+Git-linked projects; the separate reviewer project is not Git-linked. The
+candidate's Vercel output uses a 615-second function budget while the repository
+cron schedules run every 5 and 15 minutes, which is incompatible with the
+observed team configuration. The user decision between Pro and adapting the
+candidate schedule/budget is pending; no candidate deployment was made.
+
 Hosted identity remains deliberately inactive. Read-only evidence `7140029`
 is the pre-preparation comparison. The later [schema-preparation evidence](../../evidence/hosted-identity-schema-preparation-20260916-attempt-2.json)
 records 12 empty target tables with verified columns/indexes, unchanged registry
@@ -283,23 +301,33 @@ The earlier [identity readback](../../evidence/hosted-identity-migration-review-
 and [SQL manifest](../../evidence/hosted-identity-migration-review-20260916.sql-manifest.json)
 remain historical review artifacts.
 
+The [billing schema review](../../evidence/billing-schema-migration-review-20260916.json)
+at `6affd56` / `15acfde` records a sanitized read-only Vercel production
+baseline: all five expected billing relations are absent, no hosted DDL ran,
+and migration preparation is underway. A post-application read-only billing
+readback remains pending.
+
 Billing restore/over-cap handling, known-completed-write recovery, and durable
-billing compensation remain active. The local PostgreSQL operator/recovery
-proof passed 16 tests, while the metered crash repro leaves a reservation in
-`releasing`. The storage provider review says an aborted or lost write response
-is not terminal proof for Vercel Blob or generic S3-compatible paths, so a
-charge must remain until provider finality or a durable reconciliation result
-exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
+billing compensation remain active. The [local billing demo](../../evidence/local-billing-console-demo-acceptance-20260916.json)
+passes checkout/portal completion, signed test billing, PostgreSQL readback,
+and Reader denial through `LocalBillingAdapter`; it has no Stripe account or
+live charge. The earlier recovery record reports one PostgreSQL test, 86
+focused local tests, and 49 mixed checks; the newer full record above remains
+local and bounded. The storage provider review says an aborted or lost write
+response is not terminal proof for Vercel Blob or generic
+S3-compatible paths, so a charge must remain until provider finality or a
+durable reconciliation result exists. See the [metered repro](../../evidence/local-metered-reservation-repro-root-20260916.json),
 [storage review](../../evidence/storage-recovery-finality-review.md), and
 [provider research](../../evidence/storage-provider-finality-research.md).
 
-The local billing-console browser record at source `2348002` passes owner
-onboarding, free/Team entitlement readback, PostgreSQL persistence, signed
-webhook handling, reader denial, and browser-console cleanliness. Both local
-test checkout and portal URLs return 404 and require a fix plus rerun; this is
-not a Stripe or live-charge result. The ledger candidate `1d3ca34` reports 32
-unit tests, 14 PostgreSQL tests, and typecheck, but the executed recovery races
-above remain open. See the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json).
+An earlier local billing-console browser record at source `2348002` passes
+owner onboarding, free/Team entitlement readback, PostgreSQL persistence,
+signed webhook handling, reader denial, and browser-console cleanliness. Its
+test checkout and portal URLs returned 404 at that older snapshot; the later
+`3548be2` demo above resolves those local routes. This remains local test-mode
+evidence, not a Stripe or live-charge result. The ledger candidate `1d3ca34`
+reports 32 unit tests, 14 PostgreSQL tests, and typecheck, but the executed
+recovery races above remain open. See the [billing-console record](../../evidence/local-billing-console-acceptance-20260916.json).
 
 ### Additional billing recovery repros — 16 September 2026
 
@@ -313,7 +341,23 @@ pending. A reviewer reported 49 focused checks, including 35 billing units,
 plus typecheck, but those unit results do not close the executed races or the
 storage/billing acceptance gates.
 
+The local `9f46983` marketing follow-up records nine routes, axe cleanliness,
+and manual gradient contrast review, but it is not deployed; the PR #58
+production release carries the preceding comparison/mobile-copy increment.
+
 Brand selection, legal/entity and support details, real customer IdP setup,
 final commercial offer, and Stripe activation remain external inputs. B14–B16,
 the later MCP/editor/OpenClaw/SCIM/residency/custom-domain roadmap, and the
 hosted migration/restore gates remain open.
+
+### Frozen candidate qualification and local serving restore — 16 September 2026
+
+The [final local qualification record](../../evidence/final-candidate-local-qualification-20260916.json) was run from frozen runtime source `8cdbb30` and recorded in `1f8a814`: 180 test files passed / 19 skipped, 1,292 tests passed / 45 skipped, typecheck and Node, Vercel Build Output, and Cloudflare builds passed, 12 direct PostgreSQL files / 33 tests passed, and 1 composed Nitro file / 2 tests passed. The checks were local or disposable; skipped hosted and native checks remain outside the result.
+
+The [local serving-path restore record](../../evidence/local-serving-path-restore-skillsguard-20260916.json) from `d4fa33d` adds script and evidence only, with no runtime change. It verifies an exact PostgreSQL clone plus 11 Files SDK objects materialized locally, the normal pinned SkillsGuard rescan/job path, unchanged policy, and Node route/readback results for the default organization: files/resolve `200`, authorization `201`, descriptor/transfer `200` with the expected 325-byte digest, and unauthenticated catalog `401`. This closes the bounded local restored-serving path; coordinated hosted PostgreSQL/Blob freeze, IAM/provider state, Better Auth/SSO/token state, billing, and rollback remain open.
+
+The local runtime audit closes implementation/regression scope for B23, B24, and B29: `apps/web/src/tenant-review-dispatch.test.ts`, `packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts`, `packages/database/test/hosted-worker-dispatch.test.ts`, `tests/runtime-hosted-worker-dispatch.test.ts`, and `tests/operations-postgres-rehearsal.test.ts` cover durable start/reconciliation, restart/eviction recovery, bounded multi-company cursor/lease/retry dispatch, and restored dispatcher state. Hosted provider/model/worker binding and capacity evidence remain separate.
+
+### B31 identity-write contention measurement — 16 September 2026
+
+The [local identity-write contention record](../../evidence/local-identity-contention-20260916.json) is complete for its bounded disposable PostgreSQL scope. Four runtime instances covered one-company and eight-company invitation workloads plus eight-company owner demotions: invitation p95 was `551.73 ms` for one company and `489.59 ms` across eight, demotion p95 was `1,019.8 ms`, and the shared lock had at most three waiters. All 32 invitations returned `200`; 24 demotions returned `200` and eight expected last-owner denials returned `400`. The shared global advisory lock remains retained. Hosted database capacity, production contention, and a company-scoped-fence decision remain open.

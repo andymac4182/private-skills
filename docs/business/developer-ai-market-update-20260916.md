@@ -221,7 +221,7 @@ implied by this document.
 | Next | Add provider adapters for marketplace/plugin manifests, update and revoke semantics, and policy responsibility mapping. | Provider marketplaces can own distribution, but their access modes, update cadence, and policy controls differ. The adapter should make that boundary visible. |
 | Next | Add budget reservation, reconciliation, usage visibility, and per-operation explanations for storage, scans, and Eve/agent work. | Provider plans train buyers to expect quotas, pooled usage, budgets, or overage. Private Skills must provide the same operational clarity for its own work. |
 | Next | Add audit export, role separation, retention/export documentation, and deployment choices only where a pilot identifies a real blocker. | These are procurement requirements, but the current repository has no customer evidence to justify a larger enterprise surface. |
-| Later | Evaluate SSO/SCIM, private connectivity, additional provider targets, and marketplace partnerships after conformance and operating support are proven. | Provider accounts already own identity and distribution; broader integrations carry ongoing support and compatibility cost. |
+| Now | Treat company SSO as a launch requirement and complete the selected provider’s hosted validation; keep SCIM, additional provider targets, private connectivity, and marketplace partnerships for later expansion. | Company SSO is part of the launch acceptance boundary, while broader integrations carry ongoing support and compatibility cost. |
 
 The current brand remains **Private Skills**. ReleaseLoom and Vouchpack remain
 unselected shortlist candidates in the [brand/domain screen](brand-domain-shortlist.md);

@@ -1,0 +1,118 @@
+{
+  "capturedAt": "2026-09-15T22:56:59Z",
+  "capturedFor": "launch_integration",
+  "source": "Vercel CLI read-only API metadata; sanitized fields only",
+  "team": {
+    "id": "team_74K7woAfF1e48ypNcBTJ8NSC",
+    "slug": "andrewmcclenaghan-6046s-projects",
+    "billingPlan": "hobby",
+    "billingStatus": "active",
+    "resourceConfig": {
+      "concurrentBuilds": 1,
+      "elasticConcurrencyEnabled": false
+    }
+  },
+  "projects": [
+    {
+      "id": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+      "name": "private-skills",
+      "rootDirectory": null,
+      "nodeVersion": "24.x",
+      "resourceConfig": {
+        "fluid": true,
+        "functionDefaultRegions": ["iad1"],
+        "buildMachineType": "basic",
+        "buildMachineSelection": "fixed"
+      },
+      "targets": ["preview", "production"],
+      "git": {
+        "enabled": true,
+        "type": "github",
+        "repo": "private-skills",
+        "productionBranch": "main"
+      }
+    },
+    {
+      "id": "prj_XGjBsNLFAQyUx2vJXOX420wZe8VS",
+      "name": "private-skills-builder",
+      "rootDirectory": "apps/skill-builder",
+      "nodeVersion": "24.x",
+      "resourceConfig": {
+        "fluid": true,
+        "functionDefaultRegions": ["iad1"],
+        "buildMachineType": "basic",
+        "buildMachineSelection": "fixed"
+      },
+      "targets": ["preview", "production"],
+      "git": {
+        "enabled": true,
+        "type": "github",
+        "repo": "private-skills",
+        "productionBranch": "main"
+      }
+    },
+    {
+      "id": "prj_UCQvxPTnSjcTjwONPwLroAGvAb7m",
+      "name": "private-skills-marketing",
+      "rootDirectory": "apps/marketing",
+      "nodeVersion": "24.x",
+      "resourceConfig": {
+        "fluid": true,
+        "functionDefaultRegions": ["iad1"],
+        "buildMachineType": "basic",
+        "buildMachineSelection": "fixed"
+      },
+      "targets": ["preview", "production"],
+      "git": {
+        "enabled": true,
+        "type": "github",
+        "repo": "private-skills",
+        "productionBranch": "main"
+      }
+    },
+    {
+      "id": "prj_GKoyInqyArx6UlPHfmU90lX3RfNR",
+      "name": "private-skills-upload-reviewer",
+      "rootDirectory": "apps/upload-reviewer",
+      "nodeVersion": "24.x",
+      "resourceConfig": {
+        "fluid": true,
+        "functionDefaultRegions": ["iad1"],
+        "buildMachineType": "basic",
+        "buildMachineSelection": "fixed"
+      },
+      "targets": ["preview", "production"],
+      "git": {
+        "enabled": true,
+        "type": "github",
+        "repo": "private-skills",
+        "productionBranch": "main"
+      }
+    },
+    {
+      "id": "prj_hTlZ1zJWM6IVdi8F9PFwXtGIa4j2",
+      "name": "private-skills-reviewer",
+      "rootDirectory": "apps/reviewer",
+      "nodeVersion": "24.x",
+      "resourceConfig": {
+        "fluid": true,
+        "functionDefaultRegions": ["iad1"],
+        "buildMachineType": "basic",
+        "buildMachineSelection": "fixed"
+      },
+      "targets": ["production"],
+      "git": {
+        "enabled": false,
+        "type": null,
+        "repo": null,
+        "productionBranch": null
+      }
+    }
+  ],
+  "interpretation": {
+    "gitLinkedProductionProjects": 4,
+    "separateUnlinkedReviewerProject": true,
+    "candidateCronAndDurationAreNotProvenRegistered": true,
+    "candidateRequiresPlanGate": true
+  }
+}

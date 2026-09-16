@@ -1,0 +1,385 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "capturedAt": "2026-09-15T23:39:41.867Z",
+  "source": {
+    "kind": "Vercel production DATABASE_URL environment-variable lookup by ID",
+    "projectId": "prj_vw4QlLtnsPaZm8mtms1HuDqpSNti",
+    "environment": "production",
+    "environmentId": "1kbqAECTTd0rolIf",
+    "credentialHandling": "value held in process memory only; never printed or written to evidence",
+    "databaseUrlLogged": false
+  },
+  "consistency": {
+    "transaction": "REPEATABLE READ READ ONLY",
+    "exportedSnapshotPassedToPgDump": true,
+    "metadataAndDumpShareSnapshot": true
+  },
+  "backup": {
+    "format": "pg_dump-custom",
+    "pgDumpImage": "postgres:18",
+    "encryption": {
+      "algorithm": "aes-256-gcm",
+      "keyBytes": 32,
+      "keyMode": "0600",
+      "keyPathOutsideCheckout": true,
+      "ivStoredInHeader": true,
+      "authTagBytes": 16
+    },
+    "plainBytes": 590199,
+    "plainDigest": "sha256:4d49b74bbd7ffc9e144fdd6ee46186c4e027bd9a6be655b5df5e72b2a7f9cf85",
+    "encryptedBytes": 590279,
+    "encryptedDigest": "sha256:b395c43c40c21facb50f6474e89d078f59f49bab8a51333e5773da78edcf77dc",
+    "backupPath": "/private/tmp/pskills-full-postgres-recovery-XTAwL8/database.dump.pgdump.aes256gcm",
+    "keyPath": "/private/tmp/pskills-full-postgres-recovery-XTAwL8/backup.key",
+    "manifestPath": "/private/tmp/pskills-full-postgres-recovery-XTAwL8/backup-manifest.json",
+    "backupFileMode": "0600",
+    "keyFileMode": "0600",
+    "keyValueRecorded": false,
+    "tableRowDigestAlgorithm": "md5"
+  },
+  "sourceReadback": {
+    "tableCount": 14,
+    "catalogDigest": "sha256:8e7f853ca4dba7f7e1bd8bc7376d6df709d79d3ad3b9460f6b4ebba9473c19af",
+    "tables": [
+      {
+        "schema": "public",
+        "table": "account",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "invitation",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "member",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "organization",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_company_sso_providers",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_identity_operations_events",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_registry_state",
+        "tableType": "BASE TABLE",
+        "rowCount": "1",
+        "rowDigest": "90526e2da641b33041e607b4c1c63132"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_semantic_index",
+        "tableType": "BASE TABLE",
+        "rowCount": "2",
+        "rowDigest": "114a992ae6ea59376b8e91a3fcc9a972"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_service_tokens",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "rateLimit",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "session",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "ssoProvider",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "user",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "verification",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      }
+    ],
+    "identityTableCount": 12,
+    "identityTables": [
+      {
+        "schema": "public",
+        "table": "user",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "account",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "session",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "verification",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "organization",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "member",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "invitation",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "rateLimit",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "ssoProvider",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_company_sso_providers",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_identity_operations_events",
+        "tableType": "BASE TABLE"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_service_tokens",
+        "tableType": "BASE TABLE"
+      }
+    ],
+    "registry": {
+      "table": {
+        "schema": "public",
+        "table": "private_skills_registry_state"
+      },
+      "rowCount": "1",
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypes": [
+        "jsonb"
+      ],
+      "stateJsonbTypes": [
+        "string"
+      ],
+      "driverStateTypes": [
+        "string"
+      ],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:7c19fa0faaba879a23dae7c202ca66ba7bbaabd0a41fc6aa5d58b2a69f1b4927",
+      "stateContentDigest": "sha256:b38340c3914c11619f11b721d659a3c5089060267639fd65362d8617f214afd7",
+      "embeddedRevisionMatches": true
+    }
+  },
+  "restoredReadback": {
+    "tableCount": 14,
+    "catalogDigest": "sha256:8e7f853ca4dba7f7e1bd8bc7376d6df709d79d3ad3b9460f6b4ebba9473c19af",
+    "tables": [
+      {
+        "schema": "public",
+        "table": "account",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "invitation",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "member",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "organization",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_company_sso_providers",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_identity_operations_events",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_registry_state",
+        "tableType": "BASE TABLE",
+        "rowCount": "1",
+        "rowDigest": "90526e2da641b33041e607b4c1c63132"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_semantic_index",
+        "tableType": "BASE TABLE",
+        "rowCount": "2",
+        "rowDigest": "114a992ae6ea59376b8e91a3fcc9a972"
+      },
+      {
+        "schema": "public",
+        "table": "private_skills_service_tokens",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "rateLimit",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "session",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "ssoProvider",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "user",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      },
+      {
+        "schema": "public",
+        "table": "verification",
+        "tableType": "BASE TABLE",
+        "rowCount": "0",
+        "rowDigest": "d41d8cd98f00b204e9800998ecf8427e"
+      }
+    ],
+    "identityTableCount": 12,
+    "registry": {
+      "table": {
+        "schema": "public",
+        "table": "private_skills_registry_state"
+      },
+      "rowCount": "1",
+      "minRevision": "232",
+      "maxRevision": "232",
+      "stateSqlTypes": [
+        "jsonb"
+      ],
+      "stateJsonbTypes": [
+        "string"
+      ],
+      "driverStateTypes": [
+        "string"
+      ],
+      "minStateBytes": 2395620,
+      "maxStateBytes": 2395620,
+      "stateSetDigest": "sha256:7c19fa0faaba879a23dae7c202ca66ba7bbaabd0a41fc6aa5d58b2a69f1b4927",
+      "stateContentDigest": "sha256:b38340c3914c11619f11b721d659a3c5089060267639fd65362d8617f214afd7",
+      "embeddedRevisionMatches": true
+    },
+    "matchesSourceReadback": true
+  },
+  "target": {
+    "image": "pgvector/pgvector:pg18",
+    "containerName": "pskills-full-pg-restore-mu3bdlhl-3ffa573c85",
+    "host": "127.0.0.1",
+    "port": 61860,
+    "database": "private_skills_restore",
+    "retainedForInspection": true,
+    "sourceContainersChanged": false
+  },
+  "coverage": {
+    "databaseLocalObjects": "pg_dump custom format over the complete database; all non-system schemas selected by pg_dump",
+    "verifiedBaseTableCatalogAndRows": true,
+    "verifiedIdentityTables": 12,
+    "verifiedRegistryJsonbTypeShapeAndRevision": true,
+    "blobObjects": "not included; no Blob listing, write, or delete attempted",
+    "externalProviderState": "not included",
+    "tableRowDigestAlgorithm": "md5",
+    "registryAggregateDigestAlgorithm": "sha256 over sorted per-row md5 digests"
+  },
+  "limitations": [
+    "pg_dump captures database-local schema and data but not cluster-global roles, tablespaces, or provider-side configuration.",
+    "The restored target is a disposable PostgreSQL 18 container with ownership/privilege restoration disabled; it proves data/catalog recovery, not production role parity.",
+    "The encrypted recovery point does not include Files SDK Blob objects, billing-provider state, identity-provider credentials, or deployment environment values.",
+    "The target container is retained as a new isolated container for inspection; no existing container or source data was removed or changed."
+  ]
+}

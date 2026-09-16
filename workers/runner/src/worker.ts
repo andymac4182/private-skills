@@ -7,7 +7,15 @@ import {
   type WorkerAcquisitionOptions,
   type WorkerOpenClawProof,
 } from './acquisition.js';
-import type { HookConfiguration, SkillBundle } from '../../../packages/contracts/src/index.js';
+import {
+  canonicalMeteredImportIdentity,
+  type BillingUsageAdmission,
+  type HookConfiguration,
+  type ImportRequest,
+  type MeteredUsageReservation,
+  type SkillBundle,
+  type Upstream,
+} from '../../../packages/contracts/src/index.js';
 import { encodeBundle } from '../../../packages/storage/src/index.js';
 import {
   createDefaultScannerAdapters,
@@ -19,6 +27,8 @@ import {
 } from '../../../packages/scanners/src/index.js';
 
 export interface WorkerRunnerOptions extends WorkerApiClientOptions {
+  /** Optional server-side metered admission; omitted for legacy disabled billing. */
+  billing?: BillingUsageAdmission;
   adapters?: Map<string, ScannerAdapter> | ScannerAdapter[];
   executor?: CommandExecutor;
   /** Trusted scanner image references, pinned by deployment configuration. */
@@ -126,7 +136,20 @@ export class WorkerRunner {
     let importedOpenClawSource = false;
     let scanArtifactDigest: `sha256:${string}`;
     let completionSubmitted = false;
+    let billing: BillingUsageAdmission | undefined;
+    let scanReservationKey: string | undefined;
+    let scanReservationGeneration: number | undefined;
+    let scanInvocationStarted = false;
     try {
+      billing = this.options.billing?.status().enabled === true ? this.options.billing : undefined;
+      // Reserve before source acquisition, artifact download, materialization,
+      // or scanner execution. The operation key is the durable job identity,
+      // so queue-time reservations and worker retries are idempotent.
+      if (billing) {
+        scanReservationKey = await scanReservationKeyForJob(job);
+        const reservation = await billing.reserveUsage(job.organizationId, { scans: 1 }, scanReservationKey);
+        scanReservationGeneration = reservationGenerationFromAdmission(reservation);
+      }
       let bundleForScan: SkillBundleInput;
       if (job.kind === 'import') {
         const imported = await acquireImportJob(job, {
@@ -169,7 +192,16 @@ export class WorkerRunner {
         files: materialized.files,
       }, signal);
       const runs = await runConfiguredScanners(baseRequest, normalizePolicies(policy), {
-        adapters: this.adapters,
+        adapters: this.adapters.map((adapter) => ({
+          ...adapter,
+          scan: async (request, executor) => {
+            // Set the flag before entering provider code. A timeout or thrown
+            // promise after this point is an uncertain external invocation and
+            // therefore keeps the reserved scan charged.
+            scanInvocationStarted = true;
+            return adapter.scan(request, executor);
+          },
+        })),
         executor: this.executor,
         imageForScanner: (id) => this.options.scannerImages?.[id],
       });
@@ -200,6 +232,8 @@ export class WorkerRunner {
       }
       const completion = await this.client.complete(job, {
         scanResults,
+        scanInvocationStarted,
+        ...(scanReservationGeneration === undefined ? {} : { meteredReservationGeneration: scanReservationGeneration }),
         artifactDigest: scanArtifactDigest,
         attempt: job.attempt,
         ...(importedBundle === undefined ? {} : { bundle: importedBundle, provenance: importedProvenance }),
@@ -222,7 +256,7 @@ export class WorkerRunner {
       return { claimed: true, jobId: job.id, scannerResults: scanResults, allow: evaluation.allow };
     } catch (error) {
       const message = sanitizeError(error);
-      if (!completionSubmitted) await this.completeFailure(job, token, message, signal);
+      if (!completionSubmitted) await this.completeFailure(job, token, message, signal, scanInvocationStarted, scanReservationGeneration);
       await this.emit({ type: 'failed', jobId: job.id, error: message });
       return { claimed: true, jobId: job.id, error: message };
     } finally {
@@ -239,10 +273,19 @@ export class WorkerRunner {
     }
   }
 
-  private async completeFailure(job: WorkerClaimedJob, token: string, error: string, signal?: AbortSignal): Promise<void> {
+  private async completeFailure(
+    job: WorkerClaimedJob,
+    _token: string,
+    error: string,
+    signal?: AbortSignal,
+    scanInvocationStarted = false,
+    scanReservationGeneration?: number,
+  ): Promise<void> {
     try {
       await this.client.complete(job, {
         error,
+        scanInvocationStarted,
+        ...(scanReservationGeneration === undefined ? {} : { meteredReservationGeneration: scanReservationGeneration }),
         artifactDigest: job.artifactDigest ?? job.artifact?.digest,
         attempt: job.attempt,
       }, signal);
@@ -326,6 +369,63 @@ function normalizeJobPolicy(job: WorkerClaimedJob): Policy {
     allowUnscanned: false,
     scanners: job.scanners ?? [],
   };
+}
+
+async function scanReservationKeyForJob(job: WorkerClaimedJob): Promise<string> {
+  if (
+    typeof job.meteredReservationKey === 'string' &&
+    /^private-skills:scan:[^\s]{1,512}$/u.test(job.meteredReservationKey)
+  ) return job.meteredReservationKey;
+  if (job.kind !== 'import') return `private-skills:scan:${job.id}`;
+  const importValue = job.import ?? job.importRequest;
+  if (!isWorkerObject(importValue)) return `private-skills:scan:${job.id}`;
+  const request = importValue as unknown as ImportRequest;
+  const policyRevision = job.policyRevision ?? job.policy?.revision;
+  if (typeof policyRevision !== 'string' || policyRevision.length === 0) return `private-skills:scan:${job.id}`;
+  const includeVersion = request.sourceCatalogId === undefined &&
+    request.sourceReference === undefined &&
+    request.feedId === undefined &&
+    job.openclawSource === undefined;
+  const identity = canonicalMeteredImportIdentity({
+    organizationId: job.organizationId,
+    policyRevision,
+    request: includeVersion ? request : { ...request, version: undefined as unknown as string },
+    upstream: workerMeteredUpstream(job.upstream),
+    sourceAcquisition: job.sourceAcquisition,
+    openclawSource: job.openclawSource,
+  });
+  return `private-skills:scan:${digestBytes(new TextEncoder().encode(identity))}`;
+}
+
+function workerMeteredUpstream(value: unknown): Pick<Upstream, 'id' | 'kind' | 'namespace' | 'baseUrl' | 'repositories' | 'configRevision' | 'credentialEnv'> | undefined {
+  if (!isWorkerObject(value)) return undefined;
+  return {
+    id: typeof value.id === 'string' ? value.id : '',
+    kind: value.kind as Upstream['kind'],
+    namespace: typeof value.namespace === 'string' ? value.namespace : '',
+    baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : undefined,
+    repositories: Array.isArray(value.repositories) ? value.repositories as string[] : undefined,
+    configRevision: typeof value.configRevision === 'string' ? value.configRevision : undefined,
+    credentialEnv: typeof value.credentialEnv === 'string' ? value.credentialEnv : undefined,
+  };
+}
+
+function isWorkerObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Billing owns reservation lifecycle identity. A missing generation is
+ * tolerated for legacy adapters so terminal cleanup stays fail-closed; a
+ * malformed value is rejected rather than being replaced with a guessed one.
+ */
+function reservationGenerationFromAdmission(value: MeteredUsageReservation): number | undefined {
+  const generation = value.reservationGeneration;
+  if (generation === undefined) return undefined;
+  if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1) {
+    throw new Error('billing reservation returned an invalid reservation generation');
+  }
+  return generation;
 }
 
 function sanitizeError(error: unknown): string {

@@ -1,0 +1,398 @@
+{
+  "schemaVersion": 1,
+  "tablePrefix": "private_skills_billing",
+  "sqlSha256": "sha256:4386cbcd2982545c14ea9df580a34a5fb052c2441c0e8369c779c9dec851d880",
+  "sqlByteLength": 4705,
+  "sqlInventory": {
+    "createTables": 5,
+    "addColumnsIfMissing": 7,
+    "guardedConstraints": 2,
+    "createIndexesIfMissing": 2
+  },
+  "tables": [
+    {
+      "logicalName": "customers",
+      "name": "private_skills_billing_customers",
+      "columns": [
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "customer_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false,
+          "defaultExpression": "now()"
+        },
+        {
+          "name": "updated_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false,
+          "defaultExpression": "now()"
+        }
+      ],
+      "primaryKey": [
+        "organization_id"
+      ],
+      "uniqueConstraints": [
+        [
+          "provider",
+          "customer_id"
+        ]
+      ],
+      "checks": []
+    },
+    {
+      "logicalName": "subscriptions",
+      "name": "private_skills_billing_subscriptions",
+      "columns": [
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "subscription_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "customer_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "price_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "plan_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "current_period_start",
+          "dataType": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "current_period_end",
+          "dataType": "timestamp with time zone",
+          "nullable": true
+        },
+        {
+          "name": "cancel_at_period_end",
+          "dataType": "boolean",
+          "nullable": false,
+          "defaultExpression": "false"
+        },
+        {
+          "name": "event_created_at",
+          "dataType": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "last_event_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "source",
+          "dataType": "text",
+          "nullable": false,
+          "defaultExpression": "'verified-webhook'"
+        },
+        {
+          "name": "updated_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false,
+          "defaultExpression": "now()"
+        }
+      ],
+      "primaryKey": [
+        "organization_id"
+      ],
+      "uniqueConstraints": [
+        [
+          "provider",
+          "subscription_id"
+        ]
+      ],
+      "checks": [
+        "event_created_at >= 0",
+        "source = 'verified-webhook'"
+      ]
+    },
+    {
+      "logicalName": "usage",
+      "name": "private_skills_billing_usage",
+      "columns": [
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "period_start",
+          "dataType": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "period_end",
+          "dataType": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "seats",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "storage_bytes",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "scans",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "eve_cost_cents",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "seat_baseline",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "seat_reservations",
+          "dataType": "jsonb",
+          "nullable": false,
+          "defaultExpression": "'[]'::jsonb"
+        },
+        {
+          "name": "seat_revision",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "0"
+        },
+        {
+          "name": "updated_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false,
+          "defaultExpression": "now()"
+        }
+      ],
+      "primaryKey": [
+        "organization_id"
+      ],
+      "uniqueConstraints": [],
+      "checks": [
+        "period_end > period_start",
+        "seats >= 0",
+        "storage_bytes >= 0",
+        "scans >= 0",
+        "eve_cost_cents >= 0",
+        "seat_baseline >= 0",
+        "seat_revision >= 0",
+        "jsonb_typeof(seat_reservations) = 'array'"
+      ]
+    },
+    {
+      "logicalName": "events",
+      "name": "private_skills_billing_webhook_events",
+      "columns": [
+        {
+          "name": "provider",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "event_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "event_type",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "dataType": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "received_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "payload_digest",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "handled",
+          "dataType": "boolean",
+          "nullable": false,
+          "defaultExpression": "false"
+        },
+        {
+          "name": "ignored_reason",
+          "dataType": "text",
+          "nullable": true
+        }
+      ],
+      "primaryKey": [
+        "provider",
+        "event_id"
+      ],
+      "uniqueConstraints": [],
+      "checks": [
+        "created_at >= 0"
+      ]
+    },
+    {
+      "logicalName": "operations",
+      "name": "private_skills_billing_usage_operations",
+      "columns": [
+        {
+          "name": "organization_id",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "operation_key",
+          "dataType": "text",
+          "nullable": false
+        },
+        {
+          "name": "seats_delta",
+          "dataType": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "storage_bytes_delta",
+          "dataType": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "scans_delta",
+          "dataType": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "eve_cost_cents_delta",
+          "dataType": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "usage_snapshot",
+          "dataType": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "dataType": "timestamp with time zone",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "dataType": "text",
+          "nullable": false,
+          "defaultExpression": "'reserved'"
+        },
+        {
+          "name": "reconciled",
+          "dataType": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "restoration",
+          "dataType": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "reservation_generation",
+          "dataType": "bigint",
+          "nullable": false,
+          "defaultExpression": "1"
+        }
+      ],
+      "primaryKey": [
+        "organization_id",
+        "operation_key"
+      ],
+      "uniqueConstraints": [],
+      "checks": [
+        "status IN ('reserved', 'committed', 'released')",
+        "reservation_generation >= 1"
+      ]
+    }
+  ],
+  "indexes": [
+    {
+      "name": "private_skills_billing_events_org_idx",
+      "table": "events",
+      "columns": [
+        "organization_id",
+        "received_at"
+      ],
+      "descendingColumns": [
+        "received_at"
+      ]
+    },
+    {
+      "name": "private_skills_billing_operations_org_idx",
+      "table": "operations",
+      "columns": [
+        "organization_id",
+        "created_at"
+      ],
+      "descendingColumns": [
+        "created_at"
+      ]
+    }
+  ],
+  "migrationSafety": {
+    "additiveOnly": true,
+    "destructiveStatements": [],
+    "existingTableShapeMustBeCompared": true
+  }
+}

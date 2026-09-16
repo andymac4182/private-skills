@@ -85,6 +85,7 @@ describe('worker API protocol', () => {
     expect(hookStages).toEqual(['ingest.validate', 'artifact.evaluate']);
     const scanResults = completion?.scanResults as Array<Record<string, unknown>>;
     expect(scanResults).toHaveLength(0);
+    expect(completion?.scanInvocationStarted).toBe(false);
   });
 
   it('treats an explicit {job:null} claim as idle', async () => {

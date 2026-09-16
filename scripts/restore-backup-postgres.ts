@@ -41,6 +41,7 @@ import {
   type RestoreLogicalBackupResult,
   RestoreBackupError,
 } from './restore-backup.js';
+import { normalizeStorageProviderBinding } from '../packages/storage/src/index.js';
 
 export const DEFAULT_POSTGRES_STATE_TABLE = 'private_skills_registry_state';
 export const POSTGRES_SNAPSHOT_CONSISTENCY: CaptureConsistency = 'postgres-mvcc-snapshot';
@@ -139,6 +140,14 @@ function boundedString(value: unknown, field: string, maxLength: number): string
     throw new PostgresSnapshotError('INVALID_OPTIONS', `${field} is invalid`);
   }
   return value;
+}
+
+function optionalProviderBinding(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  const candidate = boundedString(value, field, 256);
+  const binding = normalizeStorageProviderBinding(candidate);
+  if (!binding) throw new PostgresSnapshotError('INVALID_OPTIONS', `${field} is invalid`);
+  return binding;
 }
 
 function quoteIdentifier(identifier: string): string {
@@ -656,6 +665,13 @@ export async function main(
     const output = resolve(cliValue(parsed.values, 'output', environment));
     const databaseUrl = boundedString(environment.DATABASE_URL, 'DATABASE_URL', 16_384);
     const blobToken = boundedString(environment.BLOB_READ_WRITE_TOKEN, 'BLOB_READ_WRITE_TOKEN', 32_768);
+    const blobStoreId = environment.PSKILLS_STORAGE_BLOB_STORE_ID === undefined
+      ? undefined
+      : boundedString(environment.PSKILLS_STORAGE_BLOB_STORE_ID, 'PSKILLS_STORAGE_BLOB_STORE_ID', 512);
+    const providerBinding = optionalProviderBinding(
+      environment.PSKILLS_STORAGE_PROVIDER_BINDING,
+      'PSKILLS_STORAGE_PROVIDER_BINDING',
+    );
     const tableName = parsed.values.get('table') ?? environment.PSKILLS_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
     const prefix = parsed.values.get('blob-prefix') ?? environment.PSKILLS_STORAGE_PREFIX;
     const fence = fenceFromCli(parsed.values, environment);
@@ -664,7 +680,11 @@ export async function main(
       const blobs = await createNodeFilesSdkBlobStore({
         provider: 'vercel-blob',
         prefix,
-        credentials: { token: blobToken },
+        ...(providerBinding ? { providerBinding } : {}),
+        credentials: {
+          token: blobToken,
+          ...(blobStoreId ? { storeId: blobStoreId } : {}),
+        },
       });
       const result = await createPostgresLogicalBackup({
         pool: runtime.pool,
@@ -723,6 +743,10 @@ export async function main(
   const targetTableName = parsed.values.get('target-table') ?? environment.PSKILLS_TARGET_STATE_TABLE ?? DEFAULT_POSTGRES_STATE_TABLE;
   const targetPrefix = parsed.values.get('target-blob-prefix') ?? environment.PSKILLS_TARGET_STORAGE_PREFIX;
   const targetStoreId = parsed.values.get('target-blob-store-id') ?? environment.PSKILLS_TARGET_BLOB_STORE_ID;
+  const targetProviderBinding = optionalProviderBinding(
+    environment.PSKILLS_TARGET_STORAGE_PROVIDER_BINDING,
+    'PSKILLS_TARGET_STORAGE_PROVIDER_BINDING',
+  );
   const initializeTargetSchemaValue = parsed.values.get('initialize-target-schema') ?? environment.PSKILLS_TARGET_INITIALIZE_SCHEMA ?? 'false';
   if (initializeTargetSchemaValue !== 'true' && initializeTargetSchemaValue !== 'false') {
     throw new PostgresSnapshotError('INVALID_OPTIONS', 'initialize-target-schema must be true or false');
@@ -732,6 +756,7 @@ export async function main(
     const targetBlobs = await createNodeFilesSdkBlobStore({
       provider: 'vercel-blob',
       prefix: targetPrefix,
+      ...(targetProviderBinding ? { providerBinding: targetProviderBinding } : {}),
       credentials: {
         token: targetBlobToken,
         ...(targetStoreId ? { storeId: boundedString(targetStoreId, 'target-blob-store-id', 512) } : {}),

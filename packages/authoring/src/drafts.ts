@@ -1,5 +1,6 @@
 import type {
   BundleFile,
+  BillingUsageAdmission,
   Digest,
   Job,
   Principal,
@@ -15,6 +16,9 @@ import type {
   SkillBuilderPatchOperation,
   SkillBuilderProposalRecord,
   SkillBuilderSessionRecord,
+  StorageAttempt,
+  StorageWriteReceipt,
+  MeteredReservationOwner,
 } from '../../contracts/src/index.js';
 import { createUploadReviewSnapshot } from '../../upload-reviews/src/snapshot.js';
 import type {
@@ -38,10 +42,16 @@ import {
   viewFile,
 } from './index.js';
 import {
+  allocateStorageObjectKey,
+  createVerifiedStorageWriteReceipt,
   decodeBundle,
   digestBytes,
+  isRecoverableBlobStore,
   encodeBundle,
+  isVerifiedStorageWriteReceipt,
   parseSkillMetadata,
+  putStorageAttemptBlob,
+  storageProviderBinding,
   validateBundle,
 } from '../../storage/src/index.js';
 import {
@@ -61,6 +71,484 @@ const MAX_IDEMPOTENCY_KEY_BYTES = 256;
  * the bounded selected-file route; this limit only governs JSON responses.
  */
 export const MAX_PUBLIC_DRAFT_RESPONSE_BYTES = 4_500_000;
+
+interface DraftUsageAdmission {
+  readonly billing: BillingUsageAdmission;
+  readonly reservationKey: string;
+  readonly delta: { storageBytes?: number; scans?: number };
+  readonly idempotent: boolean;
+  /** Exact billing lifecycle captured for storage-attempt recovery and cleanup. */
+  readonly reservationGeneration?: number;
+}
+
+function authoringBilling(deps: AuthoringHandlerDependencies): BillingUsageAdmission | undefined {
+  const billing = deps.billing;
+  return billing && typeof billing.status === 'function' && billing.status().enabled === true ? billing : undefined;
+}
+
+function authoringMeteredError(error: unknown): AuthoringApiError {
+  if (error instanceof AuthoringApiError) return error;
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === 'USAGE_LIMIT_EXCEEDED') {
+    return new AuthoringApiError('USAGE_LIMIT_EXCEEDED', 'The organization usage limit has been reached', 429);
+  }
+  if (code === 'IDEMPOTENCY_CONFLICT') {
+    return new AuthoringApiError('IDEMPOTENCY_CONFLICT', 'The metered operation key was already used with another request', 409);
+  }
+  if (code === 'INVALID_USAGE') {
+    return new AuthoringApiError('INVALID_USAGE', 'The requested usage is invalid', 400);
+  }
+  return new AuthoringApiError('BILLING_UNAVAILABLE', 'Usage enforcement is temporarily unavailable', 503);
+}
+
+function authoringReservationGeneration(result: unknown): number | undefined {
+  if (typeof result !== 'object' || result === null || !('reservationGeneration' in result)) return undefined;
+  const generation = (result as { reservationGeneration?: unknown }).reservationGeneration;
+  if (!Number.isSafeInteger(generation) || (generation as number) < 1) {
+    throw new AuthoringApiError('BILLING_UNAVAILABLE', 'Billing returned an invalid reservation generation', 503);
+  }
+  return generation as number;
+}
+
+async function draftUsageKey(draftId: string, requestDigest: Digest, kind: string): Promise<string> {
+  // Billing operation keys are deliberately bounded independently of caller
+  // supplied draft and idempotency identifiers.
+  const digest = await digestText(`${kind}:${draftId}:${requestDigest}`);
+  return `private-skills:${kind}:${digest}`;
+}
+
+async function reserveDraftUsage(
+  deps: AuthoringHandlerDependencies,
+  delta: DraftUsageAdmission['delta'],
+  reservationKey: string,
+): Promise<DraftUsageAdmission | undefined> {
+  const billing = authoringBilling(deps);
+  if (!billing) return undefined;
+  try {
+    const result = await billing.reserveUsage(deps.config.organizationId, delta, reservationKey);
+    const idempotent = typeof result === 'object' && result !== null && (result as { idempotent?: unknown }).idempotent === true;
+    return { billing, reservationKey, delta, idempotent, reservationGeneration: authoringReservationGeneration(result) };
+  } catch (error) {
+    throw authoringMeteredError(error);
+  }
+}
+
+async function releaseDraftUsage(
+  admission: DraftUsageAdmission | undefined,
+  organizationId: string,
+  releaseToken?: string,
+): Promise<boolean> {
+  if (!admission) return true;
+  try {
+    await admission.billing.reconcileUsage(
+      organizationId,
+      admission.reservationKey,
+      Object.fromEntries(Object.keys(admission.delta).map((metric) => [metric, 0])) as DraftUsageAdmission['delta'],
+      `${admission.reservationKey}:release${releaseToken === undefined ? '' : `:${releaseToken}`}`,
+      admission.reservationGeneration,
+    );
+    return true;
+  } catch {
+    // Preserve the primary storage or repository error. The durable billing
+    // row remains visible for an operator/reconciliation pass.
+    return false;
+  }
+}
+
+function draftReservationOwner(
+  state: RegistryState,
+  reservationKey: string,
+): MeteredReservationOwner | undefined {
+  state.meteredReservationOwners ??= [];
+  return state.meteredReservationOwners.find((owner) => owner.reservationKey === reservationKey);
+}
+
+function prepareDraftReservationOwner(
+  state: RegistryState,
+  admission: DraftUsageAdmission,
+): void {
+  const owner = draftReservationOwner(state, admission.reservationKey);
+  if (owner?.state === 'releasing' || (owner?.state === 'released' && admission.idempotent)) {
+    throw new AuthoringApiError('METERED_RESERVATION_BUSY', 'The metered operation is settling; retry shortly', 503);
+  }
+  if (owner?.state === 'released') {
+    owner.state = 'owned';
+    owner.releaseToken = undefined;
+    owner.jobId = undefined;
+    owner.updatedAt = new Date().toISOString();
+    owner.reservationGeneration = admission.reservationGeneration;
+  } else if (
+    owner &&
+    admission.reservationGeneration !== undefined &&
+    (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
+  ) {
+    throw new AuthoringApiError('METERED_RESERVATION_BUSY', 'The metered reservation lifecycle is no longer current', 503);
+  } else if (owner && admission.reservationGeneration !== undefined) {
+    owner.reservationGeneration = admission.reservationGeneration;
+  }
+}
+
+function claimDraftReservationOwner(
+  state: RegistryState,
+  admission: DraftUsageAdmission,
+  jobId: string,
+): void {
+  prepareDraftReservationOwner(state, admission);
+  state.meteredReservationOwners ??= [];
+  const owner = draftReservationOwner(state, admission.reservationKey);
+  if (owner) {
+    owner.state = 'owned';
+    owner.jobId = jobId;
+    owner.releaseToken = undefined;
+    owner.updatedAt = new Date().toISOString();
+    owner.reservationGeneration = admission.reservationGeneration;
+    return;
+  }
+  state.meteredReservationOwners.push({
+    reservationKey: admission.reservationKey,
+    state: 'owned',
+    jobId,
+    updatedAt: new Date().toISOString(),
+    ...(admission.reservationGeneration === undefined ? {} : { reservationGeneration: admission.reservationGeneration }),
+  });
+}
+
+/**
+ * If publication's queue transaction is uncertain, atomically transition the
+ * durable reservation owner before releasing its scan admission. An active
+ * job may already be in the worker, so a repository failure must fail closed
+ * and retain the charge.
+ */
+async function releaseDraftUsageIfUnowned(
+  admission: DraftUsageAdmission | undefined,
+  deps: AuthoringHandlerDependencies,
+): Promise<void> {
+  if (!admission) return;
+  let token: string | undefined;
+  try {
+    const decision = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      state.meteredReservationOwners ??= [];
+      const active = state.jobs.find((job) =>
+        job.organizationId === deps.config.organizationId &&
+        (job.state === 'queued' || job.state === 'running') &&
+        job.meteredReservationKey === admission.reservationKey,
+      );
+      if (active) {
+        active.meteredReservationGeneration ??= admission.reservationGeneration;
+        claimDraftReservationOwner(state, admission, active.id);
+        return 'keep' as const;
+      }
+      const owner = draftReservationOwner(state, admission.reservationKey);
+      if (
+        owner &&
+        admission.reservationGeneration !== undefined &&
+        (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
+      ) return 'busy' as const;
+      if (owner?.state === 'releasing') {
+        // A previous process may have completed the external correction but
+        // crashed before its terminal owner transaction committed. Reuse the
+        // durable fence token so the deterministic billing operation can be
+        // retried idempotently and this invocation can finish the owner
+        // transition. The fence continues to reject queue ownership until the
+        // terminal transaction succeeds.
+        if (!owner.releaseToken) return 'busy' as const;
+        token = owner.releaseToken;
+        return 'release' as const;
+      }
+      token = randomId('metered-release');
+      if (owner) {
+        owner.state = 'releasing';
+        owner.releaseToken = token;
+        owner.jobId = undefined;
+        owner.reservationGeneration = admission.reservationGeneration;
+        owner.updatedAt = new Date().toISOString();
+      } else {
+        state.meteredReservationOwners.push({
+          reservationKey: admission.reservationKey,
+          state: 'releasing',
+          releaseToken: token,
+          updatedAt: new Date().toISOString(),
+          ...(admission.reservationGeneration === undefined ? {} : { reservationGeneration: admission.reservationGeneration }),
+        });
+      }
+      return 'release' as const;
+    });
+    if (decision !== 'release' || !token) return;
+  } catch {
+    return;
+  }
+  const released = await releaseDraftUsage(admission, deps.config.organizationId, token);
+  try {
+    await deps.repository.transaction(deps.config.organizationId, (state) => {
+      const owner = draftReservationOwner(state, admission.reservationKey);
+      if (!owner || owner.state !== 'releasing' || owner.releaseToken !== token) return;
+      if (
+        admission.reservationGeneration !== undefined &&
+        (owner.reservationGeneration ?? 1) !== admission.reservationGeneration
+      ) return;
+      owner.updatedAt = new Date().toISOString();
+      if (released) {
+        owner.state = 'released';
+        owner.releaseToken = undefined;
+        owner.jobId = undefined;
+      }
+    });
+  } catch {
+    // Keep the release fence if the final transition is uncertain.
+  }
+}
+
+function draftStorageAttemptRecord(input: {
+  organizationId: string;
+  reservationKey: string;
+  digest: Digest;
+  size: number;
+  objectKey?: string;
+  providerBinding?: string;
+  reservationGeneration?: number;
+}): StorageAttempt {
+  const timestamp = new Date().toISOString();
+  return {
+    id: randomId('storage-attempt'),
+    organizationId: input.organizationId,
+    reservationKey: input.reservationKey,
+    digest: input.digest,
+    size: input.size,
+    state: 'pending',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...(input.objectKey ? { objectKey: input.objectKey } : {}),
+    ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
+    ...(input.reservationGeneration === undefined ? {} : { reservationGeneration: input.reservationGeneration }),
+  };
+}
+
+async function beginDraftStorageAttempt(
+  deps: AuthoringHandlerDependencies,
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+): Promise<DraftStorageAttemptClaim> {
+  // Persist the provider object identity before the draft write so a lost
+  // upload response can be reconciled without guessing a provider key.
+  const attempt = draftStorageAttemptRecord({
+    organizationId: deps.config.organizationId,
+    ...input,
+    objectKey: allocateStorageObjectKey(deps.blobs),
+    providerBinding: storageProviderBinding(deps.blobs),
+  });
+  const claim = await deps.repository.transaction(deps.config.organizationId, (state) => {
+    state.storageAttempts ??= [];
+    // The metered key is the lifecycle identity. Two requests can both pass
+    // the idempotency pre-read before either metadata transaction commits;
+    // only the first durable pending row may perform provider I/O. Returning
+    // the same attempt to both callers would still create two physical
+    // writers and make one caller's finality proof invalid for the other.
+    const sameLifecycle = state.storageAttempts.filter((candidate) =>
+      candidate.organizationId === deps.config.organizationId &&
+      candidate.reservationKey === input.reservationKey &&
+      candidate.reservationGeneration === input.reservationGeneration,
+    );
+    for (const existing of sameLifecycle) {
+      if (existing.digest !== input.digest || existing.size !== input.size) {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the metered lifecycle', 409);
+      }
+    }
+    // A historical retry may have left an orphan beside a committed sibling.
+    // Reuse the committed object and leave the orphan charged for recovery;
+    // never start another provider writer for this reservation lifecycle.
+    const committed = sameLifecycle.find((candidate) => candidate.state === 'committed');
+    if (committed) return { attempt: { ...committed }, ownsWrite: false, stored: committedDraftStorageBlob(committed) };
+    const existing = sameLifecycle.find((candidate) => candidate.state !== 'released');
+    if (existing) {
+      if (existing.state === 'orphaned') {
+        if (existing.billingCorrection === 'restore-pending') {
+          throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is settling; retry shortly', 503);
+        }
+        return { orphaned: true as const, attempt: { ...existing } };
+      }
+      if (existing.state === 'pending' || existing.state === 'recovering' || existing.state === 'releasing') {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+      }
+      if (existing.state === 'committed') return { attempt: { ...existing }, ownsWrite: false };
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    }
+    state.storageAttempts.push(attempt);
+    return { attempt, ownsWrite: true };
+  });
+  if ('orphaned' in claim) return await resumeOrphanedDraftStorageAttempt(deps, input, claim.attempt);
+  return claim;
+}
+
+type DraftStorageAttemptClaim = {
+  attempt: StorageAttempt;
+  ownsWrite: boolean;
+  stored?: StoredBlob;
+};
+
+async function resumeOrphanedDraftStorageAttempt(
+  deps: AuthoringHandlerDependencies,
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+  observed: StorageAttempt,
+): Promise<DraftStorageAttemptClaim> {
+  const key = observed.objectKey;
+  if (!key || !isRecoverableBlobStore(deps.blobs)) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  let inspection;
+  try {
+    inspection = await deps.blobs.inspectObject(key);
+  } catch {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  if (inspection.state === 'present') {
+    if (inspection.digest !== input.digest || inspection.size !== input.size) {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the provider object', 409);
+    }
+    const stored: StoredBlob = { key: inspection.key, digest: inspection.digest, size: inspection.size };
+    return await deps.repository.transaction(deps.config.organizationId, (state) => {
+      const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+      if (
+        !current ||
+        current.objectKey !== key ||
+        current.reservationKey !== input.reservationKey ||
+        current.reservationGeneration !== input.reservationGeneration ||
+        current.digest !== input.digest ||
+        current.size !== input.size
+      ) {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
+      }
+      const committedSibling = state.storageAttempts?.find((candidate) =>
+        candidate.id !== current.id &&
+        candidate.state === 'committed' &&
+        sameDraftStorageAttemptIdentity(candidate, deps.config.organizationId, input),
+      );
+      if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedDraftStorageBlob(committedSibling) };
+      if (current.state === 'orphaned') return { attempt: { ...current }, ownsWrite: false, stored };
+      if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedDraftStorageBlob(current) };
+      if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+        throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+      }
+      throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+    });
+  }
+
+  if (inspection.state !== 'absent') {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  let writeTerminated = false;
+  try {
+    writeTerminated = typeof deps.blobs.confirmWriteTerminated === 'function' && await deps.blobs.confirmWriteTerminated(key);
+  } catch {
+    writeTerminated = false;
+  }
+  if (!writeTerminated) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is awaiting provider finality; retry shortly', 503);
+  }
+
+  return await deps.repository.transaction(deps.config.organizationId, (state) => {
+    const current = state.storageAttempts?.find((candidate) => candidate.id === observed.id);
+    if (
+      !current ||
+      current.objectKey !== key ||
+      current.reservationKey !== input.reservationKey ||
+      current.reservationGeneration !== input.reservationGeneration ||
+      current.digest !== input.digest ||
+      current.size !== input.size
+    ) {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership changed; retry shortly', 503);
+    }
+    const committedSibling = state.storageAttempts?.find((candidate) =>
+      candidate.id !== current.id &&
+      candidate.state === 'committed' &&
+      sameDraftStorageAttemptIdentity(candidate, deps.config.organizationId, input),
+    );
+    if (committedSibling) return { attempt: { ...committedSibling }, ownsWrite: false, stored: committedDraftStorageBlob(committedSibling) };
+    if (current.state === 'orphaned') {
+      current.state = 'pending';
+      current.updatedAt = new Date().toISOString();
+      return { attempt: { ...current }, ownsWrite: true };
+    }
+    if (current.state === 'committed') return { attempt: { ...current }, ownsWrite: false, stored: committedDraftStorageBlob(current) };
+    if (current.state === 'pending' || current.state === 'recovering' || current.state === 'releasing') {
+      throw new AuthoringApiError('STORAGE_ATTEMPT_BUSY', 'Storage write ownership is active; retry shortly', 503);
+    }
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership has already been released', 409);
+  });
+}
+
+function committedDraftStorageBlob(attempt: StorageAttempt): StoredBlob {
+  if (!attempt.objectKey) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Committed storage ownership has no stable object key', 409);
+  }
+  return { key: attempt.objectKey, digest: attempt.digest, size: attempt.size };
+}
+
+function sameDraftStorageAttemptIdentity(
+  attempt: StorageAttempt,
+  organizationId: string,
+  input: { reservationKey: string; digest: Digest; size: number; reservationGeneration?: number },
+): boolean {
+  return attempt.organizationId === organizationId &&
+    attempt.reservationKey === input.reservationKey &&
+    attempt.reservationGeneration === input.reservationGeneration &&
+    attempt.digest === input.digest &&
+    attempt.size === input.size &&
+    attempt.objectKey !== undefined;
+}
+
+function preservesDraftStorageAdmission(error: unknown): boolean {
+  return error instanceof AuthoringApiError && (
+    error.code === 'STORAGE_ATTEMPT_BUSY' || error.code === 'STORAGE_ATTEMPT_CONFLICT'
+  );
+}
+
+async function markDraftStorageAttemptOrphaned(
+  deps: AuthoringHandlerDependencies,
+  attemptId: string,
+  objectKey?: string,
+  writeReceipt?: StorageWriteReceipt,
+): Promise<void> {
+  try {
+    await deps.repository.transaction(deps.config.organizationId, (state) => {
+      state.storageAttempts ??= [];
+      const attempt = state.storageAttempts.find((candidate) => candidate.id === attemptId);
+      if (!attempt || attempt.state === 'committed' || attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released') return;
+      attempt.state = 'orphaned';
+      attempt.updatedAt = new Date().toISOString();
+      if (objectKey && (attempt.objectKey === undefined || attempt.objectKey === objectKey)) attempt.objectKey = objectKey;
+      if (writeReceipt && attempt.providerBinding !== undefined && isVerifiedStorageWriteReceipt(writeReceipt, {
+        providerBinding: attempt.providerBinding,
+        key: attempt.objectKey,
+        digest: attempt.digest,
+        size: attempt.size,
+      })) {
+        attempt.writeReceipt = writeReceipt;
+      }
+    });
+  } catch {
+    // Keep a pending attempt charged when its transition is uncertain. A
+    // later operator reconciliation must verify the provider object first.
+  }
+}
+
+function commitDraftStorageAttempt(state: RegistryState, attemptId: string, stored: StoredBlob): void {
+  state.storageAttempts ??= [];
+  const attempt = state.storageAttempts.find((candidate) => candidate.id === attemptId);
+  if (!attempt) throw new AuthoringApiError('STORAGE_ATTEMPT_MISSING', 'Storage write ownership record is missing', 503);
+  if (attempt.state === 'committed') {
+    if (attempt.objectKey !== stored.key) throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
+    return;
+  }
+  if (attempt.state === 'released' || attempt.state === 'recovering' || attempt.state === 'releasing') throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  if (attempt.objectKey !== undefined && attempt.objectKey !== stored.key) throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership conflicts with the stored object', 409);
+  attempt.state = 'committed';
+  attempt.objectKey = stored.key;
+  attempt.updatedAt = new Date().toISOString();
+}
 
 export interface PublicSkillDraft {
   id: string;
@@ -877,34 +1365,77 @@ async function createDraft(
     idempotency: [],
   };
   await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: snapshot.bundle.files });
-  const stored = await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest);
+  const storageAdmission = await reserveDraftUsage(
+    deps,
+    { storageBytes: snapshot.bytes.byteLength },
+    await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+  );
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
+  try {
+    const storageClaim = await beginDraftStorageAttempt(deps, {
+      reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+      digest: snapshot.release.artifact.digest,
+      size: snapshot.bytes.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
+    });
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(deps, snapshot.bytes, snapshot.release.artifact.digest, storageAttempt)
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
+    throw error;
+  }
   record.artifact = stored;
   draft.artifact = stored;
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    ensureDrafts(state);
-    const existing = state.drafts!.find(
-      (candidate) =>
-        candidate.organizationId === deps.config.organizationId &&
-        candidate.actor === principal.subject &&
-        candidate.createIdempotency?.key === idempotencyKey,
-    );
-    if (existing) {
-      if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
-      if (existing.createIdempotency?.requestDigest !== requestDigest) {
-        throw idempotencyConflict();
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      ensureDrafts(state);
+      const existing = state.drafts!.find(
+        (candidate) =>
+          candidate.organizationId === deps.config.organizationId &&
+          candidate.actor === principal.subject &&
+          candidate.createIdempotency?.key === idempotencyKey,
+      );
+      if (existing) {
+        if (!canReadNamespace(principal, existing.name)) throw unavailableDraft();
+        if (existing.createIdempotency?.requestDigest !== requestDigest) {
+          throw idempotencyConflict();
+        }
+        return { draft: existing, idempotent: true };
       }
-      return { draft: existing, idempotent: true };
-    }
 
-    const current = state.skills.find((candidate) => candidate.id === resourceId);
-    if (!current || !sameReadableBase(current, snapshot.release, state, principal, baseDigest)) {
-      throw unavailableDraft();
+      const current = state.skills.find((candidate) => candidate.id === resourceId);
+      if (!current || !sameReadableBase(current, snapshot.release, state, principal, baseDigest)) {
+        throw unavailableDraft();
+      }
+      state.drafts!.push(draft);
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
+      appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
+      return { draft, idempotent: false };
+    });
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
-    state.drafts!.push(draft);
-    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId);
-    return { draft, idempotent: false };
-  });
+    throw error;
+  }
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   const bundle = { format: 'pskills-bundle-v1' as const, files: responseDraft.files };
@@ -990,27 +1521,70 @@ async function createUploadDraft(
     idempotency: [],
   };
   await assertDraftEnvelopeFits(draft, { format: 'pskills-bundle-v1', files: bundle.files });
-  const stored = await putVerifiedDraftBlob(deps, encoded, digest);
+  const storageAdmission = await reserveDraftUsage(
+    deps,
+    { storageBytes: encoded.byteLength },
+    await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+  );
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
+  try {
+    const storageClaim = await beginDraftStorageAttempt(deps, {
+      reservationKey: await draftUsageKey(draftId, requestDigest, 'draft-storage'),
+      digest,
+      size: encoded.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
+    });
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(deps, encoded, digest, storageAttempt)
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(deps.blobs, storageAttempt, stored);
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+    }
+    throw error;
+  }
   record.artifact = stored;
   draft.artifact = stored;
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    ensureDrafts(state);
-    const current = state.drafts!.find(
-      (candidate) =>
-        candidate.organizationId === deps.config.organizationId &&
-        candidate.actor === principal.subject &&
-        candidate.createIdempotency?.key === idempotencyKey,
-    );
-    if (current) {
-      if (!canReadNamespace(principal, current.name)) throw unavailableDraft();
-      if (current.createIdempotency?.requestDigest !== requestDigest) throw idempotencyConflict();
-      return { draft: current, idempotent: true };
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      ensureDrafts(state);
+      const current = state.drafts!.find(
+        (candidate) =>
+          candidate.organizationId === deps.config.organizationId &&
+          candidate.actor === principal.subject &&
+          candidate.createIdempotency?.key === idempotencyKey,
+      );
+      if (current) {
+        if (!canReadNamespace(principal, current.name)) throw unavailableDraft();
+        if (current.createIdempotency?.requestDigest !== requestDigest) throw idempotencyConflict();
+        return { draft: current, idempotent: true };
+      }
+      state.drafts!.push(draft);
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
+      appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
+      return { draft, idempotent: false };
+    });
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, deps.config.organizationId);
     }
-    state.drafts!.push(draft);
-    appendDraftAudit(state, principal, 'draft.create', draft, deps.config.organizationId, { origin: 'upload' });
-    return { draft, idempotent: false };
-  });
+    throw error;
+  }
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(deps, storageAttempt.id, stored?.key, writeReceipt);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent ? await draftFromCreateRecord(result.draft, deps) : result.draft;
   await syncDraftReview(responseDraft, responseDraft.files, deps, false);
@@ -1249,68 +1823,111 @@ export async function writeDraftRevision(
     { format: 'pskills-bundle-v1', files: bundle!.files },
     input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
   );
-  const stored = await putVerifiedDraftBlob(input.deps, encoded!, digest!);
+  const storageAdmission = await reserveDraftUsage(
+    input.deps,
+    { storageBytes: encoded!.byteLength },
+    await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
+  );
+  let storageAttempt: StorageAttempt | undefined;
+  let stored: StoredBlob | undefined;
+  let writeReceipt: StorageWriteReceipt | undefined;
+  try {
+    const storageClaim = await beginDraftStorageAttempt(input.deps, {
+      reservationKey: await draftUsageKey(input.draftId, identityDigest, 'draft-storage'),
+      digest: digest!,
+      size: encoded!.byteLength,
+      reservationGeneration: storageAdmission?.reservationGeneration,
+    });
+    storageAttempt = storageClaim.attempt;
+    stored = storageClaim.ownsWrite
+      ? await putVerifiedDraftBlob(input.deps, encoded!, digest!, storageAttempt)
+      : storageClaim.stored ?? committedDraftStorageBlob(storageAttempt);
+    if (storageClaim.ownsWrite) writeReceipt = createVerifiedStorageWriteReceipt(input.deps.blobs, storageAttempt, stored);
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+    }
+    throw error;
+  }
   record.artifact = stored;
 
-  const result = await input.deps.repository.transaction(input.deps.config.organizationId, (state) => {
-    const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
-    const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
-    if (concurrent) {
-      if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
-      const replay = {
+  let result: { draft: SkillDraft; idempotent: boolean };
+  try {
+    result = await input.deps.repository.transaction(input.deps.config.organizationId, (state) => {
+      const current = findDraft(state, input.draftId, input.principal, input.deps.config.organizationId);
+      const concurrent = findIdempotency(current, idempotencyKey, input.principal.subject);
+      if (concurrent) {
+        if (concurrent.requestDigest !== identityDigest) throw idempotencyConflict();
+        const replay = {
+          ...current,
+          revision: concurrent.revision,
+          digest: concurrent.digest,
+          artifact: concurrent.artifact,
+          updatedAt: concurrent.updatedAt,
+        };
+        assertDraftEnvelopeSizeWithManifest(
+          replay,
+          concurrent.manifest,
+          input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
+        );
+        return { draft: current, idempotent: true };
+      }
+      if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+      if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+      if (expectedDigest !== undefined && current.digest !== expectedDigest) {
+        throw draftDigestConflict(current.revision);
+      }
+      if (publicDraftStateFingerprint(current) !== publicStateFingerprint) {
+        throw publicDraftStateConflict(current.revision);
+      }
+      const nextIdempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
+      const nextDraft: SkillDraft = {
         ...current,
-        revision: concurrent.revision,
-        digest: concurrent.digest,
-        artifact: concurrent.artifact,
-        updatedAt: concurrent.updatedAt,
+        revision: expectedRevision + 1,
+        digest: digest!,
+        artifact: stored,
+        files: bundle!.files,
+        updatedAt: now,
+        idempotency: nextIdempotency,
       };
       assertDraftEnvelopeSizeWithManifest(
-        replay,
-        concurrent.manifest,
-        input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, true),
+        nextDraft,
+        record.manifest,
+        input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
       );
-      return { draft: current, idempotent: true };
+      current.revision = expectedRevision + 1;
+      current.digest = digest!;
+      current.artifact = stored;
+      current.files = bundle!.files;
+      current.updatedAt = now;
+      current.idempotency = nextIdempotency;
+      commitDraftStorageAttempt(state, storageAttempt!.id, stored!);
+      appendDraftAudit(
+        state,
+        input.principal,
+        'draft.update',
+        current,
+        input.deps.config.organizationId,
+        kind === 'builder-proposal' ? { source: 'builder-proposal', proposalId } : {},
+      );
+      if (kind === 'builder-proposal' && input.onCommit) input.onCommit(state, current);
+      return { draft: current, idempotent: false };
+    });
+  } catch (error) {
+    if (storageAttempt) {
+      await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
+    } else if (!preservesDraftStorageAdmission(error)) {
+      await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
     }
-    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
-    if (current.status !== 'open') throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
-    if (expectedDigest !== undefined && current.digest !== expectedDigest) {
-      throw draftDigestConflict(current.revision);
-    }
-    if (publicDraftStateFingerprint(current) !== publicStateFingerprint) {
-      throw publicDraftStateConflict(current.revision);
-    }
-    const nextIdempotency = [...(current.idempotency ?? []).slice(-(MAX_IDEMPOTENCY_RECORDS - 1)), record];
-    const nextDraft: SkillDraft = {
-      ...current,
-      revision: expectedRevision + 1,
-      digest: digest!,
-      artifact: stored,
-      files: bundle!.files,
-      updatedAt: now,
-      idempotency: nextIdempotency,
-    };
-    assertDraftEnvelopeSizeWithManifest(
-      nextDraft,
-      record.manifest,
-      input.responseEnvelope ?? defaultDraftResponseEnvelope(kind, false),
-    );
-    current.revision = expectedRevision + 1;
-    current.digest = digest!;
-    current.artifact = stored;
-    current.files = bundle!.files;
-    current.updatedAt = now;
-    current.idempotency = nextIdempotency;
-    appendDraftAudit(
-      state,
-      input.principal,
-      'draft.update',
-      current,
-      input.deps.config.organizationId,
-      kind === 'builder-proposal' ? { source: 'builder-proposal', proposalId } : {},
-    );
-    if (kind === 'builder-proposal' && input.onCommit) input.onCommit(state, current);
-    return { draft: current, idempotent: false };
-  });
+    throw error;
+  }
+  if (result.idempotent && storageAttempt) {
+    await markDraftStorageAttemptOrphaned(input.deps, storageAttempt.id, stored?.key, writeReceipt);
+  } else if (result.idempotent) {
+    await releaseDraftUsage(storageAdmission, input.deps.config.organizationId);
+  }
 
   const responseDraft = result.idempotent
     ? await draftFromIdempotency(result.draft, findIdempotency(result.draft, idempotencyKey, input.principal.subject)!, input.deps)
@@ -1662,56 +2279,74 @@ async function publishDraft(
     createdAt: now,
   };
 
-  const result = await deps.repository.transaction(deps.config.organizationId, (state) => {
-    const current = findDraft(state, draftId, principal, deps.config.organizationId);
-    const concurrent = findPublication(current, idempotencyKey, principal.subject);
-    if (concurrent) {
-      if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
-      return { operation: operationFromPublication(concurrent), idempotent: true };
-    }
-    if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
-    if (current.status !== 'open') {
-      throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
-    }
-    if (
-      draftOrigin(current) !== draftOrigin(before) ||
-      current.baseResourceId !== before.baseResourceId ||
-      current.baseDigest !== before.baseDigest
-    ) {
-      throw unavailableDraft();
-    }
-    const currentBase = current.baseResourceId === undefined
-      ? undefined
-      : state.skills.find((candidate) => candidate.id === current.baseResourceId);
-    if (draftOrigin(current) === 'release') {
-      if (!currentBase || current.baseDigest === undefined || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+  const scanAdmission = await reserveDraftUsage(
+    deps,
+    { scans: 1 },
+    `private-skills:scan:${jobId}`,
+  );
+  job.meteredReservationKey = `private-skills:scan:${jobId}`;
+  if (scanAdmission?.reservationGeneration !== undefined) {
+    job.meteredReservationGeneration = scanAdmission.reservationGeneration;
+  }
+  let result: { operation: DraftPublishOperation; idempotent: boolean };
+  try {
+    result = await deps.repository.transaction(deps.config.organizationId, (state) => {
+      if (scanAdmission) prepareDraftReservationOwner(state, scanAdmission);
+      const current = findDraft(state, draftId, principal, deps.config.organizationId);
+      const concurrent = findPublication(current, idempotencyKey, principal.subject);
+      if (concurrent) {
+        if (concurrent.requestDigest !== requestDigest) throw idempotencyConflict();
+        return { operation: operationFromPublication(concurrent), idempotent: true };
+      }
+      if (current.revision !== expectedRevision) throw revisionConflict(current.revision);
+      if (current.status !== 'open') {
+        throw new AuthoringApiError('DRAFT_CLOSED', 'Draft is no longer editable', 409);
+      }
+      if (
+        draftOrigin(current) !== draftOrigin(before) ||
+        current.baseResourceId !== before.baseResourceId ||
+        current.baseDigest !== before.baseDigest
+      ) {
         throw unavailableDraft();
       }
-    } else if (current.baseResourceId !== undefined || current.baseDigest !== undefined) {
-      throw unavailableDraft();
-    }
-    if (state.policy.revision !== policy.revision) {
-      throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
-    }
-    if (currentBase !== undefined && (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal))) {
-      throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
-    }
-    if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
-      throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
-    }
-    state.skills.push(skill);
-    state.jobs.push(job);
-    current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
-    appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
-      digest: publication.digest,
-      version,
-      resourceId,
-      jobId,
-      draftRevision: expectedRevision,
-      scanRequired: true,
-    }, now);
-    return { operation: operationFromPublication(publication), idempotent: false };
-  });
+      const currentBase = current.baseResourceId === undefined
+        ? undefined
+        : state.skills.find((candidate) => candidate.id === current.baseResourceId);
+      if (draftOrigin(current) === 'release') {
+        if (!currentBase || current.baseDigest === undefined || currentBase.organizationId !== deps.config.organizationId || !sameReadableBase(currentBase, currentBase, state, principal, current.baseDigest)) {
+          throw unavailableDraft();
+        }
+      } else if (current.baseResourceId !== undefined || current.baseDigest !== undefined) {
+        throw unavailableDraft();
+      }
+      if (state.policy.revision !== policy.revision) {
+        throw new AuthoringApiError('POLICY_CHANGED', 'The scanner policy changed; retry publication', 409);
+      }
+      if (currentBase !== undefined && (!deps.releaseAdmissionAtCommit || !deps.releaseAdmissionAtCommit(state, currentBase, principal))) {
+        throw new AuthoringApiError('RELEASE_UNAVAILABLE', 'Release admission could not be verified at commit', 503);
+      }
+      if (state.skills.some((candidate) => candidate.name === current.name && candidate.version === version)) {
+        throw new AuthoringApiError('VERSION_CONFLICT', 'That skill version already exists', 409);
+      }
+      state.skills.push(skill);
+      state.jobs.push(job);
+      if (scanAdmission) claimDraftReservationOwner(state, scanAdmission, job.id);
+      current.publications = [...(current.publications ?? []).slice(-(MAX_PUBLICATION_HISTORY - 1)), publication];
+      appendDraftAudit(state, principal, 'draft.publish.queued', current, deps.config.organizationId, {
+        digest: publication.digest,
+        version,
+        resourceId,
+        jobId,
+        draftRevision: expectedRevision,
+        scanRequired: true,
+      }, now);
+      return { operation: operationFromPublication(publication), idempotent: false };
+    });
+  } catch (error) {
+    await releaseDraftUsageIfUnowned(scanAdmission, deps);
+    throw error;
+  }
+  if (result.idempotent) await releaseDraftUsageIfUnowned(scanAdmission, deps);
 
   return jsonResponse(result, result.idempotent ? 200 : 202, {
     'cache-control': 'private, no-store',
@@ -2212,10 +2847,18 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-async function putVerifiedDraftBlob(deps: AuthoringHandlerDependencies, bytes: Uint8Array, digest: Digest): Promise<StoredBlob> {
+async function putVerifiedDraftBlob(
+  deps: AuthoringHandlerDependencies,
+  bytes: Uint8Array,
+  digest: Digest,
+  attempt?: Pick<StorageAttempt, 'objectKey' | 'state'>,
+): Promise<StoredBlob> {
+  if (attempt && (attempt.state === 'recovering' || attempt.state === 'releasing' || attempt.state === 'released')) {
+    throw new AuthoringApiError('STORAGE_ATTEMPT_CONFLICT', 'Storage write ownership is not available for metadata commit', 409);
+  }
   let stored: StoredBlob;
   try {
-    stored = await deps.blobs.put(bytes);
+    stored = await (attempt ? putStorageAttemptBlob(deps.blobs, attempt, bytes) : deps.blobs.put(bytes));
   } catch {
     throw new AuthoringApiError('STORAGE_UNAVAILABLE', 'Draft storage is temporarily unavailable', 503);
   }

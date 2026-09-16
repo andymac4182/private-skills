@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { makeSignature } from 'better-auth/crypto';
 import { describe, expect, it } from 'vitest';
@@ -19,7 +20,7 @@ function quoteIdentifier(value: string): string {
 describe.skipIf(!databaseURL)('identity PostgreSQL integration', () => {
   it('persists Better Auth memberships, observes revocation, and serializes owner demotions', async () => {
     if (!databaseURL) return;
-    const schema = `identity_test_${process.pid}_${Date.now()}`;
+    const schema = `identity_test_${randomUUID().replaceAll('-', '')}`;
     const table = (name: string) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
     const direct = postgres(databaseURL, { max: 20, prepare: false });
     const runtime = createIdentityRuntime(createIdentityRuntimeConfig({
@@ -120,7 +121,7 @@ describe.skipIf(!databaseURL)('identity PostgreSQL integration', () => {
 
   it('enforces Better Auth invitation permissions for owner and admin members', async () => {
     if (!databaseURL) return;
-    const schema = `identity_invitation_test_${process.pid}_${Date.now()}`;
+    const schema = `identity_invitation_test_${randomUUID().replaceAll('-', '')}`;
     const table = (name: string) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
     const direct = postgres(databaseURL, { max: 20, prepare: false });
     const runtime = createIdentityRuntime(createIdentityRuntimeConfig({

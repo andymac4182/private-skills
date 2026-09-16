@@ -16,6 +16,7 @@
     "worker": "node --env-file-if-exists=.env --import tsx workers/runner/src/index.ts",
     "cli": "cargo run -p pskills --",
     "smoke": "tsx scripts/smoke.ts",
+    "storage:receipt-rehearsal": "tsx scripts/storage-receipt-recovery-rehearsal.ts",
     "setup:dev": "tsx scripts/setup-dev.ts",
     "release:vercel": "node scripts/vercel-release.mjs"
   },

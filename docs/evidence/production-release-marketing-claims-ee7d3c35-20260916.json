@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 1,
+  "kind": "production-marketing-claims-release-acceptance",
+  "capturedAt": "2026-09-16T00:20:23Z",
+  "source": {
+    "repository": "andymac4182/private-skills",
+    "pullRequest": 60,
+    "pullRequestUrl": "https://github.com/andymac4182/private-skills/pull/60",
+    "reviewedHead": "968363c7797866e8eb1690d7888eba6bac5b12b5",
+    "mergeCommit": "ee7d3c352af0ece86a1274ecf7441ec064ebacdc",
+    "previousMain": "884992fdbba30a12dae29ddba7957746e8c1725d",
+    "mergedAt": "2026-09-16T00:15:34Z",
+    "mergeMethod": "merge commit"
+  },
+  "scope": {
+    "releaseType": "bounded marketing claims and evidence update",
+    "changedFiles": 6,
+    "insertions": 127,
+    "deletions": 6,
+    "dependencyChanges": false,
+    "configurationChanges": false,
+    "environmentOrDatabaseChanges": false,
+    "hobbyCompatibleConfigurationPreserved": true,
+    "changedPaths": [
+      "apps/marketing/README.md",
+      "apps/marketing/src/routes/demo.tsx",
+      "apps/marketing/src/routes/docs.getting-started.tsx",
+      "apps/marketing/src/routes/faq.tsx",
+      "apps/marketing/src/routes/legal.tsx",
+      "docs/evidence/marketing-claims-pricing-audit-20260916.md"
+    ],
+    "protectedFilesVerifiedUnchanged": [
+      "vercel.json",
+      "package.json",
+      "pnpm-lock.yaml",
+      ".env.example",
+      "apps/web/server/runtime-node.ts"
+    ]
+  },
+  "productionDeployments": [
+    {
+      "project": "private-skills",
+      "target": "production",
+      "deploymentId": "dpl_Ey8gGSfFCszE8iwnuRqQvXXZuAGm",
+      "deploymentUrl": "private-skills-fnw4b5ods-andrewmcclenaghan-6046s-projects.vercel.app",
+      "sourceSha": "ee7d3c352af0ece86a1274ecf7441ec064ebacdc",
+      "state": "READY",
+      "createdAt": "2026-09-16T00:15:38.572Z",
+      "readyAt": "2026-09-16T00:17:22.079Z",
+      "readback": "Vercel v6 deployment listing matched deploymentId, sourceSha, and READY state"
+    },
+    {
+      "project": "private-skills-builder",
+      "target": "production",
+      "deploymentId": "dpl_HfaFRmQ3NEAPkuMiJGxyCMF4vD8w",
+      "deploymentUrl": "private-skills-builder-l4amhxihp.vercel.app",
+      "sourceSha": "ee7d3c352af0ece86a1274ecf7441ec064ebacdc",
+      "state": "READY",
+      "createdAt": "2026-09-16T00:15:38.529Z",
+      "readyAt": "2026-09-16T00:16:53.801Z",
+      "readback": "Vercel v6 deployment listing matched deploymentId, sourceSha, and READY state"
+    },
+    {
+      "project": "private-skills-marketing",
+      "target": "production",
+      "deploymentId": "dpl_AV6qq6TaARigZyxcBniRLDfDEh7x",
+      "deploymentUrl": "private-skills-marketing-dlsozujl2.vercel.app",
+      "sourceSha": "ee7d3c352af0ece86a1274ecf7441ec064ebacdc",
+      "state": "READY",
+      "createdAt": "2026-09-16T00:15:38.503Z",
+      "readyAt": "2026-09-16T00:15:54.905Z",
+      "readback": "Vercel v6 deployment listing matched deploymentId, sourceSha, and READY state"
+    },
+    {
+      "project": "private-skills-upload-reviewer",
+      "target": "production",
+      "deploymentId": "dpl_2umcfZt34CGdDHUPE7jyb8CLay8C",
+      "deploymentUrl": "private-skills-upload-reviewer-nke25asew.vercel.app",
+      "sourceSha": "ee7d3c352af0ece86a1274ecf7441ec064ebacdc",
+      "state": "READY",
+      "createdAt": "2026-09-16T00:15:38.474Z",
+      "readyAt": "2026-09-16T00:16:22.828Z",
+      "readback": "Vercel v6 deployment listing matched deploymentId, sourceSha, and READY state"
+    }
+  ],
+  "publicReadback": {
+    "recordedAt": "2026-09-16T00:20:23Z",
+    "app": {
+      "origin": "https://private-skills-theta.vercel.app",
+      "routes": {
+        "/health": 200,
+        "/auth/identity/config": 200
+      },
+      "healthBody": {
+        "ok": true,
+        "service": "private-skills",
+        "version": "0.4.0"
+      },
+      "identityConfigBoundary": {
+        "enabled": false,
+        "basePath": "/api/auth",
+        "providers": [],
+        "organizationEnabled": false
+      }
+    },
+    "builder": {
+      "origin": "https://private-skills-builder.vercel.app",
+      "routes": {
+        "/": 200
+      }
+    },
+    "marketing": {
+      "origin": "https://private-skills-marketing.vercel.app",
+      "routes": {
+        "/": 200,
+        "/product": 200,
+        "/pricing": 200,
+        "/docs": 200,
+        "/docs/getting-started": 200,
+        "/demo": 200,
+        "/faq": 200,
+        "/contact": 200,
+        "/legal": 200,
+        "/robots.txt": 200,
+        "/sitemap.xml": 200
+      },
+      "changedCopyReadback": {
+        "/faq": {
+          "status": 200,
+          "contains": "owner or administrator"
+        },
+        "/docs/getting-started": {
+          "status": 200,
+          "contains": "current hosted preview has no public account sign-up"
+        },
+        "/demo": {
+          "status": 200,
+          "contains": "owner or administrator"
+        },
+        "/legal": {
+          "status": 200,
+          "contains": "owner or administrator"
+        }
+      },
+      "robotsBody": "User-agent: *\\nDisallow: /",
+      "sitemapBody": "empty public urlset"
+    },
+    "uploadReviewer": {
+      "origin": "https://private-skills-upload-reviewer.vercel.app",
+      "routes": {
+        "/": 200
+      }
+    }
+  },
+  "previewChecks": {
+    "vercelPreviewComments": "success",
+    "privateSkills": "success",
+    "privateSkillsBuilder": "success",
+    "privateSkillsMarketing": "success",
+    "privateSkillsUploadReviewer": "success"
+  },
+  "validation": [
+    {
+      "command": "pnpm --filter @private-skills/marketing test",
+      "result": "passed",
+      "observed": "1 file, 5 tests passed."
+    },
+    {
+      "command": "pnpm --filter @private-skills/marketing typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "APP_ORIGIN=https://private-skills-theta.vercel.app MARKETING_ORIGIN=https://private-skills-marketing.vercel.app MARKETING_INDEXING=noindex pnpm --filter @private-skills/marketing build",
+      "result": "passed",
+      "observed": "Marketing client, SSR, and Nitro production build completed with documented public non-secret inputs."
+    },
+    {
+      "command": "pnpm --filter @private-skills/marketing build",
+      "result": "expected-guard",
+      "observed": "The production build rejected missing APP_ORIGIN before compilation, as designed."
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "nativeCiAdmission": {
+    "workflowRunId": 35039033467,
+    "waiver": "existing user-authorized native-CI billing/admission waiver",
+    "jobs": [
+      {
+        "name": "rust (x86_64-unknown-linux-gnu)",
+        "jobId": 104614526447,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "web (Node 24)",
+        "jobId": 104614526543,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "rust (x86_64-pc-windows-msvc)",
+        "jobId": 104614526569,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "rust (aarch64-apple-darwin)",
+        "jobId": 104614526616,
+        "conclusion": "failure",
+        "stepsObserved": 0
+      },
+      {
+        "name": "build the Node container",
+        "jobId": 104614562522,
+        "conclusion": "skipped",
+        "stepsObserved": 0
+      }
+    ],
+    "interpretation": "Native CI jobs failed before executing any steps; local marketing checks and all four Vercel preview checks passed."
+  },
+  "limits": [
+    "Production identity and organization configuration remained disabled; this release activates no provider, environment, database, billing, or checkout state.",
+    "The public readback confirms current-preview wording and route availability; it does not establish authenticated role behavior or full business launch readiness.",
+    "No credentials, secrets, account grants, checkout, or external mutations were used for this evidence record."
+  ]
+}

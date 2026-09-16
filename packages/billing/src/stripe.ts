@@ -321,6 +321,31 @@ export interface LocalBillingAdapterOptions {
   baseUrl?: string;
 }
 
+export type LocalBillingTestSessionStatus = 'open' | 'completed';
+
+export interface LocalBillingTestCheckoutSession {
+  kind: 'checkout';
+  id: string;
+  organizationId: string;
+  customerId: string;
+  planId: string;
+  priceId: string;
+  successUrl: string;
+  cancelUrl: string;
+  status: LocalBillingTestSessionStatus;
+}
+
+export interface LocalBillingTestPortalSession {
+  kind: 'portal';
+  id: string;
+  organizationId: string;
+  customerId: string;
+  returnUrl: string;
+  status: LocalBillingTestSessionStatus;
+}
+
+export type LocalBillingTestSession = LocalBillingTestCheckoutSession | LocalBillingTestPortalSession;
+
 /**
  * Explicitly test-only provider. It creates no remote customer, product, or
  * charge. A caller must still feed a signed fixture through the webhook path
@@ -331,6 +356,7 @@ export class LocalBillingAdapter implements BillingProviderAdapter {
   readonly mode = 'test' as const;
   private readonly baseUrl: string;
   private readonly customers = new Map<string, string>();
+  private readonly sessions = new Map<string, LocalBillingTestSession>();
 
   constructor(options: LocalBillingAdapterOptions = {}) {
     const base = options.baseUrl ?? 'http://localhost:5173';
@@ -351,28 +377,45 @@ export class LocalBillingAdapter implements BillingProviderAdapter {
   }
 
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<HostedBillingSession> {
-    bounded(input.organizationId, 'organizationId', 256);
-    bounded(input.customerId, 'customerId', 256);
-    bounded(input.priceId, 'priceId', 256);
-    bounded(input.planId, 'planId', 64);
-    trustedUrl(input.successUrl, 'successUrl');
-    trustedUrl(input.cancelUrl, 'cancelUrl');
+    const organizationId = bounded(input.organizationId, 'organizationId', 256);
+    const customerId = bounded(input.customerId, 'customerId', 256);
+    const priceId = bounded(input.priceId, 'priceId', 256);
+    const planId = bounded(input.planId, 'planId', 64);
+    const successUrl = trustedUrl(input.successUrl, 'successUrl');
+    const cancelUrl = trustedUrl(input.cancelUrl, 'cancelUrl');
     bounded(input.idempotencyKey, 'idempotency key', 255);
     const id = `local_cs_${crypto.randomUUID().replaceAll('-', '')}`;
     const url = new URL(`${this.baseUrl}/billing/test-checkout`);
     url.searchParams.set('session', id);
+    this.rememberSession({ kind: 'checkout', id, organizationId, customerId, planId, priceId, successUrl, cancelUrl, status: 'open' });
     return { provider: 'local', mode: 'test', id, url: url.toString() };
   }
 
   async createCustomerPortalSession(input: CreateCustomerPortalSessionInput): Promise<HostedBillingSession> {
-    bounded(input.organizationId, 'organizationId', 256);
-    bounded(input.customerId, 'customerId', 256);
-    trustedUrl(input.returnUrl, 'returnUrl');
+    const organizationId = bounded(input.organizationId, 'organizationId', 256);
+    const customerId = bounded(input.customerId, 'customerId', 256);
+    const returnUrl = trustedUrl(input.returnUrl, 'returnUrl');
     bounded(input.idempotencyKey, 'idempotency key', 255);
     const id = `local_bps_${crypto.randomUUID().replaceAll('-', '')}`;
     const url = new URL(`${this.baseUrl}/billing/test-portal`);
     url.searchParams.set('session', id);
+    this.rememberSession({ kind: 'portal', id, organizationId, customerId, returnUrl, status: 'open' });
     return { provider: 'local', mode: 'test', id, url: url.toString() };
+  }
+
+  /** Server-only lookup used by the local billing demo routes. */
+  getTestSession(id: string): LocalBillingTestSession | undefined {
+    const session = this.sessions.get(bounded(id, 'session id', 256));
+    return session === undefined ? undefined : { ...session };
+  }
+
+  /** Mark a completed local checkout after its signed fixture webhook applied. */
+  markTestCheckoutCompleted(id: string): LocalBillingTestCheckoutSession {
+    const session = this.sessions.get(bounded(id, 'session id', 256));
+    if (!session || session.kind !== 'checkout') throw new StripeBillingError('SESSION_NOT_FOUND', 'local checkout session is not available');
+    const completed: LocalBillingTestCheckoutSession = { ...session, status: 'completed' };
+    this.sessions.set(completed.id, completed);
+    return { ...completed };
   }
 
   async listInvoices(input: ListInvoicesInput): Promise<readonly BillingProviderInvoice[]> {
@@ -383,6 +426,14 @@ export class LocalBillingAdapter implements BillingProviderAdapter {
     // history lets the console prove the read-model path without implying a
     // charge or fabricating provider records.
     return [];
+  }
+
+  private rememberSession(session: LocalBillingTestSession): void {
+    // The local adapter is a fixture, but its session map still has a bound
+    // so a long-running development process cannot grow without limit.
+    const oldest = this.sessions.keys().next().value;
+    if (this.sessions.size >= 1_000 && typeof oldest === 'string') this.sessions.delete(oldest);
+    this.sessions.set(session.id, session);
   }
 }
 

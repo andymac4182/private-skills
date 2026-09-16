@@ -176,6 +176,20 @@ fixture creates and drops unique schemas and never prints the connection
 string. This covers Better Auth membership revocation and owner serialization,
 the handler failure to durable event row path, and record-triggered expiry.
 
+For a bounded write-contention measurement across independent runtime
+instances, run `scripts/identity-contention-probe.ts` with
+`PSKILLS_IDENTITY_CONTENTION_DATABASE_URL` set to a loopback PostgreSQL URL.
+The probe creates and drops an ephemeral schema, exercises the real invitation
+and member-role routes through four `IdentityRuntime` instances, samples the
+shared advisory lock, and verifies pending invitations and one retained owner
+per company. Its `maxObservedWaitMs` value is the sampled
+`pg_stat_activity.query_start` age for an ungranted advisory lock, not an exact
+per-request timer. The probe is intentionally bounded and does not establish
+capacity for a larger tenant population; no OAuth provider, email transport,
+hosted database, or production mutation is involved. A captured local run is
+kept in
+[`docs/evidence/local-identity-contention-20260916.json`](evidence/local-identity-contention-20260916.json).
+
 The implementation follows Better Auth's current
 [PostgreSQL adapter guidance](https://www.better-auth.com/docs/adapters/postgresql),
 [organization plugin](https://www.better-auth.com/docs/plugins/organization),
