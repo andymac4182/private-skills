@@ -18,7 +18,7 @@ is retained as historical production evidence.
 The current combined candidate snapshot is `87a2f0c`. The [full validation
 record](../../evidence/local-storage-billing-restoration-20260916.json) uses
 source `036fb746` and records 178 test files passed / 18 skipped, 1,281 tests
-passed / 44 skipped, passing typecheck, Node/Vercel Blob/Cloudflare builds, 34
+passed / 44 skipped, passing typecheck, Node/Vercel Build Output/Cloudflare builds, 34
 disposable loopback PostgreSQL tests, and 2 composed Nitro tests. These checks
 are local or disposable and do not replace hosted acceptance. Root subsequently
 carried this checkpoint into tree-identical merge candidate `ab3c1dd`; the
@@ -52,9 +52,10 @@ state, and scanner-disabled fixtures remain explicit limits; hosted runtime,
 provider, worker, scanner, and customer IdP behavior are still open.
 
 The [marketing claims/pricing audit](../../evidence/marketing-claims-pricing-audit-20260916.md)
-was produced from source `a74dc3e`; its hosted-preview copy changes are still
-source-only and must not be called deployed. PR #60 contains the contrast and
-corrected access-copy changes with public route readback. The [Vercel entitlement record](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
+was produced from `a74dc3e`, the exact cherry-pick of `968363c7` included in
+PR #60; its corrected access/preview copy is deployed. PR #59 delivered the
+contrast change and PR #60 provides the corrected-copy/public-route readback.
+The [Vercel entitlement record](../../evidence/vercel-entitlement-readonly-20260915T225659Z.json)
 shows a Hobby/Fluid team: Hobby's 300-second function maximum and daily cron
 minimum are separate constraints, both exceeded by the candidate's 615-second
 function budget and 5-/15-minute schedules. Pro versus adaptation remains a
@@ -71,15 +72,15 @@ activation.
 | ID | Work | Current owner | State and next proof |
 | --- | --- | --- | --- |
 | L01 | Production/public deployments | root / launch integration | **Complete public slice:** PR #60 at `ee7d3c`, all four Vercel deployments READY, nine marketing routes and app health/config/robots/sitemap read back. Identity remains disabled; authenticated hosted acceptance is open. |
-| L02 | Marketing usability and claims | marketing_finish | **Production copy/contrast verified; source follow-up open:** PR #60 deploys corrected access/preview wording and contrast, with nine route readback. Source `a74dc3e` claims/pricing follow-up is not deployed; finish its release and recheck claims and preview labels. |
+| L02 | Marketing usability and claims | marketing_finish | **Production copy and contrast verified:** PR #60 deployed the `a74dc3e`/`968363c7` corrected access/preview wording, while PR #59 delivered contrast; the nine-route production readback passes. Remaining pricing/offer review belongs to the billing and commercial gates. |
 | L03 | Company portal and switch | tenant_ui / tenant acceptance | **Local complete for bounded scope:** B05/L10 matrix and two-company browser evidence cover Alpha-owner/Beta-reader switch, catalog/packs/drafts, and Reader billing denial. Hosted two-company runtime remains open. |
-| L04 | Identity and company SSO | tenant_auth_backend / oauth_demo_finish | **Local evidence complete; hosted pending:** Better Auth routes, local signed OIDC/SAML, and schema/readback exist, while production is disabled (`providers: []`). Configure a real customer provider and callback only after hosted recovery and owner approval. |
+| L04 | Identity and company SSO | tenant_auth_backend / oauth_demo_finish | **Local evidence complete; hosted pending:** Better Auth routes, local signed OIDC/SAML, invitation/member acceptance, and schema/readback exist, while production is disabled (`providers: []`). The [local invitation record](../../evidence/local-invitation-membership-acceptance-20260916.json) covers owner create, member acceptance, Reader role denial, revocation, and expiry in disposable fixtures. Configure a real customer provider and callback only after hosted recovery and owner approval. |
 | L05 | Registry/source/search/analytics isolation | runtime_finish / tenant acceptance | **Local bounded evidence complete:** populated matrix covers resource, source, search, analytics, and Eve denials. Same-deployment publish → required scan → approval → CLI install and hosted negatives remain open. |
 | L06 | Worker, scanner, and Eve boundary | runtime_finish / tenant_eve | **Local boundary evidence only:** composed Nitro/Files SDK and deterministic audience checks pass. Hosted worker/scanner/model bindings, capacity, leases, and cost traces remain open. |
 | L07 | Billing schema and console | billing_finish | **Schema applied, activation open:** five hosted billing tables now exist empty with independent readback; local test-mode console passes. Metering/caller enforcement, hosted route readback, webhook/provider state, and Stripe activation remain open. |
 | L08 | Backup, restore, and recovery | Hosting/Operations / runtime_finish | **Bounded recovery complete:** 19-table local forward restore plus 11-object Blob read verification pass. Coordinated PostgreSQL/Blob freeze, application restore, provider finality, and rollback remain open. |
 | L09 | CLI and edge portability | release / Hosting/Operations | **Mac complete; Linux emulated:** v0.4.0 native arm64 Mac lifecycle and emulated Linux amd64 lifecycle pass. Native Linux hardware/CI and Windows remain unverified. |
-| L10 | Full launch acceptance | root | **Hold:** local implementation and evidence are substantial, but hosted identity/runtime, coordinated recovery, provider/worker proof, public copy follow-up, hosting choice, and commercial inputs are not all closed. |
+| L10 | Full launch acceptance | root | **Hold:** local implementation and evidence are substantial, but hosted identity/runtime, coordinated recovery, provider/worker proof, hosting choice, and commercial inputs are not all closed. |
 
 ## Concrete next actions
 
@@ -89,10 +90,10 @@ activation.
    deployment. Record the existing two-company browser/CLI flow against that
    deployment, including role/switch/revocation, stale/revoked/foreign-company
    negatives, and publish → scan → approval → install.
-2. `billing_finish` records independent post-apply catalog/row readback from
-   the now-applied five-table schema, then proves hosted route/usage behavior
-   without treating empty tables as billing activation. Keep Stripe test/live
-   setup behind the external account gate.
+2. `billing_finish` proves hosted catalog, entitlement, usage, webhook/
+   reconciliation, and authorized-role route behavior from the now-applied
+   five-table schema without treating empty tables as billing activation. Keep
+   Stripe test/live setup behind the external account gate.
 3. Hosting/Operations and `runtime_finish` turn the local recovery records into
    a coordinated proof: fence PostgreSQL and Blob state, verify application key
    mapping and tenant scope, exercise provider-finality/negative retention,
@@ -102,10 +103,6 @@ activation.
    candidate's independent 615-second function and 5-/15-minute cron settings,
    then records capacity, monitoring, callback/device caps, and redacted
    provider/secret readback.
-5. `marketing_finish` completes and releases the source-only `a74dc3e` preview
-   copy audit, then verifies the nine public routes and pricing projection
-   against PR #60. Keep preview/no-purchase language until the offer and Stripe
-   gate are approved.
 
 ## External decisions still open
 
