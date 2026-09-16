@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "private-skills.composed-pg-blob-backup-coverage",
+  "observedAt": "2026-09-16T00:09:51.335Z",
+  "status": "verified",
+  "postgresSnapshot": {
+    "backupEvidenceCommit": "38915216d289afed66c608c9fe8e42a98137c4a0",
+    "candidate": "95eaf2a",
+    "target": {
+      "kind": "disposable-local-postgres",
+      "container": "pskills-full-pg-restore-mu3bdlhl-3ffa573c85",
+      "host": "127.0.0.1",
+      "port": 61860,
+      "database": "private_skills_restore",
+      "retainedForInspection": true
+    },
+    "registry": {
+      "organizationId": "default",
+      "revision": 232,
+      "stateMetadataRevision": 232,
+      "blobReferencesExamined": 91,
+      "uniqueReferencedObjects": 11,
+      "referencedTotalBytes": 37741,
+      "referenceManifestDigest": "sha256:192c448e3cfdf87e430afa7b956c276446a0ca0942988a467a3b9855a63a60eb"
+    },
+    "readMethod": "live SELECT of the restored registry row; state was parsed in-process and only bounded metadata was emitted"
+  },
+  "blobBackup": {
+    "evidenceFile": "docs/evidence/hosted-blob-restore-proof-20260916.json",
+    "sourceManifestObjects": 11,
+    "sourceManifestTotalBytes": 37741,
+    "sourceManifestDigest": "sha256:192c448e3cfdf87e430afa7b956c276446a0ca0942988a467a3b9855a63a60eb",
+    "destinationPrefix": "restore/skill-registry-proof-20260916-3fae894786d35e9b",
+    "sourceManifestStateStable": true,
+    "sourceObjectsUntouched": true
+  },
+  "comparison": {
+    "matchedFields": [
+      "source object key",
+      "sha256 digest",
+      "byte size"
+    ],
+    "matchedObjectCount": 11,
+    "matchedTotalBytes": 37741,
+    "exactKeyDigestSizeMatch": true,
+    "manifestComparison": "restored state references were compared with the sourceKey, digest, and size fields in the earlier destination manifest",
+    "freshDestinationReadback": {
+      "status": "verified",
+      "count": 11,
+      "totalBytes": 37741,
+      "exactCount": 11,
+      "aggregateDigest": "sha256:192c448e3cfdf87e430afa7b956c276446a0ca0942988a467a3b9855a63a60eb",
+      "method": "FilesSdkBlobStore.getVerified through createNodeFilesSdkBlobStore using files-sdk@2.4.0 and private Vercel Blob",
+      "credentialHandling": "BLOB_READ_WRITE_TOKEN was supplied to the targeted process by the Vercel CLI environment runner; its value was never printed or persisted",
+      "destinationObjectsMutated": false
+    }
+  },
+  "mutationBoundary": {
+    "postgres": "read-only SELECTs against the retained disposable target",
+    "blob": "GET/head verification only through the Files SDK",
+    "blobUploads": "not-run",
+    "blobDeletes": "not-run",
+    "coordinatedFreeze": "not-proven",
+    "applicationRestore": "not-run",
+    "deploymentOrProductionConfig": "not-run"
+  },
+  "coverage": [
+    "The restored registry revision 232 references exactly the 11 source objects represented by the earlier Blob backup manifest, with matching keys, digests, and sizes.",
+    "Every existing destination-prefix object in that 11-object manifest was freshly downloaded and verified against its recorded digest and size.",
+    "The comparison covers the restored registry JSON state and the bounded non-CLI Blob manifest only; it is not a tenant-wide coordinated recovery proof."
+  ],
+  "limits": [
+    "The PostgreSQL snapshot and the Blob copy were captured as separate operations; no shared MVCC/provider snapshot, quiescence fence, or coordinated freeze was established.",
+    "The restored state still names source sealed keys. The earlier copy maps those keys to a restore prefix; no application-level key remap, registry seed, or serving-path restore was run.",
+    "The source Blob inventory contained 14 objects; the bounded copy and fresh readback cover 11 non-CLI referenced objects totaling 37,741 bytes. Unreferenced/provider-side objects, versions, lifecycle rules, ACL/IAM, and hosted rollback remain unverified.",
+    "The PostgreSQL proof covers database-local schema and rows in its disposable target. Cluster-global roles/tablespaces, identity-provider credentials, billing-provider state, deployment values, and hosted application configuration remain outside this evidence.",
+    "No new Blob copy was performed during this verification."
+  ],
+  "redaction": {
+    "credentialsIncluded": false,
+    "statePayloadIncluded": false,
+    "objectBytesIncluded": false,
+    "fullEnvironmentExported": false,
+    "privateUrlsIncluded": false
+  }
+}
