@@ -349,3 +349,11 @@ Brand selection, legal/entity and support details, real customer IdP setup,
 final commercial offer, and Stripe activation remain external inputs. B14–B16,
 the later MCP/editor/OpenClaw/SCIM/residency/custom-domain roadmap, and the
 hosted migration/restore gates remain open.
+
+### Frozen candidate qualification and local serving restore — 16 September 2026
+
+The [final local qualification record](../../evidence/final-candidate-local-qualification-20260916.json) was run from frozen runtime source `8cdbb30` and recorded in `1f8a814`: 180 test files passed / 19 skipped, 1,292 tests passed / 45 skipped, typecheck and Node, Vercel Build Output, and Cloudflare builds passed, 12 direct PostgreSQL files / 33 tests passed, and 1 composed Nitro file / 2 tests passed. The checks were local or disposable; skipped hosted and native checks remain outside the result.
+
+The [local serving-path restore record](../../evidence/local-serving-path-restore-skillsguard-20260916.json) from `d4fa33d` adds script and evidence only, with no runtime change. It verifies an exact PostgreSQL clone plus 11 Files SDK objects materialized locally, the normal pinned SkillsGuard rescan/job path, unchanged policy, and Node route/readback results for the default organization: files/resolve `200`, authorization `201`, descriptor/transfer `200` with the expected 325-byte digest, and unauthenticated catalog `401`. This closes the bounded local restored-serving path; coordinated hosted PostgreSQL/Blob freeze, IAM/provider state, Better Auth/SSO/token state, billing, and rollback remain open.
+
+The local runtime audit closes implementation/regression scope for B23, B24, and B29: `apps/web/src/tenant-review-dispatch.test.ts`, `packages/intelligence/test/eve-cost-reservation.postgres.integration.test.ts`, `packages/database/test/hosted-worker-dispatch.test.ts`, `tests/runtime-hosted-worker-dispatch.test.ts`, and `tests/operations-postgres-rehearsal.test.ts` cover durable start/reconciliation, restart/eviction recovery, bounded multi-company cursor/lease/retry dispatch, and restored dispatcher state. Hosted provider/model/worker binding and capacity evidence remain separate. B31 is a new identity-write contention probe assigned to `tenant_auth_backend`; local worker or restore measurements do not substitute for that cross-company identity-write measurement.

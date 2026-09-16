@@ -15,14 +15,21 @@ provider callbacks, or paid activation. Native CI remains waived/blocked, not
 passed. The prior [PR #59 reader release record](../../evidence/production-release-reader-ui-884992f-20260916.json)
 is retained as historical production evidence.
 
-The current combined candidate snapshot is `87a2f0c`. The [full validation
-record](../../evidence/local-storage-billing-restoration-20260916.json) uses
-source `036fb746` and records 178 test files passed / 18 skipped, 1,281 tests
-passed / 44 skipped, passing typecheck, Node/Vercel Build Output/Cloudflare builds, 34
-disposable loopback PostgreSQL tests, and 2 composed Nitro tests. These checks
-are local or disposable and do not replace hosted acceptance. Root subsequently
-carried this checkpoint into tree-identical merge candidate `ab3c1dd`; the
-named evidence remains keyed to `87a2f0c`.
+The latest frozen candidate qualification is the [final local qualification
+record](../../evidence/final-candidate-local-qualification-20260916.json)
+from runtime source `8cdbb30`, recorded in evidence commit `1f8a814`. It reports
+180 test files passed / 19 skipped, 1,292 tests passed / 45 skipped, passing
+typecheck and Node, Vercel Build Output, and Cloudflare builds, 12 direct
+disposable loopback PostgreSQL files / 33 tests, and 1 composed Nitro file / 2
+tests. These checks are local or disposable and do not replace hosted
+acceptance. The earlier `87a2f0c` record remains a dated 178-file / 1,281-test
+snapshot rather than the current qualification.
+
+The [local serving-path restore record](../../evidence/local-serving-path-restore-skillsguard-20260916.json)
+from `d4fa33d` adds script and evidence only after the frozen qualification; it
+does not change runtime behavior. It proves the bounded default-organization
+restore through a local Node/PostgreSQL/Files SDK filesystem process and the
+pinned SkillsGuard rescan, while hosted coordinated recovery remains open.
 
 The hosted billing schema is now applied with independent readback in the
 [billing migration evidence](../../evidence/billing-hosted-migration-plan-20260916.json),
@@ -38,9 +45,10 @@ empty billing tables, while preserving the 14-table source state, identity
 rows, semantic rows, and registry revision. The [composed PostgreSQL/Blob
 record](../../evidence/composed-pg-blob-backup-coverage-20260916.json) verifies
 11 referenced objects totaling 37,741 bytes by key, digest, and size against a
-fresh private Blob read. The two operations were separate: no coordinated
-freeze, application-level key remap, upload/delete, or full application restore
-was performed.
+fresh private Blob read. The two source records were separate: no coordinated
+freeze, application-level key remap, upload/delete, or hosted application
+restore was performed in those records. The later local serving-path rehearsal
+proves only the bounded local default-organization serving path.
 
 The [populated B05/L10 matrix](../../evidence/local-b05-l10-populated-tenant-matrix-b7efd48-20260916.json)
 and [two-company browser proof](../../evidence/local-two-company-switch-acceptance-20260916.json)
@@ -76,9 +84,9 @@ activation.
 | L03 | Company portal and switch | tenant_ui / tenant acceptance | **Local complete for bounded scope:** B05/L10 matrix and two-company browser evidence cover Alpha-owner/Beta-reader switch, catalog/packs/drafts, and Reader billing denial. Hosted two-company runtime remains open. |
 | L04 | Identity and company SSO | tenant_auth_backend / oauth_demo_finish | **Local evidence complete; hosted pending:** Better Auth routes, local signed OIDC/SAML, invitation/member acceptance, and schema/readback exist, while production is disabled (`providers: []`). The [local invitation record](../../evidence/local-invitation-membership-acceptance-20260916.json) covers owner create, member acceptance, Reader role denial, revocation, and expiry in disposable fixtures. Configure a real customer provider and callback only after hosted recovery and owner approval. |
 | L05 | Registry/source/search/analytics isolation | runtime_finish / tenant acceptance | **Local bounded evidence complete:** populated matrix covers resource, source, search, analytics, and Eve denials. Same-deployment publish → required scan → approval → CLI install and hosted negatives remain open. |
-| L06 | Worker, scanner, and Eve boundary | runtime_finish / tenant_eve | **Local boundary evidence only:** composed Nitro/Files SDK and deterministic audience checks pass. Hosted worker/scanner/model bindings, capacity, leases, and cost traces remain open. |
+| L06 | Worker, scanner, and Eve boundary | runtime_finish / tenant_eve | **Local runtime implementation/regression complete for B23/B24/B29:** durable tenant-review start/reconciliation, Eve reservation restart/eviction recovery, and multi-company worker dispatch/lease/retry paths are covered by local tests and PostgreSQL restore rehearsal. Hosted worker/scanner/model bindings, capacity, provider finality, and cost traces remain open. |
 | L07 | Billing schema and console | billing_finish | **Schema applied, activation open:** five hosted billing tables now exist empty with independent readback; local test-mode console passes. Metering/caller enforcement, hosted route readback, webhook/provider state, and Stripe activation remain open. |
-| L08 | Backup, restore, and recovery | Hosting/Operations / runtime_finish | **Bounded recovery complete:** 19-table local forward restore plus 11-object Blob read verification pass. Coordinated PostgreSQL/Blob freeze, application restore, provider finality, and rollback remain open. |
+| L08 | Backup, restore, and recovery | Hosting/Operations / runtime_finish | **Bounded local recovery and serving complete:** 19-table local forward restore plus 11-object Blob read verification pass, and the [local serving-path record](../../evidence/local-serving-path-restore-skillsguard-20260916.json) proves Files SDK materialization, pinned SkillsGuard rescan, and exact Node route/transfer readback for the default organization. Coordinated hosted PostgreSQL/Blob freeze, IAM/provider finality, identity/billing state, and rollback remain open. |
 | L09 | CLI and edge portability | release / Hosting/Operations | **Mac complete; Linux emulated:** v0.4.0 native arm64 Mac lifecycle and emulated Linux amd64 lifecycle pass. Native Linux hardware/CI and Windows remain unverified. |
 | L10 | Full launch acceptance | root | **Hold:** local implementation and evidence are substantial, but hosted identity/runtime, coordinated recovery, provider/worker proof, hosting choice, and commercial inputs are not all closed. |
 
