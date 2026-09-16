@@ -53,7 +53,7 @@ function DemoPage() {
         <article className="marketing-demo-script-card">
           <span className="marketing-feature-index">01 / CONNECT</span>
           <h3>Connect the CLI</h3>
-          <p>Use a scoped token supplied by your application workspace. Keep the token out of recordings, shell history, and public docs.</p>
+          <p>Use a scoped token supplied by an owner or administrator of your application workspace. The current hosted preview has no public account sign-up. Keep the token out of recordings, shell history, and public docs.</p>
           <pre><code>pskills login --registry &lt;registry-url&gt; --token-stdin</code></pre>
         </article>
         <article className="marketing-demo-script-card">
