@@ -70,7 +70,7 @@ Launch items L01–L10 and owners are in `status.md`. Add new concrete work here
 
 - [ ] B30 — Marketing discoverability: page-specific titles/descriptions, validated canonical marketing origin, social sharing metadata, public sitemap and robots rules with preview/local noindex. Verify rendered HTML and route inventory; retain working brand and avoid unsupported company/review claims. Owner: marketing_finish.
 
-- [ ] B31 — Identity-write capacity: measure contention from the shared global PostgreSQL organization-mutation advisory lock across companies. Consider company-scoped fences only after authoritative tenant IDs are resolved for company create, invite, accept, and SSO paths; preserve the last-owner and recovery barriers while comparing throughput. Owner: tenant_auth_backend.
+- [x] B31 — Identity-write capacity: the bounded local measurement is complete in the [identity-write contention record](../../evidence/local-identity-contention-20260916.json). Four runtime instances exercised one-company and eight-company invitations plus eight-company owner demotions: invitation p95 was `551.73 ms` / `489.59 ms`, demotion p95 was `1,019.8 ms`, and lock waiters peaked at three; all 32 invitations returned `200`, while 24 demotions returned `200` and eight expected last-owner denials returned `400`. The shared global PostgreSQL organization-mutation advisory lock remains retained. Hosted database capacity, production contention, and any company-scoped-fence decision remain open. Owner: tenant_auth_backend.
 
 ### Market research delivery criteria — 16 September follow-up
 
