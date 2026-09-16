@@ -29,6 +29,14 @@ import postgres from 'postgres';
 import {
   createNodeFilesSdkBlobStore,
 } from '../packages/storage/src/node.js';
+import {
+  DockerExecutor,
+  createSkillsGuardAdapter,
+  SKILLSGUARD_PIN,
+} from '../packages/scanners/src/index.js';
+import {
+  WorkerRunner,
+} from '../workers/runner/src/index.js';
 import type {
   Digest,
   RegistryState,
@@ -64,6 +72,76 @@ interface RuntimeTarget {
   readonly origin: string;
   readonly storageRoot: string;
   readonly logs: string[];
+}
+
+interface ServingSnapshot {
+  readonly routes: {
+    readonly catalog: number;
+    readonly detail: number;
+    readonly files: number;
+    readonly resolve: number;
+    readonly authorization: number | null;
+    readonly downloadDescriptor: number | null;
+    readonly transfer: number | null;
+    readonly unauthenticatedCatalog: number;
+  };
+  readonly admission: {
+    readonly allowed: boolean;
+    readonly status: string;
+    readonly reason: string;
+  };
+  readonly filesCount: number | null;
+  readonly servedBytes: number | null;
+  readonly servedDigest: Digest | null;
+  readonly denial: {
+    readonly downloadBlockedByCurrentAdmission: boolean;
+    readonly downloadBlockStatus: number | null;
+    readonly downloadBlockCode: string | null;
+  };
+}
+
+interface LocalScannerEvidence {
+  readonly mode: 'docker-skillsguard';
+  readonly policy: {
+    readonly revision: string;
+    readonly unchangedAfterScan: true;
+  };
+  readonly image: {
+    readonly reference: string;
+    readonly id: string;
+    readonly verified: true;
+  };
+  readonly rescan: {
+    readonly status: number;
+    readonly operationId: string | null;
+    readonly resourceId: string | null;
+    readonly organizationId: string | null;
+    readonly policyRevision: string | null;
+  };
+  readonly worker: {
+    readonly claimed: boolean;
+    readonly jobId: string | null;
+    readonly allow: boolean | null;
+    readonly error: string | null;
+    readonly completionState: string | null;
+  };
+  readonly scanner: {
+    readonly scannerId: string;
+    readonly artifactDigest: Digest;
+    readonly policyRevision: string;
+    readonly status: string;
+    readonly engineVersion: string;
+    readonly rulesRevision: string;
+    readonly coverage: {
+      readonly filesEnumerated: number;
+      readonly filesAnalyzed: number;
+      readonly filesSkipped: number;
+      readonly filesUnsupported: number;
+    };
+    readonly findings: number;
+  } | null;
+  readonly before: ServingSnapshot;
+  readonly after: ServingSnapshot;
 }
 
 interface HttpResult {
@@ -156,6 +234,7 @@ interface RehearsalResult {
       readonly downloadBlockStatus: number | null;
       readonly downloadBlockCode: string | null;
     };
+    readonly localScanner?: LocalScannerEvidence;
   };
   readonly mutationBoundary: {
     readonly retainedPostgres: 'read-only pg_dump and bounded SELECT';
@@ -185,6 +264,10 @@ const CLONE_DATABASE = 'private_skills_restore_local';
 const CLONE_IMAGE = 'pgvector/pgvector:pg18';
 const SELECTED_SKILL_NAME = '@acme/m6-inert-builder-fixture';
 const LOCAL_PRINCIPAL = 'local-serving-restore-reader';
+const LOCAL_OPERATOR_PRINCIPAL = 'local-serving-restore-operator';
+const LOCAL_WORKER_ID = 'local-serving-restore-worker';
+const SKILLSGUARD_IMAGE = 'private-skills/skillsguard:1.1.1';
+const SKILLSGUARD_IMAGE_ID = 'sha256:4173ec0a31e37a572b94f88cb596e8b76aa9309beef06c16bb2e4ba2f6463aa0';
 const MAX_STATE_NODES = 200_000;
 const MAX_STATE_DEPTH = 64;
 const MAX_MANIFEST_OBJECTS = 14;
@@ -511,13 +594,22 @@ async function stopRuntime(runtime: RuntimeTarget | undefined): Promise<void> {
   }
 }
 
+async function assertPinnedSkillsGuardImage(): Promise<void> {
+  const inspected = Buffer.from(await runQuiet('docker', [
+    'image', 'inspect', SKILLSGUARD_IMAGE, '--format', '{{.Id}}',
+  ], { timeoutMs: 30_000 })).toString('utf8').trim();
+  if (inspected !== SKILLSGUARD_IMAGE_ID) {
+    throw new Error('local SkillsGuard image does not match the pinned image identity');
+  }
+}
+
 function skillByName(state: RegistryState): SkillVersion {
   const skill = state.skills.find((candidate) => candidate.name === SELECTED_SKILL_NAME);
   if (!skill) throw new Error(`restored fixture ${SELECTED_SKILL_NAME} is missing`);
   return skill;
 }
 
-function admissionFromCatalog(value: unknown): { allowed: boolean; status: string; reason: string } {
+function admissionFromCatalog(value: unknown): ServingSnapshot['admission'] {
   const skill = objectField(value, 'skill');
   const admission = objectField(skill, 'currentAdmission');
   return {
@@ -527,7 +619,7 @@ function admissionFromCatalog(value: unknown): { allowed: boolean; status: strin
   };
 }
 
-async function runApplicationJourney(runtime: RuntimeTarget, skill: SkillVersion, token: string): Promise<RehearsalResult['application']> {
+async function readServingSnapshot(runtime: RuntimeTarget, skill: SkillVersion, token: string): Promise<ServingSnapshot> {
   const catalog = await request(runtime.origin, '/v1/skills', token);
   const catalogSkills = objectField(catalog.value, 'skills');
   if (!Array.isArray(catalogSkills) || !catalogSkills.some((entry) => objectField(entry, 'id') === skill.id)) {
@@ -542,7 +634,8 @@ async function runApplicationJourney(runtime: RuntimeTarget, skill: SkillVersion
     throw new Error('detail did not return the restored fixture digest');
   }
   const files = await request(runtime.origin, `/v1/skills/${encodeURIComponent(skill.id)}/files`, token);
-  let filesStatus = files.status;
+  const filesValue = objectField(files.value, 'files');
+  const filesCount = Array.isArray(filesValue) ? filesValue.length : null;
   const resolve = await request(runtime.origin, '/v1/resolve', token, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -576,8 +669,173 @@ async function runApplicationJourney(runtime: RuntimeTarget, skill: SkillVersion
   const transferBytes = transfer?.bytes;
   const servedDigest = transferBytes ? sha256(transferBytes) : null;
   const downloadBlockedByCurrentAdmission = admission.allowed === false &&
-    (resolve.status >= 400 || filesStatus >= 400 || (descriptor?.status ?? 0) >= 400 || (transfer?.status ?? 0) >= 400);
+    (resolve.status >= 400 || files.status >= 400 || (descriptor?.status ?? 0) >= 400 || (transfer?.status ?? 0) >= 400);
   const downloadBlockResponse = [resolve, files, descriptor, transfer].find((candidate) => (candidate?.status ?? 0) >= 400);
+  return {
+    routes: {
+      catalog: catalog.status,
+      detail: detail.status,
+      files: files.status,
+      resolve: resolve.status,
+      authorization: authorization?.status ?? null,
+      downloadDescriptor: descriptor?.status ?? null,
+      transfer: transfer?.status ?? null,
+      unauthenticatedCatalog: unauthenticated.status,
+    },
+    admission,
+    filesCount,
+    servedBytes: transferBytes?.byteLength ?? null,
+    servedDigest,
+    denial: {
+      downloadBlockedByCurrentAdmission,
+      downloadBlockStatus: downloadBlockResponse?.status ?? null,
+      downloadBlockCode: codeOf(downloadBlockResponse?.value),
+    },
+  };
+}
+
+interface ApplicationJourneyOptions {
+  readonly runLocalScanner?: boolean;
+  readonly operatorToken?: string;
+  readonly workerToken?: string;
+  readonly expectedPolicyRevision?: string;
+}
+
+async function runApplicationJourney(
+  runtime: RuntimeTarget,
+  skill: SkillVersion,
+  token: string,
+  options: ApplicationJourneyOptions = {},
+): Promise<RehearsalResult['application']> {
+  const before = await readServingSnapshot(runtime, skill, token);
+  if (options.runLocalScanner !== true) {
+    return applicationFromSnapshot(skill, before);
+  }
+
+  const operatorToken = options.operatorToken;
+  const workerToken = options.workerToken;
+  if (!operatorToken || !workerToken) throw new Error('local scanner requires operator and worker tokens');
+  if (before.admission.allowed || before.admission.status !== 'needs-rescan' || before.admission.reason !== 'evidence-stale') {
+    throw new Error(`expected the restored fixture to be denied before rescan (status ${before.admission.status}; reason ${before.admission.reason})`);
+  }
+  if (before.routes.files !== 404 || before.routes.resolve !== 404 || !before.denial.downloadBlockedByCurrentAdmission) {
+    throw new Error('the stale restored fixture did not demonstrate the pre-scan distribution denial');
+  }
+
+  const rescan = await request(runtime.origin, `/v1/skills/${encodeURIComponent(skill.id)}/rescan`, operatorToken, {
+    method: 'POST',
+  });
+  const queuedOperation = objectField(rescan.value, 'operation');
+  const operationId = objectField(queuedOperation, 'id');
+  const queuedResourceId = objectField(queuedOperation, 'resourceId');
+  const queuedOrganizationId = objectField(queuedOperation, 'organizationId');
+  const queuedPolicyRevision = objectField(queuedOperation, 'policyRevision');
+  if (rescan.status !== 202 || typeof operationId !== 'string' || operationId.length === 0) {
+    throw new Error(`rescan did not queue a job (status ${rescan.status}; code ${codeOf(rescan.value) ?? 'none'})`);
+  }
+  if (
+    queuedResourceId !== skill.id ||
+    queuedOrganizationId !== 'default' ||
+    typeof options.expectedPolicyRevision !== 'string' ||
+    queuedPolicyRevision !== options.expectedPolicyRevision
+  ) {
+    throw new Error('rescan job is not bound to the restored skill, organization, or policy revision');
+  }
+
+  const worker = new WorkerRunner({
+    baseUrl: runtime.origin,
+    workerToken,
+    workerId: LOCAL_WORKER_ID,
+    adapters: [createSkillsGuardAdapter()],
+    executor: new DockerExecutor(),
+    scannerImages: { skillsguard: SKILLSGUARD_IMAGE_ID },
+  });
+  const workerResult = await worker.runOnce();
+  if (!workerResult.claimed || workerResult.jobId !== operationId) {
+    throw new Error('worker claimed a different job or did not claim the queued rescan');
+  }
+  const scannerResult = workerResult.scannerResults?.find((result) => result.scannerId === 'skillsguard');
+  if (
+    scannerResult !== undefined &&
+    (
+      scannerResult.artifactDigest !== skill.artifact.digest ||
+      scannerResult.policyRevision !== options.expectedPolicyRevision
+    )
+  ) {
+    throw new Error('scanner evidence is not bound to the restored artifact and policy revision');
+  }
+  const operation = await request(runtime.origin, `/v1/operations/${encodeURIComponent(operationId)}`, operatorToken);
+  const operationValue = objectField(operation.value, 'operation') ?? operation.value;
+  const completionState = typeof objectField(operationValue, 'state') === 'string'
+    ? objectField(operationValue, 'state') as string
+    : null;
+  const after = await readServingSnapshot(runtime, skill, token);
+  const localScanner: LocalScannerEvidence = {
+    mode: 'docker-skillsguard',
+    policy: {
+      revision: options.expectedPolicyRevision!,
+      unchangedAfterScan: true,
+    },
+    image: {
+      reference: SKILLSGUARD_IMAGE,
+      id: SKILLSGUARD_IMAGE_ID,
+      verified: true,
+    },
+    rescan: {
+      status: rescan.status,
+      operationId,
+      resourceId: typeof queuedResourceId === 'string' ? queuedResourceId : null,
+      organizationId: typeof queuedOrganizationId === 'string' ? queuedOrganizationId : null,
+      policyRevision: typeof queuedPolicyRevision === 'string' ? queuedPolicyRevision : null,
+    },
+    worker: {
+      claimed: workerResult.claimed,
+      jobId: workerResult.jobId ?? null,
+      allow: workerResult.allow ?? null,
+      error: workerResult.error ?? null,
+      completionState,
+    },
+    scanner: scannerResult === undefined ? null : {
+      scannerId: scannerResult.scannerId,
+      artifactDigest: scannerResult.artifactDigest,
+      policyRevision: scannerResult.policyRevision,
+      status: scannerResult.status,
+      engineVersion: scannerResult.engineVersion,
+      rulesRevision: scannerResult.rulesRevision,
+      coverage: {
+        filesEnumerated: scannerResult.coverage.filesEnumerated,
+        filesAnalyzed: scannerResult.coverage.filesAnalyzed,
+        filesSkipped: scannerResult.coverage.filesSkipped,
+        filesUnsupported: scannerResult.coverage.filesUnsupported,
+      },
+      findings: scannerResult.findings.length,
+    },
+    before,
+    after,
+  };
+  if (
+    workerResult.allow === true &&
+    (
+      scannerResult === undefined ||
+      scannerResult.status !== 'completed' ||
+      scannerResult.engineVersion !== SKILLSGUARD_PIN.release ||
+      scannerResult.rulesRevision !== SKILLSGUARD_PIN.sourceRevision ||
+      scannerResult.coverage.filesEnumerated !== skill.fileCount ||
+      scannerResult.coverage.filesAnalyzed !== skill.fileCount ||
+      scannerResult.coverage.filesSkipped !== 0 ||
+      scannerResult.coverage.filesUnsupported !== 0 ||
+      scannerResult.findings.some((finding) => finding.severity === 'high' || finding.severity === 'critical')
+    )
+  ) {
+    throw new Error('worker reported allow without complete, pinned, clean SkillsGuard evidence');
+  }
+  return {
+    ...applicationFromSnapshot(skill, after),
+    localScanner,
+  };
+}
+
+function applicationFromSnapshot(skill: SkillVersion, snapshot: ServingSnapshot): RehearsalResult['application'] {
   return {
     runtimeProfile: 'node',
     stateProvider: 'postgres',
@@ -597,27 +855,16 @@ async function runApplicationJourney(runtime: RuntimeTarget, skill: SkillVersion
     },
     routes: {
       health: 200,
-      catalog: catalog.status,
-      detail: detail.status,
-      files: filesStatus,
-      resolve: resolve.status,
-      authorization: authorization?.status ?? null,
-      downloadDescriptor: descriptor?.status ?? null,
-      transfer: transfer?.status ?? null,
-      unauthenticatedCatalog: unauthenticated.status,
+      ...snapshot.routes,
     },
-    servedBytes: transferBytes?.byteLength ?? null,
-    servedDigest,
+    servedBytes: snapshot.servedBytes,
+    servedDigest: snapshot.servedDigest,
     // The authorization and grant endpoints append clone-local metadata when
     // admission is current. We cannot inspect a prior count after cleanup, so
     // this reports the bounded route behavior rather than a source mutation.
-    downloadMetadataWritesOnClone: authorization?.status === 201 ? 1 + (descriptor?.status === 200 ? 1 : 0) : 0,
-    admission,
-    denial: {
-      downloadBlockedByCurrentAdmission,
-      downloadBlockStatus: downloadBlockResponse?.status ?? null,
-      downloadBlockCode: codeOf(downloadBlockResponse?.value),
-    },
+    downloadMetadataWritesOnClone: snapshot.routes.authorization === 201 ? 1 + (snapshot.routes.downloadDescriptor === 200 ? 1 : 0) : 0,
+    admission: snapshot.admission,
+    denial: snapshot.denial,
   };
 }
 
@@ -641,8 +888,9 @@ function buildResult(input: {
   const downloadPassed = input.application.routes.transfer === 200 &&
     input.application.servedBytes === input.application.selectedSkill.size &&
     input.application.servedDigest === input.application.selectedSkill.digest;
+  const scannerPassed = input.application.localScanner === undefined || input.application.localScanner.worker.allow === true;
   const status = input.blob.exactStateManifestMatch && input.blob.localReadbackVerified && applicationPassed &&
-    filesPassed && downloadPassed ? 'passed' : applicationPassed ? 'partial' : 'blocked';
+    filesPassed && downloadPassed && scannerPassed ? 'passed' : applicationPassed ? 'partial' : 'blocked';
   return {
     schemaVersion: 1,
     kind: 'private-skills.local-serving-path-restore-rehearsal',
@@ -681,7 +929,9 @@ function buildResult(input: {
       'The PostgreSQL clone was copied from the retained local recovery target; this is not a fresh hosted production snapshot.',
       'The PostgreSQL and hosted Blob proofs were captured separately; no shared MVCC/provider snapshot or coordinated freeze was established.',
       'The application used a generated legacy bootstrap token with Better Auth disabled; restored Better Auth sessions, memberships, SSO, and service-token revocations were not exercised.',
-      'Billing, external directory, hosted worker, and external scanner integrations were disabled. The persisted required-scanner policy was preserved and stale evidence was allowed to deny serving.',
+      input.application.localScanner === undefined
+        ? 'Billing, external directory, hosted worker, and external scanner integrations were disabled. The persisted required-scanner policy was preserved and stale evidence was allowed to deny serving.'
+        : 'Billing, external directory, and hosted worker integrations were disabled. The persisted required-scanner policy was preserved: stale evidence denied the pre-scan routes, then the pinned local SkillsGuard Docker worker refreshed the disposable clone through the normal rescan/job path.',
       'The selected snapshot fixture can prove read authorization only for its default organization. No second-company route denial was asserted by this single-tenant restore.',
       'Hosted rollback, hosted filesystem remapping, provider IAM/lifecycle state, and external identity or billing provider state remain outside this rehearsal.',
     ],
@@ -703,6 +953,7 @@ async function main(): Promise<void> {
   const evidencePathRaw = process.env.PSKILLS_RESTORE_EVIDENCE_PATH?.trim();
   const evidencePath = evidencePathRaw ? resolve(evidencePathRaw) : undefined;
   const keepDisposables = envBoolean('PSKILLS_RESTORE_KEEP_DISPOSABLES');
+  const runLocalScanner = envBoolean('PSKILLS_RESTORE_RUN_LOCAL_SCANNER');
   let clone: CloneTarget | undefined;
   let dumpPath: string | undefined;
   let runtime: RuntimeTarget | undefined;
@@ -713,6 +964,10 @@ async function main(): Promise<void> {
     stage = 'read-source-commit';
     const sourceCommit = Buffer.from(await runQuiet('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT })).toString('utf8').trim();
     if (!/^[0-9a-f]{40}$/u.test(sourceCommit)) throw new Error('working tree commit is invalid');
+    if (runLocalScanner) {
+      stage = 'verify-local-scanner-image';
+      await assertPinnedSkillsGuardImage();
+    }
     stage = 'load-proof';
     const proof = parseProof(await readFile(proofPath, 'utf8'));
     stage = 'clone-postgres';
@@ -775,14 +1030,27 @@ async function main(): Promise<void> {
     // The runtime's bootstrap credential is process-local. It is deliberately
     // generated in this scope and only its public subject is emitted below.
     const runtimeToken = `local-serving-restore-${randomBytes(24).toString('hex')}`;
+    const operatorToken = `local-serving-restore-operator-${randomBytes(24).toString('hex')}`;
+    const workerToken = `local-serving-restore-worker-${randomBytes(24).toString('hex')}`;
     const runtimeOriginPort = await freePort();
     const runtimeOrigin = `http://127.0.0.1:${runtimeOriginPort}`;
     // Start a fresh process with this explicit token. It remains in this
     // process and the child environment only for the duration of the probe.
-    const runtimeStart = await startRuntimeWithToken(runtimeBinary, clone, localRoot, runtimeOrigin, runtimeToken);
+    const runtimeStart = await startRuntimeWithToken(runtimeBinary, clone, localRoot, runtimeOrigin, runtimeToken, operatorToken, workerToken);
     runtime = runtimeStart.runtime;
     stage = 'exercise-serving-routes';
-    const application = await runApplicationJourney(runtime, selectedSkill, runtimeToken);
+    const application = await runApplicationJourney(runtime, selectedSkill, runtimeToken, {
+      runLocalScanner,
+      ...(runLocalScanner ? { operatorToken, workerToken, expectedPolicyRevision: restored.state.policy.revision } : {}),
+    });
+    if (runLocalScanner) {
+      const restoredAfterScan = await readRegistrySnapshot(clone.sql);
+      if (
+        JSON.stringify(restoredAfterScan.state.policy) !== JSON.stringify(restored.state.policy)
+      ) {
+        throw new Error('local scan changed the restored scanner policy or policy revision');
+      }
+    }
     stage = 'build-evidence';
     result = buildResult({
       sourceContainer,
@@ -843,17 +1111,38 @@ async function startRuntimeWithToken(
   storageRoot: string,
   origin: string,
   token: string,
+  operatorToken: string,
+  workerToken: string,
 ): Promise<RuntimeStartWithTokenResult> {
   const port = Number(new URL(origin).port);
-  const bootstrapTokens = JSON.stringify([{
-    id: LOCAL_PRINCIPAL,
-    token,
-    organizationId: 'default',
-    subject: LOCAL_PRINCIPAL,
-    roles: ['reader'],
-    scopes: ['registry:read'],
-    kind: 'user',
-  }]);
+  const bootstrapTokens = JSON.stringify([
+    {
+      id: LOCAL_PRINCIPAL,
+      token,
+      organizationId: 'default',
+      subject: LOCAL_PRINCIPAL,
+      roles: ['reader'],
+      scopes: ['registry:read'],
+      kind: 'user',
+    },
+    {
+      id: LOCAL_OPERATOR_PRINCIPAL,
+      token: operatorToken,
+      organizationId: 'default',
+      subject: LOCAL_OPERATOR_PRINCIPAL,
+      roles: ['publisher'],
+      scopes: [
+        'registry:read',
+        'skills:read',
+        'skills:rescan',
+        'skills:write',
+        'skills:publish',
+        'scans:read',
+        'operations:read',
+      ],
+      kind: 'user',
+    },
+  ]);
   const child = spawn(process.execPath, [runtimeBinary], {
     cwd: REPO_ROOT,
     env: localProcessEnvironment({
@@ -882,7 +1171,9 @@ async function startRuntimeWithToken(
       PSKILLS_BOOTSTRAP_TOKEN: undefined,
       PSKILLS_BOOTSTRAP_TOKEN_HASH: undefined,
       PSKILLS_WORKER_TOKENS: undefined,
-      PSKILLS_WORKER_TOKEN: undefined,
+      PSKILLS_WORKER_TOKEN: workerToken,
+      PSKILLS_WORKER_TOKEN_ID: LOCAL_WORKER_ID,
+      PSKILLS_WORKER_SUBJECT: LOCAL_WORKER_ID,
       BLOB_READ_WRITE_TOKEN: undefined,
       VERCEL_OIDC_TOKEN: undefined,
       PSKILLS_REQUIRED_SCANNER: undefined,
