@@ -76,6 +76,24 @@ The public discovery endpoints are `/robots.txt` and `/sitemap.xml`. Their
 contents follow `MARKETING_INDEXING`; a preview or local build is intentionally
 not discoverable.
 
+When the hosted identity configuration changes, re-read the app's public
+`/auth/identity/config` response and update the time-bound preview wording in
+these visitor pages before publishing the marketing build:
+
+- `src/routes/faq.tsx` — the first-time sign-in answer;
+- `src/routes/docs.getting-started.tsx` — the hosted access note, application
+  workspace card, and setup step;
+- `src/routes/demo.tsx` — the hosted token instruction; and
+- `src/routes/legal.tsx` — the application access note.
+
+Those sentences currently explain that company sign-in is not configured and
+that hosted access uses an existing owner/admin-supplied registry token. On a
+real identity activation, replace that current-preview wording with the
+verified company sign-in path and keep the demo/example boundary. Do not
+describe copy-link invitations as email delivery until an email transport is
+configured and tested, and do not add SCIM or other enterprise integrations
+from the roadmap without separate acceptance.
+
 ## Plan preview boundary
 
 The pricing preview is a projection of the billing package's browser-safe
