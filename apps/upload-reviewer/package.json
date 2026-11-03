@@ -15,7 +15,7 @@
   "dependencies": {
     "ai": "7.0.94",
     "eve": "0.52.3",
-    "zod": "4.5.4"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
